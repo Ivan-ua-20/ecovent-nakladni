@@ -19,7 +19,7 @@ function throttled(task) {
   return run;
 }
 
-async function call(fetchFn, subdomain, key, method, params, { sleepFn = sleep } = {}) {
+export async function call(fetchFn, subdomain, key, method, params, { sleepFn = sleep } = {}) {
   const body = new URLSearchParams({ key, ...params }).toString();
   const doFetch = (url) => throttled(() => fetchFn(url, {
     method: 'POST',
@@ -62,7 +62,7 @@ export function findOrders(node, depth = 0) {
   return Object.values(node).flatMap((v) => findOrders(v, depth + 1));
 }
 
-const asList = (data) => {
+export const asList = (data) => {
   if (!data) return [];
   if (Array.isArray(data)) return data;
   if (typeof data === 'object') return Object.values(data);

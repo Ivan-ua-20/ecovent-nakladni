@@ -16,5 +16,11 @@ export function d1Db(D1) {
       const r = await bind(sql, params).run();
       return { changes: Number(r.meta?.changes || 0), lastId: Number(r.meta?.last_row_id || 0) };
     },
+    // Кілька змін одним запитом до D1 (транзакція): [[sql, params], ...]
+    async batch(list) {
+      for (let i = 0; i < list.length; i += 200) {
+        await D1.batch(list.slice(i, i + 200).map(([sql, params]) => bind(sql, params)));
+      }
+    },
   };
 }

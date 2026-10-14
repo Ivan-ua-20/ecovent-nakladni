@@ -17,5 +17,17 @@ export function openDb(file) {
       const r = db.prepare(sql).run(...norm(params));
       return { changes: Number(r.changes), lastId: Number(r.lastInsertRowid) };
     },
+    // Кілька змін однією транзакцією: [[sql, params], ...]
+    async batch(list) {
+      if (!list.length) return;
+      db.exec('BEGIN');
+      try {
+        for (const [sql, params] of list) db.prepare(sql).run(...norm(params));
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+    },
   };
 }

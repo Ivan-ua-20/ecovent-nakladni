@@ -1,6 +1,7 @@
 import { renderInvoice, esc, money, dateUa, LAYOUT_NAMES, DEFAULT_OPTIONS } from './invoice.js';
 import { exportDocx } from './docx-export.js';
 import { renderRahunok, rahunokDocx } from './rahunok.js';
+import { createAnalyticsUI } from './an.js';
 
 // ---------- утиліти ----------
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -82,33 +83,53 @@ function readImage(file, max = 700) {
 let boot = { fops: [], templates: [], offices: [], channels: [], invFops: [], settings: {}, user: null };
 const can = (perm) => Boolean(boot.user?.perms?.includes(perm));
 
-const NAV = [
-  { id: 'invoice', label: 'Накладні ФОП' },
-  { id: 'rahunky', label: 'Рахунки (Word)' },
-  { id: 'history', label: 'Історія накладних' },
-  { sep: 'Довідники', perm: 'refs.edit' },
-  { id: 'fops', label: 'ФОПи накладних', perm: 'refs.edit' },
-  { id: 'offices', label: 'Відділи, поле 1 → ФОП', perm: 'refs.edit' },
-  { id: 'templates', label: 'Шаблони накладних', perm: 'refs.edit' },
-  { id: 'invfops', label: 'ФОПи рахунків', perm: 'refs.edit' },
-  { sep: '', perm: 'refs.edit' },
-  { id: 'settings', label: 'Налаштування', perm: 'refs.edit' },
-  { id: 'users', label: 'Користувачі', perm: 'users' },
+// Розділи (вкладки зверху) і підвкладки кожного розділу.
+const SECTIONS = [
+  { id: 'nakladni', label: 'Накладні ФОП', home: 'invoice', tabs: [
+    { id: 'invoice', label: 'Формування' },
+    { id: 'history', label: 'Історія' },
+    { id: 'fops', label: 'ФОПи накладних', perm: 'refs.edit' },
+    { id: 'offices', label: 'Відділи, поле 1 → ФОП', perm: 'refs.edit' },
+    { id: 'templates', label: 'Шаблони', perm: 'refs.edit' },
+    { id: 'nsettings', label: 'Налаштування накладних', perm: 'refs.edit' },
+  ] },
+  { id: 'rahunky', label: 'Рахунки Word', home: 'rahunky', tabs: [
+    { id: 'rahunky', label: 'Формування', perm: 'docs.edit' },
+    { id: 'rlist', label: 'Сформовані рахунки' },
+    { id: 'invfops', label: 'ФОПи рахунків', perm: 'refs.edit' },
+    { id: 'rsettings', label: 'Налаштування рахунків', perm: 'refs.edit' },
+  ] },
+  { id: 'an', label: 'Аналітика', perm: 'analytics', home: 'an', tabs: [
+    { id: 'an', label: 'Дашборд' },
+    { id: 'ansettings', label: 'Налаштування аналітики' },
+  ] },
+  { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [{ id: 'settings', label: 'Загальні налаштування' }] },
+  { id: 'users', label: 'Користувачі', perm: 'users', home: 'users', tabs: [{ id: 'users', label: 'Користувачі' }] },
 ];
+const visibleTabs = (sec) => sec.tabs.filter((t) => !t.perm || can(t.perm));
+const sectionOf = (routeId) => SECTIONS.find((sec) => sec.tabs.some((t) => t.id === routeId)) || SECTIONS[0];
 
-function renderNav() {
+function renderNav(active = 'invoice') {
   const u = boot.user;
   const s = boot.settings;
-  $('.side').innerHTML = `
+  const cur = sectionOf(active);
+  const secs = SECTIONS.filter((sec) => (!sec.perm || can(sec.perm)) && visibleTabs(sec).length);
+  const homeOf = (sec) => (visibleTabs(sec).some((t) => t.id === sec.home) ? sec.home : visibleTabs(sec)[0].id);
+  $('.topbar').innerHTML = `
     <div class="brand"><span class="brand-mark"></span>Накладні</div>
-    ${NAV.filter((n) => !n.perm || can(n.perm)).map((n) => (n.sep !== undefined
-      ? `<div class="side-sep">${esc(n.sep)}</div>`
-      : `<a href="#/${n.id}" data-nav="${n.id}">${esc(n.label)}</a>`)).join('')}
-    <div class="side-foot">
-      ${can('api') ? (s.lpcrm_key ? `LP-CRM: <b>${esc(s.lpcrm_subdomain)}</b> · ключ додано` : 'LP-CRM: <b>не підключено</b>') : ''}
-      <div class="side-user"><b>${esc(u?.name || '')}</b><span>${esc(u?.role_name || '')}</span></div>
-      <div class="side-links"><a href="#" id="navPwd">Змінити пароль</a><a href="#" id="navOut">Вийти</a></div>
+    <nav class="main-tabs" aria-label="Розділи">
+      ${secs.map((sec) => `<a href="#/${homeOf(sec)}" class="${sec.id === cur.id ? 'active' : ''}">${esc(sec.label)}</a>`).join('')}
+    </nav>
+    <div class="top-user">
+      ${can('api') && !s.lpcrm_key ? '<a href="#/settings" class="top-warn">LP-CRM не підключено</a>' : ''}
+      <span><b>${esc(u?.name || '')}</b> · ${esc(u?.role_name || '')}</span>
+      <a href="#" id="navPwd">Пароль</a><a href="#" id="navOut">Вийти</a>
     </div>`;
+  const tabs = visibleTabs(cur);
+  $('.subnav').innerHTML = tabs.length > 1
+    ? tabs.map((t) => `<a href="#/${t.id}" class="${t.id === active ? 'active' : ''}">${esc(t.label)}</a>`).join('')
+    : '';
+  $('.subnav').hidden = tabs.length <= 1;
   $('#navOut').onclick = async (e) => {
     e.preventDefault();
     await api('POST', '/api/auth/logout');
@@ -117,9 +138,10 @@ function renderNav() {
   $('#navPwd').onclick = (e) => { e.preventDefault(); changeOwnPassword(); };
 }
 
+let activeRoute = 'invoice';
 async function loadBoot() {
   boot = await api('GET', '/api/bootstrap');
-  renderNav();
+  renderNav(activeRoute);
 }
 const activeFops = () => boot.fops.filter((f) => f.active);
 const fopById = (id) => boot.fops.find((f) => String(f.id) === String(id));
@@ -174,25 +196,34 @@ function changeOwnPassword() {
 // ---------- роутер ----------
 const routes = {
   invoice: viewInvoice,
-  rahunky: viewRahunky,
   history: viewHistory,
   fops: viewFops,
   offices: viewOffices,
   templates: viewTemplates,
+  nsettings: viewNakladniSettings,
+  rahunky: viewRahunky,
+  rlist: viewRahunkyList,
   invfops: viewInvFops,
+  rsettings: viewRahunkySettings,
+  an: (...a) => AN.viewDashboard(...a),
+  ansettings: (...a) => AN.viewSettings(...a),
   settings: viewSettings,
   users: viewUsers,
 };
-const ROUTE_PERM = { fops: 'refs.edit', offices: 'refs.edit', templates: 'refs.edit', invfops: 'refs.edit', settings: 'refs.edit', users: 'users' };
 
 async function route() {
   if (!boot.user) return;
-  const [, name = 'invoice', ...args] = location.hash.replace(/^#/, '').split('/');
-  $$('.side a[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === name));
-  const fn = routes[name] || viewInvoice;
+  let [, name = 'invoice', ...args] = location.hash.replace(/^#/, '').split('/');
+  if (!routes[name]) name = 'invoice';
+  const sec = sectionOf(name);
+  const tab = sec.tabs.find((t) => t.id === name);
+  // Розділ «Рахунки» для перегляду відкриває список, а не формування
+  if (name === 'rahunky' && !can('docs.edit')) { location.hash = '#/rlist'; return; }
+  activeRoute = name;
+  renderNav(name);
   try {
-    if (ROUTE_PERM[name] && !can(ROUTE_PERM[name])) throw new Error('Немає доступу до цього розділу.');
-    await fn(...args.map((x) => decodeURIComponent(x)));
+    if ((sec.perm && !can(sec.perm)) || (tab?.perm && !can(tab.perm))) throw new Error('Немає доступу до цього розділу.');
+    await routes[name](...args.map((x) => decodeURIComponent(x)));
   } catch (e) {
     main.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`;
   }
@@ -218,10 +249,11 @@ async function viewInvoice(orderId) {
   main.innerHTML = `
     <div class="order-bar">
       <form id="orderForm">
+        <label for="orderInput" class="sr-only">Номер замовлення</label>
         <input id="orderInput" placeholder="Номер, код, телефон або ТТН" value="${esc(orderId || '')}" autocomplete="off" autofocus>
         <button class="btn primary">Сформувати</button>
       </form>
-      <span class="muted small">Для перевірки без CRM введіть <a href="#/invoice/demo">demo</a></span>
+      <div class="bar-actions" id="invActions"><span class="muted small">Для перевірки без CRM введіть <a href="#/invoice/demo">demo</a></span></div>
     </div>
     <div id="invArea"></div>`;
   $('#orderForm').addEventListener('submit', (e) => {
@@ -248,6 +280,7 @@ async function loadInvoice(orderId, fresh = false) {
     renderInvoiceView();
   } catch (e) {
     current = null;
+    if ($('#invActions')) $('#invActions').innerHTML = '';
     area.innerHTML = `<div class="alert bad"><b>Не вдалося отримати замовлення.</b><br>${esc(e.message)}</div>`;
   }
 }
@@ -319,16 +352,6 @@ function renderInvoiceView() {
       ${inv.warnings.length ? `<div>${inv.warnings.map((w) => `<div class="alert">${esc(w)}</div>`).join('')}</div>` : ''}
 
       <div class="card">
-        <div class="actions">
-          <button class="btn primary" id="actPrint">Друк</button>
-          <button class="btn" id="actWord">Word</button>
-          <button class="btn" id="actPdf">PDF</button>
-          <button class="btn" id="actEdit">Редагувати</button>
-          <button class="btn wide" id="actRefresh">Оновити з CRM</button>
-        </div>
-      </div>
-
-      <div class="card">
         <h3>Історія версій <span class="badge">${inv.versionsCount}</span></h3>
         <div class="vlist" id="vlist"><span class="muted small">Завантаження…</span></div>
       </div>
@@ -341,6 +364,12 @@ function renderInvoiceView() {
     </aside>
   </div>`;
 
+  $('#invActions').innerHTML = `
+    <button class="btn primary" id="actPrint">Друк</button>
+    <button class="btn" id="actWord">Word</button>
+    <button class="btn" id="actPdf">PDF</button>
+    <button class="btn" id="actEdit">Редагувати</button>
+    <button class="btn" id="actRefresh">Оновити з CRM</button>`;
   const id = inv.requestedId;
   if (!can('docs.edit')) {
     $$('#fopSelect, #tplSelect, #receiptRef, #receiptSet, #actEdit').forEach((el) => { el.disabled = true; });
@@ -663,14 +692,14 @@ async function viewOffices() {
       <div class="btn-row"><button class="btn primary" id="oSave">Зберегти все</button></div></div>
     <div class="alert info" style="margin-bottom:14px">Порядок визначення ФОП: вибір вручну → чек Checkbox → <b>поле 1</b> → <b>відділ</b> → ФОП за замовчуванням.<br>
       <b>Назва продавця в накладній</b> — повний текст замість «ФОП Прізвище І.П.» (можна кілька рядків), напр. «ФОП Лупу Віра Федорівна, інтернет-магазин OneDay». Реквізити (ІПН, IBAN) підставляються з картки ФОП. Порожньо — як у ФОП.</div>
-    <div class="form-page" style="grid-template-columns:1fr">
-      <div>
+    <div class="form-page" style="grid-template-columns:minmax(0,1fr)">
+      <div style="min-width:0">
         <div class="head-row"><h3 style="margin:0">Додаткове поле 1 (канал)</h3><button class="btn sm" id="chAdd">+ Значення</button></div>
         <div class="muted small" style="margin-bottom:8px">Текст у полі 1 замовлення (наприклад «Rozetka(oneday)», «Prom(Amsterdam)»). Регістр не важливий.</div>
         <table class="list"><thead><tr><th>Значення поля 1</th><th>ФОП</th><th>Назва продавця в накладній</th><th></th></tr></thead>
         <tbody id="chBody">${boot.channels.map(chRow).join('')}</tbody></table>
       </div>
-      <div>
+      <div style="min-width:0">
         <div class="head-row"><h3 style="margin:0">Відділи LP-CRM</h3><button class="btn sm" id="oAdd">+ Відділ</button></div>
         <div class="muted small" style="margin-bottom:8px">Використовується, якщо поле 1 порожнє або не прив'язане.</div>
         <table class="list"><thead><tr><th>ID</th><th>Назва відділу</th><th>ФОП</th><th>Назва продавця в накладній</th><th></th></tr></thead>
@@ -814,9 +843,10 @@ async function viewSettings() {
   const s = boot.settings;
   const apiOk = can('api');
   main.innerHTML = `
-    <h2>Налаштування</h2>
+    <h2>Загальні налаштування</h2>
     <div class="form-page">
       <div class="form-stack">
+        ${!apiOk ? '<div class="card muted small">Налаштування LP-CRM і Checkbox доступні власнику та адміністраторам. Налаштування накладних і рахунків — у відповідних розділах.</div>' : ''}
         ${apiOk ? `<form class="card form-stack" id="sApi">
           <h3>LP-CRM і Checkbox (API)</h3>
           <label class="f"><span>Піддомен</span><div style="display:flex;align-items:center;gap:6px"><input name="lpcrm_subdomain" value="${esc(s.lpcrm_subdomain || '')}" style="max-width:200px"><span class="muted">.lp-crm.biz</span></div></label>
@@ -833,16 +863,7 @@ async function viewSettings() {
       </div>
       <div class="form-stack">
         <form class="card form-stack" id="sGen">
-          <h3>Накладні ФОП</h3>
-          <label class="f"><span>ФОП, якщо не визначено ні чеком, ні полем 1, ні відділом</span><select name="default_fop_id"><option value="">— не підставляти —</option>
-            ${activeFops().map((f) => `<option value="${f.id}" ${String(s.default_fop_id) === String(f.id) ? 'selected' : ''}>${esc(f.short_name)}</option>`).join('')}</select></label>
-          <label class="f"><span>Дата накладної</span><select name="invoice_date_mode">
-            <option value="today" ${s.invoice_date_mode !== 'order' ? 'selected' : ''}>День формування накладної</option>
-            <option value="order" ${s.invoice_date_mode === 'order' ? 'selected' : ''}>Дата створення замовлення в CRM</option></select></label>
-          <h3 style="margin-top:8px">Рахунки</h3>
-          <label class="f" style="max-width:260px"><span>Наступний номер ручного рахунку</span><input name="rahunok_next_number" inputmode="numeric" value="${esc(s.rahunok_next_number || '10516')}"></label>
-          <div class="muted small">Рахунок із замовлення CRM отримує номер замовлення. Ручні рахунки нумеруються по порядку, спільно для всіх ФОПів.</div>
-          <h3 style="margin-top:8px">Зберігання</h3>
+          <h3>Зберігання</h3>
           <label class="f" style="max-width:260px"><span>Скільки днів зберігати історію накладних і рахунки</span><input name="retention_days" type="number" min="1" max="3650" value="${esc(s.retention_days || '7')}"></label>
           <div class="muted small">Старші версії накладних і рахунки видаляються автоматично.</div>
           <div class="btn-row"><button class="btn primary">Зберегти</button></div>
@@ -904,6 +925,35 @@ async function viewSettings() {
   };
 }
 
+// Налаштування окремих розділів — та сама таблиця settings, інші поля.
+async function sectionSettings(title, fields, note = '') {
+  await loadBoot();
+  main.innerHTML = `<h2>${esc(title)}</h2>
+    <form class="card form-stack" id="secForm" style="max-width:640px">${fields(boot.settings)}
+      ${note ? `<div class="muted small">${note}</div>` : ''}
+      <div class="btn-row"><button class="btn primary">Зберегти</button></div></form>`;
+  $('#secForm').onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api('PUT', '/api/settings', Object.fromEntries(new FormData(e.target))); toast('Збережено'); await loadBoot(); } catch (err) { toast(err.message, true); }
+  };
+}
+
+function viewNakladniSettings() {
+  return sectionSettings('Налаштування накладних', (s) => `
+    <label class="f"><span>ФОП, якщо не визначено ні чеком, ні полем 1, ні відділом</span><select name="default_fop_id"><option value="">— не підставляти —</option>
+      ${activeFops().map((f) => `<option value="${f.id}" ${String(s.default_fop_id) === String(f.id) ? 'selected' : ''}>${esc(f.short_name)}</option>`).join('')}</select></label>
+    <label class="f"><span>Дата накладної</span><select name="invoice_date_mode">
+      <option value="today" ${s.invoice_date_mode !== 'order' ? 'selected' : ''}>День формування накладної</option>
+      <option value="order" ${s.invoice_date_mode === 'order' ? 'selected' : ''}>Дата створення замовлення в CRM</option></select></label>`,
+  'Порядок визначення ФОП: вибір вручну → чек Checkbox → поле 1 → відділ → ФОП за замовчуванням. Відповідності — у вкладці «Відділи, поле 1 → ФОП».');
+}
+
+function viewRahunkySettings() {
+  return sectionSettings('Налаштування рахунків', (s) => `
+    <label class="f" style="max-width:260px"><span>Наступний номер ручного рахунку</span><input name="rahunok_next_number" inputmode="numeric" value="${esc(s.rahunok_next_number || '10516')}"></label>`,
+  'Рахунок із замовлення CRM отримує номер замовлення. Ручні рахунки нумеруються по порядку, спільно для всіх ФОПів. Реквізити, підпис і печатку — у вкладці «ФОПи рахунків».');
+}
+
 // =====================================================================
 // РАХУНКИ (WORD)
 // =====================================================================
@@ -913,27 +963,31 @@ const todayKyiv = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyi
 async function viewRahunky(mode, arg) {
   if (mode === 'crm' || mode === 'manual') return rahunokForm({ mode });
   if (mode === 'edit' && arg) return rahunokForm({ mode: 'edit', id: arg });
-  const editOk = can('docs.edit');
   main.innerHTML = `
-    <h2>Рахунки на оплату</h2>
-    ${editOk ? `<div class="tiles">
-      <a class="tile" href="#/rahunky/crm"><div class="tile-ico">⇄</div><div><div class="tile-title">З замовлення CRM</div>
+    <h2>Рахунок на оплату</h2>
+    <div class="tiles">
+      <a class="tile" href="#/rahunky/crm"><div class="tile-ico" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h13l-3-3M20 17H7l3 3"/></svg></div><div><div class="tile-title">З замовлення CRM</div>
         <div class="tile-text">Номер замовлення → товари підтягнуться з LP-CRM. Номер рахунку = номер замовлення.</div></div></a>
-      <a class="tile" href="#/rahunky/manual"><div class="tile-ico">✎</div><div><div class="tile-title">Вручну</div>
+      <a class="tile" href="#/rahunky/manual"><div class="tile-ico" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4L19 9l-4-4L4 16v4z"/></svg></div><div><div class="tile-title">Вручну</div>
         <div class="tile-text">Товари, кількість і ціни вписуються вручну. Номер — наступний по порядку.</div></div></a>
-    </div>` : ''}
-    <div class="head-row" style="margin-top:22px"><h3 style="margin:0">Сформовані рахунки</h3>
-      <input id="rQ" placeholder="Номер або клієнт" style="width:220px"></div>
+    </div>
+    <div class="small muted" style="margin-top:14px">Збережені рахунки — у вкладці <a href="#/rlist">«Сформовані рахунки»</a>.</div>`;
+}
+
+async function viewRahunkyList() {
+  main.innerHTML = `
+    <div class="head-row"><h2>Сформовані рахунки</h2>
+      <label class="sr-only" for="rQ">Пошук</label><input id="rQ" placeholder="Номер або клієнт" style="width:240px"></div>
     <div id="rList"><div class="card empty"><span class="spinner"></span></div></div>`;
   const load = async () => {
     const r = await api('GET', `/api/rahunky?q=${encodeURIComponent($('#rQ').value)}`);
     $('#rList').innerHTML = (r.rows.length
-      ? `<table class="list"><thead><tr><th>№</th><th>Клієнт</th><th>ФОП</th><th>Сума</th><th>Створено</th><th></th></tr></thead><tbody>
+      ? `<div class="table-wrap"><table class="list"><thead><tr><th>№</th><th>Клієнт</th><th>ФОП</th><th>Сума</th><th>Створено</th><th></th></tr></thead><tbody>
         ${r.rows.map((x) => `<tr class="click" data-r="${x.id}"><td><b>${esc(x.number)}</b> <span class="badge">${x.source === 'crm' ? 'CRM' : 'вручну'}</span></td>
           <td>${esc(x.client_name)}</td><td>${esc(x.fop_name)}</td><td>${money(x.total)} грн</td>
           <td class="small">${esc(fmtDateTime(x.created_at))}<br><span class="muted">${esc(x.created_by || '')}</span></td>
           <td><div class="btn-row" style="justify-content:flex-end"><button class="btn sm" data-word="${x.id}">Word</button><button class="btn sm" data-pdf="${x.id}">PDF</button></div></td></tr>`).join('')}
-        </tbody></table>`
+        </tbody></table></div>`
       : '<div class="card empty">Рахунків ще немає</div>') + `<div class="small muted" style="margin-top:8px">Рахунки зберігаються ${r.retentionDays} дн. Наступний номер ручного рахунку: ${esc(r.nextNumber)}.</div>`;
     $$('[data-r]').forEach((tr) => (tr.onclick = (e) => {
       if (e.target.closest('button')) return;
@@ -966,14 +1020,21 @@ async function rahunokForm({ mode, id }) {
     return;
   }
   main.innerHTML = `
-    <div class="head-row"><h2>${saved ? `Рахунок № ${esc(state.number)}` : isCrm ? 'Рахунок з замовлення CRM' : 'Рахунок вручну'}</h2>
-      <div class="btn-row"><a class="btn" href="#/rahunky">← До рахунків</a></div></div>
+    <div class="order-bar">
+      <a class="btn" href="${saved ? '#/rlist' : '#/rahunky'}">← Назад</a>
+      ${isCrm && !saved ? `<form id="rOrderF"><label for="rOrder" class="sr-only">Замовлення CRM</label><input id="rOrder" placeholder="Номер, код, телефон або ТТН" autofocus><button class="btn primary">Підтягнути</button></form>`
+        : `<h2 class="bar-title">${saved ? `Рахунок № ${esc(state.number)}` : 'Рахунок вручну'}</h2>`}
+      <div class="bar-actions">
+        <button class="btn primary" id="rWord">Завантажити Word</button>
+        <button class="btn" id="rPdf">PDF / друк</button>
+        ${editOk ? '<button class="btn" id="rSave">Зберегти</button>' : ''}
+        ${editOk && saved ? '<button class="btn danger" id="rDel">Видалити</button>' : ''}
+      </div>
+    </div>
+    ${isCrm && !saved ? '<div id="rOrderInfo" class="small muted" style="margin:-6px 0 12px">Товари з замовлення можна буде змінити, видалити чи додати.</div>' : ''}
     <div class="inv-layout">
       <div class="preview" id="rPrev"></div>
       <aside class="panel">
-        ${isCrm && !saved ? `<div class="card"><h3>Замовлення CRM</h3>
-          <form id="rOrderF" class="receipt-input" style="margin-top:0"><input id="rOrder" placeholder="Номер, код, телефон або ТТН" autofocus><button class="btn sm primary">Підтягнути</button></form>
-          <div id="rOrderInfo" class="small muted" style="margin-top:8px">Товари з замовлення можна буде змінити, видалити чи додати.</div></div>` : ''}
         <div class="card form-stack">
           <h3>Рахунок ${state.number || nextNumber ? `<span class="badge info">№ ${esc(state.number || nextNumber)}</span>` : ''}</h3>
           <label class="f"><span>Від якого ФОП</span><select id="rFop" ${editOk ? '' : 'disabled'}>${activeInvFops().map((f) => `<option value="${f.id}" ${String(f.id) === String(state.fop_id) ? 'selected' : ''}>${esc(f.short_name)}</option>`).join('')}</select></label>
@@ -989,13 +1050,7 @@ async function rahunokForm({ mode, id }) {
           <div id="rItems"></div>
           ${editOk ? '<button class="btn sm" id="rAdd" style="margin-top:8px">+ Додати товар</button>' : ''}
         </div>
-        <div class="card"><div class="actions">
-          <button class="btn primary wide" id="rWord">Завантажити Word</button>
-          <button class="btn" id="rPdf">PDF / друк</button>
-          ${editOk ? '<button class="btn" id="rSave">Зберегти</button>' : ''}
-          ${editOk && saved ? '<button class="btn danger wide" id="rDel">Видалити рахунок</button>' : ''}
-        </div>
-        <div class="small muted" style="margin-top:8px">${saved ? `Створено: ${esc(fmtDateTime(saved.created_at))}${saved.created_by ? ` · ${esc(saved.created_by)}` : ''}. Word і PDF також зберігають зміни.` : 'Word і PDF спершу зберігають рахунок і присвоюють номер.'}</div></div>
+        <div class="card"><div class="small muted">${saved ? `Створено: ${esc(fmtDateTime(saved.created_at))}${saved.created_by ? ` · ${esc(saved.created_by)}` : ''}. Word і PDF також зберігають зміни.` : 'Word і PDF спершу зберігають рахунок і присвоюють номер.'}</div></div>
       </aside>
     </div>`;
 
@@ -1056,7 +1111,7 @@ async function rahunokForm({ mode, id }) {
       state.items = o.items.map((i) => ({ name: i.name, qty: i.qty, price: i.price }));
       $('#rOrderInfo').innerHTML = `Замовлення <b>№ ${esc(o.number)}</b>${o.buyer?.name ? ` · ${esc(o.buyer.name)}` : ''}. Номер рахунку: <b>${esc(o.number)}</b>.${o.note ? `<br>${esc(o.note)}` : ''}`;
       $('.panel h3 .badge')?.remove();
-      $$('.panel h3')[1].insertAdjacentHTML('beforeend', ` <span class="badge info">№ ${esc(o.number)}</span>`);
+      $$('.panel h3')[0].insertAdjacentHTML('beforeend', ` <span class="badge info">№ ${esc(o.number)}</span>`);
       drawItems();
     } catch (er) { $('#rOrderInfo').innerHTML = `<span style="color:var(--bad)">${esc(er.message)}</span>`; }
   });
@@ -1085,7 +1140,7 @@ async function rahunokForm({ mode, id }) {
     try { const d = await persist(); toast(`Рахунок № ${d.number} збережено`); } catch (er) { toast(er.message, true); }
   });
   $('#rDel') && ($('#rDel').onclick = async () => {
-    try { await api('DELETE', `/api/rahunky/${saved.id}`); toast('Рахунок видалено'); location.hash = '#/rahunky'; } catch (er) { toast(er.message, true); }
+    try { await api('DELETE', `/api/rahunky/${saved.id}`); toast('Рахунок видалено'); location.hash = '#/rlist'; } catch (er) { toast(er.message, true); }
   });
 }
 
@@ -1205,6 +1260,8 @@ async function viewUsers() {
   $('#uNew').onclick = () => form(null);
   $$('[data-uedit]').forEach((b) => (b.onclick = () => form(users.find((x) => String(x.id) === b.dataset.uedit))));
 }
+
+const AN = createAnalyticsUI({ api, $, $$, esc, toast, modal, get main() { return main; }, fmtDateTime, setPending: (fn) => { onPending = fn; } });
 
 // ---------- старт ----------
 async function start() {

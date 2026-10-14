@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { ROLES, can, hashPassword, verifyPassword, randomToken, publicUser } from './auth.js';
 import { DEFAULT_WARNING } from './schema.js';
+import { mountAnalytics } from './analytics.js';
 import { normalizeOrder, applyEdits } from './normalize.js';
 import { getOrder, getProducts, diagnose, getStatuses, getOrderCodesByStatus, getOrdersBatch } from './lpcrm.js';
 import { DEMO_ORDER } from './demo.js';
@@ -907,6 +908,8 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     await db.run(`DELETE FROM invoices WHERE id = ?`, [c.req.param('id')]);
     return c.json({ ok: true });
   });
+
+  mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso });
 
   return app;
 }

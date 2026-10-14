@@ -13,9 +13,10 @@ export const ROLES = {
 //  refs.edit  — довідники (ФОПи, відділи, шаблони, ФОПи рахунків) і загальні налаштування
 //  api        — ключі LP-CRM / Checkbox, діагностика API
 //  users      — керування користувачами
+//  analytics  — розділ «Аналітика»
 const PERMS = {
-  owner: ['docs.view', 'docs.edit', 'refs.edit', 'api', 'users'],
-  admin: ['docs.view', 'docs.edit', 'refs.edit', 'api', 'users'],
+  owner: ['docs.view', 'docs.edit', 'refs.edit', 'api', 'users', 'analytics'],
+  admin: ['docs.view', 'docs.edit', 'refs.edit', 'api', 'users', 'analytics'],
   manager: ['docs.view', 'docs.edit', 'refs.edit'],
   viewer: ['docs.view'],
 };
