@@ -224,7 +224,12 @@ const ADD_COLUMNS = [
   ['offices', 'seller_text', "TEXT DEFAULT ''"],
   ['channels', 'seller_text', "TEXT DEFAULT ''"],
   ['versions', 'user_name', "TEXT DEFAULT ''"],
+  ['users', 'failed_logins', 'INTEGER DEFAULT 0'],
+  ['users', 'locked_until', "TEXT DEFAULT ''"],
 ];
+
+// Підвищуйте при зміні схеми: тоді міграція виконається знову (на Cloudflare — один раз на запуск ізолята).
+const SCHEMA_VERSION = '7';
 
 // Налаштування, які з'явилися пізніше, — додаємо, якщо їх ще немає.
 const LATER_SETTINGS = {
@@ -253,6 +258,15 @@ async function fillFopNames(db) {
 }
 
 export async function migrate(db) {
+  try {
+    const v = await db.get(`SELECT value FROM settings WHERE key = 'schema_version'`);
+    if (v?.value === SCHEMA_VERSION) return;
+  } catch { /* таблиць ще немає */ }
+  await migrateFull(db);
+  await db.run(`INSERT INTO settings (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [SCHEMA_VERSION]);
+}
+
+async function migrateFull(db) {
   for (const sql of SCHEMA) await db.run(sql);
   for (const [table, col, type] of ADD_COLUMNS) {
     try { await db.run(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`); } catch { /* вже є */ }

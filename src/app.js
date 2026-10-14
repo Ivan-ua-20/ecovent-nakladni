@@ -45,8 +45,17 @@ const docFop = (f) => {
 
 const parseTpl = (t) => (t ? { ...t, options: JSON.parse(t.options || '{}') } : null);
 
-export function createApp({ db, fetchFn = fetch }) {
+export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity }) {
   const app = new Hono();
+  // Ліміт зовнішніх запитів на одне звернення (Cloudflare: 50). Коли вичерпано — відповідаємо «триває»,
+  // і браузер сам повторює запит; пошук продовжується з того місця, де зупинився.
+  let usedSubrequests = 0;
+  const fetchFn = async (...args) => {
+    if (++usedSubrequests > maxSubrequests) {
+      throw Object.assign(new Error('Обробка триває…'), { pending: true });
+    }
+    return rawFetch(...args);
+  };
   const receiptCache = new Map();
 
   const settings = async () => {
@@ -55,6 +64,7 @@ export function createApp({ db, fetchFn = fetch }) {
   };
 
   app.onError((err, c) => {
+    if (err.pending) return c.json({ pending: true, message: err.message }, 202);
     if (!err.status) console.error(err);
     return c.json({ error: err.message || String(err) }, err.status || 500);
   });
@@ -117,9 +127,19 @@ export function createApp({ db, fetchFn = fetch }) {
   app.post('/api/auth/login', async (c) => {
     const b = await c.req.json();
     const user = await db.get(`SELECT * FROM users WHERE login = ?`, [String(b.login || '').trim().toLowerCase()]);
+    if (user?.locked_until && user.locked_until > nowIso()) {
+      const mins = Math.max(1, Math.ceil((new Date(user.locked_until) - Date.now()) / 60000));
+      throw fail(429, `Забагато невдалих спроб. Спробуйте через ${mins} хв.`);
+    }
     if (!user || !user.active || !(await verifyPassword(String(b.password || ''), user.password_hash))) {
+      if (user) {
+        const n = (Number(user.failed_logins) || 0) + 1;
+        const lock = n >= 5 ? new Date(Date.now() + 5 * 60000).toISOString() : '';
+        await db.run(`UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?`, [lock ? 0 : n, lock, user.id]);
+      }
       throw fail(401, 'Невірний логін або пароль.');
     }
+    if (user.failed_logins || user.locked_until) await db.run(`UPDATE users SET failed_logins = 0, locked_until = '' WHERE id = ?`, [user.id]);
     await startSession(c, user);
     return c.json({ user: publicUser(user) });
   });
@@ -385,30 +405,59 @@ export function createApp({ db, fetchFn = fetch }) {
   // Завантажує в індекс замовлення за останні `days` днів. Зупиняється, щойно `found()` повертає збіги.
   // Спершу найчастіші статуси, щоб звичайне замовлення знаходилось за кілька запитів.
   const STATUS_PRIORITY = ['11', '3', '56', '14', '18', '66', '60', '53'];
+  // Статуси LP-CRM кешуємо на добу (один зовнішній запит менше на кожен пошук).
+  async function cachedStatuses(creds) {
+    const row = await db.get(`SELECT value FROM settings WHERE key = 'statuses_cache'`);
+    const cache = row?.value ? JSON.parse(row.value) : null;
+    if (cache && cache.sub === creds.subdomain && Date.now() - cache.at < 86400000) return cache.list;
+    const list = Object.keys(await getStatuses(fetchFn, creds));
+    await db.run(`INSERT INTO settings (key, value) VALUES ('statuses_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [
+      JSON.stringify({ at: Date.now(), sub: creds.subdomain, list }),
+    ]);
+    return list;
+  }
+
+  async function saveOrders(orders) {
+    for (const o of orders) {
+      await db.run(
+        `INSERT INTO orders_index (code, datetime, phone, ttn, bayer_name, data, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(code) DO UPDATE SET datetime = excluded.datetime, phone = excluded.phone, ttn = excluded.ttn,
+         bayer_name = excluded.bayer_name, data = excluded.data, fetched_at = excluded.fetched_at`,
+        [String(o.order_id), o.datetime || '', digits(o.phone), String(o.ttn || ''), o.bayer_name || '', JSON.stringify(o), nowIso()],
+      );
+    }
+  }
+
+  // Завантажує в індекс замовлення за останні `days` днів, статус за статусом, і зупиняється, щойно `found()` дає збіг.
+  // Прогрес зберігається в базі: якщо ліміт запитів вичерпано, наступне звернення продовжить з того ж статусу.
   async function syncIndex(creds, days, found = async () => []) {
     if (syncing) { await syncing; return found(); }
     let result = [];
     syncing = (async () => {
-      const all = Object.keys(await getStatuses(fetchFn, creds));
+      const all = await cachedStatuses(creds);
       const statuses = [...STATUS_PRIORITY.filter((x) => all.includes(x)), ...all.filter((x) => !STATUS_PRIORITY.includes(x))];
       const start = ymd(new Date(Date.now() - days * 86400000));
       const end = ymd(new Date(Date.now() + 86400000));
-      for (const st of statuses) {
-        const codes = await getOrderCodesByStatus(fetchFn, creds, st, start, end);
+      const key = `${creds.subdomain}|${days}|${start}`;
+      const pr = await db.get(`SELECT value FROM settings WHERE key = 'sync_progress'`);
+      const prog = pr?.value ? JSON.parse(pr.value) : null;
+      let i = prog && prog.key === key && Date.now() - prog.at < 30 * 60000 ? prog.i : 0;
+      const saveProgress = (idx) => db.run(
+        `INSERT INTO settings (key, value) VALUES ('sync_progress', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        [JSON.stringify({ key, i: idx, at: Date.now() })],
+      );
+      for (; i < statuses.length; i++) {
+        const codes = await getOrderCodesByStatus(fetchFn, creds, statuses[i], start, end);
         const known = new Set((await db.all(`SELECT code FROM orders_index`)).map((r) => r.code));
         const fresh = codes.filter((c) => !known.has(c));
-        const orders = fresh.length ? await getOrdersBatch(fetchFn, creds, fresh) : [];
-        for (const o of orders) {
-          await db.run(
-            `INSERT INTO orders_index (code, datetime, phone, ttn, bayer_name, data, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(code) DO UPDATE SET datetime = excluded.datetime, phone = excluded.phone, ttn = excluded.ttn,
-             bayer_name = excluded.bayer_name, data = excluded.data, fetched_at = excluded.fetched_at`,
-            [String(o.order_id), o.datetime || '', digits(o.phone), String(o.ttn || ''), o.bayer_name || '', JSON.stringify(o), nowIso()],
-          );
+        for (let k = 0; k < fresh.length; k += 100) {
+          await saveOrders(await getOrdersBatch(fetchFn, creds, fresh.slice(k, k + 100)));
         }
+        await saveProgress(i + 1);
         result = await found();
-        if (result.length) return;
+        if (result.length) break;
       }
+      await db.run(`DELETE FROM settings WHERE key = 'sync_progress'`);
       lastSync = Date.now();
     })();
     try { await syncing; } finally { syncing = null; }
@@ -681,6 +730,46 @@ export function createApp({ db, fetchFn = fetch }) {
       params,
     );
     return c.json(rows);
+  });
+
+  // ---------- Перенесення налаштувань між копіями (локально ⇄ Cloudflare) ----------
+  const EXPORT_TABLES = ['templates', 'fops', 'offices', 'channels', 'inv_fops'];
+  const EXPORT_SETTINGS = ['lpcrm_subdomain', 'lpcrm_search_days', 'default_fop_id', 'checkbox_enabled', 'checkbox_search_days',
+    'invoice_date_mode', 'rahunok_next_number', 'retention_days', 'seller_note'];
+  const SECRET_COLS = new Set(['checkbox_password', 'checkbox_pin', 'checkbox_license', 'checkbox_login']);
+
+  app.get('/api/admin/export', async (c) => {
+    need(c, 'users');
+    const out = { version: 1, exported_at: nowIso(), tables: {}, settings: {} };
+    for (const t of EXPORT_TABLES) {
+      out.tables[t] = (await db.all(`SELECT * FROM ${t}`)).map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !SECRET_COLS.has(k))));
+    }
+    const s = await settings();
+    for (const k of EXPORT_SETTINGS) if (s[k] !== undefined) out.settings[k] = s[k];
+    return c.json(out);
+  });
+
+  app.post('/api/admin/import', async (c) => {
+    need(c, 'users');
+    const b = await c.req.json();
+    if (!b?.tables) throw fail(400, 'Це не файл експорту налаштувань.');
+    const counts = {};
+    for (const t of EXPORT_TABLES) {
+      const rows = b.tables[t];
+      if (!Array.isArray(rows)) continue;
+      const cols = new Set((await db.all(`PRAGMA table_info(${t})`)).map((x) => x.name));
+      await db.run(`DELETE FROM ${t}`);
+      for (const r of rows) {
+        const keys = Object.keys(r).filter((k) => cols.has(k) && !SECRET_COLS.has(k));
+        await db.run(`INSERT INTO ${t} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`, keys.map((k) => r[k]));
+      }
+      counts[t] = rows.length;
+    }
+    for (const [k, v] of Object.entries(b.settings || {})) {
+      if (!EXPORT_SETTINGS.includes(k)) continue;
+      await db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, String(v)]);
+    }
+    return c.json({ ok: true, counts });
   });
 
   // =====================================================================

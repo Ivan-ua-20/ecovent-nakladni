@@ -33,7 +33,9 @@ export function randomToken(bytes = 32) {
   return toHex(a);
 }
 
-const ITER = 100000;
+let ITER = 100000;
+// На Cloudflare (ліміт процесорного часу) — менше ітерацій; збережені хеші містять свою кількість ітерацій.
+export function setIterations(n) { if (n >= 1000) ITER = Math.min(n, 100000); }
 
 async function derive(password, saltBytes, iterations) {
   const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);

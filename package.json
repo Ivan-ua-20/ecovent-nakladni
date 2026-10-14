@@ -6,7 +6,8 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "start": "node --no-warnings dist/server.mjs",
-    "dev": "node --no-warnings --watch src/server-node.js"
+    "dev": "node --no-warnings --watch src/server-node.js",
+    "dev:cf": "npx wrangler pages dev public --d1 DB=nakladni-db"
   },
   "keywords": [],
   "author": "",
@@ -17,8 +18,7 @@
     "hono": "^4.13.13"
   },
   "devDependencies": {
-    "esbuild": "^0.28.2",
-    "playwright": "^1.64.0"
+    "esbuild": "^0.28.2"
   },
   "type": "module"
 }

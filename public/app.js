@@ -8,13 +8,21 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const main = $('#main');
 const MASK = '••••••';
 
-async function api(method, url, body) {
+// Сервер на Cloudflare може відповісти «обробка триває» (202), якщо пошук у LP-CRM довгий, — тоді повторюємо запит.
+let onPending = null;
+async function api(method, url, body, attempt = 0) {
   const res = await fetch(url, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
   });
   const json = await res.json().catch(() => ({}));
+  if (res.status === 202 && json.pending) {
+    if (attempt >= 60) throw new Error('Пошук триває надто довго. Спробуйте ще раз або введіть код замовлення.');
+    onPending?.(attempt + 1);
+    await new Promise((r) => setTimeout(r, 400));
+    return api(method, url, body, attempt + 1);
+  }
   if (res.status === 401 && !url.startsWith('/api/auth/')) { showAuth(); throw new Error(json.error || 'Потрібно увійти'); }
   if (!res.ok) throw new Error(json.error || `Помилка ${res.status}`);
   return json;
@@ -233,6 +241,7 @@ async function viewInvoice(orderId) {
 async function loadInvoice(orderId, fresh = false) {
   const area = $('#invArea');
   area.innerHTML = `<div class="card empty"><span class="spinner"></span> Завантажую замовлення №${esc(orderId)}… <div class="small" style="margin-top:6px">Перший пошук за номером може тривати до хвилини: програма завантажує список замовлень із LP-CRM. Далі — кілька секунд.</div></div>`;
+  onPending = (n) => { const el = $('#invArea .empty'); if (el) el.innerHTML = `<span class="spinner"></span> Шукаю замовлення №${esc(orderId)} у LP-CRM… (крок ${n + 1})`; };
   try {
     current = await api('GET', `/api/invoice/${encodeURIComponent(orderId)}${fresh ? '?fresh=1' : ''}`);
     current.requestedId = orderId;
@@ -838,8 +847,33 @@ async function viewSettings() {
           <div class="muted small">Старші версії накладних і рахунки видаляються автоматично.</div>
           <div class="btn-row"><button class="btn primary">Зберегти</button></div>
         </form>
+        ${can('users') ? `<div class="card form-stack">
+          <h3>Перенесення налаштувань</h3>
+          <div class="muted small">ФОПи накладних і рахунків (з підписами й печатками), відділи, поле 1, шаблони і загальні налаштування — одним файлом.
+            Ключ LP-CRM, доступи Checkbox, користувачі й історія не переносяться. Імпорт <b>замінює</b> поточні довідники.</div>
+          <div class="btn-row"><button type="button" class="btn" id="sExport">Завантажити файл налаштувань</button>
+            <label class="btn">Імпортувати файл<input type="file" accept=".json,application/json" id="sImport" hidden></label></div>
+        </div>` : ''}
       </div>
     </div>`;
+  if (can('users')) {
+    $('#sExport').onclick = async () => {
+      const data = await api('GET', '/api/admin/export');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' }));
+      a.download = `nakladni-nalashtuvannya-${todayKyiv()}.json`;
+      document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    };
+    $('#sImport').onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        const r = await api('POST', '/api/admin/import', JSON.parse(await file.text()));
+        toast(`Імпортовано: ФОПів ${r.counts.fops ?? 0}, ФОПів рахунків ${r.counts.inv_fops ?? 0}, відділів ${r.counts.offices ?? 0}`);
+        await viewSettings();
+      } catch (er) { toast('Імпорт: ' + er.message, true); }
+    };
+  }
   const save = async (form, extra = {}) => {
     const d = { ...Object.fromEntries(new FormData(form)), ...extra };
     try { await api('PUT', '/api/settings', d); toast('Збережено'); await viewSettings(); } catch (err) { toast(err.message, true); }
