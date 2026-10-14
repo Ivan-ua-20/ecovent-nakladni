@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { getOrder } from '../src/lpcrm.js';
+let n = 0; const urls = [];
+const fetchFn = async (url) => { n++; urls.push(url);
+  if (n <= 2) return new Response('<html><title>429 Too Many Requests</title></html>', { status: 429 });
+  return new Response(JSON.stringify({ status: 'ok', data: [{ order_id: '5', products: [] }] }), { status: 200 }); };
+const t = Date.now();
+const r = await getOrder(fetchFn, { subdomain: 'x', key: 'k' }, '5');
+assert.equal(r.order.order_id, '5');
+assert.equal(n, 3);
+assert.ok(urls.every((u) => u.startsWith('https://')), 'без повторного запиту по http');
+const again = await getOrder(fetchFn, { subdomain: 'x', key: 'k' }, '5');
+assert.equal(n, 3, 'повторне відкриття бере з кешу');
+console.log(`OK — 429 оброблено за ${((Date.now() - t) / 1000).toFixed(1)} с`);

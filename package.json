@@ -1,0 +1,24 @@
+{
+  "name": "nakladni",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node --no-warnings dist/server.mjs",
+    "dev": "node --no-warnings --watch src/server-node.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@hono/node-server": "^2.1.4",
+    "docx": "^9.10.0",
+    "hono": "^4.13.13"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "playwright": "^1.64.0"
+  },
+  "type": "module"
+}

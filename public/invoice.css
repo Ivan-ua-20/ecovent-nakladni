@@ -1,0 +1,98 @@
+/* Документ накладної: однаково на екрані та на папері A4 */
+.paper {
+  width: 210mm; min-height: 297mm; padding: 13mm 14mm; background: #fff; color: #111;
+  font-family: Arial, "Segoe UI", sans-serif; font-size: 10pt; line-height: 1.35;
+  position: relative;
+}
+.inv { --accent: #1f2937; }
+.inv-title { font-size: 17pt; margin: 0 0 6mm; font-weight: 700; color: var(--accent); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.inv-title span { font-size: 11pt; font-weight: 400; color: #444; }
+.inv-headnote { font-size: 9pt; color: #444; margin-bottom: 4mm; font-style: italic; }
+.inv-parties { display: grid; grid-template-columns: 1fr 1fr; gap: 8mm; margin-bottom: 4mm; }
+.party-label { font-size: 7.5pt; text-transform: uppercase; letter-spacing: .08em; color: #777; font-weight: 700; margin-bottom: 1.5mm; }
+.party-name { font-weight: 700; font-size: 10.5pt; margin-bottom: 1mm; }
+.party div { overflow-wrap: anywhere; }
+.inv-meta { font-size: 9pt; color: #333; margin: 2mm 0 4mm; padding: 2mm 0; border-top: 1px solid #ddd; border-bottom: 1px solid #ddd; }
+table.inv-items { width: 100%; border-collapse: collapse; margin-top: 2mm; }
+table.inv-items th, table.inv-items td { border: 1px solid #444; padding: 1.6mm 2mm; vertical-align: top; }
+table.inv-items th { background: #efefef; font-size: 8.5pt; font-weight: 700; text-align: center; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+table.inv-items .c-n { width: 8mm; text-align: center; }
+table.inv-items .c-art { width: 24mm; font-size: 9pt; }
+table.inv-items .c-u { width: 11mm; text-align: center; }
+table.inv-items .c-q { width: 14mm; text-align: right; }
+table.inv-items .c-m { width: 24mm; text-align: right; white-space: nowrap; }
+table.inv-items tr { break-inside: avoid; }
+.inv-totals { margin: 3mm 0 0 auto; width: 80mm; }
+.inv-totals > div { display: flex; justify-content: space-between; gap: 6mm; padding: .6mm 0; }
+.inv-totals .strong { font-size: 11.5pt; border-top: 1.5px solid #222; margin-top: 1mm; padding-top: 1.5mm; }
+.inv-totals .vat { justify-content: flex-end; color: #555; font-size: 8.5pt; }
+.inv-words { margin: 5mm 0 3mm; }
+.inv-foot { font-size: 8.5pt; color: #444; margin: 4mm 0; padding: 2mm 3mm; border-left: 2px solid var(--accent); background: #fafafa; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.inv-sign { display: grid; grid-template-columns: 1fr 1fr; gap: 14mm; margin-top: 10mm; break-inside: avoid; }
+.sign-label { font-size: 8.5pt; color: #555; }
+.sign-line { height: 20mm; border-bottom: 1px solid #333; position: relative; }
+.sig-img { position: absolute; left: 4mm; bottom: 1mm; max-height: 16mm; max-width: 45mm; }
+.stamp-img { position: absolute; left: 32mm; bottom: -12mm; width: 36mm; height: 36mm; object-fit: contain; opacity: .9; }
+.sign-name { font-size: 8.5pt; margin-top: 1.5mm; }
+
+/* Компактна */
+.inv-compact { font-size: 9pt; }
+.cmp-head { display: flex; justify-content: space-between; gap: 8mm; border-bottom: 2px solid var(--accent); padding-bottom: 3mm; margin-bottom: 3mm; }
+.cmp-title { font-size: 14pt; font-weight: 700; }
+.cmp-date { color: #555; }
+.cmp-seller { text-align: right; font-size: 8.5pt; color: #333; }
+.cmp-buyer { margin-bottom: 2mm; }
+.inv-compact table.inv-items th, .inv-compact table.inv-items td { border: 0; border-bottom: 1px solid #ccc; padding: 1.2mm 1.5mm; }
+.inv-compact table.inv-items th { background: none; border-bottom: 1.5px solid #222; text-align: left; }
+.inv-compact .inv-sign { margin-top: 6mm; }
+.inv-compact .sign-line { height: 14mm; }
+
+/* Брендована */
+.br-band { display: flex; justify-content: space-between; align-items: center; gap: 8mm; background: var(--accent); color: #fff; margin: -13mm -14mm 7mm; padding: 8mm 14mm; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.br-logo { max-height: 16mm; max-width: 60mm; background: #fff; border-radius: 2mm; padding: 1.5mm 2.5mm; }
+.br-mark { font-size: 15pt; font-weight: 700; letter-spacing: .02em; }
+.br-doc { text-align: right; }
+.br-title { font-size: 17pt; font-weight: 700; }
+.br-no { opacity: .9; font-size: 10pt; }
+.inv-branded table.inv-items th, .inv-branded table.inv-items td { border: 0; border-bottom: 1px solid #ddd; }
+.inv-branded table.inv-items th { background: color-mix(in srgb, var(--accent) 12%, white); color: #111; text-align: left; }
+.inv-branded .inv-totals .strong { color: var(--accent); border-top-color: var(--accent); }
+
+@page { size: A4; margin: 0; }
+@media print {
+  .paper { box-shadow: none !important; margin: 0 !important; break-after: page; min-height: 296mm; }
+  .paper:last-child { break-after: auto; }
+}
+
+/* ===== Рахунок на оплату ===== */
+.rh { font-family: Arial, sans-serif; font-size: 9.5pt; color: #111; }
+.rh-warn { text-align: center; font-size: 8pt; line-height: 1.35; margin: 0 6mm 4mm; }
+.rh-sample { border: 1px solid #333; padding: 2mm 4mm 3mm; margin-bottom: 5mm; }
+.rh-sample-title { text-align: center; font-weight: 700; font-size: 9.5pt; margin-bottom: 2mm; }
+.rh-grid { display: grid; grid-template-columns: 30mm 1fr; row-gap: 1.6mm; align-items: center; font-size: 8.5pt; }
+.rh-grid .lbl { color: #222; }
+.rh-box { display: inline-block; border: 1px solid #333; padding: .6mm 4mm; min-width: 40mm; text-align: center; }
+.rh-bankrow { display: flex; justify-content: space-between; align-items: baseline; }
+.rh-credit { margin-right: 22mm; }
+.rh-ibanrow { display: flex; justify-content: flex-end; }
+.rh-iban { min-width: 70mm; }
+.rh-title { font-size: 14pt; font-weight: 700; margin: 4mm 0 4mm; padding-bottom: 1.5mm; border-bottom: 2px solid #000; }
+.rh-parties { display: grid; grid-template-columns: 30mm 1fr; row-gap: 3.5mm; margin-bottom: 4mm; font-size: 8.8pt; line-height: 1.35; }
+.rh-big { font-size: 10pt; }
+table.rh-items { width: 100%; border-collapse: collapse; }
+table.rh-items th, table.rh-items td { border: 1px solid #333; padding: 1.2mm 1.6mm; vertical-align: top; font-size: 8.5pt; }
+table.rh-items th { background: #eee; font-weight: 700; text-align: center; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+table.rh-items .c-n { width: 8mm; text-align: center; }
+table.rh-items .c-q { width: 16mm; text-align: right; }
+table.rh-items .c-u { width: 11mm; text-align: center; }
+table.rh-items .c-m { width: 24mm; text-align: right; white-space: nowrap; }
+.rh-totals { margin: 3mm 0 0 auto; width: 70mm; font-weight: 700; font-size: 10pt; }
+.rh-totals > div { display: flex; justify-content: space-between; padding: .4mm 0; }
+.rh-words { margin: 4mm 0 0; padding-bottom: 2.5mm; border-bottom: 2px solid #000; font-size: 8.8pt; line-height: 1.5; }
+.rh-words b { font-size: 10pt; }
+.rh-sign { display: flex; align-items: flex-end; justify-content: flex-end; gap: 4mm; margin-top: 9mm; }
+.rh-sign-label { font-weight: 700; font-size: 10pt; }
+.rh-sign-line { position: relative; display: inline-block; width: 60mm; height: 16mm; border-bottom: 1px solid #333; }
+.rh-sig { position: absolute; left: 6mm; bottom: 1mm; max-height: 14mm; max-width: 40mm; }
+.rh-stamp { position: absolute; left: 24mm; bottom: -12mm; width: 32mm; height: 32mm; object-fit: contain; opacity: .9; }
+.rh-sign-name { font-size: 9pt; min-width: 45mm; }
