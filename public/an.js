@@ -37,6 +37,7 @@ const change = (cur, prev) => (prev ? ((cur - prev) / prev) * 100 : null);
 export function createAnalyticsUI(ctx) {
   const { api, $, $$, esc, toast, modal } = ctx;
   const main = () => ctx.main;
+  const full = () => ctx.can('analytics'); // менеджер (без цього права) бачить лише свої замовлення
 
   // ---------- стан інтерфейсу (запам'ятовується в браузері) ----------
   const DEF = { period: 'cm', from: '', to: '', cmpMode: 'auto', cmpFrom: '', cmpTo: '', depts: [], sources: [], managers: [], brands: [], cats: [], metric: 'net', cumulative: true, showTarget: true, showCmp: true, table: false, collapsed: [] };
@@ -158,7 +159,7 @@ export function createAnalyticsUI(ctx) {
     renderPeriods();
     $('#anRefresh').onclick = () => startSync('today');
 
-    const [sync, attn] = await Promise.all([api('GET', '/api/an/sync').catch(() => ({})), api('GET', '/api/an/attention').catch(() => null)]);
+    const [sync, attn] = await Promise.all([api('GET', '/api/an/sync').catch(() => ({})), full() ? api('GET', '/api/an/attention').catch(() => null) : null]);
     showAttention(attn);
     $('#anFresh').textContent = sync.lastSync ? `Дані з LP-CRM оновлено ${ctx.fmtDateTime(sync.lastSync)}` : 'Дані ще не завантажено';
     const running = sync.state && !sync.state.done && !sync.state.error;
@@ -167,9 +168,9 @@ export function createAnalyticsUI(ctx) {
       $('#anBody').innerHTML = `<div class="card empty"><div class="big">Замовлення ще не завантажено</div>
         <p>Програма завантажить замовлення зі статусами «Принят», «Отправлен», «Очікує викупу», «Завершено», «Відмова на пошті» і «Повернуто на склад» за останні 6 місяців.
         Це займе кілька хвилин; далі дані оновлюватимуться раз на добу (за останні 30 днів) або кнопкою «Оновити сьогодні».</p>
-        <button class="btn primary" id="anFirst">Завантажити замовлення</button></div>`;
+        ${full() ? '<button class="btn primary" id="anFirst">Завантажити замовлення</button>' : '<p class="muted">Перше завантаження запускає адміністратор.</p>'}</div>`;
       $('#anFilters').hidden = true;
-      $('#anFirst').onclick = () => startSync('full');
+      if (full()) $('#anFirst').onclick = () => startSync('full');
       return;
     } else if (sync.dailyDue) {
       startSync('daily'); // автоматичне оновлення раз на добу — останні 30 днів
@@ -199,7 +200,7 @@ export function createAnalyticsUI(ctx) {
       if (!$('#anSync')) return;
       if (s?.done) {
         toast('Дані з LP-CRM оновлено');
-        api('GET', '/api/an/attention').then(showAttention).catch(() => {});
+        if (full()) api('GET', '/api/an/attention').then(showAttention).catch(() => {});
         $('#anFresh').textContent = `Дані з LP-CRM оновлено щойно`;
         $('#anFilters').hidden = false;
         load();
@@ -253,6 +254,7 @@ export function createAnalyticsUI(ctx) {
 
   // ---------- фільтри ----------
   function renderFilters(d) {
+    if (d.own) ui.managers = [];
     const o = d.options;
     const deptSel = ui.depts;
     const srcOpts = o.sources.filter((s) => !deptSel.length || deptSel.includes(s.dept_id));
@@ -271,7 +273,7 @@ export function createAnalyticsUI(ctx) {
         ${active ? `<button class="btn sm" id="anReset">Скинути (${active})</button>` : ''}</div>
       ${row('Відділ', o.depts.map((x) => chip('depts', x.id, x.name, deptSel.includes(x.id))).join(''))}
       ${row('Джерело', srcOpts.map((x) => chip('sources', x.id, x.name, ui.sources.includes(x.id))).join(''))}
-      ${row('Менеджер', mgrOpts.map((x) => chip('managers', x.login, x.name, ui.managers.includes(x.login))).join(''))}
+      ${d.own ? '' : row('Менеджер', mgrOpts.map((x) => chip('managers', x.login, x.name, ui.managers.includes(x.login))).join(''))}
       ${row('Бренд', o.brands.map((x) => chip('brands', x.id, x.name, ui.brands.includes(x.id))).join(''))}
       ${row('Категорія', o.cats.map((x) => chip('cats', x.id, x.name, ui.cats.includes(x.id))).join(''), ui.brands.length ? '<span class="f-hint">категорії вибраних брендів</span>' : '')}
       <div class="f-foot"><span class="small muted">Можна вибирати кілька значень у кожному рядку. Клік по рядку в таблицях нижче теж додає фільтр.</span></div>`;
@@ -311,6 +313,11 @@ export function createAnalyticsUI(ctx) {
     const p = d.kpi.prev;
     const t = d.target;
     const hasCmp = Boolean(d.cmp && p);
+    if (d.own && !d.own.logins.length) {
+      $('#anBody').innerHTML = `<div class="card empty"><div class="big">Акаунт ще не прив’язано до логіна LP-CRM</div>
+        <p>Попросіть власника або адміністратора вказати ваш логін LP-CRM у розділі «Користувачі» — тоді тут з’являться ваші замовлення.</p></div>`;
+      return;
+    }
     const tile = (label, value, sub, dl) => `<div class="kpi"><div class="kpi-l">${label}</div><div class="kpi-v">${value}</div>
       <div class="kpi-s">${dl || ''}${sub ? `<span class="muted">${sub}</span>` : ''}</div></div>`;
     const kpis = [
@@ -328,6 +335,7 @@ export function createAnalyticsUI(ctx) {
     }
 
     $('#anBody').innerHTML = `
+      ${d.own ? `<div class="alert info an-own">Показано лише ваші замовлення · логін LP-CRM: <b>${d.own.logins.map(esc).join(', ')}</b></div>` : ''}
       ${d.cmp ? `<div class="small muted an-cmp-note">Порівняння: ${range(d.range.from, d.range.to)} проти ${range(d.cmp.from, d.cmp.to)}</div>` : ''}
       <div class="kpis">${kpis.join('')}</div>
       ${targetCard(d)}
@@ -341,12 +349,12 @@ export function createAnalyticsUI(ctx) {
             <button data-c="0" class="${!ui.cumulative ? 'on' : ''}" aria-pressed="${!ui.cumulative}">По днях</button>
             <button data-c="1" class="${ui.cumulative ? 'on' : ''}" aria-pressed="${ui.cumulative}">Наростаючим підсумком</button>
           </div>
-          <label class="check"><input type="checkbox" id="anTgt" ${ui.showTarget ? 'checked' : ''} ${targetAvailable(d) ? '' : 'disabled'}> Таргет</label>
+          ${d.own ? '' : `<label class="check"><input type="checkbox" id="anTgt" ${ui.showTarget ? 'checked' : ''} ${targetAvailable(d) ? '' : 'disabled'}> Таргет</label>`}
           ${d.cmp ? `<label class="check"><input type="checkbox" id="anCmp" ${ui.showCmp ? 'checked' : ''}> Порівняння</label>` : ''}
         </div>
         <div class="legend" id="anLegend"></div>
         <div class="chart" id="anChart"></div>
-        ${!targetAvailable(d) && ui.showTarget ? `<div class="small muted">${esc(targetHint(d))}</div>` : ''}
+        ${!d.own && !targetAvailable(d) && ui.showTarget ? `<div class="small muted">${esc(targetHint(d))}</div>` : ''}
         <button class="linkbtn small" id="anTableBtn">${ui.table ? 'Сховати таблицю' : 'Показати таблицею'}</button>
         <div id="anTable"></div>
       </div>

@@ -235,11 +235,32 @@ assert.ok(!att2.users.some((u) => u.v === 'newbie') && att2.products.fresh === 0
 const sy = await req('GET', '/api/an/sync');
 assert.equal(sy.dailyDue, false, 'щоденне оновлення вже виконано');
 
-// ---------- 9. Доступ ----------
-await app.request('/api/users', { method: 'POST', headers: H, body: JSON.stringify({ login: 'man', password: 'pass1234', role: 'manager' }) });
+// ---------- 9. Доступ: менеджер бачить лише свої замовлення ----------
+const cu = await (await app.request('/api/users', { method: 'POST', headers: H, body: JSON.stringify({ login: 'man', password: 'pass1234', role: 'manager' }) })).json();
 const ml = await app.request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: 'man', password: 'pass1234' }) });
-const mr = await app.request('/api/an/query', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: ml.headers.get('set-cookie').split(';')[0] }, body: '{}' });
-assert.equal(mr.status, 403, 'менеджер не бачить аналітику');
+const MH = { 'Content-Type': 'application/json', Cookie: ml.headers.get('set-cookie').split(';')[0] };
+const mreq = async (method, path, body) => app.request(path, { method, headers: MH, body: body ? JSON.stringify(body) : undefined });
+let mq = await (await mreq('POST', '/api/an/query', { from, to: today })).json();
+assert.deepEqual(mq.own, { logins: [] }, 'без прив’язки — порожньо');
+assert.equal(mq.kpi.cur.cnt, 0);
+await app.request(`/api/users/${cu.id}`, { method: 'PUT', headers: H, body: JSON.stringify({ crm_logins: 'Olena, ivan' }) });
+mq = await (await mreq('POST', '/api/an/query', { from, to: today, managers: ['denys'] })).json();
+const mine = (await req('POST', '/api/an/query', { from, to: today, managers: ['olena', 'ivan'] })).kpi.cur.cnt;
+assert.ok(mine > 0 && mq.kpi.cur.cnt === mine, 'менеджер бачить лише замовлення своїх логінів');
+assert.equal(mq.target.applicable, false, 'без таргету');
+assert.ok(mq.byManager.every((m) => ['olena', 'ivan'].includes(m.login)));
+assert.ok(mq.byDept.every((d) => !d.plan) && mq.bySource.every((x) => !x.plan), 'без планів');
+for (const [m, pth, body] of [['GET', '/api/an/config'], ['GET', '/api/an/targets?month=2026-10'], ['GET', '/api/an/attention'], ['PUT', '/api/an/settings', {}], ['POST', '/api/an/sync/start', { mode: 'full' }], ['GET', '/api/users']]) {
+  assert.equal((await mreq(m, pth, body)).status, 403, `менеджеру заборонено ${m} ${pth}`);
+}
+assert.equal((await mreq('GET', '/api/an/sync')).status, 200);
+
+// ---------- 10. Передача прав власника ----------
+assert.equal((await app.request('/api/users/transfer-owner', { method: 'POST', headers: MH, body: JSON.stringify({ userId: 1, myRole: 'viewer', password: 'pass1234' }) })).status, 403, 'лише власник');
+assert.equal((await app.request('/api/users/transfer-owner', { method: 'POST', headers: H, body: JSON.stringify({ userId: cu.id, myRole: 'admin', password: 'wrong' }) })).status, 400, 'потрібен пароль');
+assert.equal((await app.request('/api/users/transfer-owner', { method: 'POST', headers: H, body: JSON.stringify({ userId: cu.id, myRole: 'admin', password: 'secret123' }) })).status, 200);
+const roles = Object.fromEntries((await db.all(`SELECT login, role FROM users`)).map((r) => [r.login, r.role]));
+assert.deepEqual(roles, { o: 'admin', man: 'owner' }, 'новий власник і нова роль колишнього');
 
 globalThis.setTimeout = realSetTimeout;
 console.log('OK — аналітика працює');

@@ -2,7 +2,7 @@
 // локально запускається через Node.js, на хостингу — як Cloudflare Worker.
 import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
-import { ROLES, can, hashPassword, verifyPassword, randomToken, publicUser } from './auth.js';
+import { ROLES, can, hashPassword, verifyPassword, randomToken, publicUser, crmLogins } from './auth.js';
 import { DEFAULT_WARNING } from './schema.js';
 import { mountAnalytics } from './analytics.js';
 import { normalizeOrder, applyEdits } from './normalize.js';
@@ -187,8 +187,8 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     if (!ASSIGNABLE.includes(b.role)) throw fail(400, 'Невідома роль.');
     if (String(b.password || '').length < 6) throw fail(400, 'Пароль — не менше 6 символів.');
     if (await db.get(`SELECT id FROM users WHERE login = ?`, [login])) throw fail(400, 'Такий логін уже є.');
-    const r = await db.run(`INSERT INTO users (login, name, password_hash, role, active, created_at) VALUES (?, ?, ?, ?, 1, ?)`, [
-      login, String(b.name || '').trim(), await hashPassword(b.password), b.role, nowIso(),
+    const r = await db.run(`INSERT INTO users (login, name, password_hash, role, active, created_at, crm_logins) VALUES (?, ?, ?, ?, 1, ?, ?)`, [
+      login, String(b.name || '').trim(), await hashPassword(b.password), b.role, nowIso(), crmLogins(b.crm_logins).join(','),
     ]);
     return c.json({ id: r.lastId });
   });
@@ -203,6 +203,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     const sets = [];
     const vals = [];
     if (b.name !== undefined) { sets.push('name = ?'); vals.push(String(b.name).trim()); }
+    if (b.crm_logins !== undefined) { sets.push('crm_logins = ?'); vals.push(crmLogins(b.crm_logins).join(',')); }
     if (b.role !== undefined && target.role !== 'owner') {
       if (!ASSIGNABLE.includes(b.role)) throw fail(400, 'Невідома роль.');
       sets.push('role = ?'); vals.push(b.role);
@@ -219,6 +220,23 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     if (b.password || b.active === false || b.active === 0 || b.role !== undefined) {
       await db.run(`DELETE FROM sessions WHERE user_id = ? AND user_id != ?`, [target.id, me.id]);
     }
+    return c.json({ ok: true });
+  });
+
+  // Передача прав власника: лише власник, з підтвердженням паролем. Собі він вибирає нову роль.
+  app.post('/api/users/transfer-owner', async (c) => {
+    const me = c.get('user');
+    if (me.role !== 'owner') throw fail(403, 'Передати права може лише власник.');
+    const b = await c.req.json();
+    if (!(await verifyPassword(String(b.password || ''), me.password_hash))) throw fail(400, 'Невірний пароль.');
+    if (!ASSIGNABLE.includes(b.myRole)) throw fail(400, 'Виберіть свою нову роль.');
+    const target = await db.get(`SELECT * FROM users WHERE id = ?`, [b.userId]);
+    if (!target || String(target.id) === String(me.id)) throw fail(400, 'Виберіть іншого користувача.');
+    if (!target.active) throw fail(400, 'Цей акаунт вимкнено — спершу увімкніть його.');
+    await db.batch([
+      [`UPDATE users SET role = 'owner' WHERE id = ?`, [target.id]],
+      [`UPDATE users SET role = ? WHERE id = ?`, [b.myRole, me.id]],
+    ]);
     return c.json({ ok: true });
   });
 

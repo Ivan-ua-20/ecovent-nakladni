@@ -363,3 +363,8 @@ body.auth-mode .shell { display: none; }
   .at-bar input { max-width: none; }
 }
 .f-sum .vchip { padding: 3px 10px; }
+.crm-pick { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
+.chk-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px; cursor: pointer; }
+.chk-chip input { margin: 0; }
+.chk-chip:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); }
+.an-own { margin-bottom: 12px; }

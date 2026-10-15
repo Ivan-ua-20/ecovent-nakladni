@@ -1902,9 +1902,9 @@ var ROLES = {
   viewer: "\u041F\u0435\u0440\u0435\u0433\u043B\u044F\u0434"
 };
 var PERMS = {
-  owner: ["docs.view", "docs.edit", "refs.edit", "api", "users", "analytics"],
-  admin: ["docs.view", "docs.edit", "refs.edit", "api", "users", "analytics"],
-  manager: ["docs.view", "docs.edit", "refs.edit"],
+  owner: ["docs.view", "docs.edit", "refs.edit", "api", "users", "analytics", "an.view"],
+  admin: ["docs.view", "docs.edit", "refs.edit", "api", "users", "analytics", "an.view"],
+  manager: ["docs.view", "docs.edit", "refs.edit", "an.view"],
   viewer: ["docs.view"]
 };
 var permsOf = (role) => PERMS[role] || [];
@@ -1947,8 +1947,10 @@ var publicUser = (u) => u ? {
   role_name: ROLES[u.role] || u.role,
   active: u.active,
   created_at: u.created_at,
-  perms: permsOf(u.role)
+  perms: permsOf(u.role),
+  crm_logins: crmLogins(u.crm_logins)
 } : null;
+var crmLogins = (v) => [...new Set((Array.isArray(v) ? v : String(v || "").split(",")).map((x) => String(x).trim().toLowerCase()).filter(Boolean))].slice(0, 20);
 async function resetOwnerPassword(db, newPassword) {
   const owner = await db.get(`SELECT id, login FROM users WHERE role = 'owner' LIMIT 1`);
   if (!owner) return null;
@@ -2207,6 +2209,7 @@ async function seedChannels(db) {
 }
 var ADD_COLUMNS = [
   ["offices", "seller_text", "TEXT DEFAULT ''"],
+  ["users", "crm_logins", "TEXT DEFAULT ''"],
   ["channels", "seller_text", "TEXT DEFAULT ''"],
   ["versions", "user_name", "TEXT DEFAULT ''"],
   ["users", "failed_logins", "INTEGER DEFAULT 0"],
@@ -2215,7 +2218,7 @@ var ADD_COLUMNS = [
   ["an_products", "cat_manual", "INTEGER"],
   ["an_products", "seen", "INTEGER NOT NULL DEFAULT 0"]
 ];
-var SCHEMA_VERSION = "9";
+var SCHEMA_VERSION = "10";
 var MP_SOURCES = [
   ["Rozetka (OneDay)", ["rozetka(oneday)"]],
   ["Rozetka (Ecovent)", ["rozetka(ecovent)"]],
@@ -2833,9 +2836,15 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     await putSetting("an_values", JSON.stringify(cur));
     return cur;
   }
+  const OWN_ALLOWED = /* @__PURE__ */ new Set(["POST /api/an/query", "GET /api/an/sync", "POST /api/an/sync/start", "POST /api/an/sync/step"]);
   let checkedRemap = false;
   app.use("/api/an/*", async (c, next) => {
-    need(c, "analytics");
+    const user = c.get("user");
+    if (!can(user, "analytics")) {
+      need(c, "an.view");
+      if (!OWN_ALLOWED.has(`${c.req.method} ${c.req.path}`)) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432 \u0434\u043B\u044F \u0446\u0456\u0454\u0457 \u0434\u0456\u0457.");
+      c.set("anOwn", crmLogins(user.crm_logins));
+    }
     if (!checkedRemap) {
       checkedRemap = true;
       const f = await db.get(`SELECT value FROM settings WHERE key = 'an_need_remap'`);
@@ -3119,6 +3128,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
   app.post("/api/an/sync/start", async (c) => {
     const b = await c.req.json().catch(() => ({}));
     const mode = ["today", "full", "reset"].includes(b.mode) ? b.mode : "daily";
+    if (c.get("anOwn") && !["today", "daily"].includes(mode)) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432 \u0434\u043B\u044F \u0446\u0456\u0454\u0457 \u0434\u0456\u0457.");
     const cur = await getJson("an_sync");
     if (cur && cur.phase !== "done" && !cur.error && !b.force) return c.json({ state: summary(cur), already: true });
     const st = await getSt();
@@ -3322,6 +3332,8 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
       brands: ints(b.brands),
       cats: ints(b.cats)
     };
+    const own = c.get("anOwn");
+    if (own) f.managers = own.length ? own : [""];
     const itemLevel = f.brands.length > 0 || f.cats.length > 0;
     const ok = st.okStatuses.map(Number);
     const rf = st.refuseStatuses.map(Number);
@@ -3429,8 +3441,8 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     const tmap = new Map(targets.map((t) => [`${t.month}|${t.kind}|${t.ref_id}`, t.amount]));
     const srcTarget = (month, id) => tmap.get(`${month}|src|${id}`) || 0;
     const deptTarget = (month, id) => {
-      const own = tmap.get(`${month}|dept|${id}`);
-      if (own) return own;
+      const own2 = tmap.get(`${month}|dept|${id}`);
+      if (own2) return own2;
       return sources.filter((s) => s.dept_id === id).reduce((a, s) => a + srcTarget(month, s.id), 0);
     };
     const planFor = (fn, a, z) => {
@@ -3446,7 +3458,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     else scopeFn = (m) => depts.reduce((a, d) => a + deptTarget(m, d.id), 0);
     const factKey = st.targetBase === "all" ? "rev" : "net";
     const curDaily = fillDays(cur, from, to);
-    let target = { applicable: false, note: targetNote, base: factKey };
+    let target = { applicable: false, note: own ? "" : targetNote, base: factKey };
     if (scopeFn) {
       const perDay = curDaily.map((d) => round2(scopeFn(d.day.slice(0, 7)) / daysInMonth(d.day)));
       const plan = round2(perDay.reduce((a, x) => a + x, 0));
@@ -3528,6 +3540,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     const top = cur.top.map((r) => ({ id: r.id, name: r.name || `\u0422\u043E\u0432\u0430\u0440 ${r.id}`, brand: r.brand ? bName.get(r.brand) || "\u0406\u043D\u0448\u0456" : "\u0406\u043D\u0448\u0456", rev: round2(r.rev), qty: r.qty, rqty: r.rqty }));
     const last = await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`);
     const out = JSON.stringify({
+      own: own ? { logins: own } : null,
       range: { from, to, days: daysBetween(from, to) },
       cmp,
       compareEnabled: st.compare,
@@ -3545,7 +3558,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
       options: {
         depts: [...depts.map((d) => ({ id: d.id, name: d.name })), { id: 0, name: "\u0411\u0435\u0437 \u0432\u0456\u0434\u0434\u0456\u043B\u0443" }],
         sources: sources.map((s) => ({ id: s.id, name: s.name, dept_id: s.dept_id })),
-        managers: [...new Map([
+        managers: own ? own.map((l) => ({ login: l, name: managers.find((m) => m.login === l)?.name || l, dept_id: null, own: true })) : [...new Map([
           ...managers.map((m) => [m.login, { login: m.login, name: m.name || m.login, dept_id: m.dept_id }]),
           ...byManager.filter((m) => !mgrNames.has(m.login)).map((m) => [m.login, { login: m.login, name: m.login, dept_id: null }])
         ]).values()],
@@ -4013,12 +4026,13 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity })
     if (!ASSIGNABLE.includes(b.role)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0430 \u0440\u043E\u043B\u044C.");
     if (String(b.password || "").length < 6) throw fail(400, "\u041F\u0430\u0440\u043E\u043B\u044C \u2014 \u043D\u0435 \u043C\u0435\u043D\u0448\u0435 6 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432.");
     if (await db.get(`SELECT id FROM users WHERE login = ?`, [login])) throw fail(400, "\u0422\u0430\u043A\u0438\u0439 \u043B\u043E\u0433\u0456\u043D \u0443\u0436\u0435 \u0454.");
-    const r = await db.run(`INSERT INTO users (login, name, password_hash, role, active, created_at) VALUES (?, ?, ?, ?, 1, ?)`, [
+    const r = await db.run(`INSERT INTO users (login, name, password_hash, role, active, created_at, crm_logins) VALUES (?, ?, ?, ?, 1, ?, ?)`, [
       login,
       String(b.name || "").trim(),
       await hashPassword(b.password),
       b.role,
-      nowIso()
+      nowIso(),
+      crmLogins(b.crm_logins).join(",")
     ]);
     return c.json({ id: r.lastId });
   });
@@ -4034,6 +4048,10 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity })
     if (b.name !== void 0) {
       sets.push("name = ?");
       vals.push(String(b.name).trim());
+    }
+    if (b.crm_logins !== void 0) {
+      sets.push("crm_logins = ?");
+      vals.push(crmLogins(b.crm_logins).join(","));
     }
     if (b.role !== void 0 && target.role !== "owner") {
       if (!ASSIGNABLE.includes(b.role)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0430 \u0440\u043E\u043B\u044C.");
@@ -4054,6 +4072,21 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity })
     if (b.password || b.active === false || b.active === 0 || b.role !== void 0) {
       await db.run(`DELETE FROM sessions WHERE user_id = ? AND user_id != ?`, [target.id, me.id]);
     }
+    return c.json({ ok: true });
+  });
+  app.post("/api/users/transfer-owner", async (c) => {
+    const me = c.get("user");
+    if (me.role !== "owner") throw fail(403, "\u041F\u0435\u0440\u0435\u0434\u0430\u0442\u0438 \u043F\u0440\u0430\u0432\u0430 \u043C\u043E\u0436\u0435 \u043B\u0438\u0448\u0435 \u0432\u043B\u0430\u0441\u043D\u0438\u043A.");
+    const b = await c.req.json();
+    if (!await verifyPassword(String(b.password || ""), me.password_hash)) throw fail(400, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043F\u0430\u0440\u043E\u043B\u044C.");
+    if (!ASSIGNABLE.includes(b.myRole)) throw fail(400, "\u0412\u0438\u0431\u0435\u0440\u0456\u0442\u044C \u0441\u0432\u043E\u044E \u043D\u043E\u0432\u0443 \u0440\u043E\u043B\u044C.");
+    const target = await db.get(`SELECT * FROM users WHERE id = ?`, [b.userId]);
+    if (!target || String(target.id) === String(me.id)) throw fail(400, "\u0412\u0438\u0431\u0435\u0440\u0456\u0442\u044C \u0456\u043D\u0448\u043E\u0433\u043E \u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430.");
+    if (!target.active) throw fail(400, "\u0426\u0435\u0439 \u0430\u043A\u0430\u0443\u043D\u0442 \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0443\u0432\u0456\u043C\u043A\u043D\u0456\u0442\u044C \u0439\u043E\u0433\u043E.");
+    await db.batch([
+      [`UPDATE users SET role = 'owner' WHERE id = ?`, [target.id]],
+      [`UPDATE users SET role = ? WHERE id = ?`, [b.myRole, me.id]]
+    ]);
     return c.json({ ok: true });
   });
   app.delete("/api/users/:id", async (c) => {

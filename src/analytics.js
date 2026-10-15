@@ -6,6 +6,7 @@
 //  - підсумки рахує база (GROUP BY), щоб воркер не витрачав процесорний час;
 //  - мінімум індексів, щоб не перевищити 100 тис. записів у базу на добу.
 import { call, asList, findOrders } from './lpcrm.js';
+import { can, crmLogins } from './auth.js';
 
 // ---------- дати (дні у форматі YYYY-MM-DD, за київським часом) ----------
 export const kyivDay = (d = new Date()) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv' }).format(d);
@@ -258,9 +259,17 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
     return cur;
   }
 
+  // Доступ: власник і адміністратори — усе; менеджер — лише дашборд зі своїми замовленнями
+  // (за логінами LP-CRM, прив'язаними в «Користувачах») і оновлення даних.
+  const OWN_ALLOWED = new Set(['POST /api/an/query', 'GET /api/an/sync', 'POST /api/an/sync/start', 'POST /api/an/sync/step']);
   let checkedRemap = false;
   app.use('/api/an/*', async (c, next) => {
-    need(c, 'analytics');
+    const user = c.get('user');
+    if (!can(user, 'analytics')) {
+      need(c, 'an.view');
+      if (!OWN_ALLOWED.has(`${c.req.method} ${c.req.path}`)) throw fail(403, 'Недостатньо прав для цієї дії.');
+      c.set('anOwn', crmLogins(user.crm_logins));
+    }
     if (!checkedRemap) {
       checkedRemap = true;
       const f = await db.get(`SELECT value FROM settings WHERE key = 'an_need_remap'`);
@@ -567,6 +576,7 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
   app.post('/api/an/sync/start', async (c) => {
     const b = await c.req.json().catch(() => ({}));
     const mode = ['today', 'full', 'reset'].includes(b.mode) ? b.mode : 'daily';
+    if (c.get('anOwn') && !['today', 'daily'].includes(mode)) throw fail(403, 'Недостатньо прав для цієї дії.');
     const cur = await getJson('an_sync');
     if (cur && cur.phase !== 'done' && !cur.error && !b.force) return c.json({ state: summary(cur), already: true });
     const st = await getSt();
@@ -780,6 +790,9 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
       brands: ints(b.brands),
       cats: ints(b.cats),
     };
+    // Менеджер бачить лише свої замовлення; без прив'язаних логінів — порожньо.
+    const own = c.get('anOwn');
+    if (own) f.managers = own.length ? own : ['\u0001'];
     const itemLevel = f.brands.length > 0 || f.cats.length > 0;
     const ok = st.okStatuses.map(Number);
     const rf = st.refuseStatuses.map(Number);
@@ -900,7 +913,7 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
 
     const factKey = st.targetBase === 'all' ? 'rev' : 'net';
     const curDaily = fillDays(cur, from, to);
-    let target = { applicable: false, note: targetNote, base: factKey };
+    let target = { applicable: false, note: own ? '' : targetNote, base: factKey };
     if (scopeFn) {
       const perDay = curDaily.map((d) => round2(scopeFn(d.day.slice(0, 7)) / daysInMonth(d.day)));
       const plan = round2(perDay.reduce((a, x) => a + x, 0));
@@ -967,6 +980,7 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
 
     const last = await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`);
     const out = JSON.stringify({
+      own: own ? { logins: own } : null,
       range: { from, to, days: daysBetween(from, to) },
       cmp,
       compareEnabled: st.compare,
@@ -978,7 +992,7 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
       options: {
         depts: [...depts.map((d) => ({ id: d.id, name: d.name })), { id: 0, name: 'Без відділу' }],
         sources: sources.map((s) => ({ id: s.id, name: s.name, dept_id: s.dept_id })),
-        managers: [...new Map([...managers.map((m) => [m.login, { login: m.login, name: m.name || m.login, dept_id: m.dept_id }]),
+        managers: own ? own.map((l) => ({ login: l, name: managers.find((m) => m.login === l)?.name || l, dept_id: null, own: true })) : [...new Map([...managers.map((m) => [m.login, { login: m.login, name: m.name || m.login, dept_id: m.dept_id }]),
           ...byManager.filter((m) => !mgrNames.has(m.login)).map((m) => [m.login, { login: m.login, name: m.login, dept_id: null }])]).values()],
         brands: [...brands.map((x) => ({ id: x.id, name: x.name })), { id: 0, name: 'Інші' }],
         cats: catOptions.map((r) => ({ id: r.id, name: r.id ? cName.get(r.id) || `Категорія ${r.id}` : 'Без категорії' }))

@@ -259,6 +259,7 @@ async function seedChannels(db) {
 // Нові колонки для вже створених баз (ALTER TABLE без помилки, якщо колонка вже є).
 const ADD_COLUMNS = [
   ['offices', 'seller_text', "TEXT DEFAULT ''"],
+  ['users', 'crm_logins', "TEXT DEFAULT ''"],
   ['channels', 'seller_text', "TEXT DEFAULT ''"],
   ['versions', 'user_name', "TEXT DEFAULT ''"],
   ['users', 'failed_logins', 'INTEGER DEFAULT 0'],
@@ -269,7 +270,7 @@ const ADD_COLUMNS = [
 ];
 
 // Підвищуйте при зміні схеми: тоді міграція виконається знову (на Cloudflare — один раз на запуск ізолята).
-const SCHEMA_VERSION = '9';
+const SCHEMA_VERSION = '10';
 
 // Початкові відділи аналітики, джерела і відповідності (усе редагується в «Налаштуваннях аналітики»).
 const MP_SOURCES = [

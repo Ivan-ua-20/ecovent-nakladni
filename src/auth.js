@@ -13,11 +13,12 @@ export const ROLES = {
 //  refs.edit  — довідники (ФОПи, відділи, шаблони, ФОПи рахунків) і загальні налаштування
 //  api        — ключі LP-CRM / Checkbox, діагностика API
 //  users      — керування користувачами
-//  analytics  — розділ «Аналітика»
+//  analytics  — розділ «Аналітика» повністю (усі дані, таргети, налаштування)
+//  an.view    — дашборд аналітики (менеджер бачить лише свої замовлення, без таргетів)
 const PERMS = {
-  owner: ['docs.view', 'docs.edit', 'refs.edit', 'api', 'users', 'analytics'],
-  admin: ['docs.view', 'docs.edit', 'refs.edit', 'api', 'users', 'analytics'],
-  manager: ['docs.view', 'docs.edit', 'refs.edit'],
+  owner: ['docs.view', 'docs.edit', 'refs.edit', 'api', 'users', 'analytics', 'an.view'],
+  admin: ['docs.view', 'docs.edit', 'refs.edit', 'api', 'users', 'analytics', 'an.view'],
+  manager: ['docs.view', 'docs.edit', 'refs.edit', 'an.view'],
   viewer: ['docs.view'],
 };
 
@@ -63,8 +64,12 @@ export async function verifyPassword(password, stored) {
 
 export const publicUser = (u) => (u ? {
   id: u.id, login: u.login, name: u.name || u.login, role: u.role, role_name: ROLES[u.role] || u.role,
-  active: u.active, created_at: u.created_at, perms: permsOf(u.role),
+  active: u.active, created_at: u.created_at, perms: permsOf(u.role), crm_logins: crmLogins(u.crm_logins),
 } : null);
+
+// Логіни LP-CRM, прив'язані до акаунта (через кому).
+export const crmLogins = (v) => [...new Set((Array.isArray(v) ? v : String(v || '').split(','))
+  .map((x) => String(x).trim().toLowerCase()).filter(Boolean))].slice(0, 20);
 
 // Скидання пароля власника (локально — через файл RESET-OWNER.txt, на хостингу — через змінну середовища).
 export async function resetOwnerPassword(db, newPassword) {
