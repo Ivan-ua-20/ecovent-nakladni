@@ -44,6 +44,8 @@ export function createAnalyticsUI(ctx) {
   let ui = { ...DEF };
   try { ui = { ...DEF, ...JSON.parse(localStorage.getItem(LS_KEY) || '{}') }; } catch { /* немає сховища */ }
   const persist = () => { try { localStorage.setItem(LS_KEY, JSON.stringify(ui)); } catch { /* немає сховища */ } };
+  // На телефоні фільтри за замовчуванням згорнуті (вибрані значення видно в заголовку).
+  if (!ui.mobInit && window.matchMedia('(max-width: 760px)').matches) { ui.mobInit = true; ui.collapsed = [...new Set([...ui.collapsed, 'filters'])]; persist(); }
 
   function periods() {
     const t = kyivToday();
@@ -449,18 +451,18 @@ export function createAnalyticsUI(ctx) {
   function brandTable(rows, hasCmp) {
     if (!rows.length) return '<div class="card"><h3>Бренди</h3><div class="muted small">Немає даних за період.</div></div>';
     return `<div class="card"><h3>Бренди</h3><div class="table-wrap"><table class="list an-table">
-      <thead><tr><th>Бренд</th><th class="r">Замовлень</th><th class="r">Сума</th><th class="r">Сер. чек</th><th class="r">Відмови</th>${hasCmp ? '<th class="r">Динаміка</th>' : ''}</tr></thead>
+      <thead><tr><th>Бренд</th><th class="r">Зам.</th><th class="r">Сума</th><th class="r hide-m">Сер. чек</th><th class="r hide-m">Відмови</th>${hasCmp ? '<th class="r">Динаміка</th>' : ''}</tr></thead>
       <tbody>${rows.map((r) => `<tr class="click ${ui.brands.includes(r.id) ? 'on' : ''}" data-row="${r.id}" data-key="brands" tabindex="0">
-        <td><b>${esc(r.name)}</b></td><td class="r">${int(r.cnt)}</td><td class="r">${uah(r.rev)}</td><td class="r">${uah(r.avg)}</td>
-        <td class="r">${r.cnt ? pct1((r.rcnt / r.cnt) * 100) : '—'}</td>${hasCmp ? `<td class="r">${delta(r.rev, r.prevRev)}</td>` : ''}</tr>`).join('')}</tbody>
+        <td><b>${esc(r.name)}</b></td><td class="r">${int(r.cnt)}</td><td class="r">${uah(r.rev)}</td><td class="r hide-m">${uah(r.avg)}</td>
+        <td class="r hide-m">${r.cnt ? pct1((r.rcnt / r.cnt) * 100) : '—'}</td>${hasCmp ? `<td class="r">${delta(r.rev, r.prevRev)}</td>` : ''}</tr>`).join('')}</tbody>
     </table></div><div class="small muted">Бренд — за назвою товару, а якщо її не вистачає — за категорією; решта — «Інші». Ручна прив’язка — у налаштуваннях аналітики.</div></div>`;
   }
 
   function topTable(rows) {
     if (!rows.length) return '';
     return `<div class="card"><h3>Топ товарів</h3><div class="table-wrap"><table class="list an-table">
-      <thead><tr><th>Товар</th><th>Бренд</th><th class="r">Продано, шт</th><th class="r">Сума</th><th class="r">Відмови, шт</th></tr></thead>
-      <tbody>${rows.map((r) => `<tr><td>${esc(r.name)}</td><td class="muted">${esc(r.brand || '—')}</td><td class="r">${int(r.qty)}</td><td class="r">${uah(r.rev)}</td><td class="r">${int(r.rqty)}</td></tr>`).join('')}</tbody>
+      <thead><tr><th>Товар</th><th class="hide-m">Бренд</th><th class="r">Шт</th><th class="r">Сума</th><th class="r hide-m">Відмови, шт</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr><td>${esc(r.name)}<div class="small muted show-m">${esc(r.brand || '—')}${r.rqty ? ` · відмов ${int(r.rqty)}` : ''}</div></td><td class="muted hide-m">${esc(r.brand || '—')}</td><td class="r">${int(r.qty)}</td><td class="r">${uah(r.rev)}</td><td class="r hide-m">${int(r.rqty)}</td></tr>`).join('')}</tbody>
     </table></div><div class="small muted">Сума товару — з урахуванням знижки замовлення (розподіленої пропорційно).</div></div>`;
   }
 
@@ -507,9 +509,10 @@ export function createAnalyticsUI(ctx) {
     const isCnt = ui.metric === 'cnt';
     const fmt = isCnt ? int : uah;
     $('#anLegend').innerHTML = out.map((s) => `<span class="lg"><svg width="22" height="8" aria-hidden="true"><line x1="0" y1="4" x2="22" y2="4" stroke="${s.color}" stroke-width="2.5" ${s.dash ? `stroke-dasharray="${s.dash}"` : ''} opacity="${s.faint ? 0.7 : 1}"/></svg>${esc(s.label)}</span>`).join('');
-    const W = Math.max(320, box.clientWidth);
-    const H = 300;
-    const pad = { l: 64, r: 16, t: 14, b: 30 };
+    const narrow = box.clientWidth < 520;
+    const W = Math.max(260, box.clientWidth);
+    const H = narrow ? 230 : 300;
+    const pad = { l: narrow ? 50 : 64, r: narrow ? 10 : 16, t: 14, b: 30 };
     const n = Math.max(days.length, ...out.map((s) => s.values.length));
     const all = out.flatMap((s) => s.values).filter((v) => v != null);
     const maxV = Math.max(1, ...all) * 1.08;

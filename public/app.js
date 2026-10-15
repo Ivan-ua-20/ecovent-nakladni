@@ -220,6 +220,7 @@ async function route() {
   // Розділ «Рахунки» для перегляду відкриває список, а не формування
   if (name === 'rahunky' && !can('docs.edit')) { location.hash = '#/rlist'; return; }
   activeRoute = name;
+  document.body.classList.toggle('an-mode', sec.id === 'an');
   renderNav(name);
   try {
     if ((sec.perm && !can(sec.perm)) || (tab?.perm && !can(tab.perm))) throw new Error('Немає доступу до цього розділу.');

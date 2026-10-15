@@ -368,3 +368,48 @@ body.auth-mode .shell { display: none; }
 .chk-chip input { margin: 0; }
 .chk-chip:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); }
 .an-own { margin-bottom: 12px; }
+
+/* ---- аналітика: кілька виправлень ширини і мобільна версія ---- */
+.bk-row { grid-template-columns: minmax(0, 1.2fr) minmax(40px, 1fr) auto minmax(64px, auto); }
+.an-table td.r { white-space: nowrap; }
+.show-m { display: none; }
+@media (max-width: 760px) {
+  .an-mode .topbar { gap: 6px; padding-top: 8px; padding-bottom: 8px; }
+  .an-mode .main-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; min-width: 0; flex-basis: 100%; order: 3; }
+  .an-mode .main-tabs a { white-space: nowrap; padding: 6px 10px; }
+  .an-mode .top-user { font-size: 12px; }
+  .an-mode main { padding-top: 12px; }
+  .an-head { align-items: center; gap: 8px; margin-bottom: 10px; }
+  .an-head h2 { font-size: 20px; }
+  .an-periods { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+  .an-period { padding: 9px 12px; border-radius: 10px; }
+  .an-period b { font-size: 14px; }
+  .an-period span { font-size: 12px; }
+  .an-range { gap: 6px 10px; font-size: 13px; }
+  .an-range label { flex-wrap: wrap; }
+  .an-range select { max-width: 100%; }
+  .an-sep { display: none; }
+  .an-filters { gap: 8px; }
+  .f-chips { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; margin-right: -14px; scrollbar-width: thin; }
+  .f-chips .chip { white-space: nowrap; flex: none; }
+  .f-foot .small { display: none; }
+  .kpis { gap: 8px; }
+  .kpi { padding: 10px 12px; }
+  .kpi-l { font-size: 10.5px; }
+  .kpi-v { font-size: 19px; }
+  .kpi-s { font-size: 11.5px; }
+  .an-chart-head { gap: 8px; }
+  .an-chart-head h3 { flex-basis: 100%; }
+  .an-chart-head .seg { width: 100%; }
+  .an-chart-head .seg button { flex: 1; padding: 7px 6px; font-size: 12.5px; }
+  .tip { min-width: 170px; font-size: 12px; }
+  .bk-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name val" "bar d"; gap: 4px 10px; padding: 7px 4px; }
+  .bk-name { grid-area: name; }
+  .bk-val { grid-area: val; }
+  .bk-bar { grid-area: bar; align-self: center; }
+  .bk-d { grid-area: d; display: flex; flex-direction: row; gap: 6px; justify-content: flex-end; font-size: 11.5px; }
+  .hide-m { display: none; }
+  .show-m { display: block; }
+  .an-table th, .an-table td { padding-left: 6px; padding-right: 6px; }
+  .an-attn { font-size: 12.5px; }
+}
