@@ -2219,7 +2219,7 @@ var ADD_COLUMNS = [
   ["an_products", "cat_manual", "INTEGER"],
   ["an_products", "seen", "INTEGER NOT NULL DEFAULT 0"]
 ];
-var SCHEMA_VERSION = "12";
+var SCHEMA_VERSION = "13";
 var MP_SOURCES = [
   ["Rozetka (OneDay)", ["rozetka(oneday)"]],
   ["Rozetka (Ecovent)", ["rozetka(ecovent)"]],
@@ -2230,7 +2230,8 @@ var MP_SOURCES = [
   ["Monomarket", ["monomarket", "mono market", "\u043C\u043E\u043D\u043E \u043C\u0430\u0440\u043A\u0435\u0442", "\u043C\u043E\u043D\u043E\u043C\u0430\u0440\u043A\u0435\u0442"]],
   ["\u0421\u0430\u0439\u0442 iHunt", ["ihunt"]],
   ["\u0421\u0430\u0439\u0442 Ecovent", ["ecovent-expert", "ecovent"]],
-  ["\u0421\u0430\u0439\u0442 Amsterdam", ["amsterdam"]]
+  ["\u0421\u0430\u0439\u0442 Amsterdam", ["amsterdam"]],
+  ["\u0406\u043D\u0448\u0456", []]
 ];
 var AN_BRANDS = [
   ["iHunt", "ihunt, robot window"],
@@ -2415,6 +2416,7 @@ async function migrateFull(db) {
     await upgradeV9(db);
     await upgradeV10(db);
     await upgradeV11(db);
+    await upgradeV12(db);
     return;
   }
   const st = [];
@@ -2445,6 +2447,19 @@ async function migrateFull(db) {
   await db.run(`INSERT INTO settings (key, value) VALUES ('an_v9', '1') ON CONFLICT(key) DO NOTHING`);
   await db.run(`INSERT INTO settings (key, value) VALUES ('an_v10', '1') ON CONFLICT(key) DO NOTHING`);
   await db.run(`INSERT INTO settings (key, value) VALUES ('an_v11', '1') ON CONFLICT(key) DO NOTHING`);
+  await db.run(`INSERT INTO settings (key, value) VALUES ('an_v12', '1') ON CONFLICT(key) DO NOTHING`);
+}
+async function upgradeV12(db) {
+  if (await db.get(`SELECT value FROM settings WHERE key = 'an_v12'`)) return;
+  const mp = await db.get(`SELECT id FROM an_depts WHERE name = '\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438'`);
+  const st = [];
+  if (mp && !await db.get(`SELECT id FROM an_sources WHERE dept_id = ? AND name = '\u0406\u043D\u0448\u0456'`, [mp.id])) {
+    const next = ((await db.get(`SELECT MAX(id) AS m FROM an_sources`))?.m || 0) + 1;
+    const sort = ((await db.get(`SELECT MAX(sort) AS m FROM an_sources WHERE dept_id = ?`, [mp.id]))?.m ?? 0) + 1;
+    st.push([`INSERT INTO an_sources (id, dept_id, name, sort) VALUES (?, ?, '\u0406\u043D\u0448\u0456', ?)`, [next, mp.id, sort]]);
+  }
+  st.push([`INSERT INTO settings (key, value) VALUES ('an_v12', '1') ON CONFLICT(key) DO NOTHING`, []]);
+  await db.batch(st);
 }
 async function upgradeV11(db) {
   if (await db.get(`SELECT value FROM settings WHERE key = 'an_v11'`)) return;

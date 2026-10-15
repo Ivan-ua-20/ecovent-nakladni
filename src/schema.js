@@ -271,7 +271,7 @@ const ADD_COLUMNS = [
 ];
 
 // Підвищуйте при зміні схеми: тоді міграція виконається знову (на Cloudflare — один раз на запуск ізолята).
-const SCHEMA_VERSION = '12';
+const SCHEMA_VERSION = '13';
 
 // Початкові відділи аналітики, джерела і відповідності (усе редагується в «Налаштуваннях аналітики»).
 const MP_SOURCES = [
@@ -285,6 +285,7 @@ const MP_SOURCES = [
   ['Сайт iHunt', ['ihunt']],
   ['Сайт Ecovent', ['ecovent-expert', 'ecovent']],
   ['Сайт Amsterdam', ['amsterdam']],
+  ['Інші', []],
 ];
 // Бренди: спершу шукаються в назві товару, потім у назві категорії; решта — «Інші».
 export const AN_BRANDS = [
@@ -467,7 +468,7 @@ async function migrateFull(db) {
   await db.batch(alters);
   await db.batch(Object.entries(LATER_SETTINGS).map(([k, v]) => [`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING`, [k, v]]));
   const seeded = await db.get(`SELECT value FROM settings WHERE key = 'seeded'`);
-  if (seeded) { await seedChannels(db); await fillFopNames(db); await seedAnalytics(db); await upgradeV9(db); await upgradeV10(db); await upgradeV11(db); return; }
+  if (seeded) { await seedChannels(db); await fillFopNames(db); await seedAnalytics(db); await upgradeV9(db); await upgradeV10(db); await upgradeV11(db); await upgradeV12(db); return; }
 
   // Нова база: усе одним пакетом з явними id (атомарно, і на D1 — один запит).
   const st = [];
@@ -498,6 +499,21 @@ async function migrateFull(db) {
   await db.run(`INSERT INTO settings (key, value) VALUES ('an_v9', '1') ON CONFLICT(key) DO NOTHING`);
   await db.run(`INSERT INTO settings (key, value) VALUES ('an_v10', '1') ON CONFLICT(key) DO NOTHING`);
   await db.run(`INSERT INTO settings (key, value) VALUES ('an_v11', '1') ON CONFLICT(key) DO NOTHING`);
+  await db.run(`INSERT INTO settings (key, value) VALUES ('an_v12', '1') ON CONFLICT(key) DO NOTHING`);
+}
+
+// Оновлення: джерело «Інші» в Маркетплейсах — для рідкісних значень «Поле 1».
+async function upgradeV12(db) {
+  if (await db.get(`SELECT value FROM settings WHERE key = 'an_v12'`)) return;
+  const mp = await db.get(`SELECT id FROM an_depts WHERE name = 'Маркетплейси'`);
+  const st = [];
+  if (mp && !(await db.get(`SELECT id FROM an_sources WHERE dept_id = ? AND name = 'Інші'`, [mp.id]))) {
+    const next = ((await db.get(`SELECT MAX(id) AS m FROM an_sources`))?.m || 0) + 1;
+    const sort = ((await db.get(`SELECT MAX(sort) AS m FROM an_sources WHERE dept_id = ?`, [mp.id]))?.m ?? 0) + 1;
+    st.push([`INSERT INTO an_sources (id, dept_id, name, sort) VALUES (?, ?, 'Інші', ?)`, [next, mp.id, sort]]);
+  }
+  st.push([`INSERT INTO settings (key, value) VALUES ('an_v12', '1') ON CONFLICT(key) DO NOTHING`, []]);
+  await db.batch(st);
 }
 
 // Оновлення: відділи Інстаграм, Фейсбук і ТікТок → один відділ «Соцмережі» з трьома джерелами.
