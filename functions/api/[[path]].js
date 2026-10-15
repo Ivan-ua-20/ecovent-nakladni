@@ -2218,7 +2218,7 @@ var ADD_COLUMNS = [
   ["an_products", "cat_manual", "INTEGER"],
   ["an_products", "seen", "INTEGER NOT NULL DEFAULT 0"]
 ];
-var SCHEMA_VERSION = "10";
+var SCHEMA_VERSION = "11";
 var MP_SOURCES = [
   ["Rozetka (OneDay)", ["rozetka(oneday)"]],
   ["Rozetka (Ecovent)", ["rozetka(ecovent)"]],
@@ -2226,6 +2226,7 @@ var MP_SOURCES = [
   ["Prom (Amsterdam)", ["prom(amsterdam)"]],
   ["Epicentr (Ecovent)", ["epicentr(ecovent)"]],
   ["Epicentr (Amsterdam)", ["epicentr(amsterdam)"]],
+  ["Monomarket", ["monomarket", "mono market", "\u043C\u043E\u043D\u043E \u043C\u0430\u0440\u043A\u0435\u0442", "\u043C\u043E\u043D\u043E\u043C\u0430\u0440\u043A\u0435\u0442"]],
   ["\u0421\u0430\u0439\u0442 iHunt", ["ihunt"]],
   ["\u0421\u0430\u0439\u0442 Ecovent", ["ecovent-expert", "ecovent"]],
   ["\u0421\u0430\u0439\u0442 Amsterdam", ["amsterdam"]]
@@ -2409,6 +2410,7 @@ async function migrateFull(db) {
     await fillFopNames(db);
     await seedAnalytics(db);
     await upgradeV9(db);
+    await upgradeV10(db);
     return;
   }
   const st = [];
@@ -2437,6 +2439,21 @@ async function migrateFull(db) {
   await fillFopNames(db);
   await seedAnalytics(db);
   await db.run(`INSERT INTO settings (key, value) VALUES ('an_v9', '1') ON CONFLICT(key) DO NOTHING`);
+  await db.run(`INSERT INTO settings (key, value) VALUES ('an_v10', '1') ON CONFLICT(key) DO NOTHING`);
+}
+async function upgradeV10(db) {
+  if (await db.get(`SELECT value FROM settings WHERE key = 'an_v10'`)) return;
+  const mp = await db.get(`SELECT id FROM an_depts WHERE name = '\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438'`);
+  const st = [];
+  if (mp && !await db.get(`SELECT id FROM an_sources WHERE LOWER(name) = 'monomarket'`)) {
+    const next = ((await db.get(`SELECT MAX(id) AS m FROM an_sources`))?.m || 0) + 1;
+    const sort = ((await db.get(`SELECT MAX(sort) AS m FROM an_sources WHERE dept_id = ?`, [mp.id]))?.m ?? 0) + 1;
+    st.push([`INSERT INTO an_sources (id, dept_id, name, sort) VALUES (?, ?, 'Monomarket', ?)`, [next, mp.id, sort]]);
+    for (const v of ["monomarket", "mono market", "\u043C\u043E\u043D\u043E \u043C\u0430\u0440\u043A\u0435\u0442", "\u043C\u043E\u043D\u043E\u043C\u0430\u0440\u043A\u0435\u0442"]) st.push([`INSERT OR IGNORE INTO an_source_map (value, source_id) VALUES (?, ?)`, [v, next]]);
+    st.push([`INSERT INTO settings (key, value) VALUES ('an_need_remap', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`, []]);
+  }
+  st.push([`INSERT INTO settings (key, value) VALUES ('an_v10', '1') ON CONFLICT(key) DO NOTHING`, []]);
+  await db.batch(st);
 }
 
 // src/lpcrm.js

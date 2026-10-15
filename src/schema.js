@@ -270,7 +270,7 @@ const ADD_COLUMNS = [
 ];
 
 // Підвищуйте при зміні схеми: тоді міграція виконається знову (на Cloudflare — один раз на запуск ізолята).
-const SCHEMA_VERSION = '10';
+const SCHEMA_VERSION = '11';
 
 // Початкові відділи аналітики, джерела і відповідності (усе редагується в «Налаштуваннях аналітики»).
 const MP_SOURCES = [
@@ -280,6 +280,7 @@ const MP_SOURCES = [
   ['Prom (Amsterdam)', ['prom(amsterdam)']],
   ['Epicentr (Ecovent)', ['epicentr(ecovent)']],
   ['Epicentr (Amsterdam)', ['epicentr(amsterdam)']],
+  ['Monomarket', ['monomarket', 'mono market', 'моно маркет', 'мономаркет']],
   ['Сайт iHunt', ['ihunt']],
   ['Сайт Ecovent', ['ecovent-expert', 'ecovent']],
   ['Сайт Amsterdam', ['amsterdam']],
@@ -462,7 +463,7 @@ async function migrateFull(db) {
   await db.batch(alters);
   await db.batch(Object.entries(LATER_SETTINGS).map(([k, v]) => [`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING`, [k, v]]));
   const seeded = await db.get(`SELECT value FROM settings WHERE key = 'seeded'`);
-  if (seeded) { await seedChannels(db); await fillFopNames(db); await seedAnalytics(db); await upgradeV9(db); return; }
+  if (seeded) { await seedChannels(db); await fillFopNames(db); await seedAnalytics(db); await upgradeV9(db); await upgradeV10(db); return; }
 
   // Нова база: усе одним пакетом з явними id (атомарно, і на D1 — один запит).
   const st = [];
@@ -491,4 +492,21 @@ async function migrateFull(db) {
   await fillFopNames(db);
   await seedAnalytics(db);
   await db.run(`INSERT INTO settings (key, value) VALUES ('an_v9', '1') ON CONFLICT(key) DO NOTHING`);
+  await db.run(`INSERT INTO settings (key, value) VALUES ('an_v10', '1') ON CONFLICT(key) DO NOTHING`);
+}
+
+// Оновлення: джерело Monomarket у Маркетплейсах (значення «Поле 1», які вже кудись прив'язані, не чіпаємо).
+async function upgradeV10(db) {
+  if (await db.get(`SELECT value FROM settings WHERE key = 'an_v10'`)) return;
+  const mp = await db.get(`SELECT id FROM an_depts WHERE name = 'Маркетплейси'`);
+  const st = [];
+  if (mp && !(await db.get(`SELECT id FROM an_sources WHERE LOWER(name) = 'monomarket'`))) {
+    const next = ((await db.get(`SELECT MAX(id) AS m FROM an_sources`))?.m || 0) + 1;
+    const sort = ((await db.get(`SELECT MAX(sort) AS m FROM an_sources WHERE dept_id = ?`, [mp.id]))?.m ?? 0) + 1;
+    st.push([`INSERT INTO an_sources (id, dept_id, name, sort) VALUES (?, ?, 'Monomarket', ?)`, [next, mp.id, sort]]);
+    for (const v of ['monomarket', 'mono market', 'моно маркет', 'мономаркет']) st.push([`INSERT OR IGNORE INTO an_source_map (value, source_id) VALUES (?, ?)`, [v, next]]);
+    st.push([`INSERT INTO settings (key, value) VALUES ('an_need_remap', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`, []]);
+  }
+  st.push([`INSERT INTO settings (key, value) VALUES ('an_v10', '1') ON CONFLICT(key) DO NOTHING`, []]);
+  await db.batch(st);
 }
