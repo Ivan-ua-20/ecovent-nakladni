@@ -235,6 +235,25 @@ assert.ok(!att2.users.some((u) => u.v === 'newbie') && att2.products.fresh === 0
 const sy = await req('GET', '/api/an/sync');
 assert.equal(sy.dailyDue, false, 'щоденне оновлення вже виконано');
 
+// ---------- 8c. Соцмережі одним відділом; менеджер у кількох відділах ----------
+const cfgS = await req('GET', '/api/an/config');
+const soc = cfgS.depts.find((d) => d.name === 'Соцмережі');
+assert.ok(soc && soc.sources.map((x) => x.name).join() === 'Інстаграм,Фейсбук,ТікТок', 'відділ Соцмережі з трьома джерелами');
+assert.ok(!cfgS.depts.some((d) => ['Інстаграм', 'Фейсбук', 'ТікТок'].includes(d.name)));
+const mpS = cfgS.depts.find((d) => d.name === 'Маркетплейси');
+// denys: основний — Соцмережі, також Маркетплейси → замовлення з джерел/відділів CRM Маркетплейсів ідуть туди
+await req('PUT', '/api/an/managers', [{ login: 'denys', name: 'Денис', dept_id: soc.id, depts: [mpS.id] }]);
+const mpSrcValues = new Set(mpS.sources.flatMap((x) => x.values));
+const ivanAll = await db.all(`SELECT ch, office, dept FROM an_orders WHERE user = 'denys'`);
+const off = new Map((await db.all(`SELECT office, dept_id FROM an_office_map`)).map((r) => [r.office, r.dept_id]));
+for (const o of ivanAll) {
+  const exp = mpSrcValues.has(o.ch) || off.get(o.office) === mpS.id ? mpS.id : soc.id;
+  assert.equal(o.dept, exp, `відділ замовлення denys (${o.ch}, офіс ${o.office})`);
+}
+assert.ok(ivanAll.some((o) => o.dept === mpS.id) && ivanAll.some((o) => o.dept === soc.id), 'замовлення менеджера в обох відділах');
+const cfgM = await req('GET', '/api/an/config');
+assert.equal(cfgM.managers.find((m) => m.login === 'denys').depts, `${soc.id},${mpS.id}`);
+
 // ---------- 9. Доступ: менеджер бачить лише свої замовлення ----------
 const cu = await (await app.request('/api/users', { method: 'POST', headers: H, body: JSON.stringify({ login: 'man', password: 'pass1234', role: 'manager' }) })).json();
 const ml = await app.request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: 'man', password: 'pass1234' }) });

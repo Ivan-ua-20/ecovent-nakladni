@@ -260,6 +260,7 @@ async function seedChannels(db) {
 const ADD_COLUMNS = [
   ['offices', 'seller_text', "TEXT DEFAULT ''"],
   ['users', 'crm_logins', "TEXT DEFAULT ''"],
+  ['an_managers', 'depts', "TEXT DEFAULT ''"],
   ['channels', 'seller_text', "TEXT DEFAULT ''"],
   ['versions', 'user_name', "TEXT DEFAULT ''"],
   ['users', 'failed_logins', 'INTEGER DEFAULT 0'],
@@ -270,7 +271,7 @@ const ADD_COLUMNS = [
 ];
 
 // Підвищуйте при зміні схеми: тоді міграція виконається знову (на Cloudflare — один раз на запуск ізолята).
-const SCHEMA_VERSION = '11';
+const SCHEMA_VERSION = '12';
 
 // Початкові відділи аналітики, джерела і відповідності (усе редагується в «Налаштуваннях аналітики»).
 const MP_SOURCES = [
@@ -297,22 +298,25 @@ export const AN_BRANDS = [
   ['Dolceclima', 'dolceclima'],
 ];
 
+const SOCIAL_SOURCES = [
+  ['Інстаграм', ['instagram', 'інстаграм', 'инстаграм', 'insta']],
+  ['Фейсбук', ['facebook', 'фейсбук', 'fb']],
+  ['ТікТок', ['tiktok', 'тікток', 'тик ток', 'tik tok']],
+];
+const SOCIAL_NAMES = ['Інстаграм', 'Фейсбук', 'ТікТок'];
+
 const AN_SEED = {
   depts: [
     { name: 'Маркетплейси', sources: MP_SOURCES.map(([name, values]) => ({ name, values })) },
     { name: 'Riteil', sources: [{ name: 'Riteil(Rozetka)', values: ['riteil(rozetka)'] }] },
-    { name: 'Інстаграм', sources: [] },
-    { name: 'Фейсбук', sources: [] },
-    { name: 'ТікТок', sources: [] },
+    { name: 'Соцмережі', sources: SOCIAL_SOURCES.map(([name, values]) => ({ name, values })) },
     { name: 'Дропшипінг', sources: [] },
     { name: 'B2B', sources: [] },
     { name: 'Інше', sources: [] },
   ],
   offices: {
     'Маркетплейси': ['5', '12', '13', '14', '18', '19', '20', '21', '22', '23', '24', '25'],
-    'Фейсбук': ['4', '17'],
-    'Інстаграм': ['6', '11'],
-    'ТікТок': ['8'],
+    'Соцмережі': ['4', '17', '6', '11', '8'],
     'Дропшипінг': ['7'],
     'B2B': ['27', '28'],
     'Інше': ['9', '26', '29'],
@@ -463,7 +467,7 @@ async function migrateFull(db) {
   await db.batch(alters);
   await db.batch(Object.entries(LATER_SETTINGS).map(([k, v]) => [`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING`, [k, v]]));
   const seeded = await db.get(`SELECT value FROM settings WHERE key = 'seeded'`);
-  if (seeded) { await seedChannels(db); await fillFopNames(db); await seedAnalytics(db); await upgradeV9(db); await upgradeV10(db); return; }
+  if (seeded) { await seedChannels(db); await fillFopNames(db); await seedAnalytics(db); await upgradeV9(db); await upgradeV10(db); await upgradeV11(db); return; }
 
   // Нова база: усе одним пакетом з явними id (атомарно, і на D1 — один запит).
   const st = [];
@@ -493,6 +497,39 @@ async function migrateFull(db) {
   await seedAnalytics(db);
   await db.run(`INSERT INTO settings (key, value) VALUES ('an_v9', '1') ON CONFLICT(key) DO NOTHING`);
   await db.run(`INSERT INTO settings (key, value) VALUES ('an_v10', '1') ON CONFLICT(key) DO NOTHING`);
+  await db.run(`INSERT INTO settings (key, value) VALUES ('an_v11', '1') ON CONFLICT(key) DO NOTHING`);
+}
+
+// Оновлення: відділи Інстаграм, Фейсбук і ТікТок → один відділ «Соцмережі» з трьома джерелами.
+// Відділи CRM, менеджери і джерела переносяться; таргети трьох старих відділів видаляються.
+async function upgradeV11(db) {
+  if (await db.get(`SELECT value FROM settings WHERE key = 'an_v11'`)) return;
+  const depts = await db.all(`SELECT id, name FROM an_depts`);
+  const old = depts.filter((d) => SOCIAL_NAMES.map((x) => x.toLowerCase()).includes(d.name.trim().toLowerCase()));
+  const st = [];
+  if (old.length && !depts.some((d) => d.name === 'Соцмережі')) {
+    const keep = old.find((d) => d.name === 'Інстаграм') || old[0];
+    st.push([`UPDATE an_depts SET name = 'Соцмережі' WHERE id = ?`, [keep.id]]);
+    for (const d of old) {
+      st.push([`DELETE FROM an_targets WHERE kind = 'dept' AND ref_id = ?`, [d.id]]);
+      if (d.id === keep.id) continue;
+      st.push([`UPDATE an_sources SET dept_id = ? WHERE dept_id = ?`, [keep.id, d.id]]);
+      st.push([`UPDATE an_office_map SET dept_id = ? WHERE dept_id = ?`, [keep.id, d.id]]);
+      st.push([`UPDATE an_managers SET dept_id = ? WHERE dept_id = ?`, [keep.id, d.id]]);
+      st.push([`DELETE FROM an_depts WHERE id = ?`, [d.id]]);
+    }
+    const srcs = await db.all(`SELECT id, name FROM an_sources`);
+    let next = ((await db.get(`SELECT MAX(id) AS m FROM an_sources`))?.m || 0) + 1;
+    SOCIAL_SOURCES.forEach(([name, values], i) => {
+      let id = srcs.find((x) => x.name.trim().toLowerCase() === name.toLowerCase())?.id;
+      if (id) st.push([`UPDATE an_sources SET dept_id = ? WHERE id = ?`, [keep.id, id]]);
+      else { id = next++; st.push([`INSERT INTO an_sources (id, dept_id, name, sort) VALUES (?, ?, ?, ?)`, [id, keep.id, name, i]]); }
+      for (const v of values) st.push([`INSERT OR IGNORE INTO an_source_map (value, source_id) VALUES (?, ?)`, [v, id]]);
+    });
+    st.push([`INSERT INTO settings (key, value) VALUES ('an_need_remap', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`, []]);
+  }
+  st.push([`INSERT INTO settings (key, value) VALUES ('an_v11', '1') ON CONFLICT(key) DO NOTHING`, []]);
+  await db.batch(st);
 }
 
 // Оновлення: джерело Monomarket у Маркетплейсах (значення «Поле 1», які вже кудись прив'язані, не чіпаємо).

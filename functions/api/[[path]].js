@@ -2210,6 +2210,7 @@ async function seedChannels(db) {
 var ADD_COLUMNS = [
   ["offices", "seller_text", "TEXT DEFAULT ''"],
   ["users", "crm_logins", "TEXT DEFAULT ''"],
+  ["an_managers", "depts", "TEXT DEFAULT ''"],
   ["channels", "seller_text", "TEXT DEFAULT ''"],
   ["versions", "user_name", "TEXT DEFAULT ''"],
   ["users", "failed_logins", "INTEGER DEFAULT 0"],
@@ -2218,7 +2219,7 @@ var ADD_COLUMNS = [
   ["an_products", "cat_manual", "INTEGER"],
   ["an_products", "seen", "INTEGER NOT NULL DEFAULT 0"]
 ];
-var SCHEMA_VERSION = "11";
+var SCHEMA_VERSION = "12";
 var MP_SOURCES = [
   ["Rozetka (OneDay)", ["rozetka(oneday)"]],
   ["Rozetka (Ecovent)", ["rozetka(ecovent)"]],
@@ -2241,22 +2242,24 @@ var AN_BRANDS = [
   ["Ergovent", "ergovent"],
   ["Dolceclima", "dolceclima"]
 ];
+var SOCIAL_SOURCES = [
+  ["\u0406\u043D\u0441\u0442\u0430\u0433\u0440\u0430\u043C", ["instagram", "\u0456\u043D\u0441\u0442\u0430\u0433\u0440\u0430\u043C", "\u0438\u043D\u0441\u0442\u0430\u0433\u0440\u0430\u043C", "insta"]],
+  ["\u0424\u0435\u0439\u0441\u0431\u0443\u043A", ["facebook", "\u0444\u0435\u0439\u0441\u0431\u0443\u043A", "fb"]],
+  ["\u0422\u0456\u043A\u0422\u043E\u043A", ["tiktok", "\u0442\u0456\u043A\u0442\u043E\u043A", "\u0442\u0438\u043A \u0442\u043E\u043A", "tik tok"]]
+];
+var SOCIAL_NAMES = ["\u0406\u043D\u0441\u0442\u0430\u0433\u0440\u0430\u043C", "\u0424\u0435\u0439\u0441\u0431\u0443\u043A", "\u0422\u0456\u043A\u0422\u043E\u043A"];
 var AN_SEED = {
   depts: [
     { name: "\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438", sources: MP_SOURCES.map(([name, values]) => ({ name, values })) },
     { name: "Riteil", sources: [{ name: "Riteil(Rozetka)", values: ["riteil(rozetka)"] }] },
-    { name: "\u0406\u043D\u0441\u0442\u0430\u0433\u0440\u0430\u043C", sources: [] },
-    { name: "\u0424\u0435\u0439\u0441\u0431\u0443\u043A", sources: [] },
-    { name: "\u0422\u0456\u043A\u0422\u043E\u043A", sources: [] },
+    { name: "\u0421\u043E\u0446\u043C\u0435\u0440\u0435\u0436\u0456", sources: SOCIAL_SOURCES.map(([name, values]) => ({ name, values })) },
     { name: "\u0414\u0440\u043E\u043F\u0448\u0438\u043F\u0456\u043D\u0433", sources: [] },
     { name: "B2B", sources: [] },
     { name: "\u0406\u043D\u0448\u0435", sources: [] }
   ],
   offices: {
     "\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438": ["5", "12", "13", "14", "18", "19", "20", "21", "22", "23", "24", "25"],
-    "\u0424\u0435\u0439\u0441\u0431\u0443\u043A": ["4", "17"],
-    "\u0406\u043D\u0441\u0442\u0430\u0433\u0440\u0430\u043C": ["6", "11"],
-    "\u0422\u0456\u043A\u0422\u043E\u043A": ["8"],
+    "\u0421\u043E\u0446\u043C\u0435\u0440\u0435\u0436\u0456": ["4", "17", "6", "11", "8"],
     "\u0414\u0440\u043E\u043F\u0448\u0438\u043F\u0456\u043D\u0433": ["7"],
     "B2B": ["27", "28"],
     "\u0406\u043D\u0448\u0435": ["9", "26", "29"]
@@ -2411,6 +2414,7 @@ async function migrateFull(db) {
     await seedAnalytics(db);
     await upgradeV9(db);
     await upgradeV10(db);
+    await upgradeV11(db);
     return;
   }
   const st = [];
@@ -2440,6 +2444,39 @@ async function migrateFull(db) {
   await seedAnalytics(db);
   await db.run(`INSERT INTO settings (key, value) VALUES ('an_v9', '1') ON CONFLICT(key) DO NOTHING`);
   await db.run(`INSERT INTO settings (key, value) VALUES ('an_v10', '1') ON CONFLICT(key) DO NOTHING`);
+  await db.run(`INSERT INTO settings (key, value) VALUES ('an_v11', '1') ON CONFLICT(key) DO NOTHING`);
+}
+async function upgradeV11(db) {
+  if (await db.get(`SELECT value FROM settings WHERE key = 'an_v11'`)) return;
+  const depts = await db.all(`SELECT id, name FROM an_depts`);
+  const old = depts.filter((d) => SOCIAL_NAMES.map((x) => x.toLowerCase()).includes(d.name.trim().toLowerCase()));
+  const st = [];
+  if (old.length && !depts.some((d) => d.name === "\u0421\u043E\u0446\u043C\u0435\u0440\u0435\u0436\u0456")) {
+    const keep = old.find((d) => d.name === "\u0406\u043D\u0441\u0442\u0430\u0433\u0440\u0430\u043C") || old[0];
+    st.push([`UPDATE an_depts SET name = '\u0421\u043E\u0446\u043C\u0435\u0440\u0435\u0436\u0456' WHERE id = ?`, [keep.id]]);
+    for (const d of old) {
+      st.push([`DELETE FROM an_targets WHERE kind = 'dept' AND ref_id = ?`, [d.id]]);
+      if (d.id === keep.id) continue;
+      st.push([`UPDATE an_sources SET dept_id = ? WHERE dept_id = ?`, [keep.id, d.id]]);
+      st.push([`UPDATE an_office_map SET dept_id = ? WHERE dept_id = ?`, [keep.id, d.id]]);
+      st.push([`UPDATE an_managers SET dept_id = ? WHERE dept_id = ?`, [keep.id, d.id]]);
+      st.push([`DELETE FROM an_depts WHERE id = ?`, [d.id]]);
+    }
+    const srcs = await db.all(`SELECT id, name FROM an_sources`);
+    let next = ((await db.get(`SELECT MAX(id) AS m FROM an_sources`))?.m || 0) + 1;
+    SOCIAL_SOURCES.forEach(([name, values], i) => {
+      let id = srcs.find((x) => x.name.trim().toLowerCase() === name.toLowerCase())?.id;
+      if (id) st.push([`UPDATE an_sources SET dept_id = ? WHERE id = ?`, [keep.id, id]]);
+      else {
+        id = next++;
+        st.push([`INSERT INTO an_sources (id, dept_id, name, sort) VALUES (?, ?, ?, ?)`, [id, keep.id, name, i]]);
+      }
+      for (const v of values) st.push([`INSERT OR IGNORE INTO an_source_map (value, source_id) VALUES (?, ?)`, [v, id]]);
+    });
+    st.push([`INSERT INTO settings (key, value) VALUES ('an_need_remap', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`, []]);
+  }
+  st.push([`INSERT INTO settings (key, value) VALUES ('an_v11', '1') ON CONFLICT(key) DO NOTHING`, []]);
+  await db.batch(st);
 }
 async function upgradeV10(db) {
   if (await db.get(`SELECT value FROM settings WHERE key = 'an_v10'`)) return;
@@ -2652,21 +2689,34 @@ var AN_DEFAULTS = {
   refuseStatuses: [54, 58]
 };
 async function loadMaps(db, st) {
-  const [offices, managers, sources, brands] = await Promise.all([
+  const [offices, managers, sources, brands, srcRows] = await Promise.all([
     db.all(`SELECT office, dept_id FROM an_office_map`),
-    db.all(`SELECT login, dept_id FROM an_managers`),
+    db.all(`SELECT login, dept_id, depts FROM an_managers`),
     db.all(`SELECT value, source_id FROM an_source_map`),
-    db.all(`SELECT id, keywords FROM an_brands ORDER BY sort, id`)
+    db.all(`SELECT id, keywords FROM an_brands ORDER BY sort, id`),
+    db.all(`SELECT id, dept_id FROM an_sources`)
   ]);
   return {
     prio: st.deptPriority,
     office: new Map(offices.map((r) => [String(r.office), r.dept_id])),
     mgr: new Map(managers.filter((r) => r.dept_id).map((r) => [low(r.login), r.dept_id])),
+    mgrSet: new Map(managers.filter((r) => r.dept_id && String(r.depts || "").includes(",")).map((r) => [low(r.login), new Set(String(r.depts).split(",").map(Number))])),
+    srcDept: new Map(srcRows.map((r) => [r.id, r.dept_id])),
     src: new Map(sources.map((r) => [r.value, r.source_id])),
     brands: brands.map((b) => ({ id: b.id, kws: String(b.keywords || "").split(",").map(low).filter(Boolean) }))
   };
 }
-var deptOf = (o, m) => m.prio === "office" ? m.office.get(o.office) ?? m.mgr.get(o.user) ?? 0 : m.mgr.get(o.user) ?? m.office.get(o.office) ?? 0;
+var mgrDept = (o, m, src) => {
+  const set = m.mgrSet.get(o.user);
+  if (set) {
+    const sd = src ? m.srcDept.get(src) : null;
+    if (sd && set.has(sd)) return sd;
+    const od = m.office.get(o.office);
+    if (od && set.has(od)) return od;
+  }
+  return m.mgr.get(o.user);
+};
+var deptOf = (o, m, src) => m.prio === "office" ? m.office.get(o.office) ?? mgrDept(o, m, src) ?? 0 : mgrDept(o, m, src) ?? m.office.get(o.office) ?? 0;
 var srcOf = (o, m) => o.ch && m.src.get(o.ch) || o.site && m.src.get(o.site) || o.utm && m.src.get(o.utm) || 0;
 function brandOf(name, brands) {
   const n = low(name);
@@ -2674,16 +2724,23 @@ function brandOf(name, brands) {
   return 0;
 }
 async function remap(db, st, { dept = true, src = true } = {}) {
-  if (dept) {
-    const deptMgr = `(SELECT dept_id FROM an_managers m WHERE m.login = an_orders.user AND m.dept_id IS NOT NULL)`;
-    const deptOff = `(SELECT dept_id FROM an_office_map f WHERE f.office = an_orders.office)`;
-    const d = st.deptPriority === "office" ? `COALESCE(${deptOff}, ${deptMgr}, 0)` : `COALESCE(${deptMgr}, ${deptOff}, 0)`;
-    await db.run(`UPDATE an_orders SET dept = ${d} WHERE dept IS NOT ${d}`);
-  }
   if (src) {
     const one = (col) => `CASE WHEN an_orders.${col} != '' THEN (SELECT source_id FROM an_source_map s WHERE s.value = an_orders.${col}) END`;
     const x = `COALESCE(${one("ch")}, ${one("site")}, ${one("utm")}, 0)`;
     await db.run(`UPDATE an_orders SET src = ${x} WHERE src IS NOT ${x}`);
+  }
+  if (dept || src) {
+    const deptOff = `(SELECT dept_id FROM an_office_map f WHERE f.office = an_orders.office)`;
+    const deptSrc = `(SELECT dept_id FROM an_sources s WHERE s.id = an_orders.src)`;
+    const inSet = (x) => `(',' || m.depts || ',') LIKE ('%,' || ${x} || ',%')`;
+    const deptMgr = `(SELECT CASE
+        WHEN m.depts LIKE '%,%' AND ${deptSrc} IS NOT NULL AND ${inSet(deptSrc)} THEN ${deptSrc}
+        WHEN m.depts LIKE '%,%' AND ${deptOff} IS NOT NULL AND ${inSet(deptOff)} THEN ${deptOff}
+        ELSE m.dept_id END
+      FROM an_managers m WHERE m.login = an_orders.user AND m.dept_id IS NOT NULL)`;
+    const d = st.deptPriority === "office" ? `COALESCE(${deptOff}, ${deptMgr}, 0)` : `COALESCE(${deptMgr}, ${deptOff}, 0)`;
+    const where = dept ? "" : ` AND user IN (SELECT login FROM an_managers WHERE depts LIKE '%,%')`;
+    await db.run(`UPDATE an_orders SET dept = ${d} WHERE dept IS NOT ${d}${where}`);
   }
 }
 async function rebrand(db) {
@@ -2735,7 +2792,7 @@ async function saveOrders(db, orders, maps) {
       `INSERT INTO an_orders (id, code, day, status, office, user, ch, site, utm, total, dept, src) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET code = excluded.code, day = excluded.day, status = excluded.status, office = excluded.office,
        user = excluded.user, ch = excluded.ch, site = excluded.site, utm = excluded.utm, total = excluded.total, dept = excluded.dept, src = excluded.src`,
-      [o.id, o.code, o.day, o.status, o.office, o.user, o.ch, o.site, o.utm, o.total, deptOf(o, maps), srcOf(o, maps)]
+      [o.id, o.code, o.day, o.status, o.office, o.user, o.ch, o.site, o.utm, o.total, deptOf(o, maps, srcOf(o, maps)), srcOf(o, maps)]
     ]);
     st.push([`DELETE FROM an_items WHERE id BETWEEN ? AND ?`, [o.id * 100, o.id * 100 + 99]]);
     o.lines.forEach((l, n) => {
@@ -2881,7 +2938,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
       db.all(`SELECT id, dept_id, name, sort FROM an_sources ORDER BY sort, id`),
       db.all(`SELECT value, source_id FROM an_source_map ORDER BY value`),
       db.all(`SELECT office, dept_id FROM an_office_map`),
-      db.all(`SELECT login, name, dept_id FROM an_managers ORDER BY name, login`),
+      db.all(`SELECT login, name, dept_id, depts FROM an_managers ORDER BY name, login`),
       db.all(`SELECT id, name, keywords, sort FROM an_brands ORDER BY sort, id`),
       db.all(`SELECT office_id, name FROM offices ORDER BY CAST(office_id AS INTEGER)`),
       getJson("an_status_names"),
@@ -3034,7 +3091,8 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
       del.push([`DELETE FROM an_depts WHERE id = ?`, [id]]);
       del.push([`DELETE FROM an_targets WHERE kind = 'dept' AND ref_id = ?`, [id]]);
       del.push([`UPDATE an_office_map SET dept_id = NULL WHERE dept_id = ?`, [id]]);
-      del.push([`UPDATE an_managers SET dept_id = NULL WHERE dept_id = ?`, [id]]);
+      del.push([`UPDATE an_managers SET dept_id = NULL, depts = '' WHERE dept_id = ?`, [id]]);
+      del.push([`UPDATE an_managers SET depts = TRIM(REPLACE(',' || depts || ',', ',' || ? || ',', ','), ',') WHERE depts LIKE '%,%'`, [id]]);
     }
     for (const id of goneS) {
       del.push([`DELETE FROM an_sources WHERE id = ?`, [id]]);
@@ -3063,7 +3121,9 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     for (const r of Array.isArray(list) ? list : []) {
       const login = low(r.login);
       if (!login) continue;
-      st.push([`INSERT OR REPLACE INTO an_managers (login, name, dept_id) VALUES (?, ?, ?)`, [login, String(r.name || "").trim(), parseInt(r.dept_id, 10) || null]]);
+      const main = parseInt(r.dept_id, 10) || null;
+      const all = main ? [.../* @__PURE__ */ new Set([main, ...(Array.isArray(r.depts) ? r.depts : String(r.depts || "").split(",")).map((x) => parseInt(x, 10)).filter(Boolean)])] : [];
+      st.push([`INSERT OR REPLACE INTO an_managers (login, name, dept_id, depts) VALUES (?, ?, ?, ?)`, [login, String(r.name || "").trim(), main, all.join(",")]]);
     }
     await db.batch(st);
     await remap(db, await getSt(), { src: false });

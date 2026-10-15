@@ -337,7 +337,8 @@ body.auth-mode .shell { display: none; }
 .col-btn .chev { width: 8px; height: 8px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); margin: -3px 2px 0 0; transition: transform .15s; flex: none; }
 .card.collapsed .col-btn .chev { transform: rotate(-45deg); margin-top: 0; }
 .card.collapsed > :not(:first-child) { display: none !important; }
-.card.collapsed > :first-child > :not(h3):not(.f-sum):not(#anReset) { display: none !important; }
+.card.collapsed > :first-child:not(h3) > :not(h3):not(.f-sum):not(#anReset) { display: none !important; }
+.an-grid > .card.collapsed { align-self: start; }
 .card.collapsed { padding-bottom: 14px; }
 .card.collapsed h3 { margin-bottom: 0; }
 .an-target.collapsed, .an-filters.collapsed { gap: 0; }
@@ -413,3 +414,4 @@ body.auth-mode .shell { display: none; }
   .an-table th, .an-table td { padding-left: 6px; padding-right: 6px; }
   .an-attn { font-size: 12.5px; }
 }
+.mgr-table .crm-pick { margin: 0; } .mgr-table .chk-chip { padding: 3px 8px; font-size: 12px; }

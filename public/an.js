@@ -669,13 +669,17 @@ export function createAnalyticsUI(ctx) {
           <div class="btn-row"><button class="btn" id="dAdd">+ Відділ</button><button class="btn primary" id="structSave">Зберегти відділи і джерела</button></div>
         </section>
 
-        <form class="card form-stack" id="sMgr">
+        <form class="card form-stack wide" id="sMgr">
           <h3>Менеджери</h3>
-          <div class="small muted">Логіни з замовлень LP-CRM. Прив’язаний до відділу менеджер відносить свої замовлення до цього відділу (наприклад, Ігор, Іван, Денис і Влад — «Маркетплейси»).</div>
-          ${logins.length ? `<div class="table-wrap"><table class="list"><thead><tr><th>Логін</th><th class="r">Зам.</th><th>Ім’я</th><th>Відділ</th></tr></thead><tbody>
+          <div class="small muted">Логіни з замовлень LP-CRM. Замовлення менеджера йдуть у його основний відділ. Якщо менеджер працює ще в інших відділах — відмітьте їх: тоді замовлення потрапить у відділ свого джерела («Поле 1») або відділу LP-CRM, якщо той серед відділів менеджера, а інакше — в основний.</div>
+          ${logins.length ? `<div class="table-wrap"><table class="list mgr-table"><thead><tr><th>Логін</th><th class="r">Зам.</th><th>Ім’я</th><th>Основний відділ</th><th>Також працює у</th></tr></thead><tbody>
             ${logins.map(([login, n]) => `<tr data-login="${esc(login)}"><td><b>${esc(login)}</b></td><td class="r small">${int(n)}</td>
               <td><input data-k="name" value="${esc(mgrMap.get(login)?.name || '')}" placeholder="Ім’я" aria-label="Ім’я для ${esc(login)}"></td>
-              <td><select data-k="dept_id" aria-label="Відділ для ${esc(login)}">${deptOpts(mgrMap.get(login)?.dept_id)}</select></td></tr>`).join('')}
+              <td><select data-k="dept_id" aria-label="Основний відділ для ${esc(login)}">${deptOpts(mgrMap.get(login)?.dept_id)}</select></td>
+              <td><div class="crm-pick">${cfg.depts.map((d) => {
+                const extra = String(mgrMap.get(login)?.depts || '').split(',').map(Number).includes(d.id) && mgrMap.get(login)?.dept_id !== d.id;
+                return `<label class="chk-chip"><input type="checkbox" data-xd="${d.id}" ${extra ? 'checked' : ''}> ${esc(d.name)}</label>`;
+              }).join('')}</div></td></tr>`).join('')}
           </tbody></table></div>` : '<div class="small muted">Менеджери з’являться після завантаження замовлень.</div>'}
           <div class="btn-row"><button class="btn primary">Зберегти менеджерів</button></div>
         </form>
@@ -748,7 +752,7 @@ export function createAnalyticsUI(ctx) {
     };
     $$('[data-amgr]').forEach((sel) => (sel.onchange = async () => {
       if (!sel.value) return;
-      const rows = [...cfg.managers.map((m) => ({ login: m.login, name: m.name, dept_id: m.dept_id })), { login: sel.dataset.amgr, name: '', dept_id: sel.value }];
+      const rows = [...cfg.managers.map((m) => ({ login: m.login, name: m.name, dept_id: m.dept_id, depts: m.depts })), { login: sel.dataset.amgr, name: '', dept_id: sel.value }];
       try { await api('PUT', '/api/an/managers', rows); toast('Менеджера додано'); lastData = null; await viewSettings(); } catch (er) { toast(er.message, true); }
     }));
     $$('[data-aoff]').forEach((sel) => (sel.onchange = async () => {
@@ -924,7 +928,10 @@ export function createAnalyticsUI(ctx) {
     // --- менеджери
     $('#sMgr').onsubmit = async (e) => {
       e.preventDefault();
-      const rows = $$('[data-login]').map((tr) => ({ login: tr.dataset.login, name: $('[data-k=name]', tr).value, dept_id: $('[data-k=dept_id]', tr).value }))
+      const rows = $$('[data-login]').map((tr) => ({
+        login: tr.dataset.login, name: $('[data-k=name]', tr).value, dept_id: $('[data-k=dept_id]', tr).value,
+        depts: $$('[data-xd]', tr).filter((x) => x.checked).map((x) => Number(x.dataset.xd)),
+      }))
         .filter((r) => r.name || r.dept_id);
       try { await api('PUT', '/api/an/managers', rows); toast('Менеджерів збережено'); lastData = null; } catch (er) { toast(er.message, true); }
     };

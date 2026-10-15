@@ -43,23 +43,38 @@ export const AN_DEFAULTS = {
 
 // ---------- відповідності: відділ, джерело, бренд ----------
 async function loadMaps(db, st) {
-  const [offices, managers, sources, brands] = await Promise.all([
+  const [offices, managers, sources, brands, srcRows] = await Promise.all([
     db.all(`SELECT office, dept_id FROM an_office_map`),
-    db.all(`SELECT login, dept_id FROM an_managers`),
+    db.all(`SELECT login, dept_id, depts FROM an_managers`),
     db.all(`SELECT value, source_id FROM an_source_map`),
     db.all(`SELECT id, keywords FROM an_brands ORDER BY sort, id`),
+    db.all(`SELECT id, dept_id FROM an_sources`),
   ]);
   return {
     prio: st.deptPriority,
     office: new Map(offices.map((r) => [String(r.office), r.dept_id])),
     mgr: new Map(managers.filter((r) => r.dept_id).map((r) => [low(r.login), r.dept_id])),
+    mgrSet: new Map(managers.filter((r) => r.dept_id && String(r.depts || '').includes(',')).map((r) => [low(r.login), new Set(String(r.depts).split(',').map(Number))])),
+    srcDept: new Map(srcRows.map((r) => [r.id, r.dept_id])),
     src: new Map(sources.map((r) => [r.value, r.source_id])),
     brands: brands.map((b) => ({ id: b.id, kws: String(b.keywords || '').split(',').map(low).filter(Boolean) })),
   };
 }
-const deptOf = (o, m) => (m.prio === 'office'
-  ? m.office.get(o.office) ?? m.mgr.get(o.user) ?? 0
-  : m.mgr.get(o.user) ?? m.office.get(o.office) ?? 0);
+// Менеджер у кількох відділах: відділ джерела замовлення («Поле 1»), якщо він серед його відділів,
+// потім відділ LP-CRM, якщо він серед його відділів, інакше — основний відділ менеджера.
+const mgrDept = (o, m, src) => {
+  const set = m.mgrSet.get(o.user);
+  if (set) {
+    const sd = src ? m.srcDept.get(src) : null;
+    if (sd && set.has(sd)) return sd;
+    const od = m.office.get(o.office);
+    if (od && set.has(od)) return od;
+  }
+  return m.mgr.get(o.user);
+};
+const deptOf = (o, m, src) => (m.prio === 'office'
+  ? m.office.get(o.office) ?? mgrDept(o, m, src) ?? 0
+  : mgrDept(o, m, src) ?? m.office.get(o.office) ?? 0);
 const srcOf = (o, m) => (o.ch && m.src.get(o.ch)) || (o.site && m.src.get(o.site)) || (o.utm && m.src.get(o.utm)) || 0;
 export function brandOf(name, brands) {
   const n = low(name);
@@ -70,16 +85,25 @@ export function brandOf(name, brands) {
 // Перерахунок відділу і джерела в усіх замовленнях (після зміни відповідностей). Пише лише змінені рядки.
 // Перерахунок відділу і/або джерела в усіх замовленнях (після зміни відповідностей). Пише лише змінені рядки.
 export async function remap(db, st, { dept = true, src = true } = {}) {
-  if (dept) {
-    const deptMgr = `(SELECT dept_id FROM an_managers m WHERE m.login = an_orders.user AND m.dept_id IS NOT NULL)`;
-    const deptOff = `(SELECT dept_id FROM an_office_map f WHERE f.office = an_orders.office)`;
-    const d = st.deptPriority === 'office' ? `COALESCE(${deptOff}, ${deptMgr}, 0)` : `COALESCE(${deptMgr}, ${deptOff}, 0)`;
-    await db.run(`UPDATE an_orders SET dept = ${d} WHERE dept IS NOT ${d}`);
-  }
+  // спершу джерело — від нього залежить відділ менеджера, що працює в кількох відділах
   if (src) {
     const one = (col) => `CASE WHEN an_orders.${col} != '' THEN (SELECT source_id FROM an_source_map s WHERE s.value = an_orders.${col}) END`;
     const x = `COALESCE(${one('ch')}, ${one('site')}, ${one('utm')}, 0)`;
     await db.run(`UPDATE an_orders SET src = ${x} WHERE src IS NOT ${x}`);
+  }
+  if (dept || src) {
+    const deptOff = `(SELECT dept_id FROM an_office_map f WHERE f.office = an_orders.office)`;
+    const deptSrc = `(SELECT dept_id FROM an_sources s WHERE s.id = an_orders.src)`;
+    const inSet = (x) => `(',' || m.depts || ',') LIKE ('%,' || ${x} || ',%')`;
+    const deptMgr = `(SELECT CASE
+        WHEN m.depts LIKE '%,%' AND ${deptSrc} IS NOT NULL AND ${inSet(deptSrc)} THEN ${deptSrc}
+        WHEN m.depts LIKE '%,%' AND ${deptOff} IS NOT NULL AND ${inSet(deptOff)} THEN ${deptOff}
+        ELSE m.dept_id END
+      FROM an_managers m WHERE m.login = an_orders.user AND m.dept_id IS NOT NULL)`;
+    const d = st.deptPriority === 'office' ? `COALESCE(${deptOff}, ${deptMgr}, 0)` : `COALESCE(${deptMgr}, ${deptOff}, 0)`;
+    // джерело змінює відділ лише менеджерам із кількома відділами
+    const where = dept ? '' : ` AND user IN (SELECT login FROM an_managers WHERE depts LIKE '%,%')`;
+    await db.run(`UPDATE an_orders SET dept = ${d} WHERE dept IS NOT ${d}${where}`);
   }
 }
 
@@ -138,7 +162,7 @@ async function saveOrders(db, orders, maps) {
       `INSERT INTO an_orders (id, code, day, status, office, user, ch, site, utm, total, dept, src) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET code = excluded.code, day = excluded.day, status = excluded.status, office = excluded.office,
        user = excluded.user, ch = excluded.ch, site = excluded.site, utm = excluded.utm, total = excluded.total, dept = excluded.dept, src = excluded.src`,
-      [o.id, o.code, o.day, o.status, o.office, o.user, o.ch, o.site, o.utm, o.total, deptOf(o, maps), srcOf(o, maps)],
+      [o.id, o.code, o.day, o.status, o.office, o.user, o.ch, o.site, o.utm, o.total, deptOf(o, maps, srcOf(o, maps)), srcOf(o, maps)],
     ]);
     st.push([`DELETE FROM an_items WHERE id BETWEEN ? AND ?`, [o.id * 100, o.id * 100 + 99]]);
     o.lines.forEach((l, n) => {
@@ -291,7 +315,7 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
       db.all(`SELECT id, dept_id, name, sort FROM an_sources ORDER BY sort, id`),
       db.all(`SELECT value, source_id FROM an_source_map ORDER BY value`),
       db.all(`SELECT office, dept_id FROM an_office_map`),
-      db.all(`SELECT login, name, dept_id FROM an_managers ORDER BY name, login`),
+      db.all(`SELECT login, name, dept_id, depts FROM an_managers ORDER BY name, login`),
       db.all(`SELECT id, name, keywords, sort FROM an_brands ORDER BY sort, id`),
       db.all(`SELECT office_id, name FROM offices ORDER BY CAST(office_id AS INTEGER)`),
       getJson('an_status_names'),
@@ -455,7 +479,8 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
       del.push([`DELETE FROM an_depts WHERE id = ?`, [id]]);
       del.push([`DELETE FROM an_targets WHERE kind = 'dept' AND ref_id = ?`, [id]]);
       del.push([`UPDATE an_office_map SET dept_id = NULL WHERE dept_id = ?`, [id]]);
-      del.push([`UPDATE an_managers SET dept_id = NULL WHERE dept_id = ?`, [id]]);
+      del.push([`UPDATE an_managers SET dept_id = NULL, depts = '' WHERE dept_id = ?`, [id]]);
+      del.push([`UPDATE an_managers SET depts = TRIM(REPLACE(',' || depts || ',', ',' || ? || ',', ','), ',') WHERE depts LIKE '%,%'`, [id]]);
     }
     for (const id of goneS) {
       del.push([`DELETE FROM an_sources WHERE id = ?`, [id]]);
@@ -486,7 +511,10 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
     for (const r of Array.isArray(list) ? list : []) {
       const login = low(r.login);
       if (!login) continue;
-      st.push([`INSERT OR REPLACE INTO an_managers (login, name, dept_id) VALUES (?, ?, ?)`, [login, String(r.name || '').trim(), parseInt(r.dept_id, 10) || null]]);
+      // dept_id — основний відділ; depts — усі відділи менеджера (основний перший), через кому
+      const main = parseInt(r.dept_id, 10) || null;
+      const all = main ? [...new Set([main, ...(Array.isArray(r.depts) ? r.depts : String(r.depts || '').split(',')).map((x) => parseInt(x, 10)).filter(Boolean)])] : [];
+      st.push([`INSERT OR REPLACE INTO an_managers (login, name, dept_id, depts) VALUES (?, ?, ?, ?)`, [login, String(r.name || '').trim(), main, all.join(',')]]);
     }
     await db.batch(st);
     await remap(db, await getSt(), { src: false });
