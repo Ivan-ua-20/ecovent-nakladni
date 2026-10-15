@@ -67,22 +67,30 @@ export function brandOf(name, brands) {
 }
 
 // Перерахунок відділу і джерела в усіх замовленнях (після зміни відповідностей). Пише лише змінені рядки.
-async function remap(db, st) {
-  const deptMgr = `(SELECT dept_id FROM an_managers m WHERE m.login = an_orders.user AND m.dept_id IS NOT NULL)`;
-  const deptOff = `(SELECT dept_id FROM an_office_map f WHERE f.office = an_orders.office)`;
-  const dept = st.deptPriority === 'office' ? `COALESCE(${deptOff}, ${deptMgr}, 0)` : `COALESCE(${deptMgr}, ${deptOff}, 0)`;
-  const one = (col) => `CASE WHEN an_orders.${col} != '' THEN (SELECT source_id FROM an_source_map s WHERE s.value = an_orders.${col}) END`;
-  const src = `COALESCE(${one('ch')}, ${one('site')}, ${one('utm')}, 0)`;
-  await db.run(`UPDATE an_orders SET dept = ${dept}, src = ${src} WHERE dept IS NOT ${dept} OR src IS NOT ${src}`);
+// Перерахунок відділу і/або джерела в усіх замовленнях (після зміни відповідностей). Пише лише змінені рядки.
+export async function remap(db, st, { dept = true, src = true } = {}) {
+  if (dept) {
+    const deptMgr = `(SELECT dept_id FROM an_managers m WHERE m.login = an_orders.user AND m.dept_id IS NOT NULL)`;
+    const deptOff = `(SELECT dept_id FROM an_office_map f WHERE f.office = an_orders.office)`;
+    const d = st.deptPriority === 'office' ? `COALESCE(${deptOff}, ${deptMgr}, 0)` : `COALESCE(${deptMgr}, ${deptOff}, 0)`;
+    await db.run(`UPDATE an_orders SET dept = ${d} WHERE dept IS NOT ${d}`);
+  }
+  if (src) {
+    const one = (col) => `CASE WHEN an_orders.${col} != '' THEN (SELECT source_id FROM an_source_map s WHERE s.value = an_orders.${col}) END`;
+    const x = `COALESCE(${one('ch')}, ${one('site')}, ${one('utm')}, 0)`;
+    await db.run(`UPDATE an_orders SET src = ${x} WHERE src IS NOT ${x}`);
+  }
 }
 
-async function rebrand(db) {
+// Бренд товару: ручний вибір → бренд у назві товару → бренд у назві категорії → 0 («Інші»).
+export async function rebrand(db) {
   const brands = (await db.all(`SELECT id, keywords FROM an_brands ORDER BY sort, id`))
     .map((b) => ({ id: b.id, kws: String(b.keywords || '').split(',').map(low).filter(Boolean) }));
-  const prods = await db.all(`SELECT product_id, name, brand_id FROM an_products`);
+  const prods = await db.all(`SELECT p.product_id, p.name, p.brand_id, p.brand_manual, c.name AS cat
+    FROM an_products p LEFT JOIN an_categories c ON c.id = COALESCE(p.cat_manual, p.category_id)`);
   const upd = [];
   for (const p of prods) {
-    const b = brandOf(p.name, brands);
+    const b = p.brand_manual != null ? p.brand_manual : (brandOf(p.name, brands) || brandOf(p.cat || '', brands));
     if (b !== p.brand_id) upd.push([`UPDATE an_products SET brand_id = ? WHERE product_id = ?`, [b, p.product_id]]);
   }
   await db.batch(upd);
@@ -195,11 +203,80 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
   };
   const lp = (c, method, params) => call(fetchFn, c.subdomain, c.key, method, params);
 
-  app.use('/api/an/*', async (c, next) => { need(c, 'analytics'); return next(); });
+  // Версія даних: змінюється після оновлення з CRM і зміни налаштувань — збережені відповіді дашборду стають недійсними.
+  const bump = () => db.batch([
+    [`INSERT INTO settings (key, value) VALUES ('an_ver', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(Date.now())]],
+    [`DELETE FROM an_cache`, []],
+  ]);
+
+  // Довідник значень із замовлень (Поле 1 / сайт / utm, менеджери, відділи CRM, продажі товарів) — рахується
+  // під час щоденного/повного оновлення і зберігається, щоб налаштування не перечитували всі замовлення.
+  async function computeValues() {
+    const [ch, site, utm, users, offices, sold] = await Promise.all([
+      db.all(`SELECT ch AS v, COUNT(*) AS n FROM an_orders WHERE ch != '' GROUP BY ch`),
+      db.all(`SELECT site AS v, COUNT(*) AS n FROM an_orders WHERE site != '' GROUP BY site`),
+      db.all(`SELECT utm AS v, COUNT(*) AS n FROM an_orders WHERE utm != '' GROUP BY utm`),
+      db.all(`SELECT user AS v, COUNT(*) AS n FROM an_orders WHERE user != '' GROUP BY user ORDER BY n DESC`),
+      db.all(`SELECT office AS v, COUNT(*) AS n FROM an_orders GROUP BY office ORDER BY n DESC`),
+      db.all(`SELECT product_id AS id, SUM(qty) AS q FROM an_items GROUP BY product_id`),
+    ]);
+    const values = new Map();
+    for (const [field, rows] of [['Поле 1', ch], ['Сайт', site], ['utm_source', utm]]) {
+      for (const r of rows) {
+        const cur = values.get(r.v) || { value: r.v, n: 0, fields: [] };
+        cur.n += r.n;
+        cur.fields.push(field);
+        values.set(r.v, cur);
+      }
+    }
+    const data = {
+      at: nowIso(),
+      values: [...values.values()].sort((a, b) => b.n - a.n),
+      users,
+      offices,
+      sold: Object.fromEntries(sold.map((r) => [r.id, r.q])),
+    };
+    await putSetting('an_values', JSON.stringify(data));
+    return data;
+  }
+  // Після оновлення «за сьогодні»: лише додаємо нові значення з сьогоднішніх замовлень.
+  async function mergeTodayValues(day) {
+    const cur = await getJson('an_values');
+    if (!cur) return computeValues();
+    const r = await idRange(db, day, day);
+    if (!r) return cur;
+    const rows = await db.all(`SELECT ch, site, utm, user, office FROM an_orders WHERE id BETWEEN ? AND ? AND day = ?`, [r[0], r[1], day]);
+    const has = (list, v, key = 'v') => list.some((x) => x[key] === v);
+    for (const o of rows) {
+      for (const [field, v] of [['Поле 1', o.ch], ['Сайт', o.site], ['utm_source', o.utm]]) {
+        if (v && !has(cur.values, v, 'value')) cur.values.push({ value: v, n: 1, fields: [field] });
+      }
+      if (o.user && !has(cur.users, o.user)) cur.users.push({ v: o.user, n: 1 });
+      if (o.office && !has(cur.offices, o.office)) cur.offices.push({ v: o.office, n: 1 });
+    }
+    await putSetting('an_values', JSON.stringify(cur));
+    return cur;
+  }
+
+  let checkedRemap = false;
+  app.use('/api/an/*', async (c, next) => {
+    need(c, 'analytics');
+    if (!checkedRemap) {
+      checkedRemap = true;
+      const f = await db.get(`SELECT value FROM settings WHERE key = 'an_need_remap'`);
+      if (f?.value === '1') {
+        await remap(db, await getSt());
+        await rebrand(db);
+        await db.run(`UPDATE settings SET value = '0' WHERE key = 'an_need_remap'`);
+        await bump();
+      }
+    }
+    return next();
+  });
 
   // ---------------------------------------------------------------- налаштування
   app.get('/api/an/config', async (c) => {
-    const [st, depts, sources, smap, officeMap, managers, brands, offices, statusNames, lastSync, sync] = await Promise.all([
+    const [st, depts, sources, smap, officeMap, managers, brands, offices, statusNames, lastSync, sync, categories] = await Promise.all([
       getSt(),
       db.all(`SELECT id, name, sort FROM an_depts ORDER BY sort, id`),
       db.all(`SELECT id, dept_id, name, sort FROM an_sources ORDER BY sort, id`),
@@ -211,8 +288,10 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
       getJson('an_status_names'),
       db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`),
       getJson('an_sync'),
+      db.all(`SELECT id, name, parent_id FROM an_categories ORDER BY name`),
     ]);
     return c.json({
+      categories,
       settings: st,
       depts: depts.map((d) => ({
         ...d,
@@ -228,31 +307,80 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
     });
   });
 
-  // Значення з замовлень, які ще треба розподілити: Поле 1 / сайт / utm, менеджери, відділи CRM, товари без бренду.
+  // Значення з замовлень, які ще треба розподілити (з довідника, без перечитування замовлень).
   app.get('/api/an/values', async (c) => {
-    const [ch, site, utm, users, offices, unbranded] = await Promise.all([
-      db.all(`SELECT ch AS v, COUNT(*) AS n FROM an_orders WHERE ch != '' GROUP BY ch`),
-      db.all(`SELECT site AS v, COUNT(*) AS n FROM an_orders WHERE site != '' GROUP BY site`),
-      db.all(`SELECT utm AS v, COUNT(*) AS n FROM an_orders WHERE utm != '' GROUP BY utm`),
-      db.all(`SELECT user AS v, COUNT(*) AS n FROM an_orders WHERE user != '' GROUP BY user ORDER BY n DESC`),
-      db.all(`SELECT office AS v, COUNT(*) AS n FROM an_orders GROUP BY office ORDER BY n DESC`),
-      db.all(`SELECT name FROM an_products WHERE brand_id = 0 ORDER BY name LIMIT 300`),
+    const v = (await getJson('an_values')) || (await computeValues());
+    return c.json({ values: v.values, users: v.users, offices: v.offices, at: v.at });
+  });
+
+  // ---------------------------------------------------------------- «Потребує уваги»
+  const ignored = async () => ({ users: [], values: [], offices: [], ...((await getJson('an_ignored')) || {}) });
+  app.get('/api/an/attention', async (c) => {
+    const [v0, ig, smap, mgrs, omap, prod] = await Promise.all([
+      getJson('an_values'), ignored(),
+      db.all(`SELECT value FROM an_source_map`),
+      db.all(`SELECT login FROM an_managers`),
+      db.all(`SELECT office FROM an_office_map`),
+      db.get(`SELECT SUM(CASE WHEN seen = 0 THEN 1 ELSE 0 END) AS fresh,
+        SUM(CASE WHEN brand_id = 0 AND brand_manual IS NULL THEN 1 ELSE 0 END) AS nobrand,
+        SUM(CASE WHEN COALESCE(cat_manual, category_id, 0) = 0 AND cat_manual IS NULL THEN 1 ELSE 0 END) AS nocat
+        FROM an_products`),
     ]);
-    const values = new Map();
-    for (const [field, rows] of [['Поле 1', ch], ['Сайт', site], ['utm_source', utm]]) {
-      for (const r of rows) {
-        const cur = values.get(r.v) || { value: r.v, n: 0, fields: [] };
-        cur.n += r.n;
-        cur.fields.push(field);
-        values.set(r.v, cur);
-      }
-    }
-    return c.json({
-      values: [...values.values()].sort((a, b) => b.n - a.n),
-      users,
-      offices,
-      unbranded: unbranded.map((r) => r.name),
-    });
+    const vals = v0 || (await computeValues());
+    const mapped = new Set(smap.map((r) => r.value));
+    const known = new Set(mgrs.map((r) => r.login));
+    const offs = new Set(omap.map((r) => String(r.office)));
+    const out = {
+      values: vals.values.filter((x) => !mapped.has(x.value) && !ig.values.includes(x.value)),
+      users: vals.users.filter((x) => !known.has(x.v) && !ig.users.includes(x.v)),
+      offices: vals.offices.filter((x) => x.v !== '' && !offs.has(String(x.v)) && !ig.offices.includes(String(x.v))),
+      products: { fresh: prod?.fresh || 0, nobrand: prod?.nobrand || 0, nocat: prod?.nocat || 0 },
+      ignored: ig,
+    };
+    out.total = out.values.length + out.users.length + out.offices.length + out.products.fresh + out.products.nobrand + out.products.nocat;
+    return c.json(out);
+  });
+
+  app.put('/api/an/ignore', async (c) => {
+    const b = await c.req.json();
+    if (!['users', 'values', 'offices'].includes(b.kind)) throw fail(400, 'Невідомий тип.');
+    const ig = await ignored();
+    const v = String(b.value ?? '');
+    ig[b.kind] = b.on ? [...new Set([...ig[b.kind], v])] : ig[b.kind].filter((x) => x !== v);
+    await putSetting('an_ignored', JSON.stringify(ig));
+    return c.json({ ok: true, ignored: ig });
+  });
+
+  // Товари: список для ручної прив'язки бренду і категорії
+  app.get('/api/an/products', async (c) => {
+    const [rows, cats, v] = await Promise.all([
+      db.all(`SELECT product_id AS id, name, category_id, cat_manual, brand_id, brand_manual, seen FROM an_products ORDER BY seen, name`),
+      db.all(`SELECT id, name, parent_id FROM an_categories ORDER BY name`),
+      getJson('an_values'),
+    ]);
+    const sold = v?.sold || {};
+    return c.json({ products: rows.map((r) => ({ ...r, sold: sold[r.id] || 0 })), categories: cats });
+  });
+
+  app.put('/api/an/products', async (c) => {
+    const list = await c.req.json();
+    const norm = (x) => (x === '' || x == null ? null : parseInt(x, 10));
+    const st = (Array.isArray(list) ? list : []).filter((r) => parseInt(r.id, 10)).map((r) => [
+      `UPDATE an_products SET brand_manual = ?, cat_manual = ?, seen = 1 WHERE product_id = ?`,
+      [norm(r.brand_manual), norm(r.cat_manual), parseInt(r.id, 10)],
+    ]);
+    await db.batch(st);
+    const changed = await rebrand(db);
+    await bump();
+    return c.json({ ok: true, changed });
+  });
+
+  app.post('/api/an/products/seen', async (c) => {
+    const b = await c.req.json().catch(() => ({}));
+    const ids = (Array.isArray(b.ids) ? b.ids : []).map((x) => parseInt(x, 10)).filter(Boolean);
+    if (ids.length) await db.run(`UPDATE an_products SET seen = 1 WHERE product_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(ids)]);
+    else await db.run(`UPDATE an_products SET seen = 1 WHERE seen = 0`);
+    return c.json({ ok: true });
   });
 
   app.put('/api/an/settings', async (c) => {
@@ -264,7 +392,8 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
     if (['net', 'all'].includes(b.targetBase)) next.targetBase = b.targetBase;
     if (b.months !== undefined) next.months = Math.min(18, Math.max(1, parseInt(b.months, 10) || 6));
     await putSetting('an_settings', JSON.stringify(next));
-    if (next.deptPriority !== cur.deptPriority) await remap(db, next);
+    if (next.deptPriority !== cur.deptPriority) await remap(db, next, { src: false });
+    await bump();
     return c.json({ ok: true, settings: next });
   });
 
@@ -325,6 +454,7 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
     }
     await db.batch([...del, ...st]);
     await remap(db, await getSt());
+    await bump();
     return c.json({ ok: true });
   });
 
@@ -336,7 +466,8 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
       st.push([`INSERT OR REPLACE INTO an_office_map (office, dept_id) VALUES (?, ?)`, [String(r.office).trim(), parseInt(r.dept_id, 10)]]);
     }
     await db.batch(st);
-    await remap(db, await getSt());
+    await remap(db, await getSt(), { src: false });
+    await bump();
     return c.json({ ok: true });
   });
 
@@ -349,7 +480,8 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
       st.push([`INSERT OR REPLACE INTO an_managers (login, name, dept_id) VALUES (?, ?, ?)`, [login, String(r.name || '').trim(), parseInt(r.dept_id, 10) || null]]);
     }
     await db.batch(st);
-    await remap(db, await getSt());
+    await remap(db, await getSt(), { src: false });
+    await bump();
     return c.json({ ok: true });
   });
 
@@ -370,6 +502,7 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
     }
     await db.batch(old.filter((x) => !keep.has(x.id)).map((x) => [`DELETE FROM an_brands WHERE id = ?`, [x.id]]));
     const changed = await rebrand(db);
+    await bump();
     return c.json({ ok: true, changed });
   });
 
@@ -394,13 +527,22 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
       for (const [kind, ref, amount] of rows) st.push([`INSERT INTO an_targets (month, kind, ref_id, amount) VALUES (?, ?, ?, ?)`, [m, kind, ref, amount]]);
     }
     await db.batch(st);
+    await bump();
     return c.json({ ok: true });
   });
 
   // ---------------------------------------------------------------- завантаження з LP-CRM
   app.get('/api/an/sync', async (c) => {
-    const [state, last] = await Promise.all([getJson('an_sync'), db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`)]);
-    return c.json({ state: state ? summary(state) : null, lastSync: last?.value || '' });
+    const [state, last, daily] = await Promise.all([
+      getJson('an_sync'),
+      db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`),
+      db.get(`SELECT value FROM settings WHERE key = 'an_last_daily'`),
+    ]);
+    const lastDaily = daily?.value || '';
+    const running = state && state.phase !== 'done' && !state.error;
+    // Щодобове оновлення за 30 днів: запускається автоматично, якщо минуло понад 20 годин.
+    const dailyDue = !running && !!last?.value && (!lastDaily || Date.now() - Date.parse(lastDaily) > 20 * 3600e3);
+    return c.json({ state: state ? summary(state) : null, lastSync: last?.value || '', lastDaily, dailyDue });
   });
 
   function summary(s) {
@@ -424,7 +566,7 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
 
   app.post('/api/an/sync/start', async (c) => {
     const b = await c.req.json().catch(() => ({}));
-    const mode = ['full', 'reset'].includes(b.mode) ? b.mode : 'refresh';
+    const mode = ['today', 'full', 'reset'].includes(b.mode) ? b.mode : 'daily';
     const cur = await getJson('an_sync');
     if (cur && cur.phase !== 'done' && !cur.error && !b.force) return c.json({ state: summary(cur), already: true });
     const st = await getSt();
@@ -432,23 +574,29 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
     const statusNames = await lp(cr, 'getStatuses', {}).then((j) => (j.status === 'ok' ? j.data || {} : {})).catch(() => ({}));
     if (Object.keys(statusNames).length) await putSetting('an_status_names', JSON.stringify(statusNames));
     if (mode === 'reset') {
-      await db.batch([[`DELETE FROM an_items`, []], [`DELETE FROM an_orders`, []], [`DELETE FROM an_day_bounds`, []], [`DELETE FROM an_products`, []]]);
+      await db.batch([[`DELETE FROM an_items`, []], [`DELETE FROM an_orders`, []], [`DELETE FROM an_day_bounds`, []], [`UPDATE an_products SET fetched = 0`, []]]);
     }
+    const firstRun = !(await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`))?.value;
     const today = kyivDay();
-    const start = addMonths(monthStart(today), -st.months);
+    const keepFrom = addMonths(monthStart(today), -st.months);
+    // today — лише сьогоднішні замовлення; daily — останні 30 днів; full/reset — усе вікно (6 міс).
+    const start = mode === 'today' ? today : mode === 'daily' ? addDays(today, -29) : keepFrom;
     const statuses = [...st.okStatuses, ...st.refuseStatuses];
     const units = [];
     // Від найновіших місяців до старіших — поточні дані з'являються першими.
-    for (let m = monthStart(today); m >= start; m = addMonths(m, -1)) {
+    for (let m = monthStart(today); m >= monthStart(start); m = addMonths(m, -1)) {
       const to = monthEnd(m) > today ? today : monthEnd(m);
-      for (const s of statuses) units.push({ s, from: m, to });
+      const from = m < start ? start : m;
+      for (const s of statuses) units.push({ s, from, to });
     }
     const state = {
       mode,
       startedAt: nowIso(),
       start,
+      keepFrom,
+      firstRun,
       today,
-      refetchFrom: mode === 'refresh' ? addDays(today, -7) : '9999-12-31',
+      refetchFrom: mode === 'today' ? today : mode === 'daily' ? addDays(today, -7) : '9999-12-31',
       phase: 'units',
       units,
       unitsTotal: units.length,
@@ -543,7 +691,11 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
 
         if (state.phase === 'products') {
           const rows = await db.all(`SELECT product_id FROM an_products WHERE fetched = 0 LIMIT 50`);
-          if (!rows.length) { state.phase = 'categories'; continue; }
+          if (!rows.length) {
+            // Довідник категорій — під час щоденного/повного оновлення або коли з'явились нові товари.
+            state.phase = state.mode !== 'today' || state.stats.products > 0 ? 'categories' : 'cleanup';
+            continue;
+          }
           const ids = rows.map((r) => r.product_id);
           const j = await lp(cr, 'getProduct', { product_id: ids.join(','), status_ignore: '1' });
           calls++;
@@ -571,17 +723,26 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
         }
 
         if (state.phase === 'cleanup') {
-          const old = await db.get(`SELECT MAX(max_id) AS hi FROM an_day_bounds WHERE day < ?`, [state.start]);
+          if (calls > 0) break; // завершення — окремим кроком, щоб не перевищити ліміт запитів до бази
+          const keepFrom = state.keepFrom || state.start;
+          const old = await db.get(`SELECT MAX(max_id) AS hi FROM an_day_bounds WHERE day < ?`, [keepFrom]);
           if (old?.hi != null) {
             await db.batch([
               [`DELETE FROM an_items WHERE id < ?`, [(old.hi + 1) * 100]],
-              [`DELETE FROM an_orders WHERE id <= ? AND day < ?`, [old.hi, state.start]],
-              [`DELETE FROM an_day_bounds WHERE day < ?`, [state.start]],
+              [`DELETE FROM an_orders WHERE id <= ? AND day < ?`, [old.hi, keepFrom]],
+              [`DELETE FROM an_day_bounds WHERE day < ?`, [keepFrom]],
             ]);
           }
+          if (state.mode !== 'today' || state.stats.products > 0) await rebrand(db);
+          // Перше завантаження: усі товари вже відомі, «новими» будуть лише ті, що з'являться далі.
+          if (state.firstRun) await db.run(`UPDATE an_products SET seen = 1 WHERE seen = 0`);
+          if (state.mode === 'today') await mergeTodayValues(state.today);
+          else await computeValues();
           state.phase = 'done';
           state.finishedAt = nowIso();
           await putSetting('an_last_sync', state.finishedAt);
+          if (state.mode !== 'today') await putSetting('an_last_daily', state.finishedAt);
+          await bump();
         }
       }
     } catch (e) {
@@ -626,6 +787,12 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
     const ph = (a) => a.map(() => '?').join(',');
     const rfExpr = `(CASE WHEN o.status IN (${rf.join(',') || '-1'}) THEN 1 ELSE 0 END)`;
 
+    // Готова відповідь з кешу: дані змінюються лише після оновлення або зміни налаштувань.
+    const ver = (await db.get(`SELECT value FROM settings WHERE key = 'an_ver'`))?.value || '0';
+    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today }));
+    const hit = await db.get(`SELECT value FROM an_cache WHERE key = ?`, [cacheKey]);
+    if (hit) return c.body(hit.value, 200, { 'content-type': 'application/json; charset=UTF-8' });
+
     function base(range, { items = itemLevel, skipCats = false } = {}) {
       const where = [`o.id BETWEEN ? AND ?`, `o.day BETWEEN ? AND ?`, `o.status IN (${tracked.join(',')})`];
       const params = [range.lo, range.hi, range.from, range.to];
@@ -636,7 +803,7 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
       if (items) {
         join = `CROSS JOIN an_items i ON i.id BETWEEN o.id * 100 AND o.id * 100 + 99 LEFT JOIN an_products p ON p.product_id = i.product_id`; // CROSS JOIN: SQLite не переставляє таблиці (спершу замовлення за діапазоном id)
         if (f.brands.length) { where.push(`COALESCE(p.brand_id, 0) IN (${ph(f.brands)})`); params.push(...f.brands); }
-        if (f.cats.length && !skipCats) { where.push(`COALESCE(p.category_id, 0) IN (${ph(f.cats)})`); params.push(...f.cats); }
+        if (f.cats.length && !skipCats) { where.push(`COALESCE(p.cat_manual, p.category_id, 0) IN (${ph(f.cats)})`); params.push(...f.cats); }
       }
       return { from: `FROM an_orders o ${join} WHERE ${where.join(' AND ')}`, params };
     }
@@ -658,9 +825,9 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
         db.all(`SELECT COALESCE(p.brand_id, 0) AS id, SUM(i.amount) AS rev, SUM(CASE WHEN ${rfExpr} = 0 THEN i.amount ELSE 0 END) AS net,
                 SUM(i.qty) AS qty, COUNT(DISTINCT o.id) AS cnt, COUNT(DISTINCT CASE WHEN ${rfExpr} = 1 THEN o.id END) AS rcnt
                 ${qi.from} GROUP BY COALESCE(p.brand_id, 0)`, qi.params),
-        db.all(`SELECT COALESCE(p.category_id, 0) AS id, SUM(i.amount) AS rev, SUM(CASE WHEN ${rfExpr} = 0 THEN i.amount ELSE 0 END) AS net,
+        db.all(`SELECT COALESCE(p.cat_manual, p.category_id, 0) AS id, SUM(i.amount) AS rev, SUM(CASE WHEN ${rfExpr} = 0 THEN i.amount ELSE 0 END) AS net,
                 SUM(i.qty) AS qty, COUNT(DISTINCT o.id) AS cnt
-                ${qi.from} GROUP BY COALESCE(p.category_id, 0)`, qi.params),
+                ${qi.from} GROUP BY COALESCE(p.cat_manual, p.category_id, 0)`, qi.params),
       ];
       if (full) {
         jobs.push(db.all(`SELECT i.product_id AS id, MAX(p.name) AS name, MAX(p.brand_id) AS brand, SUM(i.amount) AS rev,
@@ -681,8 +848,8 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
       db.all(`SELECT id, name, parent_id FROM an_categories`),
       db.all(`SELECT month, kind, ref_id, amount FROM an_targets WHERE month BETWEEN ? AND ?`, [from.slice(0, 7), to.slice(0, 7)]),
       f.brands.length
-        ? db.all(`SELECT DISTINCT COALESCE(category_id, 0) AS id FROM an_products WHERE brand_id IN (${ph(f.brands)})`, f.brands)
-        : db.all(`SELECT DISTINCT COALESCE(category_id, 0) AS id FROM an_products`),
+        ? db.all(`SELECT DISTINCT COALESCE(cat_manual, category_id, 0) AS id FROM an_products WHERE brand_id IN (${ph(f.brands)})`, f.brands)
+        : db.all(`SELECT DISTINCT COALESCE(cat_manual, category_id, 0) AS id FROM an_products`),
     ]);
 
     // ---- підсумки
@@ -787,7 +954,7 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
     const bName = new Map(brands.map((x) => [x.id, x.name]));
     const prevBrands = new Map((prev?.brands || []).map((r) => [r.id, r]));
     const byBrand = cur.brands.map((r) => ({
-      id: r.id, name: r.id ? bName.get(r.id) || `Бренд ${r.id}` : 'Без бренду', rev: round2(r.rev), net: round2(r.net), qty: r.qty, cnt: r.cnt, rcnt: r.rcnt,
+      id: r.id, name: r.id ? bName.get(r.id) || `Бренд ${r.id}` : 'Інші', rev: round2(r.rev), net: round2(r.net), qty: r.qty, cnt: r.cnt, rcnt: r.rcnt,
       avg: r.cnt ? round2(r.rev / r.cnt) : 0, prevRev: prev ? round2(prevBrands.get(r.id)?.rev || 0) : null,
     })).sort((a, b) => b.rev - a.rev);
     const cName = new Map(categories.map((x) => [x.id, x.name]));
@@ -796,10 +963,10 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
       id: r.id, name: r.id ? cName.get(r.id) || `Категорія ${r.id}` : 'Без категорії', rev: round2(r.rev), net: round2(r.net), qty: r.qty, cnt: r.cnt,
       prevRev: prev ? round2(prevCats.get(r.id)?.rev || 0) : null,
     })).sort((a, b) => b.rev - a.rev);
-    const top = cur.top.map((r) => ({ id: r.id, name: r.name || `Товар ${r.id}`, brand: r.brand ? bName.get(r.brand) || '' : '', rev: round2(r.rev), qty: r.qty, rqty: r.rqty }));
+    const top = cur.top.map((r) => ({ id: r.id, name: r.name || `Товар ${r.id}`, brand: r.brand ? bName.get(r.brand) || 'Інші' : 'Інші', rev: round2(r.rev), qty: r.qty, rqty: r.rqty }));
 
     const last = await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`);
-    return c.json({
+    const out = JSON.stringify({
       range: { from, to, days: daysBetween(from, to) },
       cmp,
       compareEnabled: st.compare,
@@ -813,11 +980,21 @@ export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso 
         sources: sources.map((s) => ({ id: s.id, name: s.name, dept_id: s.dept_id })),
         managers: [...new Map([...managers.map((m) => [m.login, { login: m.login, name: m.name || m.login, dept_id: m.dept_id }]),
           ...byManager.filter((m) => !mgrNames.has(m.login)).map((m) => [m.login, { login: m.login, name: m.login, dept_id: null }])]).values()],
-        brands: [...brands.map((x) => ({ id: x.id, name: x.name })), { id: 0, name: 'Без бренду' }],
+        brands: [...brands.map((x) => ({ id: x.id, name: x.name })), { id: 0, name: 'Інші' }],
         cats: catOptions.map((r) => ({ id: r.id, name: r.id ? cName.get(r.id) || `Категорія ${r.id}` : 'Без категорії' }))
           .sort((a, b) => (a.id === 0) - (b.id === 0) || a.name.localeCompare(b.name, 'uk')),
       },
       lastSync: last?.value || '',
     });
+    await db.batch([
+      [`DELETE FROM an_cache WHERE at < ?`, [Date.now() - 2 * 86400e3]],
+      [`INSERT OR REPLACE INTO an_cache (key, value, at) VALUES (?, ?, ?)`, [cacheKey, out, Date.now()]],
+    ]);
+    return c.body(out, 200, { 'content-type': 'application/json; charset=UTF-8' });
   });
+}
+
+async function hashKey(str) {
+  const buf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, '0')).join('');
 }

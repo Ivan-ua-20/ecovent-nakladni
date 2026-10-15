@@ -39,7 +39,7 @@ export function createAnalyticsUI(ctx) {
   const main = () => ctx.main;
 
   // ---------- стан інтерфейсу (запам'ятовується в браузері) ----------
-  const DEF = { period: 'cm', from: '', to: '', cmpMode: 'auto', cmpFrom: '', cmpTo: '', depts: [], sources: [], managers: [], brands: [], cats: [], metric: 'net', cumulative: true, showTarget: true, showCmp: true, table: false };
+  const DEF = { period: 'cm', from: '', to: '', cmpMode: 'auto', cmpFrom: '', cmpTo: '', depts: [], sources: [], managers: [], brands: [], cats: [], metric: 'net', cumulative: true, showTarget: true, showCmp: true, table: false, collapsed: [] };
   let ui = { ...DEF };
   try { ui = { ...DEF, ...JSON.parse(localStorage.getItem(LS_KEY) || '{}') }; } catch { /* немає сховища */ }
   const persist = () => { try { localStorage.setItem(LS_KEY, JSON.stringify(ui)); } catch { /* немає сховища */ } };
@@ -79,7 +79,7 @@ export function createAnalyticsUI(ctx) {
     if (syncLoop) return syncLoop;
     syncLoop = (async () => {
       try {
-        let r = mode ? await api('POST', '/api/an/sync/start', { mode, force: mode !== 'refresh' }) : await api('GET', '/api/an/sync');
+        let r = mode ? await api('POST', '/api/an/sync/start', { mode, force: mode !== 'daily' }) : await api('GET', '/api/an/sync');
         let s = r.state;
         let pauses = 0;
         while (s && !s.done && !s.error) {
@@ -102,10 +102,39 @@ export function createAnalyticsUI(ctx) {
     if (!s) return '';
     if (s.error) return `<div class="alert bad">Завантаження зупинено: ${esc(s.error)}</div>`;
     if (s.done) return '';
-    return `<div class="an-sync"><div class="an-sync-top"><span><span class="spinner"></span> Завантаження замовлень з LP-CRM · ${esc(s.text)}</span><b>${s.pct}%</b></div>
+    const what = { today: 'Оновлення за сьогодні', daily: 'Оновлення за 30 днів', full: 'Повна перевірка', reset: 'Завантаження заново' }[s.mode] || 'Завантаження замовлень';
+    return `<div class="an-sync"><div class="an-sync-top"><span><span class="spinner"></span> ${what} з LP-CRM · ${esc(s.text)}</span><b>${s.pct}%</b></div>
       <div class="an-progress"><span style="width:${s.pct}%"></span></div>
       <div class="small muted">Отримано ${int(s.stats?.fetched)} замовлень. Можна працювати далі — завантаження продовжиться, поки відкрита ця сторінка.</div></div>`;
   };
+
+  // ---------- згортання блоків (стан запам'ятовується в браузері) ----------
+  function collapsible(root) {
+    $$('.card[data-col]', root).forEach((card) => {
+      const key = card.dataset.col;
+      const h = $('h3', card);
+      if (!h || h.querySelector('.col-btn')) return;
+      const closed = ui.collapsed.includes(key);
+      card.classList.toggle('collapsed', closed);
+      h.innerHTML = `<button type="button" class="col-btn" aria-expanded="${!closed}"><span class="chev" aria-hidden="true"></span>${h.innerHTML}</button>`;
+      h.querySelector('.col-btn').onclick = () => {
+        const now = !card.classList.contains('collapsed');
+        card.classList.toggle('collapsed', now);
+        h.querySelector('.col-btn').setAttribute('aria-expanded', String(!now));
+        ui.collapsed = now ? [...new Set([...ui.collapsed, key])] : ui.collapsed.filter((x) => x !== key);
+        persist();
+        if (!now && key === 'Динаміка' && lastData) drawChart(lastData);
+      };
+    });
+  }
+
+  // ---------- «Потребує уваги»: лічильник у меню ----------
+  function setBadge(n) {
+    const a = document.querySelector('.subnav a[href="#/ansettings"]');
+    if (!a) return;
+    a.querySelector('.nav-count')?.remove();
+    if (n > 0) a.insertAdjacentHTML('beforeend', ` <span class="nav-count" aria-label="потребує уваги: ${n}">${n}</span>`);
+  }
 
   // =====================================================================
   // ДАШБОРД
@@ -118,32 +147,50 @@ export function createAnalyticsUI(ctx) {
     el.innerHTML = `
       <div class="head-row an-head">
         <div><h2>Аналітика продажів</h2><div class="small muted" id="anFresh"></div></div>
-        <div class="btn-row"><button class="btn" id="anRefresh">Оновити дані з CRM</button></div>
+        <div class="btn-row"><button class="btn" id="anRefresh" title="Швидко: лише замовлення за сьогодні">Оновити сьогодні</button></div>
       </div>
       <div id="anSync"></div>
+      <div id="anAttn"></div>
       <div class="an-periods" role="group" aria-label="Період" id="anPeriods"></div>
       <div id="anRange"></div>
-      <div class="card an-filters" id="anFilters"><span class="spinner"></span></div>
+      <div class="card an-filters" id="anFilters" data-col="filters"><span class="spinner"></span></div>
       <div id="anBody"></div>`;
     renderPeriods();
-    $('#anRefresh').onclick = () => startSync('refresh');
+    $('#anRefresh').onclick = () => startSync('today');
 
-    const sync = await api('GET', '/api/an/sync').catch(() => ({}));
+    const [sync, attn] = await Promise.all([api('GET', '/api/an/sync').catch(() => ({})), api('GET', '/api/an/attention').catch(() => null)]);
+    showAttention(attn);
     $('#anFresh').textContent = sync.lastSync ? `Дані з LP-CRM оновлено ${ctx.fmtDateTime(sync.lastSync)}` : 'Дані ще не завантажено';
     const running = sync.state && !sync.state.done && !sync.state.error;
     if (running || syncLoop) startSync(null);
     else if (!sync.lastSync) {
       $('#anBody').innerHTML = `<div class="card empty"><div class="big">Замовлення ще не завантажено</div>
         <p>Програма завантажить замовлення зі статусами «Принят», «Отправлен», «Очікує викупу», «Завершено», «Відмова на пошті» і «Повернуто на склад» за останні 6 місяців.
-        Це займе кілька хвилин; далі дані оновлюватимуться раз на добу або кнопкою «Оновити дані з CRM».</p>
+        Це займе кілька хвилин; далі дані оновлюватимуться раз на добу (за останні 30 днів) або кнопкою «Оновити сьогодні».</p>
         <button class="btn primary" id="anFirst">Завантажити замовлення</button></div>`;
       $('#anFilters').hidden = true;
       $('#anFirst').onclick = () => startSync('full');
       return;
-    } else if (Date.now() - new Date(sync.lastSync).getTime() > 20 * 3600 * 1000) {
-      startSync('refresh'); // автоматичне оновлення раз на добу
+    } else if (sync.dailyDue) {
+      startSync('daily'); // автоматичне оновлення раз на добу — останні 30 днів
     }
     await load();
+  }
+
+  function showAttention(a) {
+    if (!a) return;
+    setBadge(a.total);
+    const box = $('#anAttn');
+    if (!box) return;
+    const parts = [
+      a.products.fresh && `нових товарів: ${a.products.fresh}`,
+      a.products.nobrand && `товарів без бренду: ${a.products.nobrand}`,
+      a.products.nocat && `без категорії: ${a.products.nocat}`,
+      a.users.length && `нових менеджерів: ${a.users.length}`,
+      a.values.length && `значень «Поле 1» без джерела: ${a.values.length}`,
+      a.offices.length && `відділів CRM без прив’язки: ${a.offices.length}`,
+    ].filter(Boolean);
+    box.innerHTML = parts.length ? `<div class="alert warn an-attn"><span><b>Потребує уваги:</b> ${parts.join(' · ')}</span><a href="#/ansettings" class="btn sm">Переглянути</a></div>` : '';
   }
 
   function startSync(mode) {
@@ -152,6 +199,7 @@ export function createAnalyticsUI(ctx) {
       if (!$('#anSync')) return;
       if (s?.done) {
         toast('Дані з LP-CRM оновлено');
+        api('GET', '/api/an/attention').then(showAttention).catch(() => {});
         $('#anFresh').textContent = `Дані з LP-CRM оновлено щойно`;
         $('#anFilters').hidden = false;
         load();
@@ -212,15 +260,24 @@ export function createAnalyticsUI(ctx) {
     const chip = (key, val, label, on) => `<button class="chip ${on ? 'on' : ''}" data-f="${key}" data-v="${esc(val)}" aria-pressed="${on}">${esc(label)}</button>`;
     const row = (title, html, hint = '') => (html ? `<div class="f-row"><span class="f-title">${title}</span><div class="f-chips">${html}</div>${hint}</div>` : '');
     const active = ['depts', 'sources', 'managers', 'brands', 'cats'].reduce((a, k) => a + ui[k].length, 0);
-    $('#anFilters').innerHTML = `
+    const names = (key, list, id, label) => ui[key].map((v) => list.find((x) => x[id] === v)?.[label] ?? v);
+    const picked = [
+      ...names('depts', o.depts, 'id', 'name'), ...names('sources', o.sources, 'id', 'name'), ...names('managers', o.managers, 'login', 'name'),
+      ...names('brands', o.brands, 'id', 'name'), ...names('cats', o.cats, 'id', 'name'),
+    ];
+    const box = $('#anFilters');
+    box.innerHTML = `
+      <div class="f-head"><h3>Фільтри</h3><span class="f-sum">${picked.length ? picked.map((x) => `<span class="vchip">${esc(x)}</span>`).join('') : '<span class="muted small">усі замовлення</span>'}</span>
+        ${active ? `<button class="btn sm" id="anReset">Скинути (${active})</button>` : ''}</div>
       ${row('Відділ', o.depts.map((x) => chip('depts', x.id, x.name, deptSel.includes(x.id))).join(''))}
       ${row('Джерело', srcOpts.map((x) => chip('sources', x.id, x.name, ui.sources.includes(x.id))).join(''))}
       ${row('Менеджер', mgrOpts.map((x) => chip('managers', x.login, x.name, ui.managers.includes(x.login))).join(''))}
       ${row('Бренд', o.brands.map((x) => chip('brands', x.id, x.name, ui.brands.includes(x.id))).join(''))}
       ${row('Категорія', o.cats.map((x) => chip('cats', x.id, x.name, ui.cats.includes(x.id))).join(''), ui.brands.length ? '<span class="f-hint">категорії вибраних брендів</span>' : '')}
-      <div class="f-foot"><span class="small muted">Можна вибирати кілька значень у кожному рядку. Клік по рядку в таблицях нижче теж додає фільтр.</span>
-        ${active ? `<button class="btn sm" id="anReset">Скинути фільтри (${active})</button>` : ''}</div>`;
-    $$('[data-f]', $('#anFilters')).forEach((b) => (b.onclick = () => toggle(b.dataset.f, b.dataset.v)));
+      <div class="f-foot"><span class="small muted">Можна вибирати кілька значень у кожному рядку. Клік по рядку в таблицях нижче теж додає фільтр.</span></div>`;
+    $$('[data-f]', box).forEach((b) => (b.onclick = () => toggle(b.dataset.f, b.dataset.v)));
+    box.classList.remove('collapsed');
+    collapsible(box.parentElement);
     const rs = $('#anReset');
     if (rs) rs.onclick = () => { ui.depts = []; ui.sources = []; ui.managers = []; ui.brands = []; ui.cats = []; persist(); load(); };
   }
@@ -312,7 +369,9 @@ export function createAnalyticsUI(ctx) {
     $('#anTableBtn').onclick = () => { ui.table = !ui.table; persist(); renderBody(lastData); };
     $$('[data-row]', $('#anBody')).forEach((tr) => (tr.onclick = () => toggle(tr.dataset.key, tr.dataset.row)));
     $$('[data-row]', $('#anBody')).forEach((tr) => (tr.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(tr.dataset.key, tr.dataset.row); } }));
-    drawChart(d);
+    $$('.card', $('#anBody')).forEach((card) => { const h = $('h3', card); if (h && !card.dataset.col) card.dataset.col = h.textContent.trim(); });
+    collapsible($('#anBody'));
+    if (!ui.collapsed.includes('Динаміка')) drawChart(d);
   }
 
   const targetBaseKey = (d) => (d.targetBase === 'all' ? 'rev' : 'net');
@@ -386,7 +445,7 @@ export function createAnalyticsUI(ctx) {
       <tbody>${rows.map((r) => `<tr class="click ${ui.brands.includes(r.id) ? 'on' : ''}" data-row="${r.id}" data-key="brands" tabindex="0">
         <td><b>${esc(r.name)}</b></td><td class="r">${int(r.cnt)}</td><td class="r">${uah(r.rev)}</td><td class="r">${uah(r.avg)}</td>
         <td class="r">${r.cnt ? pct1((r.rcnt / r.cnt) * 100) : '—'}</td>${hasCmp ? `<td class="r">${delta(r.rev, r.prevRev)}</td>` : ''}</tr>`).join('')}</tbody>
-    </table></div><div class="small muted">Бренд визначається за назвою товару (ключові слова — у налаштуваннях аналітики).</div></div>`;
+    </table></div><div class="small muted">Бренд — за назвою товару, а якщо її не вистачає — за категорією; решта — «Інші». Ручна прив’язка — у налаштуваннях аналітики.</div></div>`;
   }
 
   function topTable(rows) {
@@ -518,11 +577,12 @@ export function createAnalyticsUI(ctx) {
   async function viewSettings() {
     const el = main();
     el.innerHTML = '<div class="card empty"><span class="spinner"></span></div>';
-    [cfg, vals] = await Promise.all([api('GET', '/api/an/config'), api('GET', '/api/an/values')]);
+    let attn;
+    [cfg, vals, attn] = await Promise.all([api('GET', '/api/an/config'), api('GET', '/api/an/values'), api('GET', '/api/an/attention')]);
+    setBadge(attn.total);
     const st = cfg.settings;
     const deptOpts = (sel, empty = '— не вибрано —') => `<option value="">${empty}</option>${cfg.depts.map((d) => `<option value="${d.id}" ${String(sel) === String(d.id) ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}`;
     const mapped = new Set(cfg.depts.flatMap((d) => d.sources.flatMap((s) => s.values)));
-    const unmapped = vals.values.filter((v) => !mapped.has(v.value));
     const srcOpts = `<option value="">— вибрати джерело —</option>${cfg.depts.filter((d) => d.sources.length).map((d) => `<optgroup label="${esc(d.name)}">${d.sources.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</optgroup>`).join('')}`;
     const mgrMap = new Map(cfg.managers.map((m) => [m.login, m]));
     const logins = [...new Map([...vals.users.map((u) => [u.v, u.n]), ...cfg.managers.filter((m) => !vals.users.some((u) => u.v === m.login)).map((m) => [m.login, 0])])];
@@ -539,11 +599,34 @@ export function createAnalyticsUI(ctx) {
             Завантажуються замовлення зі статусами: ${[...st.okStatuses, ...st.refuseStatuses].map((id) => esc(cfg.statusNames[id] || id)).join(', ')} за останні ${st.months} міс.</div>
           <div id="sSync"></div>
           <div class="btn-row">
-            <button class="btn primary" id="sRefresh">Оновити зараз</button>
-            <button class="btn" id="sFull">Перевірити всі ${st.months} міс.</button>
+            <button class="btn primary" id="sToday">Оновити сьогодні</button>
+            <button class="btn" id="sDaily">Оновити за 30 днів</button>
+            <button class="btn" id="sFull">Повна перевірка за ${st.months} міс.</button>
             <button class="btn danger" id="sReset">Очистити і завантажити заново</button>
           </div>
-          <div class="small muted">Щоденне оновлення запускається автоматично, коли хтось відкриває дашборд, а дані старші за добу. Зміни статусів підхоплюються за весь період, суми й товари — за останні 7 днів.</div>
+          <ul class="small muted an-modes">
+            <li><b>Сьогодні</b> — лише замовлення за сьогодні, найшвидше.</li>
+            <li><b>За 30 днів</b> — запускається автоматично раз на добу, коли хтось відкриває дашборд: статуси за 30 днів, суми й товари — за 7 днів.</li>
+            <li><b>Повна перевірка</b> — статуси за весь період; лише кнопкою, бо читає багато даних.</li>
+          </ul>
+        </section>
+
+        <section class="card form-stack wide" id="sAttn">
+          <h3>Потребує уваги <span class="badge ${attn.total ? 'warn' : 'ok'}" id="attnCount">${attn.total || 'усе гаразд'}</span></h3>
+          <div id="attnLists"></div>
+          <div class="at-prod">
+            <div class="at-bar">
+              <div class="seg" role="group" aria-label="Які товари показати">
+                <button type="button" data-pf="attention" class="on" aria-pressed="true">Потребують уваги</button>
+                <button type="button" data-pf="new" aria-pressed="false">Нові</button>
+                <button type="button" data-pf="all" aria-pressed="false">Усі товари</button>
+              </div>
+              <input type="search" id="pQ" placeholder="Пошук товару" aria-label="Пошук товару">
+            </div>
+            <div class="small muted">Бренд визначається за назвою товару, а якщо в назві його немає — за назвою категорії. Решта — «Інші». Тут можна задати бренд і категорію вручну: «Авто» повертає автоматичне визначення.</div>
+            <div id="pTable"><span class="spinner"></span></div>
+            <div class="btn-row"><button type="button" class="btn" id="pSeenAll">Позначити всі нові як переглянуті</button><button type="button" class="btn" id="pOther">Товари без бренду → «Інші»</button></div>
+          </div>
         </section>
 
         <form class="card form-stack" id="sGen">
@@ -575,14 +658,6 @@ export function createAnalyticsUI(ctx) {
           <div class="btn-row"><button class="btn" id="dAdd">+ Відділ</button><button class="btn primary" id="structSave">Зберегти відділи і джерела</button></div>
         </section>
 
-        <section class="card form-stack wide">
-          <h3>Значення без джерела <span class="badge ${unmapped.length ? 'warn' : 'ok'}">${unmapped.length}</span></h3>
-          ${unmapped.length ? `<div class="table-wrap"><table class="list"><thead><tr><th>Значення</th><th>Поле</th><th class="r">Замовлень</th><th>Джерело</th></tr></thead><tbody>
-            ${unmapped.map((v) => `<tr><td><b>${esc(v.value)}</b></td><td class="small muted">${esc(v.fields.join(', '))}</td><td class="r">${int(v.n)}</td>
-              <td><select data-assign="${esc(v.value)}" aria-label="Джерело для ${esc(v.value)}">${srcOpts}</select></td></tr>`).join('')}
-          </tbody></table></div>` : `<div class="small muted">${vals.values.length ? 'Усі значення розподілено по джерелах.' : 'Значення з’являться після завантаження замовлень.'}</div>`}
-        </section>
-
         <form class="card form-stack" id="sMgr">
           <h3>Менеджери</h3>
           <div class="small muted">Логіни з замовлень LP-CRM. Прив’язаний до відділу менеджер відносить свої замовлення до цього відділу (наприклад, Ігор, Іван, Денис і Влад — «Маркетплейси»).</div>
@@ -606,26 +681,139 @@ export function createAnalyticsUI(ctx) {
 
         <form class="card form-stack wide" id="sBrands">
           <h3>Бренди</h3>
-          <div class="small muted">Бренд визначається за ключовими словами в назві товару (без урахування регістру, через кому). Перший збіг зверху вниз.</div>
+          <div class="small muted">Бренд визначається за ключовими словами (без урахування регістру, через кому): спершу в назві товару, потім у назві категорії. Перший збіг зверху вниз; без збігу — «Інші».</div>
           <div id="brandEd"></div>
           <div class="btn-row"><button type="button" class="btn" id="bAdd">+ Бренд</button><button class="btn primary">Зберегти бренди</button></div>
-          ${vals.unbranded.length ? `<details><summary>Товари без бренду (${vals.unbranded.length}${vals.unbranded.length >= 300 ? '+' : ''})</summary><ul class="small an-unb">${vals.unbranded.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></details>` : ''}
         </form>
       </div>`;
 
     // --- дані
     const syncBox = $('#sSync');
     const go = (mode) => runSync(mode, (s) => { if ($('#sSync')) syncBox.innerHTML = syncBar(s) || (s?.done ? '<div class="alert info">Готово.</div>' : ''); })
-      .then((s) => { if (s?.done) toast('Дані оновлено'); })
+      .then((s) => { if (s?.done) { toast('Дані оновлено'); viewSettings(); } })
       .catch((e) => toast(e.message, true));
     if (cfg.sync && cfg.sync.phase !== 'done' && !cfg.sync.error) go(null);
-    $('#sRefresh').onclick = () => go('refresh');
+    $('#sToday').onclick = () => go('today');
+    $('#sDaily').onclick = () => go('daily');
     $('#sFull').onclick = () => go('full');
     $('#sReset').onclick = () => {
       const m = modal('Очистити дані аналітики?', '<p>Усі завантажені замовлення буде видалено і завантажено заново з LP-CRM. Налаштування (відділи, джерела, менеджери, бренди, таргети) збережуться.</p>',
         { footer: '<button class="btn" data-close>Скасувати</button><button class="btn danger" id="rsGo">Очистити і завантажити</button>' });
       $('#rsGo', m.el).onclick = () => { m.close(); go('reset'); };
     };
+
+    // --- потребує уваги: нові менеджери, значення «Поле 1», відділи CRM
+    const hide = (kind, value) => `<button type="button" class="btn sm" data-hide="${kind}" data-v="${esc(value)}">Приховати</button>`;
+    const lists = [];
+    if (attn.users.length) {
+      lists.push(`<div class="at-group"><h4>Нові менеджери</h4><div class="small muted">Логіни з LP-CRM, яких ще немає у списку менеджерів. Виберіть відділ — менеджера буде додано.</div>
+        ${attn.users.map((u) => `<div class="at-row"><b>${esc(u.v)}</b><span class="small muted">${int(u.n)} зам.</span>
+          <select data-amgr="${esc(u.v)}" aria-label="Відділ для ${esc(u.v)}">${deptOpts('', '— відділ —')}</select>${hide('users', u.v)}</div>`).join('')}</div>`);
+    }
+    if (attn.values.length) {
+      lists.push(`<div class="at-group"><h4>Значення без джерела</h4><div class="small muted">Нові значення «Поле 1», сайту чи utm_source. Виберіть джерело продажів.</div>
+        ${attn.values.map((v) => `<div class="at-row"><b>${esc(v.value)}</b><span class="small muted">${esc(v.fields.join(', '))} · ${int(v.n)} зам.</span>
+          <select data-assign="${esc(v.value)}" aria-label="Джерело для ${esc(v.value)}">${srcOpts}</select>${hide('values', v.value)}</div>`).join('')}</div>`);
+    }
+    if (attn.offices.length) {
+      lists.push(`<div class="at-group"><h4>Відділи LP-CRM без прив’язки</h4>
+        ${attn.offices.map((o) => `<div class="at-row"><b>${esc(o.v)}</b><span class="small muted">${esc(cfg.offices.find((x) => String(x.office_id) === String(o.v))?.name || '')} · ${int(o.n)} зам.</span>
+          <select data-aoff="${esc(o.v)}" aria-label="Відділ аналітики для ${esc(o.v)}">${deptOpts('', '— відділ —')}</select>${hide('offices', o.v)}</div>`).join('')}</div>`);
+    }
+    const ig = attn.ignored;
+    const hidden = ig.users.length + ig.values.length + ig.offices.length;
+    $('#attnLists').innerHTML = lists.join('') + (hidden ? `<div class="small muted">Приховано: ${hidden}. <button type="button" class="linkbtn" id="attnShow">Показати знову</button></div>` : '');
+    $('#attnLists').onclick = async (e) => {
+      const b = e.target.closest('[data-hide]');
+      if (b) {
+        try { await api('PUT', '/api/an/ignore', { kind: b.dataset.hide, value: b.dataset.v, on: true }); await viewSettings(); } catch (er) { toast(er.message, true); }
+      }
+      if (e.target.id === 'attnShow') {
+        try {
+          for (const kind of ['users', 'values', 'offices']) for (const value of ig[kind]) await api('PUT', '/api/an/ignore', { kind, value, on: false });
+          await viewSettings();
+        } catch (er) { toast(er.message, true); }
+      }
+    };
+    $$('[data-amgr]').forEach((sel) => (sel.onchange = async () => {
+      if (!sel.value) return;
+      const rows = [...cfg.managers.map((m) => ({ login: m.login, name: m.name, dept_id: m.dept_id })), { login: sel.dataset.amgr, name: '', dept_id: sel.value }];
+      try { await api('PUT', '/api/an/managers', rows); toast('Менеджера додано'); lastData = null; await viewSettings(); } catch (er) { toast(er.message, true); }
+    }));
+    $$('[data-aoff]').forEach((sel) => (sel.onchange = async () => {
+      if (!sel.value) return;
+      const rows = [...cfg.officeMap.map((o) => ({ office: o.office, dept_id: o.dept_id })), { office: sel.dataset.aoff, dept_id: sel.value }];
+      try { await api('PUT', '/api/an/office-map', rows); toast('Збережено'); lastData = null; await viewSettings(); } catch (er) { toast(er.message, true); }
+    }));
+
+    // --- товари: ручна прив'язка бренду і категорії
+    let prods = null;
+    let pf = 'attention';
+    const catName = new Map(cfg.categories.map((c) => [c.id, c.name]));
+    const brandName = new Map([...cfg.brands.map((b) => [b.id, b.name]), [0, 'Інші']]);
+    const catOpts = [...cfg.categories].sort((a, b) => a.name.localeCompare(b.name, 'uk'));
+    const needs = (p) => !p.seen || (p.brand_id === 0 && p.brand_manual == null) || (!p.category_id && p.cat_manual == null);
+    const drawProds = () => {
+      const q = $('#pQ').value.trim().toLowerCase();
+      let list = prods.products.filter((p) => (pf === 'all' ? true : pf === 'new' ? !p.seen : needs(p)));
+      if (q) list = list.filter((p) => p.name.toLowerCase().includes(q) || String(p.id) === q);
+      const more = list.length > 200;
+      list = list.slice(0, 200);
+      if (!list.length) { $('#pTable').innerHTML = `<div class="small muted">${pf === 'attention' && !q ? 'Усі товари мають бренд і категорію, нових немає.' : 'Нічого не знайдено.'}</div>`; return; }
+      $('#pTable').innerHTML = `<div class="table-wrap"><table class="list at-table"><thead><tr><th>Товар</th><th class="r">Продано</th><th>Бренд</th><th>Категорія</th><th></th></tr></thead><tbody>
+        ${list.map((p) => {
+          const autoBrand = p.brand_manual == null ? brandName.get(p.brand_id) || 'Інші' : '';
+          const autoCat = p.category_id ? catName.get(p.category_id) || `Категорія ${p.category_id}` : 'без категорії';
+          return `<tr data-pid="${p.id}"><td><span class="at-name">${esc(p.name || `Товар ${p.id}`)}</span> ${!p.seen ? '<span class="badge info">нове</span>' : ''}<div class="small muted">ID ${p.id}</div></td>
+          <td class="r">${int(p.sold)}</td>
+          <td><select data-pb aria-label="Бренд">
+            <option value="" ${p.brand_manual == null ? 'selected' : ''}>Авто${autoBrand ? `: ${esc(autoBrand)}` : ''}</option>
+            ${cfg.brands.map((b) => `<option value="${b.id}" ${p.brand_manual === b.id ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}
+            <option value="0" ${p.brand_manual === 0 ? 'selected' : ''}>Інші</option></select></td>
+          <td><select data-pc aria-label="Категорія">
+            <option value="" ${p.cat_manual == null ? 'selected' : ''}>Авто: ${esc(autoCat)}</option>
+            ${catOpts.map((c) => `<option value="${c.id}" ${p.cat_manual === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+            <option value="0" ${p.cat_manual === 0 ? 'selected' : ''}>Без категорії</option></select></td>
+          <td>${!p.seen ? '<button type="button" class="btn sm" data-pseen>Переглянуто</button>' : ''}</td></tr>`;
+        }).join('')}</tbody></table></div>${more ? '<div class="small muted">Показано перші 200 — уточніть пошук.</div>' : ''}`;
+    };
+    const loadProds = async () => { prods = await api('GET', '/api/an/products'); drawProds(); };
+    const saveProds = async (rows) => {
+      await api('PUT', '/api/an/products', rows);
+      lastData = null;
+      const a = await api('GET', '/api/an/attention');
+      attn.total = a.total;
+      setBadge(a.total);
+      $('#attnCount').textContent = a.total || 'усе гаразд';
+      $('#attnCount').className = `badge ${a.total ? 'warn' : 'ok'}`;
+      await loadProds();
+    };
+    $$('[data-pf]').forEach((b) => (b.onclick = () => {
+      pf = b.dataset.pf;
+      $$('[data-pf]').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', String(x === b)); });
+      drawProds();
+    }));
+    $('#pQ').oninput = () => drawProds();
+    $('#pTable').onchange = (e) => {
+      const tr = e.target.closest('[data-pid]');
+      if (!tr) return;
+      saveProds([{ id: +tr.dataset.pid, brand_manual: $('[data-pb]', tr).value, cat_manual: $('[data-pc]', tr).value }])
+        .then(() => toast('Збережено')).catch((er) => toast(er.message, true));
+    };
+    $('#pTable').onclick = (e) => {
+      const b = e.target.closest('[data-pseen]');
+      if (!b) return;
+      const id = +b.closest('[data-pid]').dataset.pid;
+      api('POST', '/api/an/products/seen', { ids: [id] }).then(() => { const p = prods.products.find((x) => x.id === id); if (p) p.seen = 1; drawProds(); return api('GET', '/api/an/attention'); })
+        .then((a) => { setBadge(a.total); $('#attnCount').textContent = a.total || 'усе гаразд'; }).catch((er) => toast(er.message, true));
+    };
+    $('#pSeenAll').onclick = () => api('POST', '/api/an/products/seen', {}).then(() => saveProds([])).then(() => toast('Усі нові товари переглянуто')).catch((er) => toast(er.message, true));
+    $('#pOther').onclick = () => {
+      const rows = prods.products.filter((p) => p.brand_id === 0 && p.brand_manual == null).map((p) => ({ id: p.id, brand_manual: 0, cat_manual: p.cat_manual ?? '' }));
+      if (!rows.length) { toast('Немає товарів без бренду'); return; }
+      saveProds(rows).then(() => toast(`Позначено «Інші»: ${rows.length}`)).catch((er) => toast(er.message, true));
+    };
+    loadProds().catch((er) => { $('#pTable').innerHTML = `<div class="alert bad">${esc(er.message)}</div>`; });
 
     // --- загальні
     $('#sGen').onsubmit = async (e) => {

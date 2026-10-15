@@ -48,6 +48,13 @@ await measure('дашборд: місяць + порівняння', 'POST', '/a
 await measure('дашборд: з брендом', 'POST', '/api/an/query', { from: addDays(today, -6), to: today, brands: [1], cmpFrom: addDays(today, -13), cmpTo: addDays(today, -7) });
 await measure('налаштування аналітики', 'GET', '/api/an/config');
 await measure('значення для розподілу', 'GET', '/api/an/values');
+await measure('дашборд: з кешу', 'POST', '/api/an/query', { from: monthStart(today), to: today, cmpFrom: addDays(monthStart(today), -31), cmpTo: addDays(monthStart(today), -1) });
+await measure('потребує уваги', 'GET', '/api/an/attention');
+await measure('товари', 'GET', '/api/an/products');
+await measure('ручна прив\'язка товарів', 'PUT', '/api/an/products', [{ id: 1, brand_manual: 1, cat_manual: '' }]);
+await measure('налаштування: пріоритет', 'PUT', '/api/an/settings', { deptPriority: 'office' });
+await measure('синхронізація: сьогодні', 'POST', '/api/an/sync/start', { mode: 'today', force: true });
+for (;;) { const r = await measure('синхронізація сьогодні: крок', 'POST', '/api/an/sync/step', {}); if (r.state.done || r.state.error) { assert.ok(!r.state.error, r.state.error); break; } }
 const cfg = await (await app.request('/api/an/config', { headers: H })).json();
 await measure('збереження відділів і джерел', 'PUT', '/api/an/structure', { depts: cfg.depts });
 await measure('накладна demo', 'GET', '/api/invoice/demo');

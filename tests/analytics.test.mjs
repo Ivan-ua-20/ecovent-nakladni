@@ -131,11 +131,13 @@ const cfg = await req('GET', '/api/an/config');
 const mp = cfg.depts.find((d) => d.name === 'Маркетплейси');
 await req('PUT', '/api/an/managers', [{ login: 'olena', name: 'Олена', dept_id: mp.id }]);
 const q2 = await req('POST', '/api/an/query', { from, to: today, depts: [mp.id] });
-const exp2 = expect.filter((o) => o.user === 'olena' || o.office === '5');
+const exp2 = expect.filter((o) => o.user === 'olena' || ['5', '25'].includes(o.office));
 assert.equal(q2.kpi.cur.cnt, exp2.length, 'відділ: менеджер має пріоритет над відділом CRM');
 
 // ---------- 4. Джерело за полем 1 ----------
-const rozetka = mp.sources.find((s) => s.name === 'Rozetka');
+const rozetka = mp.sources.find((s) => s.name === 'Rozetka (OneDay)');
+assert.ok(!cfg.depts.some((d) => d.name === 'Сайти') && cfg.depts.some((d) => d.name === 'Riteil'), 'нова структура відділів');
+assert.ok(!JSON.stringify(cfg.depts).toLowerCase().includes('techno'), 'Techno-Expert прибрано');
 const q3 = await req('POST', '/api/an/query', { from, to: today, sources: [rozetka.id] });
 assert.equal(q3.kpi.cur.cnt, expect.filter((o) => o.additional_1 === 'Rozetka(oneday)').length, 'джерело Rozetka');
 
@@ -171,7 +173,7 @@ id++;
 const newCode = String(1790000000000000 + id * 37);
 orders.set(newCode, { id: String(id), order_id: newCode, datetime: `${today} 18:00:00`, status: '11', office: '5', user: 'ivan', additional_1: 'Rozetka(oneday)', total: '999.00', products: [{ product_id: '452', name: PRODUCTS[452].name, price: '999.00', quantity: '1' }] });
 const callsBefore = calls;
-await runSync('refresh');
+await runSync('daily');
 assert.equal((await db.get(`SELECT status FROM an_orders WHERE code = ?`, [someCode])).status, 54, 'статус оновлено');
 assert.equal((await db.get(`SELECT status FROM an_orders WHERE code = ?`, [leave])).status, 0, 'замовлення поза статусами виключено');
 assert.ok(await db.get(`SELECT id FROM an_orders WHERE code = ?`, [newCode]), 'нове замовлення додано');
@@ -192,6 +194,46 @@ assert.ok(vals.users.some((u) => u.v === 'rybchuk'));
 await req('PUT', '/api/an/brands', [...cfg3.brands, { name: 'Premium', keywords: 'плівка' }]);
 const q6 = await req('POST', '/api/an/query', { from, to: today });
 assert.ok(q6.byBrand.some((b) => b.name === 'Premium'), 'новий бренд застосовано до товарів');
+
+// ---------- 8b. Кеш дашборду, режим «сьогодні», «Потребує уваги» ----------
+const qa = await req('POST', '/api/an/query', { from, to: today });
+assert.ok(await db.get(`SELECT key FROM an_cache LIMIT 1`), 'відповідь дашборду збережено в кеші');
+const qb = await req('POST', '/api/an/query', { from, to: today });
+assert.deepEqual(qa.kpi, qb.kpi, 'кеш повертає ті самі дані');
+id++;
+const todayCode = String(1790000000000000 + id * 37);
+orders.set(todayCode, { id: String(id), order_id: todayCode, datetime: `${today} 19:00:00`, status: '11', office: '99', user: 'newbie', additional_1: 'NewShop', total: '500.00', products: [{ product_id: '777', name: 'Зволожувач DREO HM311', price: '500.00', quantity: '1' }] });
+PRODUCTS[777] = { name: 'Зволожувач DREO HM311', price: 500, cat: 31 };
+const callsToday = calls;
+const st7 = (await runSync('today')).s;
+assert.equal(st7.mode, 'today');
+console.log(`  оновлення за сьогодні: ${calls - callsToday} запитів до LP-CRM`);
+assert.ok(await db.get(`SELECT id FROM an_orders WHERE code = ?`, [todayCode]), 'сьогоднішнє замовлення додано');
+assert.ok(!(await db.get(`SELECT key FROM an_cache LIMIT 1`)), 'кеш очищено після оновлення');
+const qc = await req('POST', '/api/an/query', { from, to: today });
+assert.equal(qc.kpi.cur.cnt, qa.kpi.cur.cnt + 1, 'дашборд бачить нове замовлення');
+const att = await req('GET', '/api/an/attention');
+assert.ok(att.users.some((u) => u.v === 'newbie'), 'новий менеджер');
+assert.ok(att.values.some((v) => v.value === 'newshop'), 'нове значення Поле 1');
+assert.ok(att.offices.some((o) => String(o.v) === '99'), 'новий відділ CRM');
+assert.equal(att.products.fresh, 1, 'новий товар');
+const pr = await req('GET', '/api/an/products');
+const p777 = pr.products.find((x) => x.id === 777);
+assert.equal(p777.seen, 0);
+assert.equal(qc.options.brands.find((b) => b.id === p777.brand_id)?.name, 'DREO', 'бренд з назви');
+// бренд з категорії: товар без бренду в назві, категорія «Ecovent …»
+await db.run(`INSERT OR REPLACE INTO an_categories (id, name, parent_id) VALUES (88, 'Вентиляція Ecovent', NULL)`);
+await db.run(`INSERT INTO an_products (product_id, name, brand_id, category_id, fetched) VALUES (888, 'Фільтр G4', 0, 88, 1)`);
+await req('PUT', '/api/an/products', [{ id: 452, brand_manual: ihunt.id, cat_manual: '' }]);
+const pr2 = await req('GET', '/api/an/products');
+assert.equal(pr2.products.find((x) => x.id === 888).brand_id, qc.options.brands.find((b) => b.name === 'Ecovent').id, 'бренд з категорії');
+assert.equal(pr2.products.find((x) => x.id === 452).brand_id, ihunt.id, 'ручна прив\'язка бренду');
+await req('PUT', '/api/an/ignore', { kind: 'users', value: 'newbie', on: true });
+await req('POST', '/api/an/products/seen', {});
+const att2 = await req('GET', '/api/an/attention');
+assert.ok(!att2.users.some((u) => u.v === 'newbie') && att2.products.fresh === 0, 'приховано і переглянуто');
+const sy = await req('GET', '/api/an/sync');
+assert.equal(sy.dailyDue, false, 'щоденне оновлення вже виконано');
 
 // ---------- 9. Доступ ----------
 await app.request('/api/users', { method: 'POST', headers: H, body: JSON.stringify({ login: 'man', password: 'pass1234', role: 'manager' }) });

@@ -2101,6 +2101,8 @@ var SCHEMA = [
   `CREATE TABLE IF NOT EXISTS an_managers (login TEXT PRIMARY KEY, name TEXT DEFAULT '', dept_id INTEGER)`,
   // Таргет на місяць: kind = 'dept' | 'src'
   `CREATE TABLE IF NOT EXISTS an_targets (month TEXT NOT NULL, kind TEXT NOT NULL, ref_id INTEGER NOT NULL, amount REAL NOT NULL, PRIMARY KEY (month, kind, ref_id))`,
+  // Збережені відповіді дашборду (поки дані й налаштування не змінились) — менше читань бази.
+  `CREATE TABLE IF NOT EXISTS an_cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS channels (
     name TEXT PRIMARY KEY,
     fop_id INTEGER
@@ -2131,7 +2133,7 @@ var SEED_OFFICES = [
   ["14", "Rozetka(oneday) / \u0424\u041E\u041F \u041B\u0423\u041F\u0423 \u0412.\u0424.", "lupuvf"],
   ["17", "\u0424\u0435\u0439\u0441\u0431\u0443\u043A / \u0424\u041E\u041F \u041B\u0423\u041F\u0423 \u0412\u0406\u0420\u0410", "lupuvf"],
   ["18", "Amsterdam / \u0424\u041E\u041F \u0410\u0433\u0430\u0444\u0456\u0446\u0430 \u0410.\u041C", "agam"],
-  ["19", "Techno-Expert / \u0424\u041E\u041F \u0410\u0433\u0430\u0444\u0456\u0446\u0430 \u0410.\u041C", "agam"],
+  ["19", "\u0424\u041E\u041F \u0410\u0433\u0430\u0444\u0456\u0446\u0430 \u0410.\u041C", "agam"],
   ["20", "Prom(Arca) / \u0424\u041E\u041F \u0410\u0433\u0430\u0444\u0456\u0446\u0430 \u0410.\u041C.", "agam"],
   ["21", "Epicentr(Ecovent) / \u0424\u041E\u041F \u0410\u0433\u0430\u0444\u0456\u0446\u0430 \u0410.\u041C.", "agam"],
   ["22", "Ecovent-Expert / \u0424\u041E\u041F \u0410\u0433\u0430\u0444\u0456\u0446\u0430 \u0414.\u041C.", "agdm"],
@@ -2155,7 +2157,7 @@ var SEED_TEMPLATES = [
       showDelivery: true,
       showPayment: true,
       showSignatures: true,
-      footerText: "\u0422\u043E\u0432\u0430\u0440 \u043E\u0442\u0440\u0438\u043C\u0430\u0432, \u043F\u0440\u0435\u0442\u0435\u043D\u0437\u0456\u0439 \u0449\u043E\u0434\u043E \u043A\u0456\u043B\u044C\u043A\u043E\u0441\u0442\u0456, \u043A\u043E\u043C\u043F\u043B\u0435\u043A\u0442\u043D\u043E\u0441\u0442\u0456 \u0442\u0430 \u0437\u043E\u0432\u043D\u0456\u0448\u043D\u044C\u043E\u0433\u043E \u0432\u0438\u0433\u043B\u044F\u0434\u0443 \u043D\u0435 \u043C\u0430\u044E."
+      footerText: ""
     }
   },
   {
@@ -2208,22 +2210,37 @@ var ADD_COLUMNS = [
   ["channels", "seller_text", "TEXT DEFAULT ''"],
   ["versions", "user_name", "TEXT DEFAULT ''"],
   ["users", "failed_logins", "INTEGER DEFAULT 0"],
-  ["users", "locked_until", "TEXT DEFAULT ''"]
+  ["users", "locked_until", "TEXT DEFAULT ''"],
+  ["an_products", "brand_manual", "INTEGER"],
+  ["an_products", "cat_manual", "INTEGER"],
+  ["an_products", "seen", "INTEGER NOT NULL DEFAULT 0"]
 ];
-var SCHEMA_VERSION = "8";
+var SCHEMA_VERSION = "9";
+var MP_SOURCES = [
+  ["Rozetka (OneDay)", ["rozetka(oneday)"]],
+  ["Rozetka (Ecovent)", ["rozetka(ecovent)"]],
+  ["Prom (Arca)", ["prom(arca)"]],
+  ["Prom (Amsterdam)", ["prom(amsterdam)"]],
+  ["Epicentr (Ecovent)", ["epicentr(ecovent)"]],
+  ["Epicentr (Amsterdam)", ["epicentr(amsterdam)"]],
+  ["\u0421\u0430\u0439\u0442 iHunt", ["ihunt"]],
+  ["\u0421\u0430\u0439\u0442 Ecovent", ["ecovent-expert", "ecovent"]],
+  ["\u0421\u0430\u0439\u0442 Amsterdam", ["amsterdam"]]
+];
+var AN_BRANDS = [
+  ["iHunt", "ihunt, robot window"],
+  ["Evoair", "evoair, humixduo"],
+  ["Levoit", "levoit"],
+  ["DREO", "dreo"],
+  ["Ecovent", "ecovent, decora"],
+  ["BSK", "bsk, zephyr, notus"],
+  ["Ergovent", "ergovent"],
+  ["Dolceclima", "dolceclima"]
+];
 var AN_SEED = {
   depts: [
-    { name: "\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438", sources: [
-      { name: "Rozetka", values: ["rozetka(oneday)", "rozetka(ecovent)", "rozetka"] },
-      { name: "Prom", values: ["prom(arca)", "prom(amsterdam)", "prom"] },
-      { name: "Epicentr", values: ["epicentr(ecovent)", "epicentr(amsterdam)", "epicentr"] }
-    ] },
-    { name: "\u0421\u0430\u0439\u0442\u0438", sources: [
-      { name: "\u0421\u0430\u0439\u0442 iHunt", values: ["ihunt"] },
-      { name: "\u0421\u0430\u0439\u0442 Ecovent", values: ["ecovent-expert", "ecovent"] },
-      { name: "\u0421\u0430\u0439\u0442 Amsterdam", values: ["amsterdam"] },
-      { name: "\u0421\u0430\u0439\u0442 Techno-Expert", values: ["techno-expert"] }
-    ] },
+    { name: "\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438", sources: MP_SOURCES.map(([name, values]) => ({ name, values })) },
+    { name: "Riteil", sources: [{ name: "Riteil(Rozetka)", values: ["riteil(rozetka)"] }] },
     { name: "\u0406\u043D\u0441\u0442\u0430\u0433\u0440\u0430\u043C", sources: [] },
     { name: "\u0424\u0435\u0439\u0441\u0431\u0443\u043A", sources: [] },
     { name: "\u0422\u0456\u043A\u0422\u043E\u043A", sources: [] },
@@ -2232,8 +2249,7 @@ var AN_SEED = {
     { name: "\u0406\u043D\u0448\u0435", sources: [] }
   ],
   offices: {
-    "\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438": ["5", "12", "13", "14", "20", "21", "23", "24"],
-    "\u0421\u0430\u0439\u0442\u0438": ["18", "19", "22", "25"],
+    "\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438": ["5", "12", "13", "14", "18", "19", "20", "21", "22", "23", "24", "25"],
     "\u0424\u0435\u0439\u0441\u0431\u0443\u043A": ["4", "17"],
     "\u0406\u043D\u0441\u0442\u0430\u0433\u0440\u0430\u043C": ["6", "11"],
     "\u0422\u0456\u043A\u0422\u043E\u043A": ["8"],
@@ -2241,7 +2257,7 @@ var AN_SEED = {
     "B2B": ["27", "28"],
     "\u0406\u043D\u0448\u0435": ["9", "26", "29"]
   },
-  brands: [["iHunt", "ihunt"], ["Evoair", "evoair"], ["Ecovent", "ecovent"]]
+  brands: AN_BRANDS
 };
 async function seedAnalytics(db) {
   const done = await db.get(`SELECT value FROM settings WHERE key = 'an_seeded'`);
@@ -2298,6 +2314,74 @@ async function fillFopNames(db) {
     [`INSERT INTO settings (key, value) VALUES ('fop_names_v1', '1') ON CONFLICT(key) DO NOTHING`, []]
   ]);
 }
+async function upgradeV9(db) {
+  if (await db.get(`SELECT value FROM settings WHERE key = 'an_v9'`)) return;
+  const st = [];
+  for (const t of await db.all(`SELECT id, options FROM templates`)) {
+    let o = {};
+    try {
+      o = JSON.parse(t.options || "{}");
+    } catch {
+    }
+    if (/Товар отримав/i.test(o.footerText || "")) {
+      o.footerText = "";
+      st.push([`UPDATE templates SET options = ? WHERE id = ?`, [JSON.stringify(o), t.id]]);
+    }
+  }
+  st.push([`DELETE FROM channels WHERE LOWER(name) LIKE 'techno-expert%'`, []]);
+  st.push([`UPDATE offices SET name = TRIM(SUBSTR(name, 17)) WHERE name LIKE 'Techno-Expert / %'`, []]);
+  const depts = await db.all(`SELECT id, name FROM an_depts`);
+  const sources = await db.all(`SELECT id, dept_id, name FROM an_sources`);
+  const byName = (list, n) => list.find((x) => x.name.trim().toLowerCase() === n.toLowerCase());
+  let nextDept = Math.max(0, ...depts.map((d) => d.id)) + 1;
+  let nextSrc = Math.max(0, ...sources.map((x) => x.id)) + 1;
+  let mp = byName(depts, "\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438");
+  if (!mp) {
+    mp = { id: nextDept++, name: "\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438" };
+    st.push([`INSERT INTO an_depts (id, name, sort) VALUES (?, ?, 0)`, [mp.id, mp.name]]);
+  }
+  const sites = byName(depts, "\u0421\u0430\u0439\u0442\u0438");
+  for (const x of sources) {
+    const n = x.name.trim().toLowerCase();
+    if (["rozetka", "prom", "epicentr"].includes(n) || n.includes("techno")) {
+      st.push([`DELETE FROM an_source_map WHERE source_id = ?`, [x.id]]);
+      st.push([`DELETE FROM an_sources WHERE id = ?`, [x.id]]);
+    }
+  }
+  st.push([`DELETE FROM an_source_map WHERE value LIKE 'techno-expert%'`, []]);
+  MP_SOURCES.forEach(([name, values], i) => {
+    let src = byName(sources, name);
+    if (!src) {
+      src = { id: nextSrc++ };
+      st.push([`INSERT INTO an_sources (id, dept_id, name, sort) VALUES (?, ?, ?, ?)`, [src.id, mp.id, name, i]]);
+    } else st.push([`UPDATE an_sources SET dept_id = ?, sort = ? WHERE id = ?`, [mp.id, i, src.id]]);
+    for (const v of values) st.push([`INSERT OR REPLACE INTO an_source_map (value, source_id) VALUES (?, ?)`, [v, src.id]]);
+  });
+  if (sites) {
+    st.push([`UPDATE an_sources SET dept_id = ? WHERE dept_id = ?`, [mp.id, sites.id]]);
+    st.push([`UPDATE an_office_map SET dept_id = ? WHERE dept_id = ?`, [mp.id, sites.id]]);
+    st.push([`UPDATE an_managers SET dept_id = ? WHERE dept_id = ?`, [mp.id, sites.id]]);
+    st.push([`DELETE FROM an_depts WHERE id = ?`, [sites.id]]);
+  }
+  if (!byName(depts, "Riteil")) {
+    const rid = nextDept++;
+    const sid = nextSrc++;
+    st.push([`INSERT INTO an_depts (id, name, sort) VALUES (?, 'Riteil', 1)`, [rid]]);
+    st.push([`INSERT INTO an_sources (id, dept_id, name, sort) VALUES (?, ?, 'Riteil(Rozetka)', 0)`, [sid, rid]]);
+    st.push([`INSERT OR REPLACE INTO an_source_map (value, source_id) VALUES ('riteil(rozetka)', ?)`, [sid]]);
+  }
+  const brands = await db.all(`SELECT id, name FROM an_brands`);
+  let nextBrand = Math.max(0, ...brands.map((b) => b.id)) + 1;
+  AN_BRANDS.forEach(([name, kw], i) => {
+    const b = byName(brands, name);
+    if (b) st.push([`UPDATE an_brands SET name = ?, keywords = ?, sort = ? WHERE id = ?`, [name, kw, i, b.id]]);
+    else st.push([`INSERT INTO an_brands (id, name, keywords, sort) VALUES (?, ?, ?, ?)`, [nextBrand++, name, kw, i]]);
+  });
+  st.push([`UPDATE an_products SET seen = 1`, []]);
+  st.push([`INSERT INTO settings (key, value) VALUES ('an_v9', '1') ON CONFLICT(key) DO NOTHING`, []]);
+  await db.batch(st);
+  await db.run(`INSERT INTO settings (key, value) VALUES ('an_need_remap', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`);
+}
 async function migrate(db) {
   try {
     const v = await db.get(`SELECT value FROM settings WHERE key = 'schema_version'`);
@@ -2321,6 +2405,7 @@ async function migrateFull(db) {
     await seedChannels(db);
     await fillFopNames(db);
     await seedAnalytics(db);
+    await upgradeV9(db);
     return;
   }
   const st = [];
@@ -2348,6 +2433,7 @@ async function migrateFull(db) {
   await seedChannels(db);
   await fillFopNames(db);
   await seedAnalytics(db);
+  await db.run(`INSERT INTO settings (key, value) VALUES ('an_v9', '1') ON CONFLICT(key) DO NOTHING`);
 }
 
 // src/lpcrm.js
@@ -2567,20 +2653,26 @@ function brandOf(name, brands) {
   for (const b of brands) if (b.kws.some((k) => n.includes(k))) return b.id;
   return 0;
 }
-async function remap(db, st) {
-  const deptMgr = `(SELECT dept_id FROM an_managers m WHERE m.login = an_orders.user AND m.dept_id IS NOT NULL)`;
-  const deptOff = `(SELECT dept_id FROM an_office_map f WHERE f.office = an_orders.office)`;
-  const dept = st.deptPriority === "office" ? `COALESCE(${deptOff}, ${deptMgr}, 0)` : `COALESCE(${deptMgr}, ${deptOff}, 0)`;
-  const one = (col) => `CASE WHEN an_orders.${col} != '' THEN (SELECT source_id FROM an_source_map s WHERE s.value = an_orders.${col}) END`;
-  const src = `COALESCE(${one("ch")}, ${one("site")}, ${one("utm")}, 0)`;
-  await db.run(`UPDATE an_orders SET dept = ${dept}, src = ${src} WHERE dept IS NOT ${dept} OR src IS NOT ${src}`);
+async function remap(db, st, { dept = true, src = true } = {}) {
+  if (dept) {
+    const deptMgr = `(SELECT dept_id FROM an_managers m WHERE m.login = an_orders.user AND m.dept_id IS NOT NULL)`;
+    const deptOff = `(SELECT dept_id FROM an_office_map f WHERE f.office = an_orders.office)`;
+    const d = st.deptPriority === "office" ? `COALESCE(${deptOff}, ${deptMgr}, 0)` : `COALESCE(${deptMgr}, ${deptOff}, 0)`;
+    await db.run(`UPDATE an_orders SET dept = ${d} WHERE dept IS NOT ${d}`);
+  }
+  if (src) {
+    const one = (col) => `CASE WHEN an_orders.${col} != '' THEN (SELECT source_id FROM an_source_map s WHERE s.value = an_orders.${col}) END`;
+    const x = `COALESCE(${one("ch")}, ${one("site")}, ${one("utm")}, 0)`;
+    await db.run(`UPDATE an_orders SET src = ${x} WHERE src IS NOT ${x}`);
+  }
 }
 async function rebrand(db) {
   const brands = (await db.all(`SELECT id, keywords FROM an_brands ORDER BY sort, id`)).map((b) => ({ id: b.id, kws: String(b.keywords || "").split(",").map(low).filter(Boolean) }));
-  const prods = await db.all(`SELECT product_id, name, brand_id FROM an_products`);
+  const prods = await db.all(`SELECT p.product_id, p.name, p.brand_id, p.brand_manual, c.name AS cat
+    FROM an_products p LEFT JOIN an_categories c ON c.id = COALESCE(p.cat_manual, p.category_id)`);
   const upd = [];
   for (const p of prods) {
-    const b = brandOf(p.name, brands);
+    const b = p.brand_manual != null ? p.brand_manual : brandOf(p.name, brands) || brandOf(p.cat || "", brands);
     if (b !== p.brand_id) upd.push([`UPDATE an_products SET brand_id = ? WHERE product_id = ?`, [b, p.product_id]]);
   }
   await db.batch(upd);
@@ -2692,12 +2784,72 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     return { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
   };
   const lp = (c, method, params) => call(fetchFn, c.subdomain, c.key, method, params);
+  const bump = () => db.batch([
+    [`INSERT INTO settings (key, value) VALUES ('an_ver', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(Date.now())]],
+    [`DELETE FROM an_cache`, []]
+  ]);
+  async function computeValues() {
+    const [ch, site, utm, users, offices, sold] = await Promise.all([
+      db.all(`SELECT ch AS v, COUNT(*) AS n FROM an_orders WHERE ch != '' GROUP BY ch`),
+      db.all(`SELECT site AS v, COUNT(*) AS n FROM an_orders WHERE site != '' GROUP BY site`),
+      db.all(`SELECT utm AS v, COUNT(*) AS n FROM an_orders WHERE utm != '' GROUP BY utm`),
+      db.all(`SELECT user AS v, COUNT(*) AS n FROM an_orders WHERE user != '' GROUP BY user ORDER BY n DESC`),
+      db.all(`SELECT office AS v, COUNT(*) AS n FROM an_orders GROUP BY office ORDER BY n DESC`),
+      db.all(`SELECT product_id AS id, SUM(qty) AS q FROM an_items GROUP BY product_id`)
+    ]);
+    const values = /* @__PURE__ */ new Map();
+    for (const [field, rows] of [["\u041F\u043E\u043B\u0435 1", ch], ["\u0421\u0430\u0439\u0442", site], ["utm_source", utm]]) {
+      for (const r of rows) {
+        const cur = values.get(r.v) || { value: r.v, n: 0, fields: [] };
+        cur.n += r.n;
+        cur.fields.push(field);
+        values.set(r.v, cur);
+      }
+    }
+    const data = {
+      at: nowIso2(),
+      values: [...values.values()].sort((a, b) => b.n - a.n),
+      users,
+      offices,
+      sold: Object.fromEntries(sold.map((r) => [r.id, r.q]))
+    };
+    await putSetting("an_values", JSON.stringify(data));
+    return data;
+  }
+  async function mergeTodayValues(day) {
+    const cur = await getJson("an_values");
+    if (!cur) return computeValues();
+    const r = await idRange(db, day, day);
+    if (!r) return cur;
+    const rows = await db.all(`SELECT ch, site, utm, user, office FROM an_orders WHERE id BETWEEN ? AND ? AND day = ?`, [r[0], r[1], day]);
+    const has = (list, v, key = "v") => list.some((x) => x[key] === v);
+    for (const o of rows) {
+      for (const [field, v] of [["\u041F\u043E\u043B\u0435 1", o.ch], ["\u0421\u0430\u0439\u0442", o.site], ["utm_source", o.utm]]) {
+        if (v && !has(cur.values, v, "value")) cur.values.push({ value: v, n: 1, fields: [field] });
+      }
+      if (o.user && !has(cur.users, o.user)) cur.users.push({ v: o.user, n: 1 });
+      if (o.office && !has(cur.offices, o.office)) cur.offices.push({ v: o.office, n: 1 });
+    }
+    await putSetting("an_values", JSON.stringify(cur));
+    return cur;
+  }
+  let checkedRemap = false;
   app.use("/api/an/*", async (c, next) => {
     need(c, "analytics");
+    if (!checkedRemap) {
+      checkedRemap = true;
+      const f = await db.get(`SELECT value FROM settings WHERE key = 'an_need_remap'`);
+      if (f?.value === "1") {
+        await remap(db, await getSt());
+        await rebrand(db);
+        await db.run(`UPDATE settings SET value = '0' WHERE key = 'an_need_remap'`);
+        await bump();
+      }
+    }
     return next();
   });
   app.get("/api/an/config", async (c) => {
-    const [st, depts, sources, smap, officeMap, managers, brands, offices, statusNames, lastSync, sync] = await Promise.all([
+    const [st, depts, sources, smap, officeMap, managers, brands, offices, statusNames, lastSync, sync, categories] = await Promise.all([
       getSt(),
       db.all(`SELECT id, name, sort FROM an_depts ORDER BY sort, id`),
       db.all(`SELECT id, dept_id, name, sort FROM an_sources ORDER BY sort, id`),
@@ -2708,9 +2860,11 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
       db.all(`SELECT office_id, name FROM offices ORDER BY CAST(office_id AS INTEGER)`),
       getJson("an_status_names"),
       db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`),
-      getJson("an_sync")
+      getJson("an_sync"),
+      db.all(`SELECT id, name, parent_id FROM an_categories ORDER BY name`)
     ]);
     return c.json({
+      categories,
       settings: st,
       depts: depts.map((d) => ({
         ...d,
@@ -2726,29 +2880,72 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     });
   });
   app.get("/api/an/values", async (c) => {
-    const [ch, site, utm, users, offices, unbranded] = await Promise.all([
-      db.all(`SELECT ch AS v, COUNT(*) AS n FROM an_orders WHERE ch != '' GROUP BY ch`),
-      db.all(`SELECT site AS v, COUNT(*) AS n FROM an_orders WHERE site != '' GROUP BY site`),
-      db.all(`SELECT utm AS v, COUNT(*) AS n FROM an_orders WHERE utm != '' GROUP BY utm`),
-      db.all(`SELECT user AS v, COUNT(*) AS n FROM an_orders WHERE user != '' GROUP BY user ORDER BY n DESC`),
-      db.all(`SELECT office AS v, COUNT(*) AS n FROM an_orders GROUP BY office ORDER BY n DESC`),
-      db.all(`SELECT name FROM an_products WHERE brand_id = 0 ORDER BY name LIMIT 300`)
+    const v = await getJson("an_values") || await computeValues();
+    return c.json({ values: v.values, users: v.users, offices: v.offices, at: v.at });
+  });
+  const ignored = async () => ({ users: [], values: [], offices: [], ...await getJson("an_ignored") || {} });
+  app.get("/api/an/attention", async (c) => {
+    const [v0, ig, smap, mgrs, omap, prod] = await Promise.all([
+      getJson("an_values"),
+      ignored(),
+      db.all(`SELECT value FROM an_source_map`),
+      db.all(`SELECT login FROM an_managers`),
+      db.all(`SELECT office FROM an_office_map`),
+      db.get(`SELECT SUM(CASE WHEN seen = 0 THEN 1 ELSE 0 END) AS fresh,
+        SUM(CASE WHEN brand_id = 0 AND brand_manual IS NULL THEN 1 ELSE 0 END) AS nobrand,
+        SUM(CASE WHEN COALESCE(cat_manual, category_id, 0) = 0 AND cat_manual IS NULL THEN 1 ELSE 0 END) AS nocat
+        FROM an_products`)
     ]);
-    const values = /* @__PURE__ */ new Map();
-    for (const [field, rows] of [["\u041F\u043E\u043B\u0435 1", ch], ["\u0421\u0430\u0439\u0442", site], ["utm_source", utm]]) {
-      for (const r of rows) {
-        const cur = values.get(r.v) || { value: r.v, n: 0, fields: [] };
-        cur.n += r.n;
-        cur.fields.push(field);
-        values.set(r.v, cur);
-      }
-    }
-    return c.json({
-      values: [...values.values()].sort((a, b) => b.n - a.n),
-      users,
-      offices,
-      unbranded: unbranded.map((r) => r.name)
-    });
+    const vals = v0 || await computeValues();
+    const mapped = new Set(smap.map((r) => r.value));
+    const known = new Set(mgrs.map((r) => r.login));
+    const offs = new Set(omap.map((r) => String(r.office)));
+    const out = {
+      values: vals.values.filter((x) => !mapped.has(x.value) && !ig.values.includes(x.value)),
+      users: vals.users.filter((x) => !known.has(x.v) && !ig.users.includes(x.v)),
+      offices: vals.offices.filter((x) => x.v !== "" && !offs.has(String(x.v)) && !ig.offices.includes(String(x.v))),
+      products: { fresh: prod?.fresh || 0, nobrand: prod?.nobrand || 0, nocat: prod?.nocat || 0 },
+      ignored: ig
+    };
+    out.total = out.values.length + out.users.length + out.offices.length + out.products.fresh + out.products.nobrand + out.products.nocat;
+    return c.json(out);
+  });
+  app.put("/api/an/ignore", async (c) => {
+    const b = await c.req.json();
+    if (!["users", "values", "offices"].includes(b.kind)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u0442\u0438\u043F.");
+    const ig = await ignored();
+    const v = String(b.value ?? "");
+    ig[b.kind] = b.on ? [.../* @__PURE__ */ new Set([...ig[b.kind], v])] : ig[b.kind].filter((x) => x !== v);
+    await putSetting("an_ignored", JSON.stringify(ig));
+    return c.json({ ok: true, ignored: ig });
+  });
+  app.get("/api/an/products", async (c) => {
+    const [rows, cats, v] = await Promise.all([
+      db.all(`SELECT product_id AS id, name, category_id, cat_manual, brand_id, brand_manual, seen FROM an_products ORDER BY seen, name`),
+      db.all(`SELECT id, name, parent_id FROM an_categories ORDER BY name`),
+      getJson("an_values")
+    ]);
+    const sold = v?.sold || {};
+    return c.json({ products: rows.map((r) => ({ ...r, sold: sold[r.id] || 0 })), categories: cats });
+  });
+  app.put("/api/an/products", async (c) => {
+    const list = await c.req.json();
+    const norm = (x) => x === "" || x == null ? null : parseInt(x, 10);
+    const st = (Array.isArray(list) ? list : []).filter((r) => parseInt(r.id, 10)).map((r) => [
+      `UPDATE an_products SET brand_manual = ?, cat_manual = ?, seen = 1 WHERE product_id = ?`,
+      [norm(r.brand_manual), norm(r.cat_manual), parseInt(r.id, 10)]
+    ]);
+    await db.batch(st);
+    const changed = await rebrand(db);
+    await bump();
+    return c.json({ ok: true, changed });
+  });
+  app.post("/api/an/products/seen", async (c) => {
+    const b = await c.req.json().catch(() => ({}));
+    const ids = (Array.isArray(b.ids) ? b.ids : []).map((x) => parseInt(x, 10)).filter(Boolean);
+    if (ids.length) await db.run(`UPDATE an_products SET seen = 1 WHERE product_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(ids)]);
+    else await db.run(`UPDATE an_products SET seen = 1 WHERE seen = 0`);
+    return c.json({ ok: true });
   });
   app.put("/api/an/settings", async (c) => {
     const b = await c.req.json();
@@ -2759,7 +2956,8 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     if (["net", "all"].includes(b.targetBase)) next.targetBase = b.targetBase;
     if (b.months !== void 0) next.months = Math.min(18, Math.max(1, parseInt(b.months, 10) || 6));
     await putSetting("an_settings", JSON.stringify(next));
-    if (next.deptPriority !== cur.deptPriority) await remap(db, next);
+    if (next.deptPriority !== cur.deptPriority) await remap(db, next, { src: false });
+    await bump();
     return c.json({ ok: true, settings: next });
   });
   app.put("/api/an/structure", async (c) => {
@@ -2818,6 +3016,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     }
     await db.batch([...del, ...st]);
     await remap(db, await getSt());
+    await bump();
     return c.json({ ok: true });
   });
   app.put("/api/an/office-map", async (c) => {
@@ -2828,7 +3027,8 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
       st.push([`INSERT OR REPLACE INTO an_office_map (office, dept_id) VALUES (?, ?)`, [String(r.office).trim(), parseInt(r.dept_id, 10)]]);
     }
     await db.batch(st);
-    await remap(db, await getSt());
+    await remap(db, await getSt(), { src: false });
+    await bump();
     return c.json({ ok: true });
   });
   app.put("/api/an/managers", async (c) => {
@@ -2840,7 +3040,8 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
       st.push([`INSERT OR REPLACE INTO an_managers (login, name, dept_id) VALUES (?, ?, ?)`, [login, String(r.name || "").trim(), parseInt(r.dept_id, 10) || null]]);
     }
     await db.batch(st);
-    await remap(db, await getSt());
+    await remap(db, await getSt(), { src: false });
+    await bump();
     return c.json({ ok: true });
   });
   app.put("/api/an/brands", async (c) => {
@@ -2860,6 +3061,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     }
     await db.batch(old.filter((x) => !keep.has(x.id)).map((x) => [`DELETE FROM an_brands WHERE id = ?`, [x.id]]));
     const changed = await rebrand(db);
+    await bump();
     return c.json({ ok: true, changed });
   });
   app.get("/api/an/targets", async (c) => {
@@ -2880,11 +3082,19 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
       for (const [kind, ref, amount] of rows) st.push([`INSERT INTO an_targets (month, kind, ref_id, amount) VALUES (?, ?, ?, ?)`, [m, kind, ref, amount]]);
     }
     await db.batch(st);
+    await bump();
     return c.json({ ok: true });
   });
   app.get("/api/an/sync", async (c) => {
-    const [state, last] = await Promise.all([getJson("an_sync"), db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`)]);
-    return c.json({ state: state ? summary(state) : null, lastSync: last?.value || "" });
+    const [state, last, daily] = await Promise.all([
+      getJson("an_sync"),
+      db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`),
+      db.get(`SELECT value FROM settings WHERE key = 'an_last_daily'`)
+    ]);
+    const lastDaily = daily?.value || "";
+    const running = state && state.phase !== "done" && !state.error;
+    const dailyDue = !running && !!last?.value && (!lastDaily || Date.now() - Date.parse(lastDaily) > 20 * 36e5);
+    return c.json({ state: state ? summary(state) : null, lastSync: last?.value || "", lastDaily, dailyDue });
   });
   function summary(s) {
     const left = s.units?.length || 0;
@@ -2908,7 +3118,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
   }
   app.post("/api/an/sync/start", async (c) => {
     const b = await c.req.json().catch(() => ({}));
-    const mode = ["full", "reset"].includes(b.mode) ? b.mode : "refresh";
+    const mode = ["today", "full", "reset"].includes(b.mode) ? b.mode : "daily";
     const cur = await getJson("an_sync");
     if (cur && cur.phase !== "done" && !cur.error && !b.force) return c.json({ state: summary(cur), already: true });
     const st = await getSt();
@@ -2916,22 +3126,27 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     const statusNames = await lp(cr, "getStatuses", {}).then((j) => j.status === "ok" ? j.data || {} : {}).catch(() => ({}));
     if (Object.keys(statusNames).length) await putSetting("an_status_names", JSON.stringify(statusNames));
     if (mode === "reset") {
-      await db.batch([[`DELETE FROM an_items`, []], [`DELETE FROM an_orders`, []], [`DELETE FROM an_day_bounds`, []], [`DELETE FROM an_products`, []]]);
+      await db.batch([[`DELETE FROM an_items`, []], [`DELETE FROM an_orders`, []], [`DELETE FROM an_day_bounds`, []], [`UPDATE an_products SET fetched = 0`, []]]);
     }
+    const firstRun = !(await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`))?.value;
     const today = kyivDay();
-    const start = addMonths(monthStart(today), -st.months);
+    const keepFrom = addMonths(monthStart(today), -st.months);
+    const start = mode === "today" ? today : mode === "daily" ? addDays(today, -29) : keepFrom;
     const statuses = [...st.okStatuses, ...st.refuseStatuses];
     const units = [];
-    for (let m = monthStart(today); m >= start; m = addMonths(m, -1)) {
+    for (let m = monthStart(today); m >= monthStart(start); m = addMonths(m, -1)) {
       const to = monthEnd(m) > today ? today : monthEnd(m);
-      for (const s of statuses) units.push({ s, from: m, to });
+      const from = m < start ? start : m;
+      for (const s of statuses) units.push({ s, from, to });
     }
     const state = {
       mode,
       startedAt: nowIso2(),
       start,
+      keepFrom,
+      firstRun,
       today,
-      refetchFrom: mode === "refresh" ? addDays(today, -7) : "9999-12-31",
+      refetchFrom: mode === "today" ? today : mode === "daily" ? addDays(today, -7) : "9999-12-31",
       phase: "units",
       units,
       unitsTotal: units.length,
@@ -3023,7 +3238,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
         if (state.phase === "products") {
           const rows = await db.all(`SELECT product_id FROM an_products WHERE fetched = 0 LIMIT 50`);
           if (!rows.length) {
-            state.phase = "categories";
+            state.phase = state.mode !== "today" || state.stats.products > 0 ? "categories" : "cleanup";
             continue;
           }
           const ids = rows.map((r) => r.product_id);
@@ -3051,17 +3266,25 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
           continue;
         }
         if (state.phase === "cleanup") {
-          const old = await db.get(`SELECT MAX(max_id) AS hi FROM an_day_bounds WHERE day < ?`, [state.start]);
+          if (calls > 0) break;
+          const keepFrom = state.keepFrom || state.start;
+          const old = await db.get(`SELECT MAX(max_id) AS hi FROM an_day_bounds WHERE day < ?`, [keepFrom]);
           if (old?.hi != null) {
             await db.batch([
               [`DELETE FROM an_items WHERE id < ?`, [(old.hi + 1) * 100]],
-              [`DELETE FROM an_orders WHERE id <= ? AND day < ?`, [old.hi, state.start]],
-              [`DELETE FROM an_day_bounds WHERE day < ?`, [state.start]]
+              [`DELETE FROM an_orders WHERE id <= ? AND day < ?`, [old.hi, keepFrom]],
+              [`DELETE FROM an_day_bounds WHERE day < ?`, [keepFrom]]
             ]);
           }
+          if (state.mode !== "today" || state.stats.products > 0) await rebrand(db);
+          if (state.firstRun) await db.run(`UPDATE an_products SET seen = 1 WHERE seen = 0`);
+          if (state.mode === "today") await mergeTodayValues(state.today);
+          else await computeValues();
           state.phase = "done";
           state.finishedAt = nowIso2();
           await putSetting("an_last_sync", state.finishedAt);
+          if (state.mode !== "today") await putSetting("an_last_daily", state.finishedAt);
+          await bump();
         }
       }
     } catch (e) {
@@ -3105,6 +3328,10 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     const tracked = [...ok, ...rf];
     const ph = (a) => a.map(() => "?").join(",");
     const rfExpr = `(CASE WHEN o.status IN (${rf.join(",") || "-1"}) THEN 1 ELSE 0 END)`;
+    const ver = (await db.get(`SELECT value FROM settings WHERE key = 'an_ver'`))?.value || "0";
+    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today }));
+    const hit = await db.get(`SELECT value FROM an_cache WHERE key = ?`, [cacheKey]);
+    if (hit) return c.body(hit.value, 200, { "content-type": "application/json; charset=UTF-8" });
     function base(range, { items = itemLevel, skipCats = false } = {}) {
       const where = [`o.id BETWEEN ? AND ?`, `o.day BETWEEN ? AND ?`, `o.status IN (${tracked.join(",")})`];
       const params = [range.lo, range.hi, range.from, range.to];
@@ -3128,7 +3355,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
           params.push(...f.brands);
         }
         if (f.cats.length && !skipCats) {
-          where.push(`COALESCE(p.category_id, 0) IN (${ph(f.cats)})`);
+          where.push(`COALESCE(p.cat_manual, p.category_id, 0) IN (${ph(f.cats)})`);
           params.push(...f.cats);
         }
       }
@@ -3149,9 +3376,9 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
         db.all(`SELECT COALESCE(p.brand_id, 0) AS id, SUM(i.amount) AS rev, SUM(CASE WHEN ${rfExpr} = 0 THEN i.amount ELSE 0 END) AS net,
                 SUM(i.qty) AS qty, COUNT(DISTINCT o.id) AS cnt, COUNT(DISTINCT CASE WHEN ${rfExpr} = 1 THEN o.id END) AS rcnt
                 ${qi.from} GROUP BY COALESCE(p.brand_id, 0)`, qi.params),
-        db.all(`SELECT COALESCE(p.category_id, 0) AS id, SUM(i.amount) AS rev, SUM(CASE WHEN ${rfExpr} = 0 THEN i.amount ELSE 0 END) AS net,
+        db.all(`SELECT COALESCE(p.cat_manual, p.category_id, 0) AS id, SUM(i.amount) AS rev, SUM(CASE WHEN ${rfExpr} = 0 THEN i.amount ELSE 0 END) AS net,
                 SUM(i.qty) AS qty, COUNT(DISTINCT o.id) AS cnt
-                ${qi.from} GROUP BY COALESCE(p.category_id, 0)`, qi.params)
+                ${qi.from} GROUP BY COALESCE(p.cat_manual, p.category_id, 0)`, qi.params)
       ];
       if (full) {
         jobs.push(db.all(`SELECT i.product_id AS id, MAX(p.name) AS name, MAX(p.brand_id) AS brand, SUM(i.amount) AS rev,
@@ -3170,7 +3397,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
       db.all(`SELECT id, name FROM an_brands ORDER BY sort, id`),
       db.all(`SELECT id, name, parent_id FROM an_categories`),
       db.all(`SELECT month, kind, ref_id, amount FROM an_targets WHERE month BETWEEN ? AND ?`, [from.slice(0, 7), to.slice(0, 7)]),
-      f.brands.length ? db.all(`SELECT DISTINCT COALESCE(category_id, 0) AS id FROM an_products WHERE brand_id IN (${ph(f.brands)})`, f.brands) : db.all(`SELECT DISTINCT COALESCE(category_id, 0) AS id FROM an_products`)
+      f.brands.length ? db.all(`SELECT DISTINCT COALESCE(cat_manual, category_id, 0) AS id FROM an_products WHERE brand_id IN (${ph(f.brands)})`, f.brands) : db.all(`SELECT DISTINCT COALESCE(cat_manual, category_id, 0) AS id FROM an_products`)
     ]);
     const sumRows = (rows) => rows.reduce((a, r) => ({ rev: a.rev + (r.rev || 0), net: a.net + (r.net || 0), cnt: a.cnt + (r.cnt || 0), rcnt: a.rcnt + (r.rcnt || 0) }), { rev: 0, net: 0, cnt: 0, rcnt: 0 });
     const kpi = (p) => {
@@ -3179,12 +3406,12 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     };
     const fillDays = (p, a, z) => {
       const map = new Map((p?.daily || []).map((r) => [r.day, r]));
-      const out = [];
+      const out2 = [];
       for (let d = a; d <= z; d = addDays(d, 1)) {
         const r = map.get(d) || {};
-        out.push({ day: d, rev: round2(r.rev || 0), net: round2(r.net || 0), cnt: r.cnt || 0 });
+        out2.push({ day: d, rev: round2(r.rev || 0), net: round2(r.net || 0), cnt: r.cnt || 0 });
       }
-      return out;
+      return out2;
     };
     const group = (p, key) => {
       const m = /* @__PURE__ */ new Map();
@@ -3278,7 +3505,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     const prevBrands = new Map((prev?.brands || []).map((r) => [r.id, r]));
     const byBrand = cur.brands.map((r) => ({
       id: r.id,
-      name: r.id ? bName.get(r.id) || `\u0411\u0440\u0435\u043D\u0434 ${r.id}` : "\u0411\u0435\u0437 \u0431\u0440\u0435\u043D\u0434\u0443",
+      name: r.id ? bName.get(r.id) || `\u0411\u0440\u0435\u043D\u0434 ${r.id}` : "\u0406\u043D\u0448\u0456",
       rev: round2(r.rev),
       net: round2(r.net),
       qty: r.qty,
@@ -3298,9 +3525,9 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
       cnt: r.cnt,
       prevRev: prev ? round2(prevCats.get(r.id)?.rev || 0) : null
     })).sort((a, b2) => b2.rev - a.rev);
-    const top = cur.top.map((r) => ({ id: r.id, name: r.name || `\u0422\u043E\u0432\u0430\u0440 ${r.id}`, brand: r.brand ? bName.get(r.brand) || "" : "", rev: round2(r.rev), qty: r.qty, rqty: r.rqty }));
+    const top = cur.top.map((r) => ({ id: r.id, name: r.name || `\u0422\u043E\u0432\u0430\u0440 ${r.id}`, brand: r.brand ? bName.get(r.brand) || "\u0406\u043D\u0448\u0456" : "\u0406\u043D\u0448\u0456", rev: round2(r.rev), qty: r.qty, rqty: r.rqty }));
     const last = await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`);
-    return c.json({
+    const out = JSON.stringify({
       range: { from, to, days: daysBetween(from, to) },
       cmp,
       compareEnabled: st.compare,
@@ -3322,12 +3549,21 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
           ...managers.map((m) => [m.login, { login: m.login, name: m.name || m.login, dept_id: m.dept_id }]),
           ...byManager.filter((m) => !mgrNames.has(m.login)).map((m) => [m.login, { login: m.login, name: m.login, dept_id: null }])
         ]).values()],
-        brands: [...brands.map((x) => ({ id: x.id, name: x.name })), { id: 0, name: "\u0411\u0435\u0437 \u0431\u0440\u0435\u043D\u0434\u0443" }],
+        brands: [...brands.map((x) => ({ id: x.id, name: x.name })), { id: 0, name: "\u0406\u043D\u0448\u0456" }],
         cats: catOptions.map((r) => ({ id: r.id, name: r.id ? cName.get(r.id) || `\u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044F ${r.id}` : "\u0411\u0435\u0437 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457" })).sort((a, b2) => (a.id === 0) - (b2.id === 0) || a.name.localeCompare(b2.name, "uk"))
       },
       lastSync: last?.value || ""
     });
+    await db.batch([
+      [`DELETE FROM an_cache WHERE at < ?`, [Date.now() - 2 * 864e5]],
+      [`INSERT OR REPLACE INTO an_cache (key, value, at) VALUES (?, ?, ?)`, [cacheKey, out, Date.now()]]
+    ]);
+    return c.body(out, 200, { "content-type": "application/json; charset=UTF-8" });
   });
+}
+async function hashKey(str) {
+  const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
 // src/normalize.js

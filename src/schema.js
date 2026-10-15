@@ -143,6 +143,8 @@ export const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS an_managers (login TEXT PRIMARY KEY, name TEXT DEFAULT '', dept_id INTEGER)`,
   // Таргет на місяць: kind = 'dept' | 'src'
   `CREATE TABLE IF NOT EXISTS an_targets (month TEXT NOT NULL, kind TEXT NOT NULL, ref_id INTEGER NOT NULL, amount REAL NOT NULL, PRIMARY KEY (month, kind, ref_id))`,
+  // Збережені відповіді дашборду (поки дані й налаштування не змінились) — менше читань бази.
+  `CREATE TABLE IF NOT EXISTS an_cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS channels (
     name TEXT PRIMARY KEY,
     fop_id INTEGER
@@ -177,7 +179,7 @@ export const SEED_OFFICES = [
   ['14', 'Rozetka(oneday) / ФОП ЛУПУ В.Ф.', 'lupuvf'],
   ['17', 'Фейсбук / ФОП ЛУПУ ВІРА', 'lupuvf'],
   ['18', 'Amsterdam / ФОП Агафіца А.М', 'agam'],
-  ['19', 'Techno-Expert / ФОП Агафіца А.М', 'agam'],
+  ['19', 'ФОП Агафіца А.М', 'agam'],
   ['20', 'Prom(Arca) / ФОП Агафіца А.М.', 'agam'],
   ['21', 'Epicentr(Ecovent) / ФОП Агафіца А.М.', 'agam'],
   ['22', 'Ecovent-Expert / ФОП Агафіца Д.М.', 'agdm'],
@@ -202,7 +204,7 @@ export const SEED_TEMPLATES = [
       showDelivery: true,
       showPayment: true,
       showSignatures: true,
-      footerText: 'Товар отримав, претензій щодо кількості, комплектності та зовнішнього вигляду не маю.',
+      footerText: '',
     },
   },
   {
@@ -261,25 +263,42 @@ const ADD_COLUMNS = [
   ['versions', 'user_name', "TEXT DEFAULT ''"],
   ['users', 'failed_logins', 'INTEGER DEFAULT 0'],
   ['users', 'locked_until', "TEXT DEFAULT ''"],
+  ['an_products', 'brand_manual', 'INTEGER'],
+  ['an_products', 'cat_manual', 'INTEGER'],
+  ['an_products', 'seen', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
 // Підвищуйте при зміні схеми: тоді міграція виконається знову (на Cloudflare — один раз на запуск ізолята).
-const SCHEMA_VERSION = '8';
+const SCHEMA_VERSION = '9';
 
 // Початкові відділи аналітики, джерела і відповідності (усе редагується в «Налаштуваннях аналітики»).
+const MP_SOURCES = [
+  ['Rozetka (OneDay)', ['rozetka(oneday)']],
+  ['Rozetka (Ecovent)', ['rozetka(ecovent)']],
+  ['Prom (Arca)', ['prom(arca)']],
+  ['Prom (Amsterdam)', ['prom(amsterdam)']],
+  ['Epicentr (Ecovent)', ['epicentr(ecovent)']],
+  ['Epicentr (Amsterdam)', ['epicentr(amsterdam)']],
+  ['Сайт iHunt', ['ihunt']],
+  ['Сайт Ecovent', ['ecovent-expert', 'ecovent']],
+  ['Сайт Amsterdam', ['amsterdam']],
+];
+// Бренди: спершу шукаються в назві товару, потім у назві категорії; решта — «Інші».
+export const AN_BRANDS = [
+  ['iHunt', 'ihunt, robot window'],
+  ['Evoair', 'evoair, humixduo'],
+  ['Levoit', 'levoit'],
+  ['DREO', 'dreo'],
+  ['Ecovent', 'ecovent, decora'],
+  ['BSK', 'bsk, zephyr, notus'],
+  ['Ergovent', 'ergovent'],
+  ['Dolceclima', 'dolceclima'],
+];
+
 const AN_SEED = {
   depts: [
-    { name: 'Маркетплейси', sources: [
-      { name: 'Rozetka', values: ['rozetka(oneday)', 'rozetka(ecovent)', 'rozetka'] },
-      { name: 'Prom', values: ['prom(arca)', 'prom(amsterdam)', 'prom'] },
-      { name: 'Epicentr', values: ['epicentr(ecovent)', 'epicentr(amsterdam)', 'epicentr'] },
-    ] },
-    { name: 'Сайти', sources: [
-      { name: 'Сайт iHunt', values: ['ihunt'] },
-      { name: 'Сайт Ecovent', values: ['ecovent-expert', 'ecovent'] },
-      { name: 'Сайт Amsterdam', values: ['amsterdam'] },
-      { name: 'Сайт Techno-Expert', values: ['techno-expert'] },
-    ] },
+    { name: 'Маркетплейси', sources: MP_SOURCES.map(([name, values]) => ({ name, values })) },
+    { name: 'Riteil', sources: [{ name: 'Riteil(Rozetka)', values: ['riteil(rozetka)'] }] },
     { name: 'Інстаграм', sources: [] },
     { name: 'Фейсбук', sources: [] },
     { name: 'ТікТок', sources: [] },
@@ -288,8 +307,7 @@ const AN_SEED = {
     { name: 'Інше', sources: [] },
   ],
   offices: {
-    'Маркетплейси': ['5', '12', '13', '14', '20', '21', '23', '24'],
-    'Сайти': ['18', '19', '22', '25'],
+    'Маркетплейси': ['5', '12', '13', '14', '18', '19', '20', '21', '22', '23', '24', '25'],
     'Фейсбук': ['4', '17'],
     'Інстаграм': ['6', '11'],
     'ТікТок': ['8'],
@@ -297,7 +315,7 @@ const AN_SEED = {
     'B2B': ['27', '28'],
     'Інше': ['9', '26', '29'],
   },
-  brands: [['iHunt', 'ihunt'], ['Evoair', 'evoair'], ['Ecovent', 'ecovent']],
+  brands: AN_BRANDS,
 };
 
 // Усе засівання — одним пакетом (атомарно; на D1 це один запит замість десятків).
@@ -360,6 +378,69 @@ async function fillFopNames(db) {
   ]);
 }
 
+// Оновлення 15.10.2026: Сайти → у Маркетплейси, окремі Rozetka/Prom/Epicentr, відділ Riteil, без Techno-Expert,
+// нові бренди, без рядка «Товар отримав…» у шаблонах. Виконується один раз; відповідності шукаються за назвами.
+async function upgradeV9(db) {
+  if (await db.get(`SELECT value FROM settings WHERE key = 'an_v9'`)) return;
+  const st = [];
+  // шаблони накладних
+  for (const t of await db.all(`SELECT id, options FROM templates`)) {
+    let o = {};
+    try { o = JSON.parse(t.options || '{}'); } catch { /* */ }
+    if (/Товар отримав/i.test(o.footerText || '')) { o.footerText = ''; st.push([`UPDATE templates SET options = ? WHERE id = ?`, [JSON.stringify(o), t.id]]); }
+  }
+  st.push([`DELETE FROM channels WHERE LOWER(name) LIKE 'techno-expert%'`, []]);
+  st.push([`UPDATE offices SET name = TRIM(SUBSTR(name, 17)) WHERE name LIKE 'Techno-Expert / %'`, []]);
+  const depts = await db.all(`SELECT id, name FROM an_depts`);
+  const sources = await db.all(`SELECT id, dept_id, name FROM an_sources`);
+  const byName = (list, n) => list.find((x) => x.name.trim().toLowerCase() === n.toLowerCase());
+  let nextDept = Math.max(0, ...depts.map((d) => d.id)) + 1;
+  let nextSrc = Math.max(0, ...sources.map((x) => x.id)) + 1;
+  let mp = byName(depts, 'Маркетплейси');
+  if (!mp) { mp = { id: nextDept++, name: 'Маркетплейси' }; st.push([`INSERT INTO an_depts (id, name, sort) VALUES (?, ?, 0)`, [mp.id, mp.name]]); }
+  const sites = byName(depts, 'Сайти');
+  // старі спільні джерела і Techno-Expert — прибрати (таргети лишаються в історії)
+  for (const x of sources) {
+    const n = x.name.trim().toLowerCase();
+    if (['rozetka', 'prom', 'epicentr'].includes(n) || n.includes('techno')) {
+      st.push([`DELETE FROM an_source_map WHERE source_id = ?`, [x.id]]);
+      st.push([`DELETE FROM an_sources WHERE id = ?`, [x.id]]);
+    }
+  }
+  st.push([`DELETE FROM an_source_map WHERE value LIKE 'techno-expert%'`, []]);
+  MP_SOURCES.forEach(([name, values], i) => {
+    let src = byName(sources, name);
+    if (!src) { src = { id: nextSrc++ }; st.push([`INSERT INTO an_sources (id, dept_id, name, sort) VALUES (?, ?, ?, ?)`, [src.id, mp.id, name, i]]); }
+    else st.push([`UPDATE an_sources SET dept_id = ?, sort = ? WHERE id = ?`, [mp.id, i, src.id]]);
+    for (const v of values) st.push([`INSERT OR REPLACE INTO an_source_map (value, source_id) VALUES (?, ?)`, [v, src.id]]);
+  });
+  if (sites) {
+    st.push([`UPDATE an_sources SET dept_id = ? WHERE dept_id = ?`, [mp.id, sites.id]]);
+    st.push([`UPDATE an_office_map SET dept_id = ? WHERE dept_id = ?`, [mp.id, sites.id]]);
+    st.push([`UPDATE an_managers SET dept_id = ? WHERE dept_id = ?`, [mp.id, sites.id]]);
+    st.push([`DELETE FROM an_depts WHERE id = ?`, [sites.id]]);
+  }
+  if (!byName(depts, 'Riteil')) {
+    const rid = nextDept++;
+    const sid = nextSrc++;
+    st.push([`INSERT INTO an_depts (id, name, sort) VALUES (?, 'Riteil', 1)`, [rid]]);
+    st.push([`INSERT INTO an_sources (id, dept_id, name, sort) VALUES (?, ?, 'Riteil(Rozetka)', 0)`, [sid, rid]]);
+    st.push([`INSERT OR REPLACE INTO an_source_map (value, source_id) VALUES ('riteil(rozetka)', ?)`, [sid]]);
+  }
+  // бренди: оновити ключові слова наявних, додати відсутні
+  const brands = await db.all(`SELECT id, name FROM an_brands`);
+  let nextBrand = Math.max(0, ...brands.map((b) => b.id)) + 1;
+  AN_BRANDS.forEach(([name, kw], i) => {
+    const b = byName(brands, name);
+    if (b) st.push([`UPDATE an_brands SET name = ?, keywords = ?, sort = ? WHERE id = ?`, [name, kw, i, b.id]]);
+    else st.push([`INSERT INTO an_brands (id, name, keywords, sort) VALUES (?, ?, ?, ?)`, [nextBrand++, name, kw, i]]);
+  });
+  st.push([`UPDATE an_products SET seen = 1`, []]); // наявні товари не позначаємо як «нові»
+  st.push([`INSERT INTO settings (key, value) VALUES ('an_v9', '1') ON CONFLICT(key) DO NOTHING`, []]);
+  await db.batch(st);
+  await db.run(`INSERT INTO settings (key, value) VALUES ('an_need_remap', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`);
+}
+
 export async function migrate(db) {
   try {
     const v = await db.get(`SELECT value FROM settings WHERE key = 'schema_version'`);
@@ -380,7 +461,7 @@ async function migrateFull(db) {
   await db.batch(alters);
   await db.batch(Object.entries(LATER_SETTINGS).map(([k, v]) => [`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING`, [k, v]]));
   const seeded = await db.get(`SELECT value FROM settings WHERE key = 'seeded'`);
-  if (seeded) { await seedChannels(db); await fillFopNames(db); await seedAnalytics(db); return; }
+  if (seeded) { await seedChannels(db); await fillFopNames(db); await seedAnalytics(db); await upgradeV9(db); return; }
 
   // Нова база: усе одним пакетом з явними id (атомарно, і на D1 — один запит).
   const st = [];
@@ -408,4 +489,5 @@ async function migrateFull(db) {
   await seedChannels(db);
   await fillFopNames(db);
   await seedAnalytics(db);
+  await db.run(`INSERT INTO settings (key, value) VALUES ('an_v9', '1') ON CONFLICT(key) DO NOTHING`);
 }
