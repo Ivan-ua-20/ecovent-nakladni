@@ -1260,7 +1260,8 @@ function invFopForm(id) {
           ${imgField('stamp', 'Печатка', imgs.stamp, 'Необов’язково.')}
           <label class="check"><input type="checkbox" name="active" ${f.active ? 'checked' : ''}> Активний (показувати у виборі)</label>
         </div>
-        <div class="btn-row"><button class="btn primary">Зберегти</button></div>
+        <div class="btn-row"><button class="btn primary">Зберегти</button>${!isNew && !f.odb_id && can('users') ? '<button type="button" class="btn danger" id="ifDel" style="margin-left:auto">Видалити ФОП</button>' : ''}</div>
+        ${f.odb_id ? '<div class="small muted">Цей ФОП додано з Opendatabot. Назву можна змінити тут; щоб прибрати його зі списку — вимкніть рахунок у «Налаштуваннях рахунків».</div>' : ''}
       </div>
     </form>`;
   const form = $('#ifForm');
@@ -1271,6 +1272,14 @@ function invFopForm(id) {
     $(`#prev_${input.dataset.img}`).innerHTML = `<img src="${imgs[input.dataset.img]}">`;
   }));
   $$('[data-clear]', form).forEach((b) => (b.onclick = () => { imgs[b.dataset.clear] = ''; $(`#prev_${b.dataset.clear}`).innerHTML = '<span class="small muted">немає</span>'; }));
+  const del = $('#ifDel');
+  if (del) del.onclick = () => {
+    const m = modal('Видалити ФОП?', `<p>ФОП «${esc(f.short_name)}» зникне зі списку. Уже сформовані рахунки збережуться без змін.</p>`,
+      { footer: '<button class="btn" data-close>Скасувати</button><button class="btn danger" id="ifDelGo">Видалити</button>' });
+    $('#ifDelGo', m.el).onclick = async () => {
+      try { await api('DELETE', `/api/inv-fops/${id}`); m.close(); toast('ФОП видалено'); await loadBoot(); location.hash = '#/invfops'; } catch (er) { toast(er.message, true); }
+    };
+  };
   form.onsubmit = async (e) => {
     e.preventDefault();
     const d = { ...Object.fromEntries(new FormData(form)), ...imgs, active: form.active.checked ? 1 : 0 };

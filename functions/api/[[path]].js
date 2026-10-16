@@ -3871,6 +3871,9 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     }
     await addSeenAccounts();
     await fillNames();
+    await db.run(`UPDATE inv_fops SET short_name = (SELECT COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, '')) FROM odb_accounts a WHERE a.id = inv_fops.odb_id)
+      WHERE odb_id != '' AND short_name = '\u0424\u041E\u041F ' || ipn
+        AND EXISTS (SELECT 1 FROM odb_accounts a WHERE a.id = inv_fops.odb_id AND COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, '')) IS NOT NULL)`);
     const rows = await db.all(`SELECT id, iban, code, alias AS odb_alias, name, ${ACC} AS alias, kind, enabled, seen FROM odb_accounts a ORDER BY seen, sort, ${ACC}`);
     const s = await settings();
     return c.json({ accounts: rows.map((r) => ({ ...r, bank: bankOf(r.iban) })), connected: Boolean(s.odb_key && s.odb_name) });
@@ -3882,7 +3885,9 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     const b = await c.req.json();
     if (b.name !== void 0) {
       const name = String(b.name || "").trim().slice(0, 120);
+      const oldName = acc.name || acc.alias || "";
       await db.run(`UPDATE odb_accounts SET name = ? WHERE id = ?`, [name, acc.id]);
+      if (name) await db.run(`UPDATE inv_fops SET short_name = ? WHERE odb_id = ? AND (short_name = ? OR short_name = ? OR short_name = '')`, [name, acc.id, oldName, `\u0424\u041E\u041F ${acc.code}`]);
       if (!acc.id.startsWith("iban:") && name) {
         const cr = await creds().catch(() => null);
         if (cr) await odb(cr, "PUT", `/api/iban-settings/${encodeURIComponent(acc.id)}`, { alias: name }).catch(() => {
@@ -3897,7 +3902,7 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     if (acc.kind === "fop") {
       if (on) {
         const ex = await db.get(`SELECT id FROM inv_fops WHERE odb_id = ? OR REPLACE(UPPER(iban), ' ', '') = ?`, [acc.id, acc.iban]);
-        if (ex) st.push([`UPDATE inv_fops SET odb_id = ?, active = 1 WHERE id = ?`, [acc.id, ex.id]]);
+        if (ex) st.push([`UPDATE inv_fops SET odb_id = ?, active = 1, short_name = CASE WHEN short_name = ? AND ? != '' THEN ? ELSE short_name END WHERE id = ?`, [acc.id, `\u0424\u041E\u041F ${acc.code}`, acc.name || acc.alias || "", acc.name || acc.alias || "", ex.id]]);
         else st.push([`INSERT INTO inv_fops (short_name, full_name, ipn, iban, odb_id, active) VALUES (?, '', ?, ?, ?, 1)`, [acc.name || acc.alias || `\u0424\u041E\u041F ${acc.code}`, acc.code, acc.iban, acc.id]]);
       } else {
         st.push([`UPDATE inv_fops SET active = 0 WHERE odb_id = ?`, [acc.id]]);
@@ -5502,6 +5507,14 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     if (cols.length) {
       await db.run(`UPDATE inv_fops SET ${cols.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, [...cols.map((k) => b[k]), c.req.param("id")]);
     }
+    return c.json({ ok: true });
+  });
+  app.delete("/api/inv-fops/:id", async (c) => {
+    need(c, "users");
+    const f = await db.get(`SELECT id, odb_id FROM inv_fops WHERE id = ?`, [c.req.param("id")]);
+    if (!f) throw fail(404, "\u0424\u041E\u041F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    if (f.odb_id) throw fail(400, "\u0426\u0435\u0439 \u0424\u041E\u041F \u0434\u043E\u0434\u0430\u043D\u043E \u0437 Opendatabot \u2014 \u0432\u0438\u043C\u043A\u043D\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 \u0440\u0430\u0445\u0443\u043D\u043A\u0456\u0432\xBB.");
+    await db.run(`DELETE FROM inv_fops WHERE id = ?`, [f.id]);
     return c.json({ ok: true });
   });
   app.get("/api/rahunok-order/:q", async (c) => {

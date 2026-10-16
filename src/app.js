@@ -818,6 +818,16 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     return c.json({ ok: true });
   });
 
+  // Видалити ФОП рахунків, доданий вручну (з Opendatabot — вимикається в налаштуваннях рахунків)
+  app.delete('/api/inv-fops/:id', async (c) => {
+    need(c, 'users');
+    const f = await db.get(`SELECT id, odb_id FROM inv_fops WHERE id = ?`, [c.req.param('id')]);
+    if (!f) throw fail(404, 'ФОП не знайдено.');
+    if (f.odb_id) throw fail(400, 'Цей ФОП додано з Opendatabot — вимкніть його рахунок у «Налаштуваннях рахунків».');
+    await db.run(`DELETE FROM inv_fops WHERE id = ?`, [f.id]);
+    return c.json({ ok: true });
+  });
+
   // Замовлення з CRM для рахунку: номер, товари, покупець.
   app.get('/api/rahunok-order/:q', async (c) => {
     need(c, 'docs.edit');

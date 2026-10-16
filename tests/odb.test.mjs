@@ -228,6 +228,16 @@ assert.ok(regAcc.id === reg.id && !regAcc.seen && regAcc.name === 'ФОП Ага
 await req('PUT', '/api/odb/accounts/a2', { name: 'ФОП Агафіца А.М. (моно)' });
 assert.equal(ACCS.find((a) => a.id === 'a2').alias, 'ФОП Агафіца А.М. (моно)', 'перейменування передається в Opendatabot');
 
+// ФОП рахунків: назва з рахунку, видалення вручну доданих
+await req('PUT', '/api/odb/accounts/a1', { name: 'ФОП Лупу Віра (Приват)' });
+assert.equal((await db.get(`SELECT short_name FROM inv_fops WHERE odb_id = 'a1'`)).short_name, 'ФОП Лупу Віра (Приват)', 'назва рахунку → ФОП рахунків');
+const odbFopId = (await db.get(`SELECT id FROM inv_fops WHERE odb_id = 'a1'`)).id;
+assert.equal(await status(() => req('DELETE', `/api/inv-fops/${odbFopId}`)), 400, 'ФОП з Opendatabot не видаляється');
+const manualFop = (await req('POST', '/api/inv-fops', { short_name: 'Ручний ФОП' })).id;
+assert.equal(await status(() => req('DELETE', `/api/inv-fops/${manualFop}`, null, MH)), 403, 'видаляють лише адміни');
+await req('DELETE', `/api/inv-fops/${manualFop}`);
+assert.ok(!(await db.get(`SELECT id FROM inv_fops WHERE id = ?`, [manualFop])), 'вручну доданий ФОП видалено');
+
 // ---------- 7. Telegram ----------
 assert.equal(await status(() => req('POST', '/api/tg/link')), 400, 'без бота — зрозуміла помилка');
 assert.equal(await status(() => req('PUT', '/api/tg/settings', { token: '123:abc' })), 400, 'перевірка формату токена');

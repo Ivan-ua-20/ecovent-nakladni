@@ -153,6 +153,10 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
     }
     await addSeenAccounts();
     await fillNames();
+    // ФОП рахунків з назвою за замовчуванням («ФОП <код>») отримує назву рахунку
+    await db.run(`UPDATE inv_fops SET short_name = (SELECT COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, '')) FROM odb_accounts a WHERE a.id = inv_fops.odb_id)
+      WHERE odb_id != '' AND short_name = 'ФОП ' || ipn
+        AND EXISTS (SELECT 1 FROM odb_accounts a WHERE a.id = inv_fops.odb_id AND COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, '')) IS NOT NULL)`);
     const rows = await db.all(`SELECT id, iban, code, alias AS odb_alias, name, ${ACC} AS alias, kind, enabled, seen FROM odb_accounts a ORDER BY seen, sort, ${ACC}`);
     const s = await settings();
     return c.json({ accounts: rows.map((r) => ({ ...r, bank: bankOf(r.iban) })), connected: Boolean(s.odb_key && s.odb_name) });
@@ -167,7 +171,10 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
     if (b.name !== undefined) {
       // Перейменування: у нас і (для налаштувань IBAN) — в Opendatabot
       const name = String(b.name || '').trim().slice(0, 120);
+      const oldName = acc.name || acc.alias || '';
       await db.run(`UPDATE odb_accounts SET name = ? WHERE id = ?`, [name, acc.id]);
+      // ФОП рахунків, створений з цього рахунку, отримує нову назву, якщо її ще не змінювали вручну
+      if (name) await db.run(`UPDATE inv_fops SET short_name = ? WHERE odb_id = ? AND (short_name = ? OR short_name = ? OR short_name = '')`, [name, acc.id, oldName, `ФОП ${acc.code}`]);
       if (!acc.id.startsWith('iban:') && name) {
         const cr = await creds().catch(() => null);
         if (cr) await odb(cr, 'PUT', `/api/iban-settings/${encodeURIComponent(acc.id)}`, { alias: name }).catch(() => {});
@@ -181,7 +188,7 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
     if (acc.kind === 'fop') {
       if (on) {
         const ex = await db.get(`SELECT id FROM inv_fops WHERE odb_id = ? OR REPLACE(UPPER(iban), ' ', '') = ?`, [acc.id, acc.iban]);
-        if (ex) st.push([`UPDATE inv_fops SET odb_id = ?, active = 1 WHERE id = ?`, [acc.id, ex.id]]);
+        if (ex) st.push([`UPDATE inv_fops SET odb_id = ?, active = 1, short_name = CASE WHEN short_name = ? AND ? != '' THEN ? ELSE short_name END WHERE id = ?`, [acc.id, `ФОП ${acc.code}`, acc.name || acc.alias || '', acc.name || acc.alias || '', ex.id]]);
         else st.push([`INSERT INTO inv_fops (short_name, full_name, ipn, iban, odb_id, active) VALUES (?, '', ?, ?, ?, 1)`, [acc.name || acc.alias || `ФОП ${acc.code}`, acc.code, acc.iban, acc.id]]);
       } else {
         st.push([`UPDATE inv_fops SET active = 0 WHERE odb_id = ?`, [acc.id]]);
