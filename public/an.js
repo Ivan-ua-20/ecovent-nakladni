@@ -40,7 +40,7 @@ export function createAnalyticsUI(ctx) {
   const full = () => ctx.can('analytics'); // менеджер (без цього права) бачить лише свої замовлення
 
   // ---------- стан інтерфейсу (запам'ятовується в браузері) ----------
-  const DEF = { period: 'cm', from: '', to: '', cmpMode: 'auto', cmpFrom: '', cmpTo: '', depts: [], sources: [], managers: [], brands: [], cats: [], metric: 'net', cumulative: true, showTarget: true, showCmp: true, table: false, collapsed: [] };
+  const DEF = { period: 'cm', from: '', to: '', cmpMode: 'auto', cmpFrom: '', cmpTo: '', depts: [], sources: [], managers: [], brands: [], cats: [], metric: 'net', cumulative: true, showTarget: true, showCmp: true, table: false, collapsed: [], sort: {} };
   let ui = { ...DEF };
   try { ui = { ...DEF, ...JSON.parse(localStorage.getItem(LS_KEY) || '{}') }; } catch { /* немає сховища */ }
   const persist = () => { try { localStorage.setItem(LS_KEY, JSON.stringify(ui)); } catch { /* немає сховища */ } };
@@ -378,6 +378,7 @@ export function createAnalyticsUI(ctx) {
     const cm = $('#anCmp'); if (cm) cm.onchange = () => { ui.showCmp = cm.checked; persist(); renderBody(lastData); };
     $('#anTableBtn').onclick = () => { ui.table = !ui.table; persist(); renderBody(lastData); };
     $$('[data-row]', $('#anBody')).forEach((tr) => (tr.onclick = () => toggle(tr.dataset.key, tr.dataset.row)));
+    $$('[data-sort]', $('#anBody')).forEach((b) => (b.onclick = (e) => { e.stopPropagation(); onSort(b.dataset.sort, b.dataset.k); }));
     $$('[data-row]', $('#anBody')).forEach((tr) => (tr.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(tr.dataset.key, tr.dataset.row); } }));
     $$('.card', $('#anBody')).forEach((card) => { const h = $('h3', card); if (h && !card.dataset.col) card.dataset.col = h.textContent.trim(); });
     collapsible($('#anBody'));
@@ -419,12 +420,60 @@ export function createAnalyticsUI(ctx) {
     </div>`;
   }
 
+  // ---------- сортування блоків (за кожною колонкою; запам'ятовується в браузері) ----------
+  const COLS = {
+    name: (r) => String(r.name || '').toLowerCase(),
+    rev: (r) => r.rev || 0,
+    cnt: (r) => r.cnt || 0,
+    qty: (r) => r.qty || 0,
+    avg: (r) => r.avg || 0,
+    rqty: (r) => r.rqty || 0,
+    brand: (r) => String(r.brand || '').toLowerCase(),
+    refuse: (r) => (r.cnt ? (r.rcnt || 0) / r.cnt : 0),
+    dyn: (r) => { const v = change(r.rev, r.prevRev); return v == null ? (r.rev ? Infinity : -Infinity) : v; },
+    plan: (r) => (r.plan ? (r.net / r.plan) : -1),
+  };
+  function sortRows(block, rows) {
+    const st = ui.sort?.[block];
+    if (!st || !COLS[st.k]) return rows;
+    const g = COLS[st.k];
+    const m = st.dir === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const x = g(a); const y = g(b);
+      return (typeof x === 'string' ? x.localeCompare(y, 'uk') : x - y) * m;
+    });
+  }
+  // Кнопка сортування: перший клік — від більшого до меншого (для назви — за абеткою), повторний — навпаки.
+  function sortBtn(block, k, label, cls = '') {
+    const st = ui.sort?.[block];
+    const on = st?.k === k;
+    const arrow = on ? (st.dir === 'asc' ? '↑' : '↓') : '';
+    const what = on ? (st.dir === 'asc' ? 'за зростанням' : 'за спаданням') : 'не сортовано';
+    return `<button type="button" class="sort-btn ${on ? 'on' : ''} ${cls}" data-sort="${block}" data-k="${k}" aria-label="Сортувати: ${esc(label)} (${what})">${esc(label)}<span class="sort-ar" aria-hidden="true">${arrow || '↕'}</span></button>`;
+  }
+  function onSort(block, k) {
+    const st = ui.sort?.[block];
+    const first = k === 'name' || k === 'brand' ? 'asc' : 'desc';
+    ui.sort = { ...(ui.sort || {}) };
+    if (st?.k === k) {
+      if (st.dir === first) ui.sort[block] = { k, dir: first === 'asc' ? 'desc' : 'asc' };
+      else delete ui.sort[block]; // третій клік — повернути звичайний порядок
+    } else ui.sort[block] = { k, dir: first };
+    persist();
+    renderBody(lastData);
+  }
+
   function breakdown(title, rows, key, { plan = false, hasCmp = false, refusals = false, qty = false, empty = '' } = {}) {
-    const list = rows.filter((r) => r.rev || r.cnt || r.plan);
+    const list = sortRows(key, rows.filter((r) => r.rev || r.cnt || r.plan));
     if (!list.length) return `<div class="card"><h3>${title}</h3><div class="muted small">${empty || 'Немає даних за період.'}</div></div>`;
     const max = Math.max(...list.map((r) => r.rev), 1);
     const active = ui[key] || [];
-    return `<div class="card"><h3>${title}</h3><div class="bk">
+    const head = `<div class="bk-row bk-head">
+        <span>${sortBtn(key, 'name', 'Назва')}</span><span></span>
+        <span class="bk-hv">${sortBtn(key, 'rev', 'Сума')}${sortBtn(key, qty ? 'qty' : 'cnt', qty ? 'Шт' : 'Зам.')}${refusals ? sortBtn(key, 'refuse', 'Відм.') : ''}</span>
+        <span class="bk-hd">${hasCmp ? sortBtn(key, 'dyn', 'Динаміка') : ''}${plan ? sortBtn(key, 'plan', 'План') : ''}</span>
+      </div>`;
+    return `<div class="card"><h3>${title}</h3><div class="bk">${head}
       ${list.map((r) => {
         const on = active.includes(key === 'managers' ? r.id : Number(r.id));
         const planPct = plan && r.plan ? (r.net / r.plan) * 100 : null;
@@ -440,7 +489,8 @@ export function createAnalyticsUI(ctx) {
   function statusCard(rows) {
     const total = rows.reduce((a, r) => a + r.cnt, 0) || 1;
     return `<div class="card"><h3>Статуси замовлень</h3><div class="bk">
-      ${rows.map((r) => `<div class="bk-row static">
+      <div class="bk-row bk-head"><span>${sortBtn('statuses', 'name', 'Статус')}</span><span></span><span class="bk-hv">${sortBtn('statuses', 'cnt', 'Зам.')}</span><span class="bk-hd">${sortBtn('statuses', 'rev', 'Сума')}</span></div>
+      ${sortRows('statuses', rows).map((r) => `<div class="bk-row static">
         <span class="bk-name">${esc(r.name)}${r.refuse ? ' <span class="badge bad">відмова</span>' : ''}</span>
         <span class="bk-bar"><span class="${r.refuse ? 'refuse' : ''}" style="width:${((r.cnt / total) * 100).toFixed(1)}%"></span></span>
         <span class="bk-val">${int(r.cnt)}<small>${pct1((r.cnt / total) * 100)}</small></span>
@@ -451,8 +501,8 @@ export function createAnalyticsUI(ctx) {
   function brandTable(rows, hasCmp) {
     if (!rows.length) return '<div class="card"><h3>Бренди</h3><div class="muted small">Немає даних за період.</div></div>';
     return `<div class="card"><h3>Бренди</h3><div class="table-wrap"><table class="list an-table">
-      <thead><tr><th>Бренд</th><th class="r">Зам.</th><th class="r">Сума</th><th class="r hide-m">Сер. чек</th><th class="r hide-m">Відмови</th>${hasCmp ? '<th class="r">Динаміка</th>' : ''}</tr></thead>
-      <tbody>${rows.map((r) => `<tr class="click ${ui.brands.includes(r.id) ? 'on' : ''}" data-row="${r.id}" data-key="brands" tabindex="0">
+      <thead><tr><th>${sortBtn('brands', 'name', 'Бренд')}</th><th class="r">${sortBtn('brands', 'cnt', 'Зам.')}</th><th class="r">${sortBtn('brands', 'rev', 'Сума')}</th><th class="r hide-m">${sortBtn('brands', 'avg', 'Сер. чек')}</th><th class="r hide-m">${sortBtn('brands', 'refuse', 'Відмови')}</th>${hasCmp ? `<th class="r">${sortBtn('brands', 'dyn', 'Динаміка')}</th>` : ''}</tr></thead>
+      <tbody>${sortRows('brands', rows).map((r) => `<tr class="click ${ui.brands.includes(r.id) ? 'on' : ''}" data-row="${r.id}" data-key="brands" tabindex="0">
         <td><b>${esc(r.name)}</b></td><td class="r">${int(r.cnt)}</td><td class="r">${uah(r.rev)}</td><td class="r hide-m">${uah(r.avg)}</td>
         <td class="r hide-m">${r.cnt ? pct1((r.rcnt / r.cnt) * 100) : '—'}</td>${hasCmp ? `<td class="r">${delta(r.rev, r.prevRev)}</td>` : ''}</tr>`).join('')}</tbody>
     </table></div><div class="small muted">Бренд — за назвою товару, а якщо її не вистачає — за категорією; решта — «Інші». Ручна прив’язка — у налаштуваннях аналітики.</div></div>`;
@@ -461,8 +511,8 @@ export function createAnalyticsUI(ctx) {
   function topTable(rows) {
     if (!rows.length) return '';
     return `<div class="card"><h3>Топ товарів</h3><div class="table-wrap"><table class="list an-table">
-      <thead><tr><th>Товар</th><th class="hide-m">Бренд</th><th class="r">Шт</th><th class="r">Сума</th><th class="r hide-m">Відмови, шт</th></tr></thead>
-      <tbody>${rows.map((r) => `<tr><td>${esc(r.name)}<div class="small muted show-m">${esc(r.brand || '—')}${r.rqty ? ` · відмов ${int(r.rqty)}` : ''}</div></td><td class="muted hide-m">${esc(r.brand || '—')}</td><td class="r">${int(r.qty)}</td><td class="r">${uah(r.rev)}</td><td class="r hide-m">${int(r.rqty)}</td></tr>`).join('')}</tbody>
+      <thead><tr><th>${sortBtn('top', 'name', 'Товар')}</th><th class="hide-m">${sortBtn('top', 'brand', 'Бренд')}</th><th class="r">${sortBtn('top', 'qty', 'Шт')}</th><th class="r">${sortBtn('top', 'rev', 'Сума')}</th><th class="r hide-m">${sortBtn('top', 'rqty', 'Відмови, шт')}</th></tr></thead>
+      <tbody>${sortRows('top', rows).map((r) => `<tr><td>${esc(r.name)}<div class="small muted show-m">${esc(r.brand || '—')}${r.rqty ? ` · відмов ${int(r.rqty)}` : ''}</div></td><td class="muted hide-m">${esc(r.brand || '—')}</td><td class="r">${int(r.qty)}</td><td class="r">${uah(r.rev)}</td><td class="r hide-m">${int(r.rqty)}</td></tr>`).join('')}</tbody>
     </table></div><div class="small muted">Сума товару — з урахуванням знижки замовлення (розподіленої пропорційно).</div></div>`;
   }
 
