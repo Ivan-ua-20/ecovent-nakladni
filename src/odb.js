@@ -70,6 +70,21 @@ export async function txRow(item) {
   };
 }
 
+// Назва отримувача з налаштувань IBAN: назва, яку ви задали, або отримувач, як його показує Opendatabot.
+function pickName(x) {
+  for (const k of ['alias', 'name', 'recipient', 'recipientName', 'receiver', 'receiverName', 'title', 'companyName', 'ownerName', 'fullName', 'counterpartyName']) {
+    const v = x?.[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (v && typeof v === 'object' && typeof v.name === 'string' && v.name.trim()) return v.name.trim();
+  }
+  // запасний варіант: будь-яке текстове поле, схоже на назву (літери і пробіл)
+  for (const [k, v] of Object.entries(x || {})) {
+    if (['id', 'iban', 'code', 'fileId', 'logoUrl'].includes(k) || typeof v !== 'string') continue;
+    if (/[A-Za-zА-Яа-яІіЇїЄєҐґ]{2,}\s+[A-Za-zА-Яа-яІіЇїЄєҐґ«"]/.test(v) && !/^https?:/.test(v)) return v.trim();
+  }
+  return '';
+}
+
 // Банк за МФО в IBAN (6 цифр після «UAxx»)
 const BANKS = { 305299: 'Приват', 322001: 'моно', 300465: 'Ощад', 300528: 'ОТП', 380805: 'Райффайзен', 334851: 'ПУМБ', 351005: 'УкрСиббанк', 320478: 'Укргазбанк', 322313: 'Укрексімбанк', 380775: 'Креді Агріколь', 339500: 'Глобус', 325365: 'Кредобанк', 336503: 'Ідея Банк', 320649: 'Sense', 380838: 'Південний', 313849: 'Таскомбанк' };
 export const bankOf = (iban) => BANKS[String(iban || '').replace(/\s/g, '').slice(4, 10)] || '';
@@ -143,7 +158,7 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
       const st = list.map((x, i) => [
         `INSERT INTO odb_accounts (id, iban, code, alias, kind, sort) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET iban = excluded.iban, code = excluded.code, alias = excluded.alias, kind = excluded.kind, sort = excluded.sort`,
-        [String(x.id), String(x.iban || '').replace(/\s/g, '').toUpperCase(), String(x.code || ''), String(x.alias || ''), kindOf(x.code), i],
+        [String(x.id), String(x.iban || '').replace(/\s/g, '').toUpperCase(), String(x.code || ''), pickName(x), kindOf(x.code), i],
       ]);
       // рахунки, яких більше немає в налаштуваннях IBAN, стають «лише платежі» (назва зберігається)
       st.push([`UPDATE odb_accounts SET id = 'iban:' || iban, enabled = 0, seen = 1 WHERE id NOT LIKE 'iban:%' AND id NOT IN (SELECT value FROM json_each(?))

@@ -484,3 +484,4 @@ th.r .sort-btn { flex-direction: row; }
   .f-chips { min-width: 0; max-width: calc(100% + 14px); }
 }
 .odb-accs tr.acc-seen td { background: #fafbfa; } .odb-accs .ap-ren { margin-left: 4px; }
+.odb-others { margin-top: 10px; } .odb-others summary { cursor: pointer; }
