@@ -473,3 +473,13 @@ th.r .sort-btn { flex-direction: row; }
   .bk-row.bk-head .bk-hd { grid-area: d; }
 }
 .an-table th { padding-left: 6px; padding-right: 6px; } .an-table th .sort-btn { font-size: 11px; }
+.ap-sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
+.ap-code { margin-left: 6px; font-size: 11px; }
+.ap-ren { padding: 0 4px; text-decoration: none; font-size: 13px; }
+.ap-periods { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.ap-filters { margin-bottom: 14px; }
+@media (max-width: 760px) { .ap-periods { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+  .an-filters, .f-row { min-width: 0; max-width: 100%; }
+  .f-chips { min-width: 0; max-width: calc(100% + 14px); }
+}

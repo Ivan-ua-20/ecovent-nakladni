@@ -1554,10 +1554,10 @@ var RegExpRouter = class {
       const handlers = r[path];
       const pathData = trie.paths[path];
       if (!pathData) {
-        staticMap[path] = [handlers.map(([h]) => [h, createNullObject()]), emptyParam];
+        staticMap[path] = [handlers.map(([h2]) => [h2, createNullObject()]), emptyParam];
         continue;
       }
-      handlerData[pathData[0]] = handlers.map(([h, handlerPath]) => [h, trie.paths[handlerPath][1].reduceRight((map, [key], i) => {
+      handlerData[pathData[0]] = handlers.map(([h2, handlerPath]) => [h2, trie.paths[handlerPath][1].reduceRight((map, [key], i) => {
         map[key] = paramReplacementMap[pathData[1][i][1]];
         return map;
       }, createNullObject())]);
@@ -1911,7 +1911,7 @@ var permsOf = (role) => PERMS[role] || [];
 var can = (user, perm) => Boolean(user && permsOf(user.role).includes(perm));
 var enc = new TextEncoder();
 var toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-var fromHex = (hex) => new Uint8Array(hex.match(/.{2}/g).map((h) => parseInt(h, 16)));
+var fromHex = (hex) => new Uint8Array(hex.match(/.{2}/g).map((h2) => parseInt(h2, 16)));
 function randomToken(bytes = 32) {
   const a = new Uint8Array(bytes);
   crypto.getRandomValues(a);
@@ -1928,15 +1928,15 @@ async function derive(password, saltBytes, iterations) {
 }
 async function hashPassword(password) {
   const salt = fromHex(randomToken(16));
-  const h = await derive(password, salt, ITER);
-  return `pbkdf2$${ITER}$${toHex(salt)}$${h}`;
+  const h2 = await derive(password, salt, ITER);
+  return `pbkdf2$${ITER}$${toHex(salt)}$${h2}`;
 }
 async function verifyPassword(password, stored) {
   const [scheme, iter, saltHex, hashHex] = String(stored || "").split("$");
   if (scheme !== "pbkdf2" || !saltHex || !hashHex) return false;
-  const h = await derive(password, fromHex(saltHex), Number(iter));
-  let diff = h.length ^ hashHex.length;
-  for (let i = 0; i < Math.min(h.length, hashHex.length); i++) diff |= h.charCodeAt(i) ^ hashHex.charCodeAt(i);
+  const h2 = await derive(password, fromHex(saltHex), Number(iter));
+  let diff = h2.length ^ hashHex.length;
+  for (let i = 0; i < Math.min(h2.length, hashHex.length); i++) diff |= h2.charCodeAt(i) ^ hashHex.charCodeAt(i);
   return diff === 0;
 }
 var publicUser = (u) => u ? {
@@ -2105,6 +2105,7 @@ var SCHEMA = [
   )`,
   `CREATE INDEX IF NOT EXISTS odb_tx_date ON odb_tx (date)`,
   `CREATE INDEX IF NOT EXISTS odb_tx_link ON odb_tx (link_id)`,
+  `CREATE TABLE IF NOT EXISTS odb_payers (code TEXT PRIMARY KEY, name TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS invoices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     number TEXT NOT NULL,
@@ -2262,6 +2263,10 @@ var ADD_COLUMNS = [
   ["users", "crm_logins", "TEXT DEFAULT ''"],
   ["an_managers", "depts", "TEXT DEFAULT ''"],
   ["inv_fops", "odb_id", "TEXT DEFAULT ''"],
+  ["users", "tg_chat_id", "TEXT DEFAULT ''"],
+  ["users", "tg_code", "TEXT DEFAULT ''"],
+  ["users", "tg_all_links", "INTEGER DEFAULT 0"],
+  ["users", "tg_all_tx", "INTEGER DEFAULT 0"],
   ["channels", "seller_text", "TEXT DEFAULT ''"],
   ["versions", "user_name", "TEXT DEFAULT ''"],
   ["users", "failed_logins", "INTEGER DEFAULT 0"],
@@ -2270,7 +2275,7 @@ var ADD_COLUMNS = [
   ["an_products", "cat_manual", "INTEGER"],
   ["an_products", "seen", "INTEGER NOT NULL DEFAULT 0"]
 ];
-var SCHEMA_VERSION = "14";
+var SCHEMA_VERSION = "15";
 var MP_SOURCES = [
   ["Rozetka (OneDay)", ["rozetka(oneday)"]],
   ["Rozetka (Ecovent)", ["rozetka(ecovent)"]],
@@ -2661,8 +2666,8 @@ async function getProducts(fetchFn, { subdomain, key }, ids) {
   const cached = {};
   const unique = [];
   for (const id of all) {
-    const h = productCache.get(`${subdomain}|${id}`);
-    if (h && Date.now() - h.at < PRODUCT_TTL) cached[id] = h.value;
+    const h2 = productCache.get(`${subdomain}|${id}`);
+    if (h2 && Date.now() - h2.at < PRODUCT_TTL) cached[id] = h2.value;
     else unique.push(id);
   }
   if (!unique.length) return cached;
@@ -3784,7 +3789,7 @@ async function txRow(item) {
     config_id: item.autoclientConfigId ? String(item.autoclientConfigId) : ""
   };
 }
-function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can: can2, userName, base = ODB_BASE }) {
+function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can: can2, userName, base = ODB_BASE, notify = async () => 0 }) {
   const putSetting = (key, value) => db.run(
     `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [key, String(value)]
@@ -3979,7 +3984,7 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
   });
   async function saveTx(items) {
     const rows = (await Promise.all(items.map(txRow))).filter(Boolean);
-    if (!rows.length) return { rows, fresh: 0 };
+    if (!rows.length) return { rows, fresh: 0, freshRows: [] };
     const known = new Set((await db.all(`SELECT id FROM odb_tx WHERE id IN (SELECT value FROM json_each(?))`, [JSON.stringify(rows.map((r) => r.id))])).map((r) => r.id));
     const now = nowIso2();
     await db.batch(rows.map((r) => [
@@ -3988,7 +3993,8 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
        ON CONFLICT(id) DO UPDATE SET invoice_id = COALESCE(odb_tx.invoice_id, excluded.invoice_id), possible = excluded.possible`,
       [r.id, r.date, r.amount, r.currency, r.purpose, r.iban, r.payer_name, r.payer_code, r.payer_acc, r.invoice_id, r.possible, r.config_id, now]
     ]));
-    return { rows, fresh: rows.filter((r) => !known.has(r.id)).length };
+    const freshRows = rows.filter((r) => !known.has(r.id));
+    return { rows, fresh: freshRows.length, freshRows };
   }
   async function relink() {
     const before = await db.all(`SELECT id, status FROM pay_links WHERE status NOT IN ('closed', 'manual')`);
@@ -4023,9 +4029,10 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     } catch {
       throw fail(400, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 JSON.");
     }
-    const { fresh } = await saveTx([body]);
+    const { fresh, freshRows } = await saveTx([body]);
     const paid = await relink();
     await putSetting("odb_hook_at", nowIso2());
+    await notify({ linkIds: paid, freshRows }).catch(() => 0);
     return c.json({ ok: true, fresh, paid: paid.length });
   });
   const PAGE = 100;
@@ -4039,11 +4046,13 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     await putSetting("odb_sync_at", nowIso2());
     const cr = { key: s.odb_key, name: s.odb_name };
     let added = 0;
+    const newRows = [];
     for (let p = 0; p < 5; p++) {
       const j = await odb(cr, "GET", `/api/transactions?limit=${PAGE}&offset=${p * PAGE}`);
       const items = Array.isArray(j.items) ? j.items : [];
-      const { rows, fresh } = await saveTx(items);
+      const { rows, fresh, freshRows } = await saveTx(items);
       added += fresh;
+      newRows.push(...freshRows);
       if (items.length < PAGE || rows.length && fresh === 0) break;
     }
     let hist = {};
@@ -4075,6 +4084,7 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
       if (paidIds.length) await db.run(`UPDATE pay_links SET odb_paid = 1, paid_at = COALESCE(paid_at, ?) WHERE odb_paid = 0 AND odb_id IN (SELECT value FROM json_each(?))`, [nowIso2(), JSON.stringify(paidIds)]);
     }
     const paid = await relink();
+    await notify({ linkIds: paid, freshRows: hist.done ? newRows : [] }).catch(() => 0);
     const me = c.get("user");
     const minePaid = paid.length ? await db.all(`SELECT id, number, amount, client FROM pay_links WHERE created_by_id = ? AND id IN (SELECT value FROM json_each(?))`, [me.id, JSON.stringify(paid)]) : [];
     return c.json({ ok: true, added, paid: paid.length, minePaid, hist, lastSync: nowIso2() });
@@ -4135,7 +4145,226 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     await relink();
     return c.json({ ok: true });
   });
+  const PERSON = "person";
+  const payerKey = `CASE WHEN length(t.payer_code) = 10 THEN '${PERSON}' WHEN t.payer_code != '' THEN t.payer_code ELSE 'name:' || t.payer_name END`;
+  app.get("/api/odb/stats", async (c) => {
+    need(c, "analytics");
+    const day = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || "") ? v : "";
+    const from = day(c.req.query("from")) || "2000-01-01";
+    const to = day(c.req.query("to")) || "2999-12-31";
+    const cmpFrom = day(c.req.query("cmpFrom"));
+    const cmpTo = day(c.req.query("cmpTo"));
+    const group = ["day", "week", "month"].includes(c.req.query("group")) ? c.req.query("group") : "day";
+    const accs = String(c.req.query("accounts") || "").split(",").filter(Boolean).slice(0, 40);
+    const payer = String(c.req.query("payer") || "");
+    const bucket = group === "month" ? `substr(t.date, 1, 7)` : group === "week" ? `date(substr(t.date, 1, 10), 'weekday 0', '-6 days')` : `substr(t.date, 1, 10)`;
+    const scope = (f, tt) => {
+      const w = [`t.date >= ?`, `t.date <= ?`, `t.currency = 'UAH'`];
+      const p = [`${f}T00:00:00`, `${tt}T23:59:59`];
+      if (accs.length) {
+        w.push(`t.iban IN (SELECT iban FROM odb_accounts WHERE id IN (SELECT value FROM json_each(?)))`);
+        p.push(JSON.stringify(accs));
+      }
+      if (payer) {
+        w.push(`${payerKey} = ?`);
+        p.push(payer);
+      }
+      return { w: `WHERE ${w.join(" AND ")}`, p };
+    };
+    const cur = scope(from, to);
+    const prev = cmpFrom && cmpTo ? scope(cmpFrom, cmpTo) : null;
+    const q = (sc, sql) => db.all(sql.replace("$W", sc.w), sc.p);
+    const [tot, series, byAcc, byPayer, ptot, pseries, pAcc, pPayer, accounts, names, range] = await Promise.all([
+      q(cur, `SELECT COUNT(*) AS cnt, COALESCE(SUM(t.amount), 0) AS sum FROM odb_tx t $W`),
+      q(cur, `SELECT ${bucket} AS k, COUNT(*) AS cnt, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY k ORDER BY k`),
+      q(cur, `SELECT t.iban, COUNT(*) AS cnt, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY t.iban`),
+      q(cur, `SELECT ${payerKey} AS k, MAX(t.payer_name) AS name, COUNT(*) AS cnt, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY k ORDER BY sum DESC LIMIT 40`),
+      prev ? q(prev, `SELECT COUNT(*) AS cnt, COALESCE(SUM(t.amount), 0) AS sum FROM odb_tx t $W`) : null,
+      prev ? q(prev, `SELECT ${bucket} AS k, COUNT(*) AS cnt, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY k ORDER BY k`) : null,
+      prev ? q(prev, `SELECT t.iban, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY t.iban`) : null,
+      prev ? q(prev, `SELECT ${payerKey} AS k, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY k`) : null,
+      db.all(`SELECT id, iban, alias, kind FROM odb_accounts ORDER BY sort, alias`),
+      db.all(`SELECT code, name FROM odb_payers`),
+      db.get(`SELECT MIN(date) AS min, MAX(date) AS max FROM odb_tx`)
+    ]);
+    const accBy = new Map(accounts.map((a) => [a.iban, a]));
+    const nameBy = new Map(names.map((n) => [n.code, n.name]));
+    const pA = new Map((pAcc || []).map((r) => [r.iban, r.sum]));
+    const pP = new Map((pPayer || []).map((r) => [r.k, r.sum]));
+    const s = await settings();
+    let hist = {};
+    try {
+      hist = JSON.parse(s.odb_hist || "{}");
+    } catch {
+    }
+    return c.json({
+      group,
+      total: { sum: round22(tot[0].sum), cnt: tot[0].cnt, avg: tot[0].cnt ? round22(tot[0].sum / tot[0].cnt) : 0 },
+      prevTotal: ptot ? { sum: round22(ptot[0].sum), cnt: ptot[0].cnt, avg: ptot[0].cnt ? round22(ptot[0].sum / ptot[0].cnt) : 0 } : null,
+      series: series.map((r) => ({ k: r.k, sum: round22(r.sum), cnt: r.cnt })),
+      prevSeries: pseries ? pseries.map((r) => ({ k: r.k, sum: round22(r.sum), cnt: r.cnt })) : null,
+      byAccount: byAcc.map((r) => {
+        const a = accBy.get(r.iban);
+        return { id: a?.id || "", iban: r.iban, name: a?.alias || r.iban || "\u2014", kind: a?.kind || "", sum: round22(r.sum), cnt: r.cnt, prevSum: prev ? round22(pA.get(r.iban) || 0) : null };
+      }).sort((x, y) => y.sum - x.sum),
+      byPayer: byPayer.map((r) => ({
+        key: r.k,
+        name: r.k === PERSON ? "\u0424\u0456\u0437\u0438\u0447\u043D\u0456 \u043E\u0441\u043E\u0431\u0438" : nameBy.get(r.k) || r.name || "\u2014",
+        auto: r.k === PERSON ? "" : r.name || "",
+        code: r.k === PERSON || r.k.startsWith("name:") ? "" : r.k,
+        sum: round22(r.sum),
+        cnt: r.cnt,
+        prevSum: prev ? round22(pP.get(r.k) || 0) : null
+      })),
+      accounts: accounts.map((a) => ({ id: a.id, name: a.alias, kind: a.kind })),
+      range: { min: range?.min?.slice(0, 10) || "", max: range?.max?.slice(0, 10) || "" },
+      lastSync: s.odb_sync_at || "",
+      hist
+    });
+  });
+  app.put("/api/odb/payers/:code", async (c) => {
+    need(c, "analytics");
+    const code = c.req.param("code");
+    const name = String((await c.req.json()).name || "").trim().slice(0, 120);
+    if (!name) await db.run(`DELETE FROM odb_payers WHERE code = ?`, [code]);
+    else await db.run(`INSERT INTO odb_payers (code, name) VALUES (?, ?) ON CONFLICT(code) DO UPDATE SET name = excluded.name`, [code, name]);
+    return c.json({ ok: true });
+  });
   return { linkForRahunok };
+}
+
+// src/tg.js
+var TG = "https://api.telegram.org";
+var h = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+var nf = new Intl.NumberFormat("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+var uah = (n) => `${nf.format(Number(n) || 0)} \u20B4`;
+var kyivAt = (ms) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(ms)).replace(" ", "T");
+function mountTg(app, { db, fetchFn, settings, need, fail }) {
+  const putSetting = (key, value) => db.run(
+    `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [key, String(value)]
+  );
+  async function tg(token, method, body) {
+    const r = await fetchFn(`${TG}/bot${token}/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    let j = null;
+    try {
+      j = await r.json();
+    } catch {
+    }
+    if (!j?.ok) throw fail(400, `Telegram: ${j?.description || `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${r.status}`}`);
+    return j.result;
+  }
+  app.put("/api/tg/settings", async (c) => {
+    need(c, "api");
+    const b = await c.req.json();
+    const token = String(b.token || "").trim();
+    if (!token) {
+      const s = await settings();
+      if (s.tg_token) await tg(s.tg_token, "deleteWebhook", {}).catch(() => {
+      });
+      await db.batch([[`DELETE FROM settings WHERE key IN ('tg_token', 'tg_bot', 'tg_secret')`, []]]);
+      return c.json({ ok: true, bot: "" });
+    }
+    if (!/^\d+:[\w-]{20,}$/.test(token)) throw fail(400, "\u0421\u0445\u043E\u0436\u0435, \u0446\u0435 \u043D\u0435 \u0442\u043E\u043A\u0435\u043D \u0431\u043E\u0442\u0430. \u0412\u0456\u043D \u0432\u0438\u0433\u043B\u044F\u0434\u0430\u0454 \u0442\u0430\u043A: 1234567890:AAH\u2026");
+    const me = await tg(token, "getMe");
+    const secret = randomToken(16);
+    const url = `${new URL(c.req.url).origin}/api/tg/hook`;
+    await tg(token, "setWebhook", { url, secret_token: secret, allowed_updates: ["message"] });
+    await putSetting("tg_token", token);
+    await putSetting("tg_bot", me.username || "");
+    await putSetting("tg_secret", secret);
+    return c.json({ ok: true, bot: me.username || "" });
+  });
+  app.get("/api/tg/me", async (c) => {
+    const s = await settings();
+    const u = await db.get(`SELECT tg_chat_id, tg_all_links, tg_all_tx FROM users WHERE id = ?`, [c.get("user").id]);
+    return c.json({ bot: s.tg_bot || "", connected: Boolean(u?.tg_chat_id), allLinks: Boolean(u?.tg_all_links), allTx: Boolean(u?.tg_all_tx) });
+  });
+  app.post("/api/tg/link", async (c) => {
+    const s = await settings();
+    if (!s.tg_token || !s.tg_bot) throw fail(400, "Telegram-\u0431\u043E\u0442\u0430 \u0449\u0435 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u2014 \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u0432\u043B\u0430\u0441\u043D\u0438\u043A\u0430 \u0430\u0431\u043E \u0430\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0430.");
+    const code = randomToken(12);
+    await db.run(`UPDATE users SET tg_code = ? WHERE id = ?`, [`${code}|${Date.now() + 15 * 6e4}`, c.get("user").id]);
+    return c.json({ url: `https://t.me/${s.tg_bot}?start=${code}` });
+  });
+  app.delete("/api/tg/me", async (c) => {
+    await db.run(`UPDATE users SET tg_chat_id = '', tg_code = '' WHERE id = ?`, [c.get("user").id]);
+    return c.json({ ok: true });
+  });
+  app.put("/api/tg/me", async (c) => {
+    need(c, "users");
+    const b = await c.req.json();
+    await db.run(`UPDATE users SET tg_all_links = ?, tg_all_tx = ? WHERE id = ?`, [b.allLinks ? 1 : 0, b.allTx ? 1 : 0, c.get("user").id]);
+    return c.json({ ok: true });
+  });
+  app.post("/api/tg/hook", async (c) => {
+    const s = await settings();
+    if (!s.tg_token || !s.tg_secret || c.req.header("x-telegram-bot-api-secret-token") !== s.tg_secret) return c.json({ ok: false }, 401);
+    const upd = await c.req.json().catch(() => ({}));
+    const msg = upd.message;
+    const chat = msg?.chat?.id;
+    if (!chat) return c.json({ ok: true });
+    const m = /^\/start(?:@\w+)?\s+([0-9a-f]{24})\b/.exec(String(msg.text || ""));
+    let reply = "\u0429\u043E\u0431 \u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0442\u0438 \u0441\u043F\u043E\u0432\u0456\u0449\u0435\u043D\u043D\u044F \u043F\u0440\u043E \u043E\u043F\u043B\u0430\u0442\u0438, \u0432\u0456\u0434\u043A\u0440\u0438\u0439\u0442\u0435 \u0441\u0430\u0439\u0442, \u043D\u0430\u0442\u0438\u0441\u043D\u0456\u0442\u044C \xABTelegram\xBB \u0443\u0433\u043E\u0440\u0456 \u0456 \u043F\u043E\u0442\u0456\u043C \xAB\u041F\u0456\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u0438 Telegram\xBB.";
+    if (m) {
+      const u = await db.get(`SELECT id, name, login, tg_code FROM users WHERE tg_code LIKE ? AND active = 1`, [`${m[1]}|%`]);
+      const exp = Number(String(u?.tg_code || "").split("|")[1]) || 0;
+      if (u && exp > Date.now()) {
+        await db.run(`UPDATE users SET tg_chat_id = ?, tg_code = '' WHERE id = ?`, [String(chat), u.id]);
+        reply = `\u2705 \u0413\u043E\u0442\u043E\u0432\u043E, ${h(u.name || u.login)}! \u0421\u044E\u0434\u0438 \u043D\u0430\u0434\u0445\u043E\u0434\u0438\u0442\u0438\u043C\u0443\u0442\u044C \u0441\u043F\u043E\u0432\u0456\u0449\u0435\u043D\u043D\u044F \u043F\u0440\u043E \u043E\u043F\u043B\u0430\u0442\u0443 \u0432\u0430\u0448\u0438\u0445 \u0440\u0430\u0445\u0443\u043D\u043A\u0456\u0432.`;
+      } else {
+        reply = "\u041F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u0434\u043B\u044F \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043D\u044F \u0437\u0430\u0441\u0442\u0430\u0440\u0456\u043B\u043E. \u041D\u0430\u0442\u0438\u0441\u043D\u0456\u0442\u044C \xAB\u041F\u0456\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u0438 Telegram\xBB \u043D\u0430 \u0441\u0430\u0439\u0442\u0456 \u0449\u0435 \u0440\u0430\u0437.";
+      }
+    }
+    await tg(s.tg_token, "sendMessage", { chat_id: chat, text: reply, parse_mode: "HTML" }).catch(() => {
+    });
+    return c.json({ ok: true });
+  });
+  const LABEL = { paid: "\u2705 \u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E", over: "\u2705 \u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E (\u043F\u0435\u0440\u0435\u043F\u043B\u0430\u0442\u0430)", partial: "\u{1F7E1} \u0427\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430" };
+  async function notify({ linkIds = [], freshRows = [] }) {
+    const s = await settings();
+    if (!s.tg_token) return 0;
+    const out = [];
+    const admins = await db.all(`SELECT id, tg_chat_id, tg_all_links, tg_all_tx FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin') AND (tg_all_links = 1 OR tg_all_tx = 1)`);
+    if (linkIds.length) {
+      const links = await db.all(
+        `SELECT l.id, l.number, l.amount, l.paid_amount, l.status, l.client, l.created_by_id, l.created_by, a.alias, u.tg_chat_id AS chat
+         FROM pay_links l LEFT JOIN odb_accounts a ON a.id = l.account_id LEFT JOIN users u ON u.id = l.created_by_id AND u.active = 1
+         WHERE l.id IN (SELECT value FROM json_each(?))`,
+        [JSON.stringify(linkIds)]
+      );
+      for (const l of links) {
+        const text = `<b>${LABEL[l.status] || "\u041E\u043F\u043B\u0430\u0442\u0430"}: \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h(l.number)}</b>
+${uah(l.paid_amount)} \u0437 ${uah(l.amount)}${l.client ? ` \xB7 ${h(l.client)}` : ""}
+${h(l.alias || "")}${l.created_by ? `
+\u0421\u0442\u0432\u043E\u0440\u0438\u0432(\u043B\u0430): ${h(l.created_by)}` : ""}`;
+        const chats = /* @__PURE__ */ new Set();
+        if (l.chat) chats.add(l.chat);
+        for (const a of admins) if (a.tg_all_links) chats.add(a.tg_chat_id);
+        for (const ch of chats) out.push([ch, text]);
+      }
+    }
+    const since = kyivAt(Date.now() - 864e5);
+    const recent = freshRows.filter((r) => r.date >= since);
+    const txAdmins = admins.filter((a) => a.tg_all_tx);
+    if (recent.length && txAdmins.length) {
+      const accs = new Map((await db.all(`SELECT iban, alias FROM odb_accounts`)).map((a) => [a.iban, a.alias]));
+      const texts = recent.length > 5 ? [`<b>\u{1F4B0} \u041D\u043E\u0432\u0456 \u043D\u0430\u0434\u0445\u043E\u0434\u0436\u0435\u043D\u043D\u044F: ${recent.length}</b> \u043D\u0430 \u0441\u0443\u043C\u0443 ${uah(recent.reduce((t, r) => t + r.amount, 0))}`] : recent.map((r) => `<b>\u{1F4B0} ${uah(r.amount)}</b> \u2192 ${h(accs.get(r.iban) || r.iban)}
+\u0412\u0456\u0434: ${h(r.payer_name || "\u2014")}
+<i>${h(r.purpose).slice(0, 200)}</i>`);
+      for (const a of txAdmins) for (const t of texts) out.push([a.tg_chat_id, t]);
+    }
+    let sent = 0;
+    for (const [chat, text] of out.slice(0, 15)) {
+      try {
+        await tg(s.tg_token, "sendMessage", { chat_id: chat, text, parse_mode: "HTML", disable_web_page_preview: true });
+        sent++;
+      } catch {
+      }
+    }
+    return sent;
+  }
+  return { notify };
 }
 
 // src/normalize.js
@@ -4438,12 +4667,12 @@ var FOP_FIELDS = [
   "active"
 ];
 var hash = (s) => {
-  let h = 2166136261;
+  let h2 = 2166136261;
   for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619) >>> 0;
+    h2 ^= s.charCodeAt(i);
+    h2 = Math.imul(h2, 16777619) >>> 0;
   }
-  return h.toString(16);
+  return h2.toString(16);
 };
 var nowIso = () => (/* @__PURE__ */ new Date()).toISOString();
 var publicFop = (f) => {
@@ -4557,7 +4786,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     return c.json({ ok: true });
   });
   app.use("/api/*", async (c, next) => {
-    if (c.req.path.startsWith("/api/auth/") || c.req.path === "/api/odb/hook") return next();
+    if (c.req.path.startsWith("/api/auth/") || c.req.path === "/api/odb/hook" || c.req.path === "/api/tg/hook") return next();
     const user = await sessionUser(c);
     if (!user) throw fail(401, "\u041F\u043E\u0442\u0440\u0456\u0431\u043D\u043E \u0443\u0432\u0456\u0439\u0442\u0438.");
     c.set("user", user);
@@ -4681,7 +4910,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
       invFops,
       defaultWarning: DEFAULT_WARNING,
       user: publicUser(user),
-      settings: apiOk ? { ...s, lpcrm_key: s.lpcrm_key ? MASK : "", odb_key: s.odb_key ? MASK : "" } : Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith("lpcrm_") && !k.startsWith("checkbox_") && !k.startsWith("odb_")).concat([["lpcrm_key", s.lpcrm_key ? MASK : ""], ["lpcrm_subdomain", s.lpcrm_subdomain || ""]]))
+      settings: apiOk ? { ...s, lpcrm_key: s.lpcrm_key ? MASK : "", odb_key: s.odb_key ? MASK : "", tg_token: s.tg_token ? MASK : "", tg_secret: "" } : Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith("lpcrm_") && !k.startsWith("checkbox_") && !k.startsWith("odb_") && !k.startsWith("tg_")).concat([["lpcrm_key", s.lpcrm_key ? MASK : ""], ["lpcrm_subdomain", s.lpcrm_subdomain || ""]]))
     });
   });
   app.put("/api/settings", async (c) => {
@@ -5306,7 +5535,8 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     return c.json({ ok: true });
   });
   mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso });
-  odbApi = mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, userName, base: odbBase });
+  const tgApi = mountTg(app, { db, fetchFn, settings, need, fail });
+  odbApi = mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, userName, base: odbBase, notify: tgApi.notify });
   return app;
 }
 
@@ -5356,7 +5586,7 @@ async function onRequest(ctx) {
   await ready;
   if (env.OWNER_RESET_PASSWORD && env.OWNER_RESET_PASSWORD.length >= 6) {
     const mark = await db.get(`SELECT value FROM settings WHERE key = 'owner_reset_mark'`);
-    const tag = `${env.OWNER_RESET_PASSWORD.length}:${[...env.OWNER_RESET_PASSWORD].reduce((h, ch) => Math.imul(h, 31) + ch.charCodeAt(0) >>> 0, 7)}`;
+    const tag = `${env.OWNER_RESET_PASSWORD.length}:${[...env.OWNER_RESET_PASSWORD].reduce((h2, ch) => Math.imul(h2, 31) + ch.charCodeAt(0) >>> 0, 7)}`;
     if (mark?.value !== tag) {
       await resetOwnerPassword(db, env.OWNER_RESET_PASSWORD);
       await db.run(`INSERT INTO settings (key, value) VALUES ('owner_reset_mark', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [tag]);

@@ -30,8 +30,19 @@ const tx = (n, { iban = ACCS[0].iban, amount = 100 + n, type = 'credit', invoice
 });
 for (let n = 1; n <= 260; n++) feed.unshift(tx(n, { type: n % 13 === 0 ? 'debit' : 'credit', iban: ACCS[n % 3].iban }));
 
+const tgSent = [];
+let tgHook = null;
 const fetchFn = async (url, opts = {}) => {
   const u = new URL(url);
+  if (u.host === 'api.telegram.org') {
+    const m = u.pathname.split('/').pop();
+    const b = JSON.parse(opts.body || '{}');
+    const ok = (result) => new Response(JSON.stringify({ ok: true, result }));
+    if (m === 'getMe') return ok({ id: 1, is_bot: true, username: 'ecovent_pay_bot' });
+    if (m === 'setWebhook') { tgHook = b; return ok(true); }
+    if (m === 'sendMessage') { tgSent.push(b); return ok({ message_id: tgSent.length }); }
+    return ok(true);
+  }
   assert.equal(u.origin, BASE);
   assert.equal(opts.headers['x-client-key'], KEY);
   const key = `${opts.method} ${u.pathname.replace(/\/[0-9a-f]{24}\//, '/:id/')}`;
@@ -194,6 +205,61 @@ await hook(tx(903, { amount: 77, invoice: { id: ml1.odb_id } }));
 assert.equal((await req('GET', '/api/odb/payments?tab=mine', null, MH)).count, 1, 'свої платежі — за посиланнями менеджера');
 assert.equal(await status(() => req('PUT', '/api/odb/accounts/a2', { enabled: true }, MH)), 403, 'вмикати рахунки — лише адміни');
 assert.equal(await status(() => req('GET', '/api/odb/accounts?refresh=1', null, MH)), 403);
+
+// ---------- 7. Telegram ----------
+assert.equal(await status(() => req('POST', '/api/tg/link')), 400, 'без бота — зрозуміла помилка');
+assert.equal(await status(() => req('PUT', '/api/tg/settings', { token: '123:abc' })), 400, 'перевірка формату токена');
+assert.equal(await status(() => req('PUT', '/api/tg/settings', { token: '123456:AAH_abcdefghijklmnopqrstuvwxyz' }, MH)), 403, 'бота підключає лише адмін');
+const tgs = await req('PUT', '/api/tg/settings', { token: '123456:AAH_abcdefghijklmnopqrstuvwxyz' });
+assert.equal(tgs.bot, 'ecovent_pay_bot');
+assert.ok(tgHook.url.endsWith('/api/tg/hook') && tgHook.secret_token, 'вебхук встановлено з секретом');
+assert.ok(/^•+$/.test((await req('GET', '/api/bootstrap')).settings.tg_token), 'токен не віддається у браузер');
+const sendStart = (code, chat, secret = tgHook.secret_token) => app.request('/api/tg/hook', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Telegram-Bot-Api-Secret-Token': secret }, body: JSON.stringify({ message: { chat: { id: chat }, text: `/start ${code}` } }) });
+// менеджер підключає себе
+const lnk = await req('POST', '/api/tg/link', null, MH);
+const code = lnk.url.split('start=')[1];
+assert.ok(lnk.url.startsWith('https://t.me/ecovent_pay_bot?start='));
+assert.equal((await sendStart(code, 555, 'wrong')).status, 401, 'чужі запити відкидаються');
+await sendStart(code, 555);
+assert.ok((await req('GET', '/api/tg/me', null, MH)).connected);
+assert.match(tgSent.at(-1).text, /Готово/);
+await sendStart(code, 556); // повторно той самий код — вже не працює
+assert.match(tgSent.at(-1).text, /застаріло/);
+// власник: підключається і вмикає «усі оплати» + «усі надходження»
+await sendStart((await req('POST', '/api/tg/link')).url.split('start=')[1], 777);
+await req('PUT', '/api/tg/me', { allLinks: true, allTx: true });
+assert.equal(await status(() => req('PUT', '/api/tg/me', { allLinks: true }, MH)), 403, 'галочки — лише для адмінів');
+tgSent.length = 0;
+const ml2 = (await req('POST', '/api/odb/links', { account_id: 'a1', amount: 300, client: 'Олег' }, MH)).link;
+await hook(tx(950, { amount: 300, invoice: { id: ml2.odb_id }, date: new Date().toISOString() }));
+const toMgr = tgSent.filter((m) => m.chat_id === '555');
+const toOwner = tgSent.filter((m) => m.chat_id === '777');
+assert.equal(toMgr.length, 1, 'менеджеру — про його оплачений рахунок');
+assert.match(toMgr[0].text, new RegExp(`Оплачено: рахунок № ${ml2.number}`));
+assert.equal(toOwner.length, 2, 'адміну — і про рахунок, і про надходження');
+tgSent.length = 0;
+await hook(tx(951, { amount: 10, date: '2025-01-01T10:00:00Z' }));
+assert.equal(tgSent.length, 0, 'старі платежі не розсилаються');
+
+// ---------- 8. Аналітика оплат ----------
+assert.equal(await status(() => req('GET', '/api/odb/stats', null, MH)), 403, 'аналітика оплат — лише адміни');
+const st = await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31&group=month&cmpFrom=2025-01-01&cmpTo=2025-12-31');
+const exp26 = (await db.get(`SELECT COUNT(*) AS n, SUM(amount) AS s FROM odb_tx WHERE date >= '2026-01-01' AND date <= '2026-12-31T23:59:59'`));
+assert.equal(st.total.cnt, exp26.n);
+assert.ok(Math.abs(st.total.sum - exp26.s) < 0.01);
+assert.equal(st.series.reduce((t, r) => t + r.cnt, 0), exp26.n, 'стовпчики по місяцях сходяться з підсумком');
+assert.ok(st.series.every((r) => /^2026-\d{2}$/.test(r.k)));
+assert.equal(st.prevTotal.cnt, 1, 'порівняння з попереднім періодом');
+assert.ok(st.byAccount.some((a) => a.name === 'ТОВ Ековент'));
+assert.ok(st.byPayer.some((p) => p.code === '37193071'), 'платник за ЄДРПОУ');
+const wk = await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31&group=week');
+assert.ok(wk.series.every((r) => new Date(r.k + 'T00:00:00Z').getUTCDay() === 1), 'тижні з понеділка');
+const onlyTov = await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31&accounts=a3');
+assert.ok(onlyTov.byAccount.length === 1 && onlyTov.byAccount[0].name === 'ТОВ Ековент', 'фільтр за рахунком');
+await req('PUT', '/api/odb/payers/37193071', { name: 'Rozetka' });
+assert.equal((await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31')).byPayer.find((p) => p.code === '37193071').name, 'Rozetka', 'своя назва платника');
+const onlyPayer = await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31&payer=37193071');
+assert.ok(onlyPayer.byPayer.length === 1);
 
 console.log('  виклики Opendatabot:', calls);
 console.log('  запитів до бази (макс.):', maxQ);

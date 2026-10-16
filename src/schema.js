@@ -145,6 +145,7 @@ export const SCHEMA = [
   )`,
   `CREATE INDEX IF NOT EXISTS odb_tx_date ON odb_tx (date)`,
   `CREATE INDEX IF NOT EXISTS odb_tx_link ON odb_tx (link_id)`,
+  `CREATE TABLE IF NOT EXISTS odb_payers (code TEXT PRIMARY KEY, name TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS invoices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     number TEXT NOT NULL,
@@ -312,6 +313,10 @@ const ADD_COLUMNS = [
   ['users', 'crm_logins', "TEXT DEFAULT ''"],
   ['an_managers', 'depts', "TEXT DEFAULT ''"],
   ['inv_fops', 'odb_id', "TEXT DEFAULT ''"],
+  ['users', 'tg_chat_id', "TEXT DEFAULT ''"],
+  ['users', 'tg_code', "TEXT DEFAULT ''"],
+  ['users', 'tg_all_links', 'INTEGER DEFAULT 0'],
+  ['users', 'tg_all_tx', 'INTEGER DEFAULT 0'],
   ['channels', 'seller_text', "TEXT DEFAULT ''"],
   ['versions', 'user_name', "TEXT DEFAULT ''"],
   ['users', 'failed_logins', 'INTEGER DEFAULT 0'],
@@ -322,7 +327,7 @@ const ADD_COLUMNS = [
 ];
 
 // Підвищуйте при зміні схеми: тоді міграція виконається знову (на Cloudflare — один раз на запуск ізолята).
-const SCHEMA_VERSION = '14';
+const SCHEMA_VERSION = '15';
 
 // Початкові відділи аналітики, джерела і відповідності (усе редагується в «Налаштуваннях аналітики»).
 const MP_SOURCES = [

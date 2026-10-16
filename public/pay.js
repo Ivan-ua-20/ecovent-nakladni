@@ -328,6 +328,27 @@ export function createPayUI(ctx) {
           Увімкнений ФОП також з’являється у «ФОПах рахунків» для Word-рахунків з QR-кодом. ТОВ і ПП — лише посилання.</div>
         <div id="odbAccs"><span class="spinner"></span></div>
       </section>`);
+    container.insertAdjacentHTML('beforeend', `
+      <section class="card form-stack" id="tgCard" style="max-width:900px;margin-top:14px">
+        <h3>Telegram-бот для сповіщень про оплати</h3>
+        <div class="small">${settings.tg_bot ? `Підключено бота <b>@${esc(settings.tg_bot)}</b>. Кожен користувач підключає себе сам: «Telegram» угорі сторінки → «Підключити Telegram».` : 'Бота ще не підключено.'}</div>
+        <details ${settings.tg_bot ? '' : 'open'}><summary class="small">Як створити бота (2 хвилини)</summary>
+          <ol class="small" style="margin:8px 0;padding-left:18px;line-height:1.6">
+            <li>У Telegram відкрийте <b>@BotFather</b> і надішліть команду <code>/newbot</code>.</li>
+            <li>Введіть назву (наприклад, «Ековент оплати») і ім’я бота латиницею, що закінчується на <code>bot</code>.</li>
+            <li>BotFather надішле токен виду <code>1234567890:AAH…</code> — вставте його нижче й збережіть.</li>
+          </ol></details>
+        <form id="tgF" class="pl-url"><input name="token" value="${esc(settings.tg_token || '')}" placeholder="Токен бота від @BotFather" autocomplete="off" aria-label="Токен бота">
+          <button class="btn primary">Зберегти</button>${settings.tg_bot ? '<button type="button" class="btn danger" id="tgDel">Відключити</button>' : ''}</form>
+      </section>`);
+    $('#tgF').onsubmit = async (e) => {
+      e.preventDefault();
+      const token = e.target.token.value.trim();
+      if (/^•+$/.test(token)) { toast('Токен уже збережено'); return; }
+      try { const r = await api('PUT', '/api/tg/settings', { token }); toast(`Бота @${r.bot} підключено`); await ctx.reloadBoot?.(); location.reload(); } catch (er) { toast(er.message, true); }
+    };
+    const tgDel = $('#tgDel');
+    if (tgDel) tgDel.onclick = async () => { try { await api('PUT', '/api/tg/settings', { token: '' }); toast('Бота відключено'); location.reload(); } catch (er) { toast(er.message, true); } };
     $('#odbHookCopy').onclick = () => copy(`${location.origin}/api/odb/hook`, 'Адресу скопійовано');
     $('#odbKeyF').onsubmit = async (e) => {
       e.preventDefault();

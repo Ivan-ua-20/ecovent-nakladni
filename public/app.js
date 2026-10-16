@@ -3,6 +3,7 @@ import { exportDocx } from './docx-export.js';
 import { renderRahunok, rahunokDocx } from './rahunok.js';
 import { createAnalyticsUI } from './an.js';
 import { createPayUI, STATUS as PAY_STATUS } from './pay.js';
+import { createPayStatsUI } from './anpay.js';
 const payBadge = (st) => { const [t, c] = PAY_STATUS[st] || [st, '']; return `<span class="badge ${c}">QR · ${t}</span>`; };
 
 // ---------- утиліти ----------
@@ -105,6 +106,7 @@ const SECTIONS = [
   ] },
   { id: 'an', label: 'Аналітика', perm: 'an.view', home: 'an', tabs: [
     { id: 'an', label: 'Дашборд' },
+    { id: 'anpay', label: 'Оплати', perm: 'analytics' },
     { id: 'ansettings', label: 'Налаштування аналітики', perm: 'analytics' },
   ] },
   { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [{ id: 'settings', label: 'Загальні налаштування' }] },
@@ -127,7 +129,7 @@ function renderNav(active = 'invoice') {
     <div class="top-user">
       ${can('api') && !s.lpcrm_key ? '<a href="#/settings" class="top-warn">LP-CRM не підключено</a>' : ''}
       <span><b>${esc(u?.name || '')}</b> · ${esc(u?.role_name || '')}</span>
-      <a href="#" id="navPwd">Пароль</a><a href="#" id="navOut">Вийти</a>
+      <a href="#" id="navTg">Telegram</a><a href="#" id="navPwd">Пароль</a><a href="#" id="navOut">Вийти</a>
     </div>`;
   const tabs = visibleTabs(cur);
   $('.subnav').innerHTML = tabs.length > 1
@@ -140,6 +142,46 @@ function renderNav(active = 'invoice') {
     showAuth();
   };
   $('#navPwd').onclick = (e) => { e.preventDefault(); changeOwnPassword(); };
+  $('#navTg').onclick = (e) => { e.preventDefault(); tgDialog(); };
+}
+
+// Мій Telegram: підключення одним натисканням (бот сам отримує ID), для адмінів — що надсилати.
+async function tgDialog() {
+  let me;
+  try { me = await api('GET', '/api/tg/me'); } catch (e) { toast(e.message, true); return; }
+  const admin = can('users');
+  const body = () => `
+    ${!me.bot ? `<div class="alert">Telegram-бота ще не підключено. ${can('api') ? 'Вставте токен бота в <a href="#/rsettings" data-close>«Рахунки Word → Налаштування рахунків»</a>.' : 'Зверніться до власника або адміністратора.'}</div>`
+      : me.connected ? `<div class="alert info">✅ Telegram підключено до бота <b>@${esc(me.bot)}</b>. Сюди надходитимуть сповіщення про оплату рахунків, які ви створили.</div>`
+        : `<p>Натисніть кнопку — відкриється бот <b>@${esc(me.bot)}</b>. Натисніть у ньому <b>«Start»</b> (або «Почати»), і ваш Telegram прив’яжеться до цього акаунта автоматично.</p>
+          <div class="btn-row"><button class="btn primary" id="tgGo">Підключити Telegram</button></div><div class="small muted" id="tgWait"></div>`}
+    ${me.bot && admin ? `<div class="form-stack" style="margin-top:14px"><h4 style="margin:0">Що ще надсилати мені (для адміністраторів)</h4>
+      <label class="check"><input type="checkbox" id="tgAllLinks" ${me.allLinks ? 'checked' : ''}> Оплати за посиланнями всіх менеджерів</label>
+      <label class="check"><input type="checkbox" id="tgAllTx" ${me.allTx ? 'checked' : ''}> Усі надходження на рахунки Opendatabot</label></div>` : ''}`;
+  const m = modal('Сповіщення в Telegram', body(), { footer: `${me.connected ? '<button class="btn danger" id="tgOff" style="margin-right:auto">Відключити</button>' : ''}<button class="btn primary" data-close>Готово</button>` });
+  const wire = () => {
+    const go = $('#tgGo', m.el);
+    if (go) go.onclick = async () => {
+      try {
+        const r = await api('POST', '/api/tg/link');
+        window.open(r.url, '_blank', 'noopener');
+        $('#tgWait', m.el).innerHTML = '<span class="spinner"></span> Чекаю, поки ви натиснете «Start» у боті…';
+        for (let i = 0; i < 60 && document.body.contains(m.el); i++) {
+          await new Promise((ok) => setTimeout(ok, 3000));
+          me = await api('GET', '/api/tg/me');
+          if (me.connected) { $('.modal-body', m.el).innerHTML = body(); wire(); toast('Telegram підключено'); return; }
+        }
+      } catch (er) { toast(er.message, true); }
+    };
+    const save = async () => {
+      try { await api('PUT', '/api/tg/me', { allLinks: $('#tgAllLinks', m.el).checked, allTx: $('#tgAllTx', m.el).checked }); toast('Збережено'); } catch (er) { toast(er.message, true); }
+    };
+    $('#tgAllLinks', m.el) && ($('#tgAllLinks', m.el).onchange = save);
+    $('#tgAllTx', m.el) && ($('#tgAllTx', m.el).onchange = save);
+  };
+  wire();
+  const off = $('#tgOff', m.el);
+  if (off) off.onclick = async () => { try { await api('DELETE', '/api/tg/me'); m.close(); toast('Telegram відключено'); } catch (er) { toast(er.message, true); } };
 }
 
 let activeRoute = 'invoice';
@@ -208,6 +250,7 @@ const routes = {
   rahunky: viewRahunky,
   rlist: viewRahunkyList,
   paylinks: () => PAY.viewLinks(),
+  anpay: () => PAYSTATS.view(),
   payments: () => PAY.viewPayments(),
   invfops: viewInvFops,
   rsettings: viewRahunkySettings,
@@ -1316,6 +1359,7 @@ async function viewUsers() {
 }
 
 const PAY = createPayUI({ api, $, $$, esc, toast, modal, can, get main() { return main; }, reloadBoot: () => loadBoot() });
+const PAYSTATS = createPayStatsUI({ api, $, $$, esc, toast, modal, get main() { return main; } });
 const AN = createAnalyticsUI({ api, $, $$, esc, toast, modal, can, get main() { return main; }, fmtDateTime, setPending: (fn) => { onPending = fn; } });
 
 // ---------- старт ----------

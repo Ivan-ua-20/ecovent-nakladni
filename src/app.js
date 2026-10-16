@@ -6,6 +6,7 @@ import { ROLES, can, hashPassword, verifyPassword, randomToken, publicUser, crmL
 import { DEFAULT_WARNING } from './schema.js';
 import { mountAnalytics } from './analytics.js';
 import { mountOdb, ODB_BASE } from './odb.js';
+import { mountTg } from './tg.js';
 import { normalizeOrder, applyEdits } from './normalize.js';
 import { getOrder, getProducts, diagnose, getStatuses, getOrderCodesByStatus, getOrdersBatch } from './lpcrm.js';
 import { DEMO_ORDER } from './demo.js';
@@ -156,7 +157,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
 
   // Усе інше в /api — лише після входу.
   app.use('/api/*', async (c, next) => {
-    if (c.req.path.startsWith('/api/auth/') || c.req.path === '/api/odb/hook') return next();
+    if (c.req.path.startsWith('/api/auth/') || c.req.path === '/api/odb/hook' || c.req.path === '/api/tg/hook') return next();
     const user = await sessionUser(c);
     if (!user) throw fail(401, 'Потрібно увійти.');
     c.set('user', user);
@@ -277,8 +278,8 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
       defaultWarning: DEFAULT_WARNING,
       user: publicUser(user),
       settings: apiOk
-        ? { ...s, lpcrm_key: s.lpcrm_key ? MASK : '', odb_key: s.odb_key ? MASK : '' }
-        : Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith('lpcrm_') && !k.startsWith('checkbox_') && !k.startsWith('odb_')).concat([['lpcrm_key', s.lpcrm_key ? MASK : ''], ['lpcrm_subdomain', s.lpcrm_subdomain || '']])),
+        ? { ...s, lpcrm_key: s.lpcrm_key ? MASK : '', odb_key: s.odb_key ? MASK : '', tg_token: s.tg_token ? MASK : '', tg_secret: '' }
+        : Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith('lpcrm_') && !k.startsWith('checkbox_') && !k.startsWith('odb_') && !k.startsWith('tg_')).concat([['lpcrm_key', s.lpcrm_key ? MASK : ''], ['lpcrm_subdomain', s.lpcrm_subdomain || '']])),
     });
   });
 
@@ -933,7 +934,8 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   });
 
   mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso });
-  odbApi = mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, userName, base: odbBase });
+  const tgApi = mountTg(app, { db, fetchFn, settings, need, fail });
+  odbApi = mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, userName, base: odbBase, notify: tgApi.notify });
 
   return app;
 }

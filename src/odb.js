@@ -69,7 +69,7 @@ export async function txRow(item) {
   };
 }
 
-export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, userName, base = ODB_BASE }) {
+export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, userName, base = ODB_BASE, notify = async () => 0 }) {
   const putSetting = (key, value) => db.run(
     `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, String(value)],
   );
@@ -263,7 +263,7 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
   // ---------------------------------------------------------------- надходження
   async function saveTx(items) {
     const rows = (await Promise.all(items.map(txRow))).filter(Boolean);
-    if (!rows.length) return { rows, fresh: 0 };
+    if (!rows.length) return { rows, fresh: 0, freshRows: [] };
     const known = new Set((await db.all(`SELECT id FROM odb_tx WHERE id IN (SELECT value FROM json_each(?))`, [JSON.stringify(rows.map((r) => r.id))])).map((r) => r.id));
     const now = nowIso();
     await db.batch(rows.map((r) => [
@@ -272,7 +272,8 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
        ON CONFLICT(id) DO UPDATE SET invoice_id = COALESCE(odb_tx.invoice_id, excluded.invoice_id), possible = excluded.possible`,
       [r.id, r.date, r.amount, r.currency, r.purpose, r.iban, r.payer_name, r.payer_code, r.payer_acc, r.invoice_id, r.possible, r.config_id, now],
     ]));
-    return { rows, fresh: rows.filter((r) => !known.has(r.id)).length };
+    const freshRows = rows.filter((r) => !known.has(r.id));
+    return { rows, fresh: freshRows.length, freshRows };
   }
 
   // Прив'язка платежів до наших посилань і перерахунок статусів. Повертає посилання, що щойно стали оплаченими.
@@ -307,9 +308,10 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
     if (!sameHex(sig, await hmacHex(s.odb_key, raw))) throw fail(401, 'Невірний підпис.');
     let body;
     try { body = JSON.parse(raw); } catch { throw fail(400, 'Невірний JSON.'); }
-    const { fresh } = await saveTx([body]);
+    const { fresh, freshRows } = await saveTx([body]);
     const paid = await relink();
     await putSetting('odb_hook_at', nowIso());
+    await notify({ linkIds: paid, freshRows }).catch(() => 0);
     return c.json({ ok: true, fresh, paid: paid.length });
   });
 
@@ -325,12 +327,14 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
     await putSetting('odb_sync_at', nowIso());
     const cr = { key: s.odb_key, name: s.odb_name };
     let added = 0;
+    const newRows = [];
     // 1) нові: з початку стрічки, доки не підуть уже відомі
     for (let p = 0; p < 5; p++) {
       const j = await odb(cr, 'GET', `/api/transactions?limit=${PAGE}&offset=${p * PAGE}`);
       const items = Array.isArray(j.items) ? j.items : [];
-      const { rows, fresh } = await saveTx(items);
+      const { rows, fresh, freshRows } = await saveTx(items);
       added += fresh;
+      newRows.push(...freshRows);
       if (items.length < PAGE || (rows.length && fresh === 0)) break;
     }
     // 2) історія — кілька сторінок за раз, з місця, де зупинились
@@ -358,6 +362,8 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
       if (paidIds.length) await db.run(`UPDATE pay_links SET odb_paid = 1, paid_at = COALESCE(paid_at, ?) WHERE odb_paid = 0 AND odb_id IN (SELECT value FROM json_each(?))`, [nowIso(), JSON.stringify(paidIds)]);
     }
     const paid = await relink();
+    // сповіщення: лише якщо історію вже завантажено (інакше це старі платежі)
+    await notify({ linkIds: paid, freshRows: hist.done ? newRows : [] }).catch(() => 0);
     const me = c.get('user');
     const minePaid = paid.length
       ? await db.all(`SELECT id, number, amount, client FROM pay_links WHERE created_by_id = ? AND id IN (SELECT value FROM json_each(?))`, [me.id, JSON.stringify(paid)])
@@ -405,6 +411,85 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
     if (linkId && !(await db.get(`SELECT id FROM pay_links WHERE id = ?`, [linkId]))) throw fail(404, 'Посилання не знайдено.');
     await db.run(`UPDATE odb_tx SET link_id = ?, manual = 1 WHERE id = ?`, [linkId, c.req.param('id')]);
     await relink();
+    return c.json({ ok: true });
+  });
+
+  // ---------------------------------------------------------------- аналітика оплат (власник і адміни)
+  const PERSON = 'person';
+  const payerKey = `CASE WHEN length(t.payer_code) = 10 THEN '${PERSON}' WHEN t.payer_code != '' THEN t.payer_code ELSE 'name:' || t.payer_name END`;
+  app.get('/api/odb/stats', async (c) => {
+    need(c, 'analytics');
+    const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v : '');
+    const from = day(c.req.query('from')) || '2000-01-01';
+    const to = day(c.req.query('to')) || '2999-12-31';
+    const cmpFrom = day(c.req.query('cmpFrom'));
+    const cmpTo = day(c.req.query('cmpTo'));
+    const group = ['day', 'week', 'month'].includes(c.req.query('group')) ? c.req.query('group') : 'day';
+    const accs = String(c.req.query('accounts') || '').split(',').filter(Boolean).slice(0, 40);
+    const payer = String(c.req.query('payer') || '');
+    const bucket = group === 'month' ? `substr(t.date, 1, 7)`
+      : group === 'week' ? `date(substr(t.date, 1, 10), 'weekday 0', '-6 days')` : `substr(t.date, 1, 10)`;
+    const scope = (f, tt) => {
+      const w = [`t.date >= ?`, `t.date <= ?`, `t.currency = 'UAH'`];
+      const p = [`${f}T00:00:00`, `${tt}T23:59:59`];
+      if (accs.length) { w.push(`t.iban IN (SELECT iban FROM odb_accounts WHERE id IN (SELECT value FROM json_each(?)))`); p.push(JSON.stringify(accs)); }
+      if (payer) { w.push(`${payerKey} = ?`); p.push(payer); }
+      return { w: `WHERE ${w.join(' AND ')}`, p };
+    };
+    const cur = scope(from, to);
+    const prev = cmpFrom && cmpTo ? scope(cmpFrom, cmpTo) : null;
+    const q = (sc, sql) => db.all(sql.replace('$W', sc.w), sc.p);
+    const [tot, series, byAcc, byPayer, ptot, pseries, pAcc, pPayer, accounts, names, range] = await Promise.all([
+      q(cur, `SELECT COUNT(*) AS cnt, COALESCE(SUM(t.amount), 0) AS sum FROM odb_tx t $W`),
+      q(cur, `SELECT ${bucket} AS k, COUNT(*) AS cnt, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY k ORDER BY k`),
+      q(cur, `SELECT t.iban, COUNT(*) AS cnt, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY t.iban`),
+      q(cur, `SELECT ${payerKey} AS k, MAX(t.payer_name) AS name, COUNT(*) AS cnt, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY k ORDER BY sum DESC LIMIT 40`),
+      prev ? q(prev, `SELECT COUNT(*) AS cnt, COALESCE(SUM(t.amount), 0) AS sum FROM odb_tx t $W`) : null,
+      prev ? q(prev, `SELECT ${bucket} AS k, COUNT(*) AS cnt, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY k ORDER BY k`) : null,
+      prev ? q(prev, `SELECT t.iban, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY t.iban`) : null,
+      prev ? q(prev, `SELECT ${payerKey} AS k, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY k`) : null,
+      db.all(`SELECT id, iban, alias, kind FROM odb_accounts ORDER BY sort, alias`),
+      db.all(`SELECT code, name FROM odb_payers`),
+      db.get(`SELECT MIN(date) AS min, MAX(date) AS max FROM odb_tx`),
+    ]);
+    const accBy = new Map(accounts.map((a) => [a.iban, a]));
+    const nameBy = new Map(names.map((n) => [n.code, n.name]));
+    const pA = new Map((pAcc || []).map((r) => [r.iban, r.sum]));
+    const pP = new Map((pPayer || []).map((r) => [r.k, r.sum]));
+    const s = await settings();
+    let hist = {};
+    try { hist = JSON.parse(s.odb_hist || '{}'); } catch { /* */ }
+    return c.json({
+      group,
+      total: { sum: round2(tot[0].sum), cnt: tot[0].cnt, avg: tot[0].cnt ? round2(tot[0].sum / tot[0].cnt) : 0 },
+      prevTotal: ptot ? { sum: round2(ptot[0].sum), cnt: ptot[0].cnt, avg: ptot[0].cnt ? round2(ptot[0].sum / ptot[0].cnt) : 0 } : null,
+      series: series.map((r) => ({ k: r.k, sum: round2(r.sum), cnt: r.cnt })),
+      prevSeries: pseries ? pseries.map((r) => ({ k: r.k, sum: round2(r.sum), cnt: r.cnt })) : null,
+      byAccount: byAcc.map((r) => {
+        const a = accBy.get(r.iban);
+        return { id: a?.id || '', iban: r.iban, name: a?.alias || r.iban || '—', kind: a?.kind || '', sum: round2(r.sum), cnt: r.cnt, prevSum: prev ? round2(pA.get(r.iban) || 0) : null };
+      }).sort((x, y) => y.sum - x.sum),
+      byPayer: byPayer.map((r) => ({
+        key: r.k,
+        name: r.k === PERSON ? 'Фізичні особи' : nameBy.get(r.k) || r.name || '—',
+        auto: r.k === PERSON ? '' : r.name || '',
+        code: r.k === PERSON || r.k.startsWith('name:') ? '' : r.k,
+        sum: round2(r.sum), cnt: r.cnt, prevSum: prev ? round2(pP.get(r.k) || 0) : null,
+      })),
+      accounts: accounts.map((a) => ({ id: a.id, name: a.alias, kind: a.kind })),
+      range: { min: range?.min?.slice(0, 10) || '', max: range?.max?.slice(0, 10) || '' },
+      lastSync: s.odb_sync_at || '',
+      hist,
+    });
+  });
+
+  // Своя назва для платника (група за ЄДРПОУ)
+  app.put('/api/odb/payers/:code', async (c) => {
+    need(c, 'analytics');
+    const code = c.req.param('code');
+    const name = String((await c.req.json()).name || '').trim().slice(0, 120);
+    if (!name) await db.run(`DELETE FROM odb_payers WHERE code = ?`, [code]);
+    else await db.run(`INSERT INTO odb_payers (code, name) VALUES (?, ?) ON CONFLICT(code) DO UPDATE SET name = excluded.name`, [code, name]);
     return c.json({ ok: true });
   });
 
