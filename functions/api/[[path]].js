@@ -3844,7 +3844,7 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     for (const a of empty) {
       const f = known.find((k) => norm(k.iban) === a.iban) || (a.code ? known.find((k) => String(k.ipn || "").trim() === a.code) : null);
       let base2 = a.alias || (f ? (f.full_name || f.short_name || "").trim() : "");
-      if (f && !/^(ФОП|ТОВ|ПП)\b/i.test(base2) && kindOf(a.code) === "fop") base2 = `\u0424\u041E\u041F ${base2}`;
+      if (f && !/^(ФОП|ТОВ|ПП)(\s|$)/i.test(base2) && kindOf(a.code) === "fop") base2 = `\u0424\u041E\u041F ${base2}`;
       if (!base2) continue;
       const bank = bankOf(a.iban);
       st.push([`UPDATE odb_accounts SET name = ? WHERE id = ?`, [bank && !base2.toLowerCase().includes(bank.toLowerCase()) ? `${base2} (${bank})` : base2, a.id]]);
