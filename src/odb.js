@@ -63,11 +63,17 @@ export async function txRow(item) {
     payer_name: String(t.counterpartyName || '').trim(),
     payer_code: String(t.counterpartyEdrpou || '').trim(),
     payer_acc: String(t.counterpartyAcc || '').replace(/\s/g, '').toUpperCase(),
+    our_code: String(t.edrpou || '').trim(),
     invoice_id: item.invoice?.id ? String(item.invoice.id) : null,
     possible: JSON.stringify(possible.slice(0, 10)),
     config_id: item.autoclientConfigId ? String(item.autoclientConfigId) : '',
   };
 }
+
+// Банк за МФО в IBAN (6 цифр після «UAxx»)
+const BANKS = { 305299: 'Приват', 322001: 'моно', 300465: 'Ощад', 300528: 'ОТП', 380805: 'Райффайзен', 334851: 'ПУМБ', 351005: 'УкрСиббанк', 320478: 'Укргазбанк', 322313: 'Укрексімбанк', 380775: 'Креді Агріколь', 339500: 'Глобус', 325365: 'Кредобанк', 336503: 'Ідея Банк', 320649: 'Sense', 380838: 'Південний', 313849: 'Таскомбанк' };
+export const bankOf = (iban) => BANKS[String(iban || '').replace(/\s/g, '').slice(4, 10)] || '';
+const ACC = `COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, ''), a.iban)`;
 
 export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, userName, base = ODB_BASE, notify = async () => 0 }) {
   const putSetting = (key, value) => db.run(
@@ -95,6 +101,36 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
     return j || {};
   }
 
+  // Рахунки, з яких приходять платежі (усі «Автоклієнти»), навіть якщо їх немає в налаштуваннях IBAN.
+  // Такі рахунки мають id «iban:UA…» і лише показують платежі; щоб створювати на них посилання — «Додати в Opendatabot».
+  async function addSeenAccounts() {
+    await db.batch([
+      [`UPDATE odb_accounts SET code = (SELECT MAX(t.our_code) FROM odb_tx t WHERE t.iban = odb_accounts.iban AND t.our_code != '')
+        WHERE code = '' AND EXISTS (SELECT 1 FROM odb_tx t WHERE t.iban = odb_accounts.iban AND t.our_code != '')`, []],
+      [`INSERT OR IGNORE INTO odb_accounts (id, iban, code, alias, kind, enabled, sort, seen)
+        SELECT 'iban:' || t.iban, t.iban, COALESCE(MAX(t.our_code), ''), '', CASE WHEN length(MAX(t.our_code)) = 8 THEN 'company' ELSE 'fop' END, 0, 1000, 1
+        FROM odb_tx t WHERE t.iban != '' AND t.iban NOT IN (SELECT iban FROM odb_accounts) GROUP BY t.iban`, []],
+      [`UPDATE odb_accounts SET kind = CASE WHEN length(code) = 8 THEN 'company' ELSE 'fop' END WHERE code != ''`, []],
+    ]);
+  }
+  // Назва за замовчуванням: з наших ФОПів (за IBAN або кодом) + банк; інакше — назва з Opendatabot.
+  async function fillNames() {
+    const empty = await db.all(`SELECT id, iban, code, alias FROM odb_accounts WHERE name = ''`);
+    if (!empty.length) return;
+    const known = await db.all(`SELECT full_name, short_name, ipn, iban FROM inv_fops UNION ALL SELECT full_name, short_name, ipn, iban FROM fops`);
+    const norm = (x) => String(x || '').replace(/\s/g, '').toUpperCase();
+    const st = [];
+    for (const a of empty) {
+      const f = known.find((k) => norm(k.iban) === a.iban) || (a.code ? known.find((k) => String(k.ipn || '').trim() === a.code) : null);
+      let base = a.alias || (f ? (f.full_name || f.short_name || '').trim() : '');
+      if (f && !/^(ФОП|ТОВ|ПП)\b/i.test(base) && kindOf(a.code) === 'fop') base = `ФОП ${base}`;
+      if (!base) continue;
+      const bank = bankOf(a.iban);
+      st.push([`UPDATE odb_accounts SET name = ? WHERE id = ?`, [bank && !base.toLowerCase().includes(bank.toLowerCase()) ? `${base} (${bank})` : base, a.id]]);
+    }
+    await db.batch(st);
+  }
+
   // ---------------------------------------------------------------- рахунки (IBAN) з Opendatabot
   app.get('/api/odb/accounts', async (c) => {
     need(c, 'docs.edit');
@@ -109,12 +145,17 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
          ON CONFLICT(id) DO UPDATE SET iban = excluded.iban, code = excluded.code, alias = excluded.alias, kind = excluded.kind, sort = excluded.sort`,
         [String(x.id), String(x.iban || '').replace(/\s/g, '').toUpperCase(), String(x.code || ''), String(x.alias || ''), kindOf(x.code), i],
       ]);
-      st.push([`DELETE FROM odb_accounts WHERE id NOT IN (SELECT value FROM json_each(?))`, [JSON.stringify(ids)]]);
+      // рахунки, яких більше немає в налаштуваннях IBAN, стають «лише платежі» (назва зберігається)
+      st.push([`UPDATE odb_accounts SET id = 'iban:' || iban, enabled = 0, seen = 1 WHERE id NOT LIKE 'iban:%' AND id NOT IN (SELECT value FROM json_each(?))
+        AND NOT EXISTS (SELECT 1 FROM odb_accounts b WHERE b.id = 'iban:' || odb_accounts.iban)`, [JSON.stringify(ids)]]);
+      st.push([`DELETE FROM odb_accounts WHERE id NOT LIKE 'iban:%' AND id NOT IN (SELECT value FROM json_each(?))`, [JSON.stringify(ids)]]);
       await db.batch(st);
     }
-    const rows = await db.all(`SELECT id, iban, code, alias, kind, enabled FROM odb_accounts ORDER BY sort, alias`);
+    await addSeenAccounts();
+    await fillNames();
+    const rows = await db.all(`SELECT id, iban, code, alias AS odb_alias, name, ${ACC} AS alias, kind, enabled, seen FROM odb_accounts a ORDER BY seen, sort, ${ACC}`);
     const s = await settings();
-    return c.json({ accounts: rows, connected: Boolean(s.odb_key && s.odb_name) });
+    return c.json({ accounts: rows.map((r) => ({ ...r, bank: bankOf(r.iban) })), connected: Boolean(s.odb_key && s.odb_name) });
   });
 
   // Увімкнути/вимкнути формування рахунків. ФОП також з'являється у «ФОПах рахунків» (для Word).
@@ -123,13 +164,25 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
     const acc = await db.get(`SELECT * FROM odb_accounts WHERE id = ?`, [c.req.param('id')]);
     if (!acc) throw fail(404, 'Рахунок не знайдено — оновіть список.');
     const b = await c.req.json();
+    if (b.name !== undefined) {
+      // Перейменування: у нас і (для налаштувань IBAN) — в Opendatabot
+      const name = String(b.name || '').trim().slice(0, 120);
+      await db.run(`UPDATE odb_accounts SET name = ? WHERE id = ?`, [name, acc.id]);
+      if (!acc.id.startsWith('iban:') && name) {
+        const cr = await creds().catch(() => null);
+        if (cr) await odb(cr, 'PUT', `/api/iban-settings/${encodeURIComponent(acc.id)}`, { alias: name }).catch(() => {});
+      }
+      if (!name) await fillNames();
+      return c.json({ ok: true });
+    }
+    if (acc.id.startsWith('iban:')) throw fail(400, 'Цей рахунок лише в «Автоклієнті». Щоб створювати на нього посилання, натисніть «Додати в Opendatabot».');
     const on = b.enabled ? 1 : 0;
     const st = [[`UPDATE odb_accounts SET enabled = ? WHERE id = ?`, [on, acc.id]]];
     if (acc.kind === 'fop') {
       if (on) {
         const ex = await db.get(`SELECT id FROM inv_fops WHERE odb_id = ? OR REPLACE(UPPER(iban), ' ', '') = ?`, [acc.id, acc.iban]);
         if (ex) st.push([`UPDATE inv_fops SET odb_id = ?, active = 1 WHERE id = ?`, [acc.id, ex.id]]);
-        else st.push([`INSERT INTO inv_fops (short_name, full_name, ipn, iban, odb_id, active) VALUES (?, '', ?, ?, ?, 1)`, [acc.alias || `ФОП ${acc.code}`, acc.code, acc.iban, acc.id]]);
+        else st.push([`INSERT INTO inv_fops (short_name, full_name, ipn, iban, odb_id, active) VALUES (?, '', ?, ?, ?, 1)`, [acc.name || acc.alias || `ФОП ${acc.code}`, acc.code, acc.iban, acc.id]]);
       } else {
         st.push([`UPDATE inv_fops SET active = 0 WHERE odb_id = ?`, [acc.id]]);
       }
@@ -138,9 +191,28 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
     return c.json({ ok: true });
   });
 
+  // Рахунок з «Автоклієнта» → налаштування IBAN в Opendatabot (тоді на нього можна створювати посилання)
+  app.post('/api/odb/accounts/:id/register', async (c) => {
+    need(c, 'api');
+    const acc = await db.get(`SELECT * FROM odb_accounts WHERE id = ?`, [c.req.param('id')]);
+    if (!acc || !acc.id.startsWith('iban:')) throw fail(400, 'Цей рахунок уже є в Opendatabot.');
+    const b = await c.req.json().catch(() => ({}));
+    const code = String(b.code || acc.code || '').trim();
+    if (!/^(\d{8}|\d{10})$/.test(code)) throw fail(400, 'Вкажіть код: ЄДРПОУ (8 цифр) для ТОВ/ПП або РНОКПП (10 цифр) для ФОП.');
+    const cr = await creds();
+    const r = await odb(cr, 'POST', '/api/iban-settings', { iban: acc.iban, code, alias: acc.name || '' });
+    if (!r.id) throw fail(502, 'Opendatabot не повернув ідентифікатор рахунку.');
+    await db.batch([
+      [`DELETE FROM odb_accounts WHERE id = ?`, [acc.id]],
+      [`INSERT OR REPLACE INTO odb_accounts (id, iban, code, alias, kind, enabled, sort, seen, name) VALUES (?, ?, ?, ?, ?, 0, 500, 0, ?)`,
+        [String(r.id), acc.iban, code, String(r.alias || ''), kindOf(code), acc.name || '']],
+    ]);
+    return c.json({ ok: true, id: String(r.id) });
+  });
+
   // ---------------------------------------------------------------- посилання на оплату
   const LINK_COLS = `l.id, l.odb_id, l.number, l.order_ref, l.account_id, l.amount, l.purpose, l.client, l.url, l.page, l.status, l.paid_amount, l.paid_at,
-    l.rahunok_id, l.created_at, l.created_by_id, l.created_by, a.alias AS account_alias, a.kind AS account_kind, a.iban AS account_iban`;
+    l.rahunok_id, l.created_at, l.created_by_id, l.created_by, ${ACC} AS account_alias, a.kind AS account_kind, a.iban AS account_iban`;
 
   async function nextManualNumber() {
     const s = await settings();
@@ -267,11 +339,12 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
     const known = new Set((await db.all(`SELECT id FROM odb_tx WHERE id IN (SELECT value FROM json_each(?))`, [JSON.stringify(rows.map((r) => r.id))])).map((r) => r.id));
     const now = nowIso();
     await db.batch(rows.map((r) => [
-      `INSERT INTO odb_tx (id, date, amount, currency, purpose, iban, payer_name, payer_code, payer_acc, invoice_id, possible, config_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET invoice_id = COALESCE(odb_tx.invoice_id, excluded.invoice_id), possible = excluded.possible`,
-      [r.id, r.date, r.amount, r.currency, r.purpose, r.iban, r.payer_name, r.payer_code, r.payer_acc, r.invoice_id, r.possible, r.config_id, now],
+      `INSERT INTO odb_tx (id, date, amount, currency, purpose, iban, payer_name, payer_code, payer_acc, invoice_id, possible, config_id, our_code, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET invoice_id = COALESCE(odb_tx.invoice_id, excluded.invoice_id), possible = excluded.possible, our_code = excluded.our_code`,
+      [r.id, r.date, r.amount, r.currency, r.purpose, r.iban, r.payer_name, r.payer_code, r.payer_acc, r.invoice_id, r.possible, r.config_id, r.our_code, now],
     ]));
+    await addSeenAccounts();
     const freshRows = rows.filter((r) => !known.has(r.id));
     return { rows, fresh: freshRows.length, freshRows };
   }
@@ -340,6 +413,8 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
     // 2) історія — кілька сторінок за раз, з місця, де зупинились
     let hist = {};
     try { hist = JSON.parse(s.odb_hist || '{}'); } catch { /* */ }
+    // одноразово перечитати історію, щоб дізнатися коди власників рахунків (нове поле)
+    if (!s.odb_hist_v2) { hist = {}; await putSetting('odb_hist_v2', '1'); }
     if (!hist.done) {
       let off = hist.offset || 0;
       for (let p = 0; p < 3; p++) { // небагато сторінок за раз — ліміт процесорного часу Cloudflare
@@ -390,12 +465,12 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
     const [rows, tot, accounts] = await Promise.all([
       db.all(
         `SELECT t.id, t.date, t.amount, t.currency, t.purpose, t.iban, t.payer_name, t.payer_code, t.possible, t.link_id, t.manual,
-                l.number AS link_number, l.status AS link_status, l.created_by AS link_author, a.alias AS account_alias, a.kind AS account_kind
+                l.number AS link_number, l.status AS link_status, l.created_by AS link_author, ${ACC} AS account_alias, a.kind AS account_kind
          FROM odb_tx t LEFT JOIN pay_links l ON l.id = t.link_id LEFT JOIN odb_accounts a ON a.iban = t.iban
          ${w} ORDER BY t.date DESC LIMIT 500`, params,
       ),
       db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN t.currency = 'UAH' THEN t.amount END), 0) AS sum FROM odb_tx t LEFT JOIN pay_links l ON l.id = t.link_id ${w}`, params),
-      db.all(`SELECT id, alias, kind FROM odb_accounts ORDER BY sort, alias`),
+      db.all(`SELECT id, ${ACC} AS alias, kind FROM odb_accounts a ORDER BY seen, sort, alias`),
     ]);
     const s = await settings();
     let hist = {};
@@ -448,7 +523,7 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
       prev ? q(prev, `SELECT ${bucket} AS k, COUNT(*) AS cnt, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY k ORDER BY k`) : null,
       prev ? q(prev, `SELECT t.iban, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY t.iban`) : null,
       prev ? q(prev, `SELECT ${payerKey} AS k, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY k`) : null,
-      db.all(`SELECT id, iban, alias, kind FROM odb_accounts ORDER BY sort, alias`),
+      db.all(`SELECT id, iban, ${ACC} AS alias, kind FROM odb_accounts a ORDER BY seen, sort, alias`),
       db.all(`SELECT code, name FROM odb_payers`),
       db.get(`SELECT MIN(date) AS min, MAX(date) AS max FROM odb_tx`),
     ]);

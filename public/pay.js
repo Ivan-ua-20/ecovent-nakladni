@@ -359,14 +359,40 @@ export function createPayUI(ctx) {
       const box = $('#odbAccs');
       box.innerHTML = '<span class="spinner"></span>';
       try {
+        if (refresh) await api('POST', '/api/odb/sync', { force: true }).catch(() => null); // підтягнути рахунки з платежів «Автоклієнтів»
         const { accounts, connected } = await api('GET', `/api/odb/accounts${refresh ? '?refresh=1' : ''}`);
         if (!connected) { box.innerHTML = '<div class="small muted">Вкажіть ключ і назву клієнта — список рахунків підтягнеться автоматично.</div>'; return; }
-        box.innerHTML = accounts.length ? `<div class="table-wrap"><table class="list"><thead><tr><th>Формувати</th><th>Назва</th><th>Тип</th><th>IBAN</th><th>Код</th></tr></thead><tbody>
-          ${accounts.map((a) => `<tr><td><label class="switch"><input type="checkbox" data-acc="${esc(a.id)}" ${a.enabled ? 'checked' : ''} aria-label="Формувати рахунки на ${esc(a.alias)}"><span></span></label></td>
-            <td><b>${esc(a.alias)}</b></td><td>${KIND[a.kind]}</td><td class="small mono">${esc(a.iban)}</td><td class="small">${esc(a.code)}</td></tr>`).join('')}</tbody></table></div>`
+        const seen = accounts.filter((x) => x.seen).length;
+        box.innerHTML = accounts.length ? `<div class="table-wrap"><table class="list odb-accs"><thead><tr><th>Формувати</th><th>Назва</th><th>Банк</th><th>Тип</th><th>IBAN</th><th>Код</th></tr></thead><tbody>
+          ${accounts.map((a) => `<tr class="${a.seen ? 'acc-seen' : ''}"><td>${a.seen
+            ? '<button type="button" class="btn sm" data-reg="' + esc(a.id) + '" data-code="' + esc(a.code) + '">Додати в Opendatabot</button>'
+            : `<label class="switch"><input type="checkbox" data-acc="${esc(a.id)}" ${a.enabled ? 'checked' : ''} aria-label="Формувати рахунки на ${esc(a.alias)}"><span></span></label>`}</td>
+            <td><b>${esc(a.name || a.odb_alias || '')}</b>${!a.name && !a.odb_alias ? '<span class="muted small">без назви</span>' : ''}
+              <button type="button" class="linkbtn ap-ren" data-ren="${esc(a.id)}" data-name="${esc(a.name || a.odb_alias || '')}" aria-label="Перейменувати">✎</button></td>
+            <td class="small">${esc(a.bank || '')}</td><td>${KIND[a.kind] || ''}</td><td class="small mono">${esc(a.iban)}</td><td class="small">${esc(a.code)}</td></tr>`).join('')}</tbody></table></div>
+          ${seen ? `<div class="small muted">Рахунки з кнопкою «Додати в Opendatabot» знайдено в платежах «Автоклієнтів». Платежі по них уже видно; щоб створювати на них посилання, додайте їх у налаштування IBAN Opendatabot (кнопка зробить це сама).</div>` : ''}
+          <div class="small muted">Рахунки, на які ще не надходило жодного платежу, з’являться тут після першого надходження або після «Оновити список».</div>`
           : '<div class="small muted">У кабінеті Opendatabot ще немає рахунків.</div>';
         $$('[data-acc]', box).forEach((i) => (i.onchange = async () => {
           try { await api('PUT', `/api/odb/accounts/${encodeURIComponent(i.dataset.acc)}`, { enabled: i.checked }); toast(i.checked ? 'Рахунок увімкнено' : 'Рахунок вимкнено'); await ctx.reloadBoot?.(); } catch (er) { i.checked = !i.checked; toast(er.message, true); }
+        }));
+        $$('[data-ren]', box).forEach((b) => (b.onclick = () => {
+          const m = modal('Назва рахунку', `<form id="anF" class="form-stack"><label class="f"><span>Назва (видно в посиланнях, платежах і аналітиці)</span>
+            <input name="name" value="${esc(b.dataset.name)}" maxlength="120" placeholder="Напр. ФОП Агафіца Вероніка (Приват)"></label>
+            <div class="small muted">Залиште порожнім, щоб назва підставилась автоматично.</div></form>`,
+          { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="anGo">Зберегти</button>' });
+          const go = async () => { try { await api('PUT', `/api/odb/accounts/${encodeURIComponent(b.dataset.ren)}`, { name: $('#anF', m.el).name.value }); m.close(); toast('Назву збережено'); drawAccs(false); } catch (er) { toast(er.message, true); } };
+          $('#anGo', m.el).onclick = go;
+          $('#anF', m.el).onsubmit = (e) => { e.preventDefault(); go(); };
+        }));
+        $$('[data-reg]', box).forEach((b) => (b.onclick = async () => {
+          let code = b.dataset.code;
+          if (!/^(\d{8}|\d{10})$/.test(code)) {
+            code = (prompt('Код власника рахунку: РНОКПП (10 цифр) для ФОП або ЄДРПОУ (8 цифр) для ТОВ/ПП') || '').trim();
+            if (!code) return;
+          }
+          b.disabled = true;
+          try { await api('POST', `/api/odb/accounts/${encodeURIComponent(b.dataset.reg)}/register`, { code }); toast('Рахунок додано — тепер його можна ввімкнути'); drawAccs(false); } catch (er) { b.disabled = false; toast(er.message, true); }
         }));
       } catch (er) { box.innerHTML = `<div class="alert bad">${esc(er.message)}</div>`; }
     }

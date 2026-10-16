@@ -101,7 +101,7 @@ export function mountTg(app, { db, fetchFn, settings, need, fail }) {
     const admins = await db.all(`SELECT id, tg_chat_id, tg_all_links, tg_all_tx FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin') AND (tg_all_links = 1 OR tg_all_tx = 1)`);
     if (linkIds.length) {
       const links = await db.all(
-        `SELECT l.id, l.number, l.amount, l.paid_amount, l.status, l.client, l.created_by_id, l.created_by, a.alias, u.tg_chat_id AS chat
+        `SELECT l.id, l.number, l.amount, l.paid_amount, l.status, l.client, l.created_by_id, l.created_by, COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, ''), a.iban) AS alias, u.tg_chat_id AS chat
          FROM pay_links l LEFT JOIN odb_accounts a ON a.id = l.account_id LEFT JOIN users u ON u.id = l.created_by_id AND u.active = 1
          WHERE l.id IN (SELECT value FROM json_each(?))`, [JSON.stringify(linkIds)],
       );
@@ -118,7 +118,7 @@ export function mountTg(app, { db, fetchFn, settings, need, fail }) {
     const recent = freshRows.filter((r) => r.date >= since);
     const txAdmins = admins.filter((a) => a.tg_all_tx);
     if (recent.length && txAdmins.length) {
-      const accs = new Map((await db.all(`SELECT iban, alias FROM odb_accounts`)).map((a) => [a.iban, a.alias]));
+      const accs = new Map((await db.all(`SELECT iban, COALESCE(NULLIF(name, ''), NULLIF(alias, ''), iban) AS alias FROM odb_accounts`)).map((a) => [a.iban, a.alias]));
       const texts = recent.length > 5
         ? [`<b>💰 Нові надходження: ${recent.length}</b> на суму ${uah(recent.reduce((t, r) => t + r.amount, 0))}`]
         : recent.map((r) => `<b>💰 ${uah(r.amount)}</b> → ${h(accs.get(r.iban) || r.iban)}\nВід: ${h(r.payer_name || '—')}\n<i>${h(r.purpose).slice(0, 200)}</i>`);

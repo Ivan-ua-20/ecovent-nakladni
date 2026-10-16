@@ -48,6 +48,8 @@ const fetchFn = async (url, opts = {}) => {
   const key = `${opts.method} ${u.pathname.replace(/\/[0-9a-f]{24}\//, '/:id/')}`;
   calls[key] = (calls[key] || 0) + 1;
   const json = (o, status = 200) => new Response(JSON.stringify(o), { status });
+  if (u.pathname === '/api/iban-settings' && opts.method === 'POST') { const b = JSON.parse(opts.body); const x = { id: `new${ACCS.length}`, ...b, alias: b.alias || '' }; ACCS.push(x); return json(x, 201); }
+  if (u.pathname.startsWith('/api/iban-settings/') && opts.method === 'PUT') { const x = ACCS.find((a) => a.id === u.pathname.split('/').pop()); Object.assign(x, JSON.parse(opts.body)); return json(x); }
   if (u.pathname === '/api/iban-settings') return json({ ibanSettings: ACCS });
   if (u.pathname === '/api/invoice' && opts.method === 'POST') {
     const b = JSON.parse(opts.body);
@@ -98,7 +100,7 @@ assert.equal(await status(() => req('POST', '/api/odb/links', { account_id: 'a1'
 await req('PUT', '/api/odb/accounts/a1', { enabled: true });
 await req('PUT', '/api/odb/accounts/a3', { enabled: true });
 const fops = await db.all(`SELECT short_name, ipn, iban, odb_id, active FROM inv_fops WHERE odb_id != ''`);
-assert.deepEqual(fops.map((x) => ({ ...x })), [{ short_name: 'ФОП Лупу В.Ф.', ipn: '2882618253', iban: ACCS[0].iban, odb_id: 'a1', active: 1 }], 'увімкнений ФОП з’явився у ФОПах рахунків, ТОВ — ні');
+assert.deepEqual(fops.map((x) => ({ ...x })), [{ short_name: 'ФОП Лупу В.Ф. (Приват)', ipn: '2882618253', iban: ACCS[0].iban, odb_id: 'a1', active: 1 }], 'увімкнений ФОП з’явився у ФОПах рахунків, ТОВ — ні');
 
 // ---------- 2. Посилання ----------
 const n0 = Number((await req('GET', '/api/odb/links')).nextNumber);
@@ -206,6 +208,26 @@ assert.equal((await req('GET', '/api/odb/payments?tab=mine', null, MH)).count, 1
 assert.equal(await status(() => req('PUT', '/api/odb/accounts/a2', { enabled: true }, MH)), 403, 'вмикати рахунки — лише адміни');
 assert.equal(await status(() => req('GET', '/api/odb/accounts?refresh=1', null, MH)), 403);
 
+// ---------- 6b. Рахунки з «Автоклієнтів», назви ----------
+const OTHER = 'UA333220010000026000000000777';
+feed.unshift(tx(980, { iban: OTHER, amount: 1000 }));
+feed[0].transaction.edrpou = '3137919599';
+await req('POST', '/api/odb/sync', { force: true });
+let accs2 = (await req('GET', '/api/odb/accounts')).accounts;
+const seenAcc = accs2.find((a) => a.iban === OTHER);
+assert.ok(seenAcc && seenAcc.seen && seenAcc.id === `iban:${OTHER}` && seenAcc.code === '3137919599' && seenAcc.kind === 'fop', 'рахунок з платежів «Автоклієнта» з’явився');
+assert.equal(seenAcc.bank, 'моно');
+assert.equal(await status(() => req('PUT', `/api/odb/accounts/${encodeURIComponent(seenAcc.id)}`, { enabled: true })), 400, 'лише платежі — без формування');
+await req('PUT', `/api/odb/accounts/${encodeURIComponent(seenAcc.id)}`, { name: 'ФОП Агафіца Даніела (моно)' });
+assert.ok((await req('GET', '/api/odb/payments')).rows.some((r) => r.account_alias === 'ФОП Агафіца Даніела (моно)'), 'назва в платежах');
+const reg = await req('POST', `/api/odb/accounts/${encodeURIComponent(seenAcc.id)}/register`, {});
+assert.ok(ACCS.some((a) => a.iban === OTHER && a.alias === 'ФОП Агафіца Даніела (моно)'), 'додано в Opendatabot з назвою');
+accs2 = (await req('GET', '/api/odb/accounts?refresh=1')).accounts;
+const regAcc = accs2.find((a) => a.iban === OTHER);
+assert.ok(regAcc.id === reg.id && !regAcc.seen && regAcc.name === 'ФОП Агафіца Даніела (моно)', 'тепер можна формувати, назва збереглась');
+await req('PUT', '/api/odb/accounts/a2', { name: 'ФОП Агафіца А.М. (моно)' });
+assert.equal(ACCS.find((a) => a.id === 'a2').alias, 'ФОП Агафіца А.М. (моно)', 'перейменування передається в Opendatabot');
+
 // ---------- 7. Telegram ----------
 assert.equal(await status(() => req('POST', '/api/tg/link')), 400, 'без бота — зрозуміла помилка');
 assert.equal(await status(() => req('PUT', '/api/tg/settings', { token: '123:abc' })), 400, 'перевірка формату токена');
@@ -250,12 +272,12 @@ assert.ok(Math.abs(st.total.sum - exp26.s) < 0.01);
 assert.equal(st.series.reduce((t, r) => t + r.cnt, 0), exp26.n, 'стовпчики по місяцях сходяться з підсумком');
 assert.ok(st.series.every((r) => /^2026-\d{2}$/.test(r.k)));
 assert.equal(st.prevTotal.cnt, 1, 'порівняння з попереднім періодом');
-assert.ok(st.byAccount.some((a) => a.name === 'ТОВ Ековент'));
+assert.ok(st.byAccount.some((a) => a.name.startsWith('ТОВ Ековент')));
 assert.ok(st.byPayer.some((p) => p.code === '37193071'), 'платник за ЄДРПОУ');
 const wk = await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31&group=week');
 assert.ok(wk.series.every((r) => new Date(r.k + 'T00:00:00Z').getUTCDay() === 1), 'тижні з понеділка');
 const onlyTov = await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31&accounts=a3');
-assert.ok(onlyTov.byAccount.length === 1 && onlyTov.byAccount[0].name === 'ТОВ Ековент', 'фільтр за рахунком');
+assert.ok(onlyTov.byAccount.length === 1 && onlyTov.byAccount[0].name.startsWith('ТОВ Ековент'), 'фільтр за рахунком');
 await req('PUT', '/api/odb/payers/37193071', { name: 'Rozetka' });
 assert.equal((await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31')).byPayer.find((p) => p.code === '37193071').name, 'Rozetka', 'своя назва платника');
 const onlyPayer = await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31&payer=37193071');

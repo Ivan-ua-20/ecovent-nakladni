@@ -2267,6 +2267,9 @@ var ADD_COLUMNS = [
   ["users", "tg_code", "TEXT DEFAULT ''"],
   ["users", "tg_all_links", "INTEGER DEFAULT 0"],
   ["users", "tg_all_tx", "INTEGER DEFAULT 0"],
+  ["odb_accounts", "name", "TEXT DEFAULT ''"],
+  ["odb_accounts", "seen", "INTEGER DEFAULT 0"],
+  ["odb_tx", "our_code", "TEXT DEFAULT ''"],
   ["channels", "seller_text", "TEXT DEFAULT ''"],
   ["versions", "user_name", "TEXT DEFAULT ''"],
   ["users", "failed_logins", "INTEGER DEFAULT 0"],
@@ -2275,7 +2278,7 @@ var ADD_COLUMNS = [
   ["an_products", "cat_manual", "INTEGER"],
   ["an_products", "seen", "INTEGER NOT NULL DEFAULT 0"]
 ];
-var SCHEMA_VERSION = "15";
+var SCHEMA_VERSION = "16";
 var MP_SOURCES = [
   ["Rozetka (OneDay)", ["rozetka(oneday)"]],
   ["Rozetka (Ecovent)", ["rozetka(ecovent)"]],
@@ -3784,11 +3787,15 @@ async function txRow(item) {
     payer_name: String(t.counterpartyName || "").trim(),
     payer_code: String(t.counterpartyEdrpou || "").trim(),
     payer_acc: String(t.counterpartyAcc || "").replace(/\s/g, "").toUpperCase(),
+    our_code: String(t.edrpou || "").trim(),
     invoice_id: item.invoice?.id ? String(item.invoice.id) : null,
     possible: JSON.stringify(possible.slice(0, 10)),
     config_id: item.autoclientConfigId ? String(item.autoclientConfigId) : ""
   };
 }
+var BANKS = { 305299: "\u041F\u0440\u0438\u0432\u0430\u0442", 322001: "\u043C\u043E\u043D\u043E", 300465: "\u041E\u0449\u0430\u0434", 300528: "\u041E\u0422\u041F", 380805: "\u0420\u0430\u0439\u0444\u0444\u0430\u0439\u0437\u0435\u043D", 334851: "\u041F\u0423\u041C\u0411", 351005: "\u0423\u043A\u0440\u0421\u0438\u0431\u0431\u0430\u043D\u043A", 320478: "\u0423\u043A\u0440\u0433\u0430\u0437\u0431\u0430\u043D\u043A", 322313: "\u0423\u043A\u0440\u0435\u043A\u0441\u0456\u043C\u0431\u0430\u043D\u043A", 380775: "\u041A\u0440\u0435\u0434\u0456 \u0410\u0433\u0440\u0456\u043A\u043E\u043B\u044C", 339500: "\u0413\u043B\u043E\u0431\u0443\u0441", 325365: "\u041A\u0440\u0435\u0434\u043E\u0431\u0430\u043D\u043A", 336503: "\u0406\u0434\u0435\u044F \u0411\u0430\u043D\u043A", 320649: "Sense", 380838: "\u041F\u0456\u0432\u0434\u0435\u043D\u043D\u0438\u0439", 313849: "\u0422\u0430\u0441\u043A\u043E\u043C\u0431\u0430\u043D\u043A" };
+var bankOf = (iban) => BANKS[String(iban || "").replace(/\s/g, "").slice(4, 10)] || "";
+var ACC = `COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, ''), a.iban)`;
 function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can: can2, userName, base = ODB_BASE, notify = async () => 0 }) {
   const putSetting = (key, value) => db.run(
     `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
@@ -3818,6 +3825,32 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     }
     return j || {};
   }
+  async function addSeenAccounts() {
+    await db.batch([
+      [`UPDATE odb_accounts SET code = (SELECT MAX(t.our_code) FROM odb_tx t WHERE t.iban = odb_accounts.iban AND t.our_code != '')
+        WHERE code = '' AND EXISTS (SELECT 1 FROM odb_tx t WHERE t.iban = odb_accounts.iban AND t.our_code != '')`, []],
+      [`INSERT OR IGNORE INTO odb_accounts (id, iban, code, alias, kind, enabled, sort, seen)
+        SELECT 'iban:' || t.iban, t.iban, COALESCE(MAX(t.our_code), ''), '', CASE WHEN length(MAX(t.our_code)) = 8 THEN 'company' ELSE 'fop' END, 0, 1000, 1
+        FROM odb_tx t WHERE t.iban != '' AND t.iban NOT IN (SELECT iban FROM odb_accounts) GROUP BY t.iban`, []],
+      [`UPDATE odb_accounts SET kind = CASE WHEN length(code) = 8 THEN 'company' ELSE 'fop' END WHERE code != ''`, []]
+    ]);
+  }
+  async function fillNames() {
+    const empty = await db.all(`SELECT id, iban, code, alias FROM odb_accounts WHERE name = ''`);
+    if (!empty.length) return;
+    const known = await db.all(`SELECT full_name, short_name, ipn, iban FROM inv_fops UNION ALL SELECT full_name, short_name, ipn, iban FROM fops`);
+    const norm = (x) => String(x || "").replace(/\s/g, "").toUpperCase();
+    const st = [];
+    for (const a of empty) {
+      const f = known.find((k) => norm(k.iban) === a.iban) || (a.code ? known.find((k) => String(k.ipn || "").trim() === a.code) : null);
+      let base2 = a.alias || (f ? (f.full_name || f.short_name || "").trim() : "");
+      if (f && !/^(ФОП|ТОВ|ПП)\b/i.test(base2) && kindOf(a.code) === "fop") base2 = `\u0424\u041E\u041F ${base2}`;
+      if (!base2) continue;
+      const bank = bankOf(a.iban);
+      st.push([`UPDATE odb_accounts SET name = ? WHERE id = ?`, [bank && !base2.toLowerCase().includes(bank.toLowerCase()) ? `${base2} (${bank})` : base2, a.id]]);
+    }
+    await db.batch(st);
+  }
   app.get("/api/odb/accounts", async (c) => {
     need(c, "docs.edit");
     if (c.req.query("refresh")) {
@@ -3831,25 +3864,41 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
          ON CONFLICT(id) DO UPDATE SET iban = excluded.iban, code = excluded.code, alias = excluded.alias, kind = excluded.kind, sort = excluded.sort`,
         [String(x.id), String(x.iban || "").replace(/\s/g, "").toUpperCase(), String(x.code || ""), String(x.alias || ""), kindOf(x.code), i]
       ]);
-      st.push([`DELETE FROM odb_accounts WHERE id NOT IN (SELECT value FROM json_each(?))`, [JSON.stringify(ids)]]);
+      st.push([`UPDATE odb_accounts SET id = 'iban:' || iban, enabled = 0, seen = 1 WHERE id NOT LIKE 'iban:%' AND id NOT IN (SELECT value FROM json_each(?))
+        AND NOT EXISTS (SELECT 1 FROM odb_accounts b WHERE b.id = 'iban:' || odb_accounts.iban)`, [JSON.stringify(ids)]]);
+      st.push([`DELETE FROM odb_accounts WHERE id NOT LIKE 'iban:%' AND id NOT IN (SELECT value FROM json_each(?))`, [JSON.stringify(ids)]]);
       await db.batch(st);
     }
-    const rows = await db.all(`SELECT id, iban, code, alias, kind, enabled FROM odb_accounts ORDER BY sort, alias`);
+    await addSeenAccounts();
+    await fillNames();
+    const rows = await db.all(`SELECT id, iban, code, alias AS odb_alias, name, ${ACC} AS alias, kind, enabled, seen FROM odb_accounts a ORDER BY seen, sort, ${ACC}`);
     const s = await settings();
-    return c.json({ accounts: rows, connected: Boolean(s.odb_key && s.odb_name) });
+    return c.json({ accounts: rows.map((r) => ({ ...r, bank: bankOf(r.iban) })), connected: Boolean(s.odb_key && s.odb_name) });
   });
   app.put("/api/odb/accounts/:id", async (c) => {
     need(c, "api");
     const acc = await db.get(`SELECT * FROM odb_accounts WHERE id = ?`, [c.req.param("id")]);
     if (!acc) throw fail(404, "\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u043F\u0438\u0441\u043E\u043A.");
     const b = await c.req.json();
+    if (b.name !== void 0) {
+      const name = String(b.name || "").trim().slice(0, 120);
+      await db.run(`UPDATE odb_accounts SET name = ? WHERE id = ?`, [name, acc.id]);
+      if (!acc.id.startsWith("iban:") && name) {
+        const cr = await creds().catch(() => null);
+        if (cr) await odb(cr, "PUT", `/api/iban-settings/${encodeURIComponent(acc.id)}`, { alias: name }).catch(() => {
+        });
+      }
+      if (!name) await fillNames();
+      return c.json({ ok: true });
+    }
+    if (acc.id.startsWith("iban:")) throw fail(400, "\u0426\u0435\u0439 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043B\u0438\u0448\u0435 \u0432 \xAB\u0410\u0432\u0442\u043E\u043A\u043B\u0456\u0454\u043D\u0442\u0456\xBB. \u0429\u043E\u0431 \u0441\u0442\u0432\u043E\u0440\u044E\u0432\u0430\u0442\u0438 \u043D\u0430 \u043D\u044C\u043E\u0433\u043E \u043F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F, \u043D\u0430\u0442\u0438\u0441\u043D\u0456\u0442\u044C \xAB\u0414\u043E\u0434\u0430\u0442\u0438 \u0432 Opendatabot\xBB.");
     const on = b.enabled ? 1 : 0;
     const st = [[`UPDATE odb_accounts SET enabled = ? WHERE id = ?`, [on, acc.id]]];
     if (acc.kind === "fop") {
       if (on) {
         const ex = await db.get(`SELECT id FROM inv_fops WHERE odb_id = ? OR REPLACE(UPPER(iban), ' ', '') = ?`, [acc.id, acc.iban]);
         if (ex) st.push([`UPDATE inv_fops SET odb_id = ?, active = 1 WHERE id = ?`, [acc.id, ex.id]]);
-        else st.push([`INSERT INTO inv_fops (short_name, full_name, ipn, iban, odb_id, active) VALUES (?, '', ?, ?, ?, 1)`, [acc.alias || `\u0424\u041E\u041F ${acc.code}`, acc.code, acc.iban, acc.id]]);
+        else st.push([`INSERT INTO inv_fops (short_name, full_name, ipn, iban, odb_id, active) VALUES (?, '', ?, ?, ?, 1)`, [acc.name || acc.alias || `\u0424\u041E\u041F ${acc.code}`, acc.code, acc.iban, acc.id]]);
       } else {
         st.push([`UPDATE inv_fops SET active = 0 WHERE odb_id = ?`, [acc.id]]);
       }
@@ -3857,8 +3906,27 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     await db.batch(st);
     return c.json({ ok: true });
   });
+  app.post("/api/odb/accounts/:id/register", async (c) => {
+    need(c, "api");
+    const acc = await db.get(`SELECT * FROM odb_accounts WHERE id = ?`, [c.req.param("id")]);
+    if (!acc || !acc.id.startsWith("iban:")) throw fail(400, "\u0426\u0435\u0439 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u0443\u0436\u0435 \u0454 \u0432 Opendatabot.");
+    const b = await c.req.json().catch(() => ({}));
+    const code = String(b.code || acc.code || "").trim();
+    if (!/^(\d{8}|\d{10})$/.test(code)) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043A\u043E\u0434: \u0404\u0414\u0420\u041F\u041E\u0423 (8 \u0446\u0438\u0444\u0440) \u0434\u043B\u044F \u0422\u041E\u0412/\u041F\u041F \u0430\u0431\u043E \u0420\u041D\u041E\u041A\u041F\u041F (10 \u0446\u0438\u0444\u0440) \u0434\u043B\u044F \u0424\u041E\u041F.");
+    const cr = await creds();
+    const r = await odb(cr, "POST", "/api/iban-settings", { iban: acc.iban, code, alias: acc.name || "" });
+    if (!r.id) throw fail(502, "Opendatabot \u043D\u0435 \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u0432 \u0456\u0434\u0435\u043D\u0442\u0438\u0444\u0456\u043A\u0430\u0442\u043E\u0440 \u0440\u0430\u0445\u0443\u043D\u043A\u0443.");
+    await db.batch([
+      [`DELETE FROM odb_accounts WHERE id = ?`, [acc.id]],
+      [
+        `INSERT OR REPLACE INTO odb_accounts (id, iban, code, alias, kind, enabled, sort, seen, name) VALUES (?, ?, ?, ?, ?, 0, 500, 0, ?)`,
+        [String(r.id), acc.iban, code, String(r.alias || ""), kindOf(code), acc.name || ""]
+      ]
+    ]);
+    return c.json({ ok: true, id: String(r.id) });
+  });
   const LINK_COLS = `l.id, l.odb_id, l.number, l.order_ref, l.account_id, l.amount, l.purpose, l.client, l.url, l.page, l.status, l.paid_amount, l.paid_at,
-    l.rahunok_id, l.created_at, l.created_by_id, l.created_by, a.alias AS account_alias, a.kind AS account_kind, a.iban AS account_iban`;
+    l.rahunok_id, l.created_at, l.created_by_id, l.created_by, ${ACC} AS account_alias, a.kind AS account_kind, a.iban AS account_iban`;
   async function nextManualNumber() {
     const s = await settings();
     const n = Number(s.rahunok_next_number) || 10516;
@@ -3988,11 +4056,12 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     const known = new Set((await db.all(`SELECT id FROM odb_tx WHERE id IN (SELECT value FROM json_each(?))`, [JSON.stringify(rows.map((r) => r.id))])).map((r) => r.id));
     const now = nowIso2();
     await db.batch(rows.map((r) => [
-      `INSERT INTO odb_tx (id, date, amount, currency, purpose, iban, payer_name, payer_code, payer_acc, invoice_id, possible, config_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET invoice_id = COALESCE(odb_tx.invoice_id, excluded.invoice_id), possible = excluded.possible`,
-      [r.id, r.date, r.amount, r.currency, r.purpose, r.iban, r.payer_name, r.payer_code, r.payer_acc, r.invoice_id, r.possible, r.config_id, now]
+      `INSERT INTO odb_tx (id, date, amount, currency, purpose, iban, payer_name, payer_code, payer_acc, invoice_id, possible, config_id, our_code, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET invoice_id = COALESCE(odb_tx.invoice_id, excluded.invoice_id), possible = excluded.possible, our_code = excluded.our_code`,
+      [r.id, r.date, r.amount, r.currency, r.purpose, r.iban, r.payer_name, r.payer_code, r.payer_acc, r.invoice_id, r.possible, r.config_id, r.our_code, now]
     ]));
+    await addSeenAccounts();
     const freshRows = rows.filter((r) => !known.has(r.id));
     return { rows, fresh: freshRows.length, freshRows };
   }
@@ -4060,6 +4129,10 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
       hist = JSON.parse(s.odb_hist || "{}");
     } catch {
     }
+    if (!s.odb_hist_v2) {
+      hist = {};
+      await putSetting("odb_hist_v2", "1");
+    }
     if (!hist.done) {
       let off = hist.offset || 0;
       for (let p = 0; p < 3; p++) {
@@ -4120,13 +4193,13 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     const [rows, tot, accounts] = await Promise.all([
       db.all(
         `SELECT t.id, t.date, t.amount, t.currency, t.purpose, t.iban, t.payer_name, t.payer_code, t.possible, t.link_id, t.manual,
-                l.number AS link_number, l.status AS link_status, l.created_by AS link_author, a.alias AS account_alias, a.kind AS account_kind
+                l.number AS link_number, l.status AS link_status, l.created_by AS link_author, ${ACC} AS account_alias, a.kind AS account_kind
          FROM odb_tx t LEFT JOIN pay_links l ON l.id = t.link_id LEFT JOIN odb_accounts a ON a.iban = t.iban
          ${w} ORDER BY t.date DESC LIMIT 500`,
         params
       ),
       db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN t.currency = 'UAH' THEN t.amount END), 0) AS sum FROM odb_tx t LEFT JOIN pay_links l ON l.id = t.link_id ${w}`, params),
-      db.all(`SELECT id, alias, kind FROM odb_accounts ORDER BY sort, alias`)
+      db.all(`SELECT id, ${ACC} AS alias, kind FROM odb_accounts a ORDER BY seen, sort, alias`)
     ]);
     const s = await settings();
     let hist = {};
@@ -4183,7 +4256,7 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
       prev ? q(prev, `SELECT ${bucket} AS k, COUNT(*) AS cnt, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY k ORDER BY k`) : null,
       prev ? q(prev, `SELECT t.iban, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY t.iban`) : null,
       prev ? q(prev, `SELECT ${payerKey} AS k, SUM(t.amount) AS sum FROM odb_tx t $W GROUP BY k`) : null,
-      db.all(`SELECT id, iban, alias, kind FROM odb_accounts ORDER BY sort, alias`),
+      db.all(`SELECT id, iban, ${ACC} AS alias, kind FROM odb_accounts a ORDER BY seen, sort, alias`),
       db.all(`SELECT code, name FROM odb_payers`),
       db.get(`SELECT MIN(date) AS min, MAX(date) AS max FROM odb_tx`)
     ]);
@@ -4328,7 +4401,7 @@ function mountTg(app, { db, fetchFn, settings, need, fail }) {
     const admins = await db.all(`SELECT id, tg_chat_id, tg_all_links, tg_all_tx FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin') AND (tg_all_links = 1 OR tg_all_tx = 1)`);
     if (linkIds.length) {
       const links = await db.all(
-        `SELECT l.id, l.number, l.amount, l.paid_amount, l.status, l.client, l.created_by_id, l.created_by, a.alias, u.tg_chat_id AS chat
+        `SELECT l.id, l.number, l.amount, l.paid_amount, l.status, l.client, l.created_by_id, l.created_by, COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, ''), a.iban) AS alias, u.tg_chat_id AS chat
          FROM pay_links l LEFT JOIN odb_accounts a ON a.id = l.account_id LEFT JOIN users u ON u.id = l.created_by_id AND u.active = 1
          WHERE l.id IN (SELECT value FROM json_each(?))`,
         [JSON.stringify(linkIds)]
@@ -4348,7 +4421,7 @@ ${h(l.alias || "")}${l.created_by ? `
     const recent = freshRows.filter((r) => r.date >= since);
     const txAdmins = admins.filter((a) => a.tg_all_tx);
     if (recent.length && txAdmins.length) {
-      const accs = new Map((await db.all(`SELECT iban, alias FROM odb_accounts`)).map((a) => [a.iban, a.alias]));
+      const accs = new Map((await db.all(`SELECT iban, COALESCE(NULLIF(name, ''), NULLIF(alias, ''), iban) AS alias FROM odb_accounts`)).map((a) => [a.iban, a.alias]));
       const texts = recent.length > 5 ? [`<b>\u{1F4B0} \u041D\u043E\u0432\u0456 \u043D\u0430\u0434\u0445\u043E\u0434\u0436\u0435\u043D\u043D\u044F: ${recent.length}</b> \u043D\u0430 \u0441\u0443\u043C\u0443 ${uah(recent.reduce((t, r) => t + r.amount, 0))}`] : recent.map((r) => `<b>\u{1F4B0} ${uah(r.amount)}</b> \u2192 ${h(accs.get(r.iban) || r.iban)}
 \u0412\u0456\u0434: ${h(r.payer_name || "\u2014")}
 <i>${h(r.purpose).slice(0, 200)}</i>`);
