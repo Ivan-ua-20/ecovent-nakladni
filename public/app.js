@@ -2,6 +2,8 @@ import { renderInvoice, esc, money, dateUa, LAYOUT_NAMES, DEFAULT_OPTIONS } from
 import { exportDocx } from './docx-export.js';
 import { renderRahunok, rahunokDocx } from './rahunok.js';
 import { createAnalyticsUI } from './an.js';
+import { createPayUI, STATUS as PAY_STATUS } from './pay.js';
+const payBadge = (st) => { const [t, c] = PAY_STATUS[st] || [st, '']; return `<span class="badge ${c}">QR · ${t}</span>`; };
 
 // ---------- утиліти ----------
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -96,6 +98,8 @@ const SECTIONS = [
   { id: 'rahunky', label: 'Рахунки Word', home: 'rahunky', tabs: [
     { id: 'rahunky', label: 'Формування', perm: 'docs.edit' },
     { id: 'rlist', label: 'Сформовані рахунки' },
+    { id: 'paylinks', label: 'Посилання на оплату', perm: 'docs.edit' },
+    { id: 'payments', label: 'Платежі', perm: 'docs.edit' },
     { id: 'invfops', label: 'ФОПи рахунків', perm: 'refs.edit' },
     { id: 'rsettings', label: 'Налаштування рахунків', perm: 'refs.edit' },
   ] },
@@ -203,6 +207,8 @@ const routes = {
   nsettings: viewNakladniSettings,
   rahunky: viewRahunky,
   rlist: viewRahunkyList,
+  paylinks: () => PAY.viewLinks(),
+  payments: () => PAY.viewPayments(),
   invfops: viewInvFops,
   rsettings: viewRahunkySettings,
   an: (...a) => AN.viewDashboard(...a),
@@ -949,10 +955,11 @@ function viewNakladniSettings() {
   'Порядок визначення ФОП: вибір вручну → чек Checkbox → поле 1 → відділ → ФОП за замовчуванням. Відповідності — у вкладці «Відділи, поле 1 → ФОП».');
 }
 
-function viewRahunkySettings() {
-  return sectionSettings('Налаштування рахунків', (s) => `
+async function viewRahunkySettings() {
+  await sectionSettings('Налаштування рахунків', (s) => `
     <label class="f" style="max-width:260px"><span>Наступний номер ручного рахунку</span><input name="rahunok_next_number" inputmode="numeric" value="${esc(s.rahunok_next_number || '10516')}"></label>`,
-  'Рахунок із замовлення CRM отримує номер замовлення. Ручні рахунки нумеруються по порядку, спільно для всіх ФОПів. Реквізити, підпис і печатку — у вкладці «ФОПи рахунків».');
+  'Рахунок із замовлення CRM отримує номер замовлення. Ручні рахунки і посилання на оплату без замовлення нумеруються по порядку, спільно для всіх ФОПів. Реквізити, підпис і печатку — у вкладці «ФОПи рахунків».');
+  if (can('api')) await PAY.settingsCard(main, boot.settings);
 }
 
 // =====================================================================
@@ -984,7 +991,7 @@ async function viewRahunkyList() {
     const r = await api('GET', `/api/rahunky?q=${encodeURIComponent($('#rQ').value)}`);
     $('#rList').innerHTML = (r.rows.length
       ? `<div class="table-wrap"><table class="list"><thead><tr><th>№</th><th>Клієнт</th><th>ФОП</th><th>Сума</th><th>Створено</th><th></th></tr></thead><tbody>
-        ${r.rows.map((x) => `<tr class="click" data-r="${x.id}"><td><b>${esc(x.number)}</b> <span class="badge">${x.source === 'crm' ? 'CRM' : 'вручну'}</span></td>
+        ${r.rows.map((x) => `<tr class="click ${x.pay_status ? `st-${x.pay_status}` : ''}" data-r="${x.id}"><td><b>${esc(x.number)}</b> <span class="badge">${x.source === 'crm' ? 'CRM' : 'вручну'}</span>${x.pay_status ? ` ${payBadge(x.pay_status)}` : ''}</td>
           <td>${esc(x.client_name)}</td><td>${esc(x.fop_name)}</td><td>${money(x.total)} грн</td>
           <td class="small">${esc(fmtDateTime(x.created_at))}<br><span class="muted">${esc(x.created_by || '')}</span></td>
           <td><div class="btn-row" style="justify-content:flex-end"><button class="btn sm" data-word="${x.id}">Word</button><button class="btn sm" data-pdf="${x.id}">PDF</button></div></td></tr>`).join('')}
@@ -1011,10 +1018,11 @@ async function rahunokForm({ mode, id }) {
   if (mode === 'edit') {
     const r = await api('GET', `/api/rahunky/${id}`);
     saved = { id: r.id, data: r.data, created_at: r.created_at, created_by: r.created_by };
-    state = { source: r.data.source, number: r.data.number, order_ref: r.data.orderRef, fop_id: r.data.fop.id, client: { ...r.data.client }, date: r.data.date, items: r.data.items.map((i) => ({ name: i.name, qty: i.qty, price: i.price })) };
+    state = { source: r.data.source, number: r.data.number, order_ref: r.data.orderRef, fop_id: r.data.fop.id, client: { ...r.data.client }, date: r.data.date, items: r.data.items.map((i) => ({ name: i.name, qty: i.qty, price: i.price })), qr: Boolean(r.data.pay) };
   } else if (mode === 'manual') {
     nextNumber = (await api('GET', '/api/rahunky?q=__none__')).nextNumber;
   }
+  if (state.qr === undefined) { try { state.qr = localStorage.getItem('rh_qr') === '1'; } catch { state.qr = false; } }
   const isCrm = state.source === 'crm';
   if (!activeInvFops().length) {
     main.innerHTML = `<div class="alert">Спершу додайте ФОП для рахунків у розділі <a href="#/invfops">«ФОПи рахунків»</a>.</div>`;
@@ -1045,6 +1053,8 @@ async function rahunokForm({ mode, id }) {
             <label class="f"><span>Дата рахунку</span><input id="rDate" type="date" value="${esc(state.date)}"></label>
           </div>
           <label class="f"><span>Договір</span><input id="rCContract" value="${esc(state.client.contract)}" placeholder="Необов’язково"></label>
+          <label class="check" id="rQrWrap"><input type="checkbox" id="rQr" ${state.qr ? 'checked' : ''} ${editOk ? '' : 'disabled'}> Додати QR-код на оплату</label>
+          <div class="small muted" id="rQrHint"></div>
         </div>
         <div class="card">
           <h3>Товари <span class="small muted" id="rTotal"></span></h3>
@@ -1056,7 +1066,17 @@ async function rahunokForm({ mode, id }) {
     </div>`;
 
   const fopObj = () => boot.invFops.find((f) => String(f.id) === String($('#rFop').value)) || {};
+  const qrOk = () => Boolean(fopObj().odb_id);
+  const qrOn = () => state.qr && qrOk();
+  const qrUi = () => {
+    const ok = qrOk();
+    $('#rQr').disabled = !editOk || !ok;
+    $('#rQrHint').textContent = ok
+      ? 'Посилання на оплату створюється в Opendatabot (0,42 ₴). Той самий номер і сума — те саме посилання.'
+      : 'Для цього ФОП немає рахунку Opendatabot — увімкніть його в «Налаштуваннях рахунків».';
+  };
   const read = () => {
+    state.qr = $('#rQr').checked;
     state.fop_id = $('#rFop').value;
     state.client = { name: $('#rCName').value, edrpou: $('#rCCode').value, contract: $('#rCContract').value };
     state.date = $('#rDate').value || todayKyiv();
@@ -1066,7 +1086,10 @@ async function rahunokForm({ mode, id }) {
   const previewData = () => {
     const items = state.items.filter((i) => String(i.name).trim()).map((i) => ({ name: i.name, qty: num(i.qty), price: num(i.price), unit: 'шт', sum: Math.round(num(i.qty) * num(i.price) * 100) / 100 }));
     const f = fopObj();
-    return { number: state.number || nextNumber || '—', date: state.date, fop: { ...f, warning_text: f.warning_text || boot.defaultWarning }, client: state.client, items, total: Math.round(items.reduce((t, i) => t + i.sum, 0) * 100) / 100 };
+    const total = Math.round(items.reduce((t, i) => t + i.sum, 0) * 100) / 100;
+    const sp = saved?.data?.pay;
+    const pay = !qrOn() ? null : sp && Math.abs((saved.data.total || 0) - total) < 0.005 && String(saved.data.fop?.id) === String(f.id) ? sp : { placeholder: true };
+    return { number: state.number || nextNumber || '—', date: state.date, fop: { ...f, warning_text: f.warning_text || boot.defaultWarning }, client: state.client, items, total, pay };
   };
   const preview = () => {
     const d = previewData();
@@ -1089,7 +1112,9 @@ async function rahunokForm({ mode, id }) {
   drawItems();
 
   $('.panel').addEventListener('input', () => { read(); preview(); });
-  $('#rFop').onchange = () => { read(); preview(); };
+  $('#rFop').onchange = () => { read(); qrUi(); preview(); };
+  $('#rQr').onchange = () => { read(); try { localStorage.setItem('rh_qr', state.qr ? '1' : '0'); } catch { /* */ } preview(); };
+  qrUi();
   $('#rItems').addEventListener('click', (e) => {
     const b = e.target.closest('[data-rdel]');
     if (!b) return;
@@ -1120,11 +1145,12 @@ async function rahunokForm({ mode, id }) {
   const persist = async () => {
     read();
     if (isCrm && !state.number) throw new Error('Спершу підтягніть замовлення з CRM.');
-    const body = { source: state.source, number: state.number, order_ref: state.order_ref, fop_id: state.fop_id, client: state.client, date: state.date, items: state.items };
+    const body = { source: state.source, number: state.number, order_ref: state.order_ref, fop_id: state.fop_id, client: state.client, date: state.date, items: state.items, qr: qrOn() };
     const r = saved ? await api('PUT', `/api/rahunky/${saved.id}`, body) : await api('POST', '/api/rahunky', body);
     const first = !saved;
     saved = { id: r.id, data: r.data };
     state.number = r.data.number;
+    preview();
     if (first) history.replaceState(null, '', `#/rahunky/edit/${r.id}`);
     return r.data;
   };
@@ -1152,8 +1178,8 @@ async function viewInvFops(id) {
   await loadBoot();
   if (id) return invFopForm(id);
   main.innerHTML = `
-    <div class="head-row"><h2>ФОПи для рахунків</h2><a class="btn primary" href="#/invfops/new">+ Додати ФОП</a></div>
-    <div class="muted small" style="margin-bottom:12px">Окремий список від ФОПів накладних. Від цих ФОПів виставляються рахунки на оплату.</div>
+    <div class="head-row"><h2>ФОПи для рахунків</h2>${can('users') ? '<a class="btn primary" href="#/invfops/new">+ Додати ФОП</a>' : ''}</div>
+    <div class="muted small" style="margin-bottom:12px">Окремий список від ФОПів накладних. Від цих ФОПів виставляються рахунки на оплату. ФОП, увімкнені в Opendatabot (у «Налаштуваннях рахунків»), додаються сюди автоматично — доповніть їхні реквізити для Word.</div>
     ${boot.invFops.length ? `<div class="fop-cards">${boot.invFops.map((f) => {
       const ok = f.full_name && f.ipn && f.iban && f.bank && f.address;
       return `<a class="card fop-card ${f.active ? '' : 'inactive'}" href="#/invfops/${f.id}" style="text-decoration:none;color:inherit">
@@ -1161,7 +1187,7 @@ async function viewInvFops(id) {
         <div class="muted small">${esc(f.full_name || 'Повну назву не вказано')}</div>
         <div class="tags">${ok ? '<span class="badge ok">реквізити є</span>' : '<span class="badge warn">заповніть реквізити</span>'}
           ${f.signature ? '<span class="badge">підпис</span>' : ''}${f.stamp ? '<span class="badge">печатка</span>' : ''}
-          ${f.active ? '' : '<span class="badge bad">вимкнено</span>'}</div></a>`;
+          ${f.odb_id ? '<span class="badge info">Opendatabot · QR</span>' : ''}${f.active ? '' : '<span class="badge bad">вимкнено</span>'}</div></a>`;
     }).join('')}</div>` : '<div class="card empty">Ще немає ФОПів для рахунків</div>'}`;
 }
 
@@ -1289,6 +1315,7 @@ async function viewUsers() {
   $$('[data-uedit]').forEach((b) => (b.onclick = () => form(users.find((x) => String(x.id) === b.dataset.uedit))));
 }
 
+const PAY = createPayUI({ api, $, $$, esc, toast, modal, can, get main() { return main; }, reloadBoot: () => loadBoot() });
 const AN = createAnalyticsUI({ api, $, $$, esc, toast, modal, can, get main() { return main; }, fmtDateTime, setPending: (fn) => { onPending = fn; } });
 
 // ---------- старт ----------

@@ -58,8 +58,9 @@ assert.ok(!('checkbox_login' in mb.fops[0]), 'доступи Checkbox прихо
 await req('PUT', '/api/settings', { lpcrm_key: 'stolen', retention_days: '10' }, M);
 assert.equal((await db.get(`SELECT value FROM settings WHERE key='lpcrm_key'`)).value, 'k', 'менеджер не змінює ключ API');
 assert.equal((await db.get(`SELECT value FROM settings WHERE key='retention_days'`)).value, '10');
-const invFop = await req('POST', '/api/inv-fops', { short_name: 'ФОП Лупу В.Ф.', full_name: 'ФОП Лупу Віра Філаретівна', ipn: '1234567890', iban: 'UA00', bank: 'ПриватБанк', address: 'м. Чернівці' }, M);
+const invFop = await req('POST', '/api/inv-fops', { short_name: 'ФОП Лупу В.Ф.', full_name: 'ФОП Лупу Віра Філаретівна', ipn: '1234567890', iban: 'UA00', bank: 'ПриватБанк', address: 'м. Чернівці' }, O);
 assert.equal(invFop.status, 200);
+assert.equal((await req('POST', '/api/inv-fops', { short_name: 'y' }, M)).status, 403, 'створювати ФОП рахунків — лише адміни');
 
 // перегляд: лише читання
 assert.equal((await req('GET', '/api/bootstrap', null, V)).status, 200);

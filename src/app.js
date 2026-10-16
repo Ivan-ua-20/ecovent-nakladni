@@ -5,6 +5,7 @@ import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { ROLES, can, hashPassword, verifyPassword, randomToken, publicUser, crmLogins } from './auth.js';
 import { DEFAULT_WARNING } from './schema.js';
 import { mountAnalytics } from './analytics.js';
+import { mountOdb, ODB_BASE } from './odb.js';
 import { normalizeOrder, applyEdits } from './normalize.js';
 import { getOrder, getProducts, diagnose, getStatuses, getOrderCodesByStatus, getOrdersBatch } from './lpcrm.js';
 import { DEMO_ORDER } from './demo.js';
@@ -46,7 +47,8 @@ const docFop = (f) => {
 
 const parseTpl = (t) => (t ? { ...t, options: JSON.parse(t.options || '{}') } : null);
 
-export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity }) {
+export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, odbBase = ODB_BASE }) {
+  let odbApi = null;
   const app = new Hono();
   // Ліміт зовнішніх запитів на одне звернення (Cloudflare: 50). Коли вичерпано — відповідаємо «триває»,
   // і браузер сам повторює запит; пошук продовжується з того місця, де зупинився.
@@ -154,7 +156,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
 
   // Усе інше в /api — лише після входу.
   app.use('/api/*', async (c, next) => {
-    if (c.req.path.startsWith('/api/auth/')) return next();
+    if (c.req.path.startsWith('/api/auth/') || c.req.path === '/api/odb/hook') return next();
     const user = await sessionUser(c);
     if (!user) throw fail(401, 'Потрібно увійти.');
     c.set('user', user);
@@ -275,15 +277,15 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
       defaultWarning: DEFAULT_WARNING,
       user: publicUser(user),
       settings: apiOk
-        ? { ...s, lpcrm_key: s.lpcrm_key ? MASK : '' }
-        : Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith('lpcrm_') && !k.startsWith('checkbox_')).concat([['lpcrm_key', s.lpcrm_key ? MASK : ''], ['lpcrm_subdomain', s.lpcrm_subdomain || '']])),
+        ? { ...s, lpcrm_key: s.lpcrm_key ? MASK : '', odb_key: s.odb_key ? MASK : '' }
+        : Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith('lpcrm_') && !k.startsWith('checkbox_') && !k.startsWith('odb_')).concat([['lpcrm_key', s.lpcrm_key ? MASK : ''], ['lpcrm_subdomain', s.lpcrm_subdomain || '']])),
     });
   });
 
   app.put('/api/settings', async (c) => {
     need(c, 'refs.edit');
     const body = await c.req.json();
-    const apiKeys = ['lpcrm_subdomain', 'lpcrm_key', 'lpcrm_search_days', 'checkbox_enabled', 'checkbox_search_days'];
+    const apiKeys = ['lpcrm_subdomain', 'lpcrm_key', 'lpcrm_search_days', 'checkbox_enabled', 'checkbox_search_days', 'odb_key', 'odb_name'];
     const general = ['invoice_date_mode', 'default_fop_id', 'seller_note', 'retention_days', 'rahunok_next_number'];
     const allowed = can(c.get('user'), 'api') ? [...apiKeys, ...general] : general;
     if (body.rahunok_next_number !== undefined && !/^\d{1,12}$/.test(String(body.rahunok_next_number).trim())) throw fail(400, 'Номер рахунку — лише цифри.');
@@ -797,7 +799,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   const INV_FOP_FIELDS = ['short_name', 'full_name', 'ipn', 'iban', 'bank', 'address', 'phone', 'warning_text', 'signature', 'stamp', 'active'];
 
   app.post('/api/inv-fops', async (c) => {
-    need(c, 'refs.edit');
+    need(c, 'users'); // створювати ФОП рахунків вручну — лише власник і адміни
     const b = await c.req.json();
     if (!String(b.short_name || '').trim()) throw fail(400, 'Вкажіть коротку назву ФОП.');
     const cols = INV_FOP_FIELDS.filter((k) => b[k] !== undefined);
@@ -869,7 +871,8 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   app.get('/api/rahunky', async (c) => {
     const q = (c.req.query('q') || '').trim();
     const rows = await db.all(
-      `SELECT id, number, source, order_ref, fop_name, client_name, total, created_at, created_by, updated_at, updated_by FROM invoices
+      `SELECT id, number, source, order_ref, fop_name, client_name, total, created_at, created_by, updated_at, updated_by,
+         (SELECT p.status FROM pay_links p WHERE p.id = json_extract(invoices.data, '$.pay.link_id')) AS pay_status FROM invoices
        ${q ? 'WHERE number LIKE ? OR client_name LIKE ? OR order_ref LIKE ?' : ''} ORDER BY id DESC LIMIT 300`,
       q ? [`%${q}%`, `%${q}%`, `%${q}%`] : [],
     );
@@ -899,6 +902,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     if (b.source !== 'crm') {
       await db.run(`UPDATE settings SET value = ? WHERE key = 'rahunok_next_number'`, [String(Number(number) + 1)]);
     }
+    if (b.qr) data.pay = await odbApi.linkForRahunok(c, data);
     const r = await db.run(
       `INSERT INTO invoices (number, source, order_ref, fop_id, fop_name, client_name, total, data, created_at, created_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -914,6 +918,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     const b = await c.req.json();
     const prev = JSON.parse(row.data);
     const data = await buildRahunok({ ...b, source: prev.source, order_ref: prev.orderRef }, row.number);
+    if (b.qr) data.pay = await odbApi.linkForRahunok(c, data);
     await db.run(
       `UPDATE invoices SET fop_id = ?, fop_name = ?, client_name = ?, total = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
       [data.fop.id, data.fop.short_name, data.client.name, data.total, JSON.stringify(data), nowIso(), userName(c), row.id],
@@ -928,6 +933,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   });
 
   mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso });
+  odbApi = mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, userName, base: odbBase });
 
   return app;
 }

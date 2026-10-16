@@ -96,3 +96,10 @@ table.rh-items .c-m { width: 24mm; text-align: right; white-space: nowrap; }
 .rh-sig { position: absolute; left: 6mm; bottom: 1mm; max-height: 14mm; max-width: 40mm; }
 .rh-stamp { position: absolute; left: 24mm; bottom: -12mm; width: 32mm; height: 32mm; object-fit: contain; opacity: .9; }
 .rh-sign-name { font-size: 9pt; min-width: 45mm; }
+.rh-pay { display: flex; align-items: center; gap: 5mm; margin-top: 6mm; padding: 3mm; border: 1px solid #bbb; border-radius: 2mm; break-inside: avoid; }
+.rh-qr { flex: none; display: block; width: 30mm; height: 30mm; }
+.rh-qr img { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
+.rh-qr-ph { border: 1px dashed #999; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 7.5pt; color: #666; padding: 2mm; }
+.rh-pay-text { font-size: 8.5pt; line-height: 1.45; }
+.rh-pay-text b { font-size: 10pt; }
+.rh-pay-text a { color: #0563c1; word-break: break-all; }

@@ -24,6 +24,19 @@ export function rahunokParts(r) {
   };
 }
 
+// QR-код на оплату: картинка — це посилання (клікабельне і в збереженому PDF), під нею — текстове посилання.
+const shortUrl = (u) => String(u || '').replace(/^https?:\/\//, '');
+function payBlock(pay) {
+  if (!pay) return '';
+  if (pay.placeholder) {
+    return `<div class="rh-pay"><div class="rh-qr rh-qr-ph">QR-код з’явиться після збереження</div>
+      <div class="rh-pay-text"><b>Оплатити онлайн</b><br>Відскануйте QR-код камерою телефона або в застосунку банку.</div></div>`;
+  }
+  return `<div class="rh-pay"><a class="rh-qr" href="${esc(pay.page)}" target="_blank" rel="noopener"><img src="${esc(pay.qr)}" alt="QR-код для оплати"></a>
+    <div class="rh-pay-text"><b>Оплатити онлайн</b><br>Відскануйте QR-код камерою телефона або в застосунку банку — реквізити й сума заповняться самі.
+    На телефоні можна просто натиснути на QR-код або на посилання:<br><a href="${esc(pay.page)}" target="_blank" rel="noopener">${esc(shortUrl(pay.page))}</a></div></div>`;
+}
+
 export function renderRahunok(r) {
   const p = rahunokParts(r);
   const f = p.f;
@@ -59,6 +72,7 @@ export function renderRahunok(r) {
       <div><span>Без ПДВ</span><b></b></div>
     </div>
     <div class="rh-words">Всього найменувань ${r.items.length}, на суму ${money(r.total)} грн.<br><b>${esc(p.words)}</b></div>
+    ${payBlock(r.pay)}
     <div class="rh-sign">
       <span class="rh-sign-label">Виписав(ла):</span>
       <span class="rh-sign-line">
@@ -170,6 +184,24 @@ export async function rahunokDocx(r) {
     children: [run(p.words, { bold: true, size: 20 })], spacing: { after: 240 },
     border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 6 } },
   }));
+
+  if (r.pay?.qr) {
+    const { ExternalHyperlink } = D();
+    const qr = await image(r.pay.qr, 110, 110);
+    const link = (children) => new ExternalHyperlink({ link: r.pay.page, children: [].concat(children) });
+    body.push(new Table({
+      width: { size: 9600, type: WidthType.DXA }, columnWidths: [1900, 7700], borders: noB,
+      rows: [new TableRow({ children: [
+        cell(par(qr ? link(qr) : run(''), { after: 0 }), { w: 1900 }),
+        cell([
+          par(run('Оплатити онлайн', { bold: true, size: 20 }), { after: 40 }),
+          par(run('Відскануйте QR-код камерою телефона або в застосунку банку — реквізити й сума заповняться самі. На телефоні можна натиснути на QR-код або на посилання:', { size: 16 }), { after: 40 }),
+          par(link(new TextRun({ text: String(r.pay.page).replace(/^https?:\/\//, ''), font: FONT, size: 17, color: '0563C1', underline: {} })), { after: 0 }),
+        ], { w: 7700 }),
+      ] })],
+    }));
+    body.push(par(run(''), { after: 60 }));
+  }
 
   const imgs = [];
   if (f.signature) { const i = await image(f.signature, 130, 45); if (i) imgs.push(i); }
