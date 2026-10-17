@@ -595,7 +595,7 @@ async function viewFops(id) {
   if (id) return viewFopForm(id);
   const officeCount = (fid) => boot.offices.filter((o) => String(o.fop_id) === String(fid)).length;
   main.innerHTML = `
-    <div class="head-row"><h2>ФОПи</h2><a class="btn primary" href="#/fops/new">+ Додати ФОП</a></div>
+    <div class="head-row"><h2>ФОПи</h2>${can('requisites') ? '<a class="btn primary" href="#/fops/new">+ Додати ФОП</a>' : ''}</div>
     <div class="fop-cards">
       ${boot.fops.map((f) => {
         const filled = f.full_name && f.ipn && f.iban;
@@ -613,16 +613,35 @@ async function viewFops(id) {
     </div>`;
 }
 
-function imgField(key, label, value, hint) {
+function imgField(key, label, value, hint, locked = false) {
   return `<label class="f"><span>${label}</span>
     <div class="img-field">
       <div class="img-prev" id="prev_${key}">${value ? `<img src="${esc(value)}">` : '<span class="small muted">немає</span>'}</div>
-      <div class="btn-row">
+      ${locked ? '' : `<div class="btn-row">
         <label class="btn sm">Завантажити<input type="file" accept="image/*" data-img="${key}" hidden></label>
         <button type="button" class="btn sm danger" data-clear="${key}">Прибрати</button>
-      </div>
+      </div>`}
     </div>
     <span class="small muted" style="font-weight:400">${hint}</span></label>`;
+}
+
+// Реквізити ФОП (IBAN, ІПН, назва, адреса, підпис, печатка) змінюють лише власник і адміни — сервер перевіряє те саме.
+const FOP_REQ = ['short_name', 'full_name', 'ipn', 'address', 'iban', 'bank', 'phone', 'email', 'extra', 'logo', 'signature', 'stamp'];
+const INV_FOP_REQ = ['short_name', 'full_name', 'ipn', 'iban', 'bank', 'address', 'phone', 'warning_text', 'signature', 'stamp'];
+const REQ_NOTE = '<div class="alert">Реквізити ФОП змінюють лише власник і адміністратори. Вам доступні шаблон і активність.</div>';
+const dropLocked = (data, fields) => { if (!can('requisites')) for (const k of fields) delete data[k]; return data; };
+const FIELD_NAMES = { short_name: 'Коротка назва', full_name: 'Назва / ПІБ', ipn: 'ІПН', address: 'Адреса', iban: 'IBAN', bank: 'Банк', phone: 'Телефон',
+  email: 'E-mail', extra: 'Додатковий рядок', logo: 'Логотип', signature: 'Підпис', stamp: 'Печатка', warning_text: 'Попередження' };
+
+// Журнал змін реквізитів (видно власнику й адмінам).
+async function auditCard(kind, refId, el) {
+  if (!can('users') || !el) return;
+  try {
+    const rows = await api('GET', `/api/audit?kind=${kind}&ref=${encodeURIComponent(refId)}`);
+    el.innerHTML = `<h3>Зміни реквізитів</h3>${rows.length ? rows.slice(0, 20).map((r) => `<div class="small" style="margin-bottom:8px"><b>${esc(fmtDateTime(r.at))}</b> · ${esc(r.user_name || '—')} · ${esc(r.action)}
+      ${r.changes.map((x) => `<div class="muted">${esc(FIELD_NAMES[x.field] || x.field)}: ${esc(x.from || '—')} → ${esc(x.to || '—')}</div>`).join('')}</div>`).join('') : '<div class="small muted">Змін ще не було</div>'}`;
+    el.hidden = false;
+  } catch { /* журнал необов'язковий */ }
 }
 
 function viewFopForm(id) {
@@ -630,7 +649,9 @@ function viewFopForm(id) {
   const f = isNew ? { active: 1, template_id: boot.templates[0]?.id } : fopById(id);
   if (!f) throw new Error('ФОП не знайдено');
   const imgs = { logo: f.logo || '', signature: f.signature || '', stamp: f.stamp || '' };
-  const inp = (k, label, ph = '', type = 'text') => `<label class="f"><span>${label}</span><input type="${type}" name="${k}" value="${esc(f[k] ?? '')}" placeholder="${esc(ph)}"></label>`;
+  const locked = !can('requisites');
+  const off = (k) => (locked && FOP_REQ.includes(k) ? 'disabled' : '');
+  const inp = (k, label, ph = '', type = 'text') => `<label class="f"><span>${label}</span><input type="${type}" name="${k}" value="${esc(f[k] ?? '')}" placeholder="${esc(ph)}" ${off(k)}></label>`;
   main.innerHTML = `
     <div class="head-row"><h2>${isNew ? 'Новий ФОП' : esc(f.short_name)}</h2>
       <div class="btn-row"><a class="btn" href="#/fops">← До списку</a></div></div>
@@ -638,22 +659,23 @@ function viewFopForm(id) {
       <div class="form-stack">
         <div class="card form-stack">
           <h3>Реквізити</h3>
+          ${locked ? REQ_NOTE : ''}
           ${inp('short_name', 'Коротка назва (у списку)', 'ФОП Агафіца А.М.')}
           ${inp('full_name', 'ПІБ повністю', 'Агафіца Анна Миколаївна')}
           <div class="grid2">${inp('ipn', 'ІПН (РНОКПП)', '1234567890')}${inp('phone', 'Телефон', '+380…')}</div>
           ${inp('address', 'Адреса')}
           <div class="grid2">${inp('iban', 'IBAN', 'UA…')}${inp('bank', 'Банк', 'АТ «…»')}</div>
           ${inp('email', 'E-mail')}
-          <label class="f"><span>Додатковий рядок у реквізитах</span><textarea name="extra" placeholder="Напр.: Платник єдиного податку 3 групи">${esc(f.extra || '')}</textarea></label>
+          <label class="f"><span>Додатковий рядок у реквізитах</span><textarea name="extra" placeholder="Напр.: Платник єдиного податку 3 групи" ${off('extra')}>${esc(f.extra || '')}</textarea></label>
         </div>
         <div class="card form-stack">
           <h3>Накладна</h3>
           <label class="f"><span>Шаблон за замовчуванням</span><select name="template_id">
             ${boot.templates.map((t) => `<option value="${t.id}" ${String(f.template_id) === String(t.id) ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}
           </select></label>
-          ${imgField('logo', 'Логотип', imgs.logo, 'Показується в брендованому шаблоні.')}
-          ${imgField('signature', 'Підпис', imgs.signature, 'PNG з прозорим фоном виглядає найкраще.')}
-          ${imgField('stamp', 'Печатка', imgs.stamp, 'Необов’язково.')}
+          ${imgField('logo', 'Логотип', imgs.logo, 'Показується в брендованому шаблоні.', locked)}
+          ${imgField('signature', 'Підпис', imgs.signature, 'PNG з прозорим фоном виглядає найкраще.', locked)}
+          ${imgField('stamp', 'Печатка', imgs.stamp, 'Необов’язково.', locked)}
           <label class="check"><input type="checkbox" name="active" ${f.active ? 'checked' : ''}> Активний (показувати у виборі)</label>
         </div>
       </div>
@@ -670,6 +692,7 @@ function viewFopForm(id) {
           <div class="small">${boot.offices.filter((o) => String(o.fop_id) === String(f.id)).map((o) => `<div>${esc(o.office_id)} · ${esc(o.name)}</div>`).join('') || '<span class="muted">Немає</span>'}</div>
           <a class="small" href="#/offices">Змінити прив’язку відділів</a>
         </div>
+        <div class="card form-stack" id="fopAudit" hidden></div>
         <div class="btn-row">
           <button class="btn primary">Зберегти</button>
           ${isNew ? '' : '<button type="button" class="btn danger" id="fopOff">Вимкнути ФОП</button>'}
@@ -694,6 +717,7 @@ function viewFopForm(id) {
     const data = Object.fromEntries(new FormData(form));
     data.active = form.active.checked ? 1 : 0;
     Object.assign(data, imgs);
+    dropLocked(data, FOP_REQ);
     try {
       if (isNew) {
         const r = await api('POST', '/api/fops', data);
@@ -713,6 +737,7 @@ function viewFopForm(id) {
       $('#cbRes').innerHTML = `<span class="badge ok">OK</span> ${esc(r.organization)} · ${esc(r.cashier)}`;
     } catch (err) { $('#cbRes').innerHTML = `<span class="badge bad">помилка</span> ${esc(err.message)}`; }
   });
+  if (!isNew) auditCard('fop', id, $('#fopAudit'));
   $('#fopOff') && ($('#fopOff').onclick = async () => {
     await api('PUT', `/api/fops/${id}`, { active: 0 });
     toast('ФОП вимкнено');
@@ -1239,27 +1264,31 @@ function invFopForm(id) {
   const f = isNew ? { active: 1, warning_text: boot.defaultWarning } : boot.invFops.find((x) => String(x.id) === String(id));
   if (!f) throw new Error('ФОП не знайдено');
   const imgs = { signature: f.signature || '', stamp: f.stamp || '' };
-  const inp = (k, label, ph = '') => `<label class="f"><span>${label}</span><input name="${k}" value="${esc(f[k] ?? '')}" placeholder="${esc(ph)}"></label>`;
+  const locked = !can('requisites');
+  const off = (k) => (locked && INV_FOP_REQ.includes(k) ? 'disabled' : '');
+  const inp = (k, label, ph = '') => `<label class="f"><span>${label}</span><input name="${k}" value="${esc(f[k] ?? '')}" placeholder="${esc(ph)}" ${off(k)}></label>`;
   main.innerHTML = `
     <div class="head-row"><h2>${isNew ? 'Новий ФОП для рахунків' : esc(f.short_name)}</h2><a class="btn" href="#/invfops">← До списку</a></div>
     <form id="ifForm" class="form-page">
       <div class="card form-stack">
         <h3>Реквізити</h3>
+        ${locked ? REQ_NOTE : ''}
         ${inp('short_name', 'Коротка назва (у списку)', 'ФОП Лупу В.Ф.')}
         ${inp('full_name', 'Повна назва в рахунку', 'ФОП Лупу Віра Філаретівна')}
         <div class="grid2">${inp('ipn', 'ІПН (РНОКПП)', '1234567890')}${inp('phone', 'Телефон (необов’язково)', '+380…')}</div>
         ${inp('iban', 'IBAN', 'UA…')}
         ${inp('bank', 'Банк', 'АТ КБ «ПриватБанк»')}
-        <label class="f"><span>Адреса реєстрації</span><textarea name="address" rows="2" placeholder="Україна, 58018, Чернівецька обл., м. Чернівці, вул. …">${esc(f.address || '')}</textarea></label>
+        <label class="f"><span>Адреса реєстрації</span><textarea name="address" rows="2" ${off('address')} placeholder="Україна, 58018, Чернівецька обл., м. Чернівці, вул. …">${esc(f.address || '')}</textarea></label>
       </div>
       <div class="form-stack">
         <div class="card form-stack">
           <h3>Рахунок</h3>
-          <label class="f"><span>Текст попередження над рахунком</span><textarea name="warning_text" rows="4">${esc(f.warning_text || '')}</textarea></label>
-          ${imgField('signature', 'Підпис', imgs.signature, 'PNG з прозорим фоном виглядає найкраще.')}
-          ${imgField('stamp', 'Печатка', imgs.stamp, 'Необов’язково.')}
+          <label class="f"><span>Текст попередження над рахунком</span><textarea name="warning_text" rows="4" ${off('warning_text')}>${esc(f.warning_text || '')}</textarea></label>
+          ${imgField('signature', 'Підпис', imgs.signature, 'PNG з прозорим фоном виглядає найкраще.', locked)}
+          ${imgField('stamp', 'Печатка', imgs.stamp, 'Необов’язково.', locked)}
           <label class="check"><input type="checkbox" name="active" ${f.active ? 'checked' : ''}> Активний (показувати у виборі)</label>
         </div>
+        <div class="card form-stack" id="ifAudit" hidden></div>
         <div class="btn-row"><button class="btn primary">Зберегти</button>${!isNew && !f.odb_id && can('users') ? '<button type="button" class="btn danger" id="ifDel" style="margin-left:auto">Видалити ФОП</button>' : ''}</div>
         ${f.odb_id ? '<div class="small muted">Цей ФОП додано з Opendatabot. Назву можна змінити тут; щоб прибрати його зі списку — вимкніть рахунок у «Налаштуваннях рахунків».</div>' : ''}
       </div>
@@ -1272,6 +1301,7 @@ function invFopForm(id) {
     $(`#prev_${input.dataset.img}`).innerHTML = `<img src="${esc(imgs[input.dataset.img])}">`;
   }));
   $$('[data-clear]', form).forEach((b) => (b.onclick = () => { imgs[b.dataset.clear] = ''; $(`#prev_${b.dataset.clear}`).innerHTML = '<span class="small muted">немає</span>'; }));
+  if (!isNew) auditCard('inv_fop', id, $('#ifAudit'));
   const del = $('#ifDel');
   if (del) del.onclick = () => {
     const m = modal('Видалити ФОП?', `<p>ФОП «${esc(f.short_name)}» зникне зі списку. Уже сформовані рахунки збережуться без змін.</p>`,
@@ -1282,7 +1312,7 @@ function invFopForm(id) {
   };
   form.onsubmit = async (e) => {
     e.preventDefault();
-    const d = { ...Object.fromEntries(new FormData(form)), ...imgs, active: form.active.checked ? 1 : 0 };
+    const d = dropLocked({ ...Object.fromEntries(new FormData(form)), ...imgs, active: form.active.checked ? 1 : 0 }, INV_FOP_REQ);
     try {
       if (isNew) { const r = await api('POST', '/api/inv-fops', d); toast('ФОП додано'); location.hash = `#/invfops/${r.id}`; }
       else { await api('PUT', `/api/inv-fops/${id}`, d); toast('Збережено'); await viewInvFops(id); }

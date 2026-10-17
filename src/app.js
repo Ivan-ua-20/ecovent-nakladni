@@ -13,6 +13,7 @@ import { DEMO_ORDER } from './demo.js';
 import { findReceiptByRef, findReceiptForOrder, hasCheckbox, testCheckbox } from './checkbox.js';
 import { checkImages, dropUnsafeImages } from './validate.js';
 import { takeRahunokNumber, peekRahunokNumber } from './counters.js';
+import { FOP_REQUISITES, INV_FOP_REQUISITES, REQUISITES_DENIED, changedFields, describeChanges, logAudit } from './requisites.js';
 
 const MASK = '••••••';
 const SECRET_FOP_FIELDS = ['checkbox_password', 'checkbox_pin', 'checkbox_license'];
@@ -308,6 +309,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   const fopCols = (c, b) => FOP_FIELDS.filter((k) => b[k] !== undefined && b[k] !== MASK && (can(c.get('user'), 'api') || !k.startsWith('checkbox_')));
   app.post('/api/fops', async (c) => {
     need(c, 'refs.edit');
+    if (!can(c.get('user'), 'requisites')) throw fail(403, REQUISITES_DENIED);
     const b = await c.req.json();
     if (!b.short_name) return c.json({ error: 'Вкажіть коротку назву ФОП' }, 400);
     checkImages(b, fail);
@@ -316,6 +318,8 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
       `INSERT INTO fops (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
       cols.map((k) => b[k]),
     );
+    const fields = changedFields({}, b, FOP_REQUISITES);
+    await logAudit(db, { user: c.get('user'), kind: 'fop', refId: r.lastId, action: 'створено', changes: describeChanges({}, b, fields) });
     return c.json({ id: r.lastId });
   });
 
@@ -323,11 +327,16 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     need(c, 'refs.edit');
     const b = await c.req.json();
     checkImages(b, fail);
+    const cur = await db.get(`SELECT * FROM fops WHERE id = ?`, [c.req.param('id')]);
+    if (!cur) throw fail(404, 'ФОП не знайдено.');
+    const req = changedFields(cur, b, FOP_REQUISITES);
+    if (req.length && !can(c.get('user'), 'requisites')) throw fail(403, REQUISITES_DENIED);
     const cols = fopCols(c, b);
     if (!cols.length) return c.json({ ok: true });
     await db.run(`UPDATE fops SET ${cols.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [
-      ...cols.map((k) => b[k]), c.req.param('id'),
+      ...cols.map((k) => b[k]), cur.id,
     ]);
+    if (req.length) await logAudit(db, { user: c.get('user'), kind: 'fop', refId: cur.id, action: 'змінено реквізити', changes: describeChanges(cur, b, req) });
     return c.json({ ok: true });
   });
 
@@ -777,6 +786,19 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     return c.json(out);
   });
 
+  // Журнал змін (власник і адміни): ?kind=fop&ref=3 — для одного ФОП.
+  app.get('/api/audit', async (c) => {
+    need(c, 'users');
+    const kind = String(c.req.query('kind') || '');
+    const ref = String(c.req.query('ref') || '');
+    const rows = await db.all(
+      `SELECT id, at, user_name, kind, ref_id, action, changes FROM audit_log
+       ${kind ? `WHERE kind = ?${ref ? ' AND ref_id = ?' : ''}` : ''} ORDER BY id DESC LIMIT 100`,
+      kind ? (ref ? [kind, ref] : [kind]) : [],
+    );
+    return c.json(rows.map((r) => ({ ...r, changes: JSON.parse(r.changes || '[]') })));
+  });
+
   app.post('/api/admin/import', async (c) => {
     need(c, 'users');
     const b = await c.req.json();
@@ -803,6 +825,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
       st.push([`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, String(v)]]);
     }
     await db.batch(st);
+    await logAudit(db, { user: c.get('user'), kind: 'settings', action: 'імпорт налаштувань', changes: Object.entries(counts).map(([field, n]) => ({ field, from: '', to: `${n} рядків` })) });
     return c.json({ ok: true, counts });
   });
 
@@ -818,6 +841,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     checkImages(b, fail);
     const cols = INV_FOP_FIELDS.filter((k) => b[k] !== undefined);
     const r = await db.run(`INSERT INTO inv_fops (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`, cols.map((k) => b[k]));
+    await logAudit(db, { user: c.get('user'), kind: 'inv_fop', refId: r.lastId, action: 'створено', changes: describeChanges({}, b, changedFields({}, b, INV_FOP_REQUISITES)) });
     return c.json({ id: r.lastId });
   });
 
@@ -825,10 +849,15 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     need(c, 'refs.edit');
     const b = await c.req.json();
     checkImages(b, fail);
+    const cur = await db.get(`SELECT * FROM inv_fops WHERE id = ?`, [c.req.param('id')]);
+    if (!cur) throw fail(404, 'ФОП не знайдено.');
+    const req = changedFields(cur, b, INV_FOP_REQUISITES);
+    if (req.length && !can(c.get('user'), 'requisites')) throw fail(403, REQUISITES_DENIED);
     const cols = INV_FOP_FIELDS.filter((k) => b[k] !== undefined);
     if (cols.length) {
-      await db.run(`UPDATE inv_fops SET ${cols.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [...cols.map((k) => b[k]), c.req.param('id')]);
+      await db.run(`UPDATE inv_fops SET ${cols.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [...cols.map((k) => b[k]), cur.id]);
     }
+    if (req.length) await logAudit(db, { user: c.get('user'), kind: 'inv_fop', refId: cur.id, action: 'змінено реквізити', changes: describeChanges(cur, b, req) });
     return c.json({ ok: true });
   });
 

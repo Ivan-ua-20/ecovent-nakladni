@@ -200,6 +200,18 @@ export const SCHEMA = [
     name TEXT PRIMARY KEY,
     fop_id INTEGER
   )`,
+  // Журнал змін реквізитів ФОП та інших важливих дій: хто, коли, що змінив.
+  `CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    user_id INTEGER,
+    user_name TEXT DEFAULT '',
+    kind TEXT NOT NULL,
+    ref_id TEXT DEFAULT '',
+    action TEXT NOT NULL,
+    changes TEXT NOT NULL DEFAULT '[]'
+  )`,
+  `CREATE INDEX IF NOT EXISTS audit_log_ref ON audit_log (kind, ref_id)`,
   `CREATE TABLE IF NOT EXISTS order_alias (
     alias TEXT PRIMARY KEY,
     code TEXT NOT NULL
@@ -331,7 +343,7 @@ const ADD_COLUMNS = [
 ];
 
 // Підвищуйте при зміні схеми: тоді міграція виконається знову (на Cloudflare — один раз на запуск ізолята).
-const SCHEMA_VERSION = '17';
+const SCHEMA_VERSION = '18';
 
 // Початкові відділи аналітики, джерела і відповідності (усе редагується в «Налаштуваннях аналітики»).
 const MP_SOURCES = [

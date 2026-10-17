@@ -500,11 +500,23 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
   });
 
   // Ручна прив'язка платежу до посилання (або відв'язка: link_id = null)
+  // Менеджер — лише до своїх посилань; власник і адміни — до будь-яких.
   app.put('/api/odb/payments/:id', async (c) => {
     need(c, 'docs.edit');
     const b = await c.req.json();
+    const me = c.get('user');
+    const admin = can(me, 'users');
     const linkId = b.link_id ? parseInt(b.link_id, 10) : null;
-    if (linkId && !(await db.get(`SELECT id FROM pay_links WHERE id = ?`, [linkId]))) throw fail(404, 'Посилання не знайдено.');
+    const link = linkId ? await db.get(`SELECT id, created_by_id FROM pay_links WHERE id = ?`, [linkId]) : null;
+    if (linkId && !link) throw fail(404, 'Посилання не знайдено.');
+    if (!admin) {
+      const tx = await db.get(`SELECT t.link_id, l.created_by_id FROM odb_tx t LEFT JOIN pay_links l ON l.id = t.link_id WHERE t.id = ?`, [c.req.param('id')]);
+      if (!tx) throw fail(404, 'Платіж не знайдено.');
+      const mine = (x) => String(x ?? '') === String(me.id);
+      if ((link && !mine(link.created_by_id)) || (tx.link_id && !mine(tx.created_by_id))) {
+        throw fail(403, 'Прив’язувати платежі до чужих посилань можуть лише власник і адміністратори.');
+      }
+    }
     await db.run(`UPDATE odb_tx SET link_id = ?, manual = 1 WHERE id = ?`, [linkId, c.req.param('id')]);
     await relink();
     return c.json({ ok: true });

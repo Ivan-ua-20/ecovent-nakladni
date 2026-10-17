@@ -62,6 +62,21 @@ const invFop = await req('POST', '/api/inv-fops', { short_name: 'ФОП Лупу
 assert.equal(invFop.status, 200);
 assert.equal((await req('POST', '/api/inv-fops', { short_name: 'y' }, M)).status, 403, 'створювати ФОП рахунків — лише адміни');
 
+// реквізити ФОП (IBAN, ІПН…) — лише власник і адміни; кожна зміна — у журналі
+const ifId = invFop.json.id;
+assert.equal((await req('PUT', `/api/inv-fops/${ifId}`, { iban: 'UA99' }, M)).status, 403, 'менеджер не змінює IBAN ФОП рахунків');
+assert.equal((await req('PUT', `/api/inv-fops/${ifId}`, { iban: 'UA00', ipn: '1234567890', active: 1 }, M)).status, 200, 'незмінені реквізити + активність — можна');
+assert.equal((await req('PUT', `/api/inv-fops/${ifId}`, { iban: 'UA11' }, A)).status, 200, 'адмін змінює IBAN');
+const fop1 = (await req('GET', '/api/bootstrap', null, O)).json.fops[0];
+assert.equal((await req('PUT', `/api/fops/${fop1.id}`, { iban: 'UA77' }, M)).status, 403, 'менеджер не змінює IBAN ФОП накладних');
+assert.equal((await req('PUT', `/api/fops/${fop1.id}`, { template_id: 2 }, M)).status, 200, 'шаблон менеджер змінює');
+assert.equal((await req('POST', '/api/fops', { short_name: 'Новий', iban: 'UA55' }, M)).status, 403, 'нового ФОП додає лише адмін');
+assert.equal((await req('PUT', `/api/fops/${fop1.id}`, { iban: 'UA12' }, O)).status, 200);
+const audit = (await req('GET', '/api/audit', null, A)).json;
+assert.deepEqual(audit.filter((x) => x.action === 'змінено реквізити').map((x) => [x.kind, x.user_name, x.changes[0].field, x.changes[0].to]),
+  [['fop', 'Іван', 'iban', 'UA12'], ['inv_fop', 'adm', 'iban', 'UA11']], 'журнал змін реквізитів');
+assert.equal((await req('GET', '/api/audit', null, M)).status, 403, 'журнал — лише адмінам');
+
 // перегляд: лише читання
 assert.equal((await req('GET', '/api/bootstrap', null, V)).status, 200);
 assert.equal((await req('POST', '/api/inv-fops', { short_name: 'x' }, V)).status, 403);
