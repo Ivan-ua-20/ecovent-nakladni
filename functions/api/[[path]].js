@@ -3963,7 +3963,7 @@ function mountAnalytics(app, { db, fetchFn, shared: shared2 = {} }) {
     const firstRun = !(await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`))?.value;
     const today = kyivDay();
     const keepFrom = addMonths(monthStart(today), -st.months);
-    const start = mode === "today" ? today : mode === "daily" ? addDays(today, -29) : keepFrom;
+    const start = mode === "today" || mode === "daily" ? addDays(today, -29) : keepFrom;
     const statuses = [...st.okStatuses, ...st.refuseStatuses];
     const units = [];
     for (let m = monthStart(today); m >= monthStart(start); m = addMonths(m, -1)) {
