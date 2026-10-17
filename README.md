@@ -51,8 +51,9 @@ node --no-warnings tests/d1-budget.test.mjs   # кількість запиті�
 node --no-warnings tests/security.test.mjs    # картинки ФОП (XSS) і номери рахунків без дублів
 ```
 
-GitHub Actions (`.github/workflows/ci.yml`) запускає всі тести на кожен push і pull request
-і перевіряє, що `functions/api/[[path]].js` зібрано з поточного `src/`.
+GitHub Actions (`.github/workflows/ci.yml`) запускає всі тести на кожен push і pull request.
+У pull request він сам збирає `functions/api/[[path]].js` і комітить його в гілку; у `main` — перевіряє,
+що файл зібрано з поточного `src/`.
 
 Заголовки безпеки сторінок (Content-Security-Policy та інші) — у `public/_headers` (Cloudflare Pages)
 і в `src/server-node.js` (локальна версія).
