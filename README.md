@@ -67,6 +67,7 @@ node --no-warnings tests/ratelimit.test.mjs
 node --no-warnings tests/analytics.test.mjs
 node --no-warnings tests/d1-budget.test.mjs   # кількість запитів до бази на одне звернення
 node --no-warnings tests/security.test.mjs    # картинки ФОП (XSS) і номери рахунків без дублів
+node --no-warnings tests/architecture.test.mjs # модулі залежать один від одного лише через index.js
 ```
 
 GitHub Actions (`.github/workflows/ci.yml`) запускає всі тести на кожен push і pull request.
