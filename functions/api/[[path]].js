@@ -1902,8 +1902,8 @@ var ROLES = {
   viewer: "\u041F\u0435\u0440\u0435\u0433\u043B\u044F\u0434"
 };
 var PERMS = {
-  owner: ["docs.view", "docs.edit", "refs.edit", "api", "users", "analytics", "an.view"],
-  admin: ["docs.view", "docs.edit", "refs.edit", "api", "users", "analytics", "an.view"],
+  owner: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "analytics", "an.view"],
+  admin: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "analytics", "an.view"],
   manager: ["docs.view", "docs.edit", "refs.edit", "an.view"],
   viewer: ["docs.view"]
 };
@@ -2160,6 +2160,18 @@ var SCHEMA = [
     name TEXT PRIMARY KEY,
     fop_id INTEGER
   )`,
+  // Журнал змін реквізитів ФОП та інших важливих дій: хто, коли, що змінив.
+  `CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    user_id INTEGER,
+    user_name TEXT DEFAULT '',
+    kind TEXT NOT NULL,
+    ref_id TEXT DEFAULT '',
+    action TEXT NOT NULL,
+    changes TEXT NOT NULL DEFAULT '[]'
+  )`,
+  `CREATE INDEX IF NOT EXISTS audit_log_ref ON audit_log (kind, ref_id)`,
   `CREATE TABLE IF NOT EXISTS order_alias (
     alias TEXT PRIMARY KEY,
     code TEXT NOT NULL
@@ -2279,7 +2291,7 @@ var ADD_COLUMNS = [
   ["an_products", "cat_manual", "INTEGER"],
   ["an_products", "seen", "INTEGER NOT NULL DEFAULT 0"]
 ];
-var SCHEMA_VERSION = "17";
+var SCHEMA_VERSION = "18";
 var MP_SOURCES = [
   ["Rozetka (OneDay)", ["rozetka(oneday)"]],
   ["Rozetka (Ecovent)", ["rozetka(ecovent)"]],
@@ -4240,8 +4252,19 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
   app.put("/api/odb/payments/:id", async (c) => {
     need(c, "docs.edit");
     const b = await c.req.json();
+    const me = c.get("user");
+    const admin = can2(me, "users");
     const linkId = b.link_id ? parseInt(b.link_id, 10) : null;
-    if (linkId && !await db.get(`SELECT id FROM pay_links WHERE id = ?`, [linkId])) throw fail(404, "\u041F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const link = linkId ? await db.get(`SELECT id, created_by_id FROM pay_links WHERE id = ?`, [linkId]) : null;
+    if (linkId && !link) throw fail(404, "\u041F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    if (!admin) {
+      const tx = await db.get(`SELECT t.link_id, l.created_by_id FROM odb_tx t LEFT JOIN pay_links l ON l.id = t.link_id WHERE t.id = ?`, [c.req.param("id")]);
+      if (!tx) throw fail(404, "\u041F\u043B\u0430\u0442\u0456\u0436 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+      const mine = (x) => String(x ?? "") === String(me.id);
+      if (link && !mine(link.created_by_id) || tx.link_id && !mine(tx.created_by_id)) {
+        throw fail(403, "\u041F\u0440\u0438\u0432\u2019\u044F\u0437\u0443\u0432\u0430\u0442\u0438 \u043F\u043B\u0430\u0442\u0435\u0436\u0456 \u0434\u043E \u0447\u0443\u0436\u0438\u0445 \u043F\u043E\u0441\u0438\u043B\u0430\u043D\u044C \u043C\u043E\u0436\u0443\u0442\u044C \u043B\u0438\u0448\u0435 \u0432\u043B\u0430\u0441\u043D\u0438\u043A \u0456 \u0430\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0438.");
+      }
+    }
     await db.run(`UPDATE odb_tx SET link_id = ?, manual = 1 WHERE id = ?`, [linkId, c.req.param("id")]);
     await relink();
     return c.json({ ok: true });
@@ -4765,6 +4788,24 @@ function dropUnsafeImages(row) {
   return out;
 }
 
+// src/requisites.js
+var FOP_REQUISITES = ["short_name", "full_name", "ipn", "address", "iban", "bank", "phone", "email", "extra", "logo", "signature", "stamp"];
+var INV_FOP_REQUISITES = ["short_name", "full_name", "ipn", "iban", "bank", "address", "phone", "warning_text", "signature", "stamp"];
+var IMAGES = /* @__PURE__ */ new Set(["logo", "signature", "stamp"]);
+var REQUISITES_DENIED = "\u0420\u0435\u043A\u0432\u0456\u0437\u0438\u0442\u0438 \u0424\u041E\u041F (IBAN, \u0406\u041F\u041D, \u043D\u0430\u0437\u0432\u0443, \u0430\u0434\u0440\u0435\u0441\u0443, \u043F\u0456\u0434\u043F\u0438\u0441, \u043F\u0435\u0447\u0430\u0442\u043A\u0443) \u0437\u043C\u0456\u043D\u044E\u044E\u0442\u044C \u043B\u0438\u0448\u0435 \u0432\u043B\u0430\u0441\u043D\u0438\u043A \u0456 \u0430\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0438.";
+function changedFields(current, body, fields) {
+  return fields.filter((k) => body[k] !== void 0 && String(body[k] ?? "") !== String(current?.[k] ?? ""));
+}
+function describeChanges(current, body, fields) {
+  return fields.map((k) => IMAGES.has(k) ? { field: k, from: current?.[k] ? "\u0454" : "\u043D\u0435\u043C\u0430\u0454", to: body[k] ? "\u043D\u043E\u0432\u0435 \u0437\u043E\u0431\u0440\u0430\u0436\u0435\u043D\u043D\u044F" : "\u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E" } : { field: k, from: String(current?.[k] ?? ""), to: String(body[k] ?? "") });
+}
+async function logAudit(db, { user, kind, refId = "", action, changes = [] }) {
+  await db.run(
+    `INSERT INTO audit_log (at, user_id, user_name, kind, ref_id, action, changes) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [(/* @__PURE__ */ new Date()).toISOString(), user?.id || null, user?.name || user?.login || "", kind, String(refId), action, JSON.stringify(changes)]
+  );
+}
+
 // src/app.js
 var MASK = "\u2022\u2022\u2022\u2022\u2022\u2022";
 var SECRET_FOP_FIELDS = ["checkbox_password", "checkbox_pin", "checkbox_license"];
@@ -5056,6 +5097,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   const fopCols = (c, b) => FOP_FIELDS.filter((k) => b[k] !== void 0 && b[k] !== MASK && (can(c.get("user"), "api") || !k.startsWith("checkbox_")));
   app.post("/api/fops", async (c) => {
     need(c, "refs.edit");
+    if (!can(c.get("user"), "requisites")) throw fail(403, REQUISITES_DENIED);
     const b = await c.req.json();
     if (!b.short_name) return c.json({ error: "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043A\u043E\u0440\u043E\u0442\u043A\u0443 \u043D\u0430\u0437\u0432\u0443 \u0424\u041E\u041F" }, 400);
     checkImages(b, fail);
@@ -5064,18 +5106,25 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
       `INSERT INTO fops (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`,
       cols.map((k) => b[k])
     );
+    const fields = changedFields({}, b, FOP_REQUISITES);
+    await logAudit(db, { user: c.get("user"), kind: "fop", refId: r.lastId, action: "\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E", changes: describeChanges({}, b, fields) });
     return c.json({ id: r.lastId });
   });
   app.put("/api/fops/:id", async (c) => {
     need(c, "refs.edit");
     const b = await c.req.json();
     checkImages(b, fail);
+    const cur = await db.get(`SELECT * FROM fops WHERE id = ?`, [c.req.param("id")]);
+    if (!cur) throw fail(404, "\u0424\u041E\u041F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const req2 = changedFields(cur, b, FOP_REQUISITES);
+    if (req2.length && !can(c.get("user"), "requisites")) throw fail(403, REQUISITES_DENIED);
     const cols = fopCols(c, b);
     if (!cols.length) return c.json({ ok: true });
     await db.run(`UPDATE fops SET ${cols.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, [
       ...cols.map((k) => b[k]),
-      c.req.param("id")
+      cur.id
     ]);
+    if (req2.length) await logAudit(db, { user: c.get("user"), kind: "fop", refId: cur.id, action: "\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0440\u0435\u043A\u0432\u0456\u0437\u0438\u0442\u0438", changes: describeChanges(cur, b, req2) });
     return c.json({ ok: true });
   });
   app.delete("/api/fops/:id", async (c) => {
@@ -5513,6 +5562,17 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     for (const k of EXPORT_SETTINGS) if (s[k] !== void 0) out.settings[k] = s[k];
     return c.json(out);
   });
+  app.get("/api/audit", async (c) => {
+    need(c, "users");
+    const kind = String(c.req.query("kind") || "");
+    const ref = String(c.req.query("ref") || "");
+    const rows = await db.all(
+      `SELECT id, at, user_name, kind, ref_id, action, changes FROM audit_log
+       ${kind ? `WHERE kind = ?${ref ? " AND ref_id = ?" : ""}` : ""} ORDER BY id DESC LIMIT 100`,
+      kind ? ref ? [kind, ref] : [kind] : []
+    );
+    return c.json(rows.map((r) => ({ ...r, changes: JSON.parse(r.changes || "[]") })));
+  });
   app.post("/api/admin/import", async (c) => {
     need(c, "users");
     const b = await c.req.json();
@@ -5538,6 +5598,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
       st.push([`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, String(v)]]);
     }
     await db.batch(st);
+    await logAudit(db, { user: c.get("user"), kind: "settings", action: "\u0456\u043C\u043F\u043E\u0440\u0442 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u044C", changes: Object.entries(counts).map(([field, n]) => ({ field, from: "", to: `${n} \u0440\u044F\u0434\u043A\u0456\u0432` })) });
     return c.json({ ok: true, counts });
   });
   const INV_FOP_FIELDS = ["short_name", "full_name", "ipn", "iban", "bank", "address", "phone", "warning_text", "signature", "stamp", "active"];
@@ -5548,16 +5609,22 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     checkImages(b, fail);
     const cols = INV_FOP_FIELDS.filter((k) => b[k] !== void 0);
     const r = await db.run(`INSERT INTO inv_fops (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`, cols.map((k) => b[k]));
+    await logAudit(db, { user: c.get("user"), kind: "inv_fop", refId: r.lastId, action: "\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E", changes: describeChanges({}, b, changedFields({}, b, INV_FOP_REQUISITES)) });
     return c.json({ id: r.lastId });
   });
   app.put("/api/inv-fops/:id", async (c) => {
     need(c, "refs.edit");
     const b = await c.req.json();
     checkImages(b, fail);
+    const cur = await db.get(`SELECT * FROM inv_fops WHERE id = ?`, [c.req.param("id")]);
+    if (!cur) throw fail(404, "\u0424\u041E\u041F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const req2 = changedFields(cur, b, INV_FOP_REQUISITES);
+    if (req2.length && !can(c.get("user"), "requisites")) throw fail(403, REQUISITES_DENIED);
     const cols = INV_FOP_FIELDS.filter((k) => b[k] !== void 0);
     if (cols.length) {
-      await db.run(`UPDATE inv_fops SET ${cols.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, [...cols.map((k) => b[k]), c.req.param("id")]);
+      await db.run(`UPDATE inv_fops SET ${cols.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, [...cols.map((k) => b[k]), cur.id]);
     }
+    if (req2.length) await logAudit(db, { user: c.get("user"), kind: "inv_fop", refId: cur.id, action: "\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0440\u0435\u043A\u0432\u0456\u0437\u0438\u0442\u0438", changes: describeChanges(cur, b, req2) });
     return c.json({ ok: true });
   });
   app.delete("/api/inv-fops/:id", async (c) => {
