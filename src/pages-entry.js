@@ -5,6 +5,8 @@ import { d1Db } from './core/db-d1.js';
 import { setIterations, resetOwnerPassword } from './core/auth.js';
 
 let ready = null;
+// Живе, поки живе ізолят: чистка за строком зберігання — раз на годину, а не на кожен запит; кеш чеків Checkbox.
+const shared = {};
 
 export async function onRequest(ctx) {
   const { env, request } = ctx;
@@ -34,6 +36,6 @@ export async function onRequest(ctx) {
   const fetchFn = env.LPCRM_TEST_URL
     ? (url, opts) => fetch(String(url).replace(/^https?:\/\/[^/]+\.lp-crm\.biz/, env.LPCRM_TEST_URL), opts)
     : fetch;
-  const app = createApp({ db, fetchFn, maxSubrequests: Number(env.MAX_SUBREQUESTS) || 40 });
+  const app = createApp({ db, fetchFn, maxSubrequests: Number(env.MAX_SUBREQUESTS) || 40, shared });
   return app.fetch(request, env, ctx);
 }

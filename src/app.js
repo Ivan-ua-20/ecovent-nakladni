@@ -14,7 +14,9 @@ import { mountAnalytics } from './modules/analytics/index.js';
 import { mountTg } from './modules/notify/index.js';
 import { mountOdb, ODB_BASE } from './modules/payments/index.js';
 
-export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, odbBase = ODB_BASE }) {
+// shared — стан, що живе довше за одне звернення (на Cloudflare застосунок створюється на кожен запит,
+// а об'єкт shared з pages-entry.js — один на ізолят): мітка останньої чистки, кеш чеків, замок синхронізації.
+export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, odbBase = ODB_BASE, shared = {} }) {
   const app = new Hono();
   // Ліміт зовнішніх запитів на одне звернення (Cloudflare: 50). Коли вичерпано — відповідаємо «триває»,
   // і браузер сам повторює запит; пошук продовжується з того місця, де зупинився.
@@ -35,10 +37,9 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   // ---------- Строк зберігання: модулі реєструють свою чистку, вона йде не частіше разу на годину ----------
   const cleanupTasks = [];
   const onCleanup = (fn) => cleanupTasks.push(fn);
-  let lastCleanup = 0;
   async function runCleanup() {
-    if (Date.now() - lastCleanup < 60 * 60 * 1000) return;
-    lastCleanup = Date.now();
+    if (Date.now() - (shared.lastCleanup || 0) < 60 * 60 * 1000) return;
+    shared.lastCleanup = Date.now();
     const s = await loadSettings(db);
     const days = Math.max(1, Number(s.retention_days) || 7);
     const border = new Date(Date.now() - days * 86400000).toISOString();
@@ -47,7 +48,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
 
   // Публічні входи модулів для інших модулів.
   const services = {};
-  const ctx = { db, fetchFn, services, onCleanup, runCleanup };
+  const ctx = { db, fetchFn, services, onCleanup, runCleanup, shared };
 
   // Порядок важливий: auth першим (його маршрути входу не потребують сесії, а далі стоїть перевірка входу).
   mountAuth(app, ctx);

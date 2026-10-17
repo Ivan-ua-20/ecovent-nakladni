@@ -3442,10 +3442,15 @@ var docFop = (f) => {
   const { checkbox_login, checkbox_password, checkbox_license, checkbox_pin, ...rest } = f;
   return rest;
 };
-function mountNakladni(app, { db, fetchFn, onCleanup }) {
+function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {} }) {
   const settings = () => loadSettings(db);
-  const receiptCache = /* @__PURE__ */ new Map();
+  shared2.receiptCache ||= /* @__PURE__ */ new Map();
+  const receiptCache = shared2.receiptCache;
   onCleanup((border) => db.run(`DELETE FROM versions WHERE created_at < ?`, [border]));
+  onCleanup(async () => {
+    const days = (Number((await settings()).lpcrm_search_days) || 30) + 7;
+    await db.run(`DELETE FROM orders_index WHERE datetime != '' AND datetime < ?`, [new Date(Date.now() - days * 864e5).toISOString().slice(0, 10)]);
+  });
   app.get("/api/lpcrm/diagnose/:orderId", async (c) => {
     need(c, "api");
     const s = await settings();
@@ -3502,7 +3507,7 @@ function mountNakladni(app, { db, fetchFn, onCleanup }) {
       );
       for (; i < statuses.length; i++) {
         const codes = await getOrderCodesByStatus(fetchFn, creds, statuses[i], start, end);
-        const known = new Set((await db.all(`SELECT code FROM orders_index`)).map((r) => r.code));
+        const known = new Set((await db.all(`SELECT code FROM orders_index WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => r.code));
         const fresh = codes.filter((c) => !known.has(c));
         for (let k = 0; k < fresh.length; k += 100) {
           await saveOrders2(await getOrdersBatch(fetchFn, creds, fresh.slice(k, k + 100)));
@@ -3522,17 +3527,18 @@ function mountNakladni(app, { db, fetchFn, onCleanup }) {
   }
   const SKIP_KEYS = /* @__PURE__ */ new Set(["total", "status", "office", "payment", "delivery_id", "attribute_status_id", "localization"]);
   async function matchIndex(q) {
-    const rows = await db.all(`SELECT code, datetime, phone, ttn, data FROM orders_index ORDER BY datetime DESC`);
+    const strong = await db.all(
+      `SELECT code, datetime, phone, ttn FROM orders_index o
+       WHERE o.ttn = ? OR EXISTS (SELECT 1 FROM json_each(o.data) j
+         WHERE j.type IN ('text', 'integer', 'real') AND j.key NOT IN (SELECT value FROM json_each(?))
+           AND TRIM(CAST(j.value AS TEXT)) = ?)
+       ORDER BY datetime DESC`,
+      [q, JSON.stringify([...SKIP_KEYS]), q]
+    );
+    if (strong.length) return strong;
     const qd = digits(q);
-    const strong = [];
-    const weak = [];
-    for (const r of rows) {
-      const data = JSON.parse(r.data || "{}");
-      const exact = Object.entries(data).some(([k, v]) => v !== null && typeof v !== "object" && !SKIP_KEYS.has(k) && String(v).trim() === q);
-      if (exact || r.ttn === q) strong.push(r);
-      else if (qd.length >= 9 && r.phone && r.phone.endsWith(qd)) weak.push(r);
-    }
-    return strong.length ? strong : weak;
+    if (qd.length < 9) return [];
+    return db.all(`SELECT code, datetime, phone, ttn FROM orders_index WHERE phone != '' AND phone LIKE ? ORDER BY datetime DESC`, [`%${qd}`]);
   }
   async function resolveCode(q, s, creds) {
     if (/^\d{11,}$/.test(q) && !q.startsWith("380")) return { code: q };
@@ -3692,6 +3698,7 @@ function mountNakladni(app, { db, fetchFn, onCleanup }) {
       crmRaw: crmRaw ? JSON.stringify(crmRaw, null, 2).slice(0, 2e4) : ""
     };
   }
+  const snapshotOf = ({ crmRaw, receiptCandidates, versionsCount, requestedId, ...rest }) => rest;
   async function addVersion(orderId, inv, reason, who = "") {
     const dataHash = hash(JSON.stringify([inv.order, inv.fop?.id, inv.template?.id, inv.template?.options]));
     await db.run(
@@ -3706,7 +3713,7 @@ function mountNakladni(app, { db, fetchFn, onCleanup }) {
         inv.template?.id || null,
         inv.order.total,
         dataHash,
-        JSON.stringify(inv),
+        JSON.stringify(snapshotOf(inv)),
         who
       ]
     );
@@ -4174,7 +4181,7 @@ function flattenCategories(node, parent = null, out = [], depth = 0) {
   }
   return out;
 }
-function mountAnalytics(app, { db, fetchFn }) {
+function mountAnalytics(app, { db, fetchFn, shared: shared2 = {} }) {
   const settings = () => loadSettings(db);
   const getSt = async () => {
     const r = await db.get(`SELECT value FROM settings WHERE key = 'an_settings'`);
@@ -4253,7 +4260,6 @@ function mountAnalytics(app, { db, fetchFn }) {
     return cur;
   }
   const OWN_ALLOWED = /* @__PURE__ */ new Set(["POST /api/an/query", "GET /api/an/sync", "POST /api/an/sync/start", "POST /api/an/sync/step"]);
-  let checkedRemap = false;
   app.use("/api/an/*", async (c, next) => {
     const user = c.get("user");
     if (!can(user, "analytics")) {
@@ -4261,8 +4267,8 @@ function mountAnalytics(app, { db, fetchFn }) {
       if (!OWN_ALLOWED.has(`${c.req.method} ${c.req.path}`)) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432 \u0434\u043B\u044F \u0446\u0456\u0454\u0457 \u0434\u0456\u0457.");
       c.set("anOwn", crmLogins(user.crm_logins));
     }
-    if (!checkedRemap) {
-      checkedRemap = true;
+    if (!shared2.anRemapChecked) {
+      shared2.anRemapChecked = true;
       const f = await db.get(`SELECT value FROM settings WHERE key = 'an_need_remap'`);
       if (f?.value === "1") {
         await remap(db, await getSt());
@@ -5724,7 +5730,7 @@ function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 })
 }
 
 // src/app.js
-function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, odbBase = ODB_BASE }) {
+function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, odbBase = ODB_BASE, shared: shared2 = {} }) {
   const app = new Hono3();
   let usedSubrequests = 0;
   const fetchFn = async (...args) => {
@@ -5740,17 +5746,16 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   });
   const cleanupTasks = [];
   const onCleanup = (fn) => cleanupTasks.push(fn);
-  let lastCleanup = 0;
   async function runCleanup() {
-    if (Date.now() - lastCleanup < 60 * 60 * 1e3) return;
-    lastCleanup = Date.now();
+    if (Date.now() - (shared2.lastCleanup || 0) < 60 * 60 * 1e3) return;
+    shared2.lastCleanup = Date.now();
     const s = await loadSettings(db);
     const days = Math.max(1, Number(s.retention_days) || 7);
     const border = new Date(Date.now() - days * 864e5).toISOString();
     for (const task of cleanupTasks) await task(border);
   }
   const services = {};
-  const ctx = { db, fetchFn, services, onCleanup, runCleanup };
+  const ctx = { db, fetchFn, services, onCleanup, runCleanup, shared: shared2 };
   mountAuth(app, ctx);
   mountRefs(app, ctx);
   services.nakladni = mountNakladni(app, ctx);
@@ -5791,6 +5796,7 @@ function d1Db(D1) {
 
 // src/pages-entry.js
 var ready = null;
+var shared = {};
 async function onRequest(ctx) {
   const { env, request } = ctx;
   if (!env.DB) {
@@ -5815,7 +5821,7 @@ async function onRequest(ctx) {
     }
   }
   const fetchFn = env.LPCRM_TEST_URL ? (url, opts) => fetch(String(url).replace(/^https?:\/\/[^/]+\.lp-crm\.biz/, env.LPCRM_TEST_URL), opts) : fetch;
-  const app = createApp({ db, fetchFn, maxSubrequests: Number(env.MAX_SUBREQUESTS) || 40 });
+  const app = createApp({ db, fetchFn, maxSubrequests: Number(env.MAX_SUBREQUESTS) || 40, shared });
   return app.fetch(request, env, ctx);
 }
 export {
