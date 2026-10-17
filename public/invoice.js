@@ -127,8 +127,8 @@ function totals(p) {
 function signatures(p) {
   const { o, fop } = p;
   if (!o.showSignatures) return '';
-  const sig = fop.signature ? `<img class="sig-img" src="${fop.signature}" alt="">` : '';
-  const stamp = o.showStamp && fop.stamp ? `<img class="stamp-img" src="${fop.stamp}" alt="">` : '';
+  const sig = fop.signature ? `<img class="sig-img" src="${esc(fop.signature)}" alt="">` : '';
+  const stamp = o.showStamp && fop.stamp ? `<img class="stamp-img" src="${esc(fop.stamp)}" alt="">` : '';
   return `<div class="inv-sign">
     <div class="sign-box">
       <div class="sign-label">Відвантажив (продавець)</div>
@@ -185,7 +185,7 @@ function pageBranded(p) {
   const { o, fop } = p;
   return `<div class="inv inv-branded" style="--accent:${esc(o.accent)}">
     <div class="br-band">
-      ${fop.logo ? `<img class="br-logo" src="${fop.logo}" alt="">` : `<div class="br-mark">${esc((fop.short_name || 'ФОП').replace(/^ФОП\s*/, ''))}</div>`}
+      ${fop.logo ? `<img class="br-logo" src="${esc(fop.logo)}" alt="">` : `<div class="br-mark">${esc((fop.short_name || 'ФОП').replace(/^ФОП\s*/, ''))}</div>`}
       <div class="br-doc"><div class="br-title">${esc(o.title)}</div><div class="br-no">№ ${esc(p.number)} · ${esc(dateUa(p.order.invoiceDate || p.order.date))}</div></div>
     </div>
     ${o.headerText ? `<div class="inv-headnote">${esc(o.headerText)}</div>` : ''}

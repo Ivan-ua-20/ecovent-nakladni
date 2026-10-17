@@ -616,7 +616,7 @@ async function viewFops(id) {
 function imgField(key, label, value, hint) {
   return `<label class="f"><span>${label}</span>
     <div class="img-field">
-      <div class="img-prev" id="prev_${key}">${value ? `<img src="${value}">` : '<span class="small muted">немає</span>'}</div>
+      <div class="img-prev" id="prev_${key}">${value ? `<img src="${esc(value)}">` : '<span class="small muted">немає</span>'}</div>
       <div class="btn-row">
         <label class="btn sm">Завантажити<input type="file" accept="image/*" data-img="${key}" hidden></label>
         <button type="button" class="btn sm danger" data-clear="${key}">Прибрати</button>
@@ -683,7 +683,7 @@ function viewFopForm(id) {
     if (!file) return;
     const key = input.dataset.img;
     imgs[key] = await readImage(file, key === 'stamp' ? 500 : 700);
-    $(`#prev_${key}`).innerHTML = `<img src="${imgs[key]}">`;
+    $(`#prev_${key}`).innerHTML = `<img src="${esc(imgs[key])}">`;
   }));
   $$('[data-clear]', form).forEach((b) => (b.onclick = () => {
     imgs[b.dataset.clear] = '';
@@ -1269,7 +1269,7 @@ function invFopForm(id) {
     const file = input.files[0];
     if (!file) return;
     imgs[input.dataset.img] = await readImage(file, input.dataset.img === 'stamp' ? 500 : 700);
-    $(`#prev_${input.dataset.img}`).innerHTML = `<img src="${imgs[input.dataset.img]}">`;
+    $(`#prev_${input.dataset.img}`).innerHTML = `<img src="${esc(imgs[input.dataset.img])}">`;
   }));
   $$('[data-clear]', form).forEach((b) => (b.onclick = () => { imgs[b.dataset.clear] = ''; $(`#prev_${b.dataset.clear}`).innerHTML = '<span class="small muted">немає</span>'; }));
   const del = $('#ifDel');

@@ -1,0 +1,34 @@
+# Перевірка кожної зміни: усі тести + чи оновлено готовий файл для Cloudflare (functions/api/[[path]].js).
+name: Тести
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Тести
+        run: |
+          set -e
+          for t in tests/*.test.mjs; do
+            echo "== $t"
+            node --no-warnings "$t"
+          done
+      - name: Збірка
+        run: npm run build
+      - name: Готовий файл для Cloudflare оновлено
+        run: |
+          if ! git diff --quiet -- functions/; then
+            echo "::error::Після змін у src/ виконайте npm run build і закомітьте functions/api/[[path]].js"
+            git diff --stat -- functions/
+            exit 1
+          fi

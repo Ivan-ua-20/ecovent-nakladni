@@ -121,7 +121,7 @@ export function mountTg(app, { db, fetchFn, settings, need, fail }) {
       const accs = new Map((await db.all(`SELECT iban, COALESCE(NULLIF(name, ''), NULLIF(alias, ''), iban) AS alias FROM odb_accounts`)).map((a) => [a.iban, a.alias]));
       const texts = recent.length > 5
         ? [`<b>💰 Нові надходження: ${recent.length}</b> на суму ${uah(recent.reduce((t, r) => t + r.amount, 0))}`]
-        : recent.map((r) => `<b>💰 ${uah(r.amount)}</b> → ${h(accs.get(r.iban) || r.iban)}\nВід: ${h(r.payer_name || '—')}\n<i>${h(r.purpose).slice(0, 200)}</i>`);
+        : recent.map((r) => `<b>💰 ${uah(r.amount)}</b> → ${h(accs.get(r.iban) || r.iban)}\nВід: ${h(r.payer_name || '—')}\n<i>${h(String(r.purpose || '').slice(0, 200))}</i>`);
       for (const a of txAdmins) for (const t of texts) out.push([a.tg_chat_id, t]);
     }
     let sent = 0;
