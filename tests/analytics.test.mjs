@@ -128,6 +128,13 @@ assert.ok(Math.abs(q.kpi.cur.drev - expDone.reduce((s, o) => s + Number(o.total)
 assert.ok(Math.abs(q.kpi.cur.rrev - expRef.reduce((s, o) => s + Number(o.total), 0)) < 0.05, 'сума відмов і повернень');
 assert.equal(q.kpi.cur.ncnt, expect.length - expRef.length, 'кількість без відмов');
 assert.deepEqual(q.kpi.doneStatuses, [18]);
+const grp = Object.fromEntries(q.byStatusGroup.map((g) => [g.id, g]));
+const cntOf = (ids) => expect.filter((o) => ids.includes(o.status)).length;
+const revOf = (ids) => expect.filter((o) => ids.includes(o.status)).reduce((s, o) => s + Number(o.total), 0);
+assert.deepEqual([grp.accepted.cnt, grp.done.cnt, grp.shipping.cnt, grp.refused.cnt], [cntOf(['11']), cntOf(['18']), cntOf(['14', '53']), cntOf(['54', '58'])], 'групи статусів: кількість');
+assert.ok(Math.abs(grp.shipping.rev - revOf(['14', '53'])) < 0.05 && Math.abs(grp.refused.rev - revOf(['54', '58'])) < 0.05, 'групи статусів: суми');
+assert.deepEqual(grp.shipping.statuses, [14, 53]);
+assert.equal(q.byStatusGroup.reduce((a, g) => a + g.cnt, 0), q.kpi.cur.cnt, 'групи покривають усі замовлення');
 assert.equal(q.daily.cur.length, daysBetween(from, today));
 assert.ok(q.kpi.prev && q.kpi.prev.cnt > 0, 'є порівняння');
 assert.ok(q.byStatus.find((x) => x.id === 54).refuse);
