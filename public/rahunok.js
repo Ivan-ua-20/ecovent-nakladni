@@ -110,7 +110,8 @@ async function image(url, maxW, maxH) {
   return new (D().ImageRun)({ type: info.type, data: info.bytes, transformation: { width: Math.round(w * k), height: Math.round(h * k) } });
 }
 
-export async function rahunokDocx(r) {
+// download: false — лише повернути файл (для «Надіслати»), без завантаження.
+export async function rahunokDocx(r, { download = true } = {}) {
   const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, BorderStyle, ShadingType } = D();
   const p = rahunokParts(r);
   const f = p.f;
@@ -221,11 +222,22 @@ export async function rahunokDocx(r) {
     sections: [{ properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 800, bottom: 800, left: 1100, right: 1100 } } }, children: body }],
   });
   const blob = await Packer.toBlob(doc);
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
   const client = String(r.client?.name || '').replace(/[^\p{L}\p{N}.]+/gu, '_').slice(0, 40);
-  a.download = `Рахунок_${r.number}${client ? '_' + client : ''}.docx`;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  const name = `Рахунок_${r.number}${client ? '_' + client : ''}.docx`;
+  if (download) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+  return { blob, name };
+}
+
+// Текст для клієнта: номер, ФОП, сума і посилання на оплату (якщо в рахунку є QR).
+export function rahunokMessage(r) {
+  const fop = r.fop?.full_name || r.fop?.short_name || '';
+  const sum = (Number(r.total) || 0).toLocaleString('uk-UA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `Рахунок на оплату № ${r.number}${fop ? ` від ${fop}` : ''} на суму ${sum} грн.${r.pay?.page ? `\nОплатити онлайн: ${r.pay.page}` : ''}`;
 }

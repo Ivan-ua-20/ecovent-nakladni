@@ -1,10 +1,19 @@
 // Рахунки на оплату (Word): формування з CRM або вручну, список, QR-посилання.
 import { esc, money } from '../invoice.js';
-import { renderRahunok, rahunokDocx } from '../rahunok.js';
+import { renderRahunok, rahunokDocx, rahunokMessage } from '../rahunok.js';
+import { sendDialog } from '../core/share.js';
 import { STATUS as PAY_STATUS } from '../pay.js';
 import { $, $$, main, MASK, api, setPending, toast, modal, confirmDanger, fmtDateTime, readImage, printHtml, todayKyiv } from '../core/ui.js';
 
 export function createRahunkyPages(ctx) {
+  // Вікно «Надіслати» для рахунку: файл Word і текст із посиланням на оплату.
+  const openSend = (d) => sendDialog({
+    title: `Надіслати рахунок № ${d.number}`,
+    text: rahunokMessage(d),
+    url: d.pay?.page || '',
+    makeFile: () => rahunokDocx(d, { download: false }),
+    download: () => rahunokDocx(d).catch((er) => toast(er.message, true)),
+  });
   const { can, loadBoot, activeFops, fopById, tplById } = ctx;
 
 const payBadge = (st) => { const [t, c] = PAY_STATUS[st] || [st, '']; return `<span class="badge ${c}">QR · ${t}</span>`; };
@@ -36,12 +45,15 @@ async function viewRahunkyList() {
         ${r.rows.map((x) => `<tr class="click ${x.pay_status ? `st-${x.pay_status}` : ''}" data-r="${x.id}"><td><b>${esc(x.number)}</b> <span class="badge">${x.source === 'crm' ? 'CRM' : 'вручну'}</span>${x.pay_status ? ` ${payBadge(x.pay_status)}` : ''}</td>
           <td>${esc(x.client_name)}</td><td>${esc(x.fop_name)}</td><td>${money(x.total)} грн</td>
           <td class="small">${esc(fmtDateTime(x.created_at))}<br><span class="muted">${esc(x.created_by || '')}</span></td>
-          <td><div class="btn-row" style="justify-content:flex-end"><button class="btn sm" data-word="${x.id}">Word</button><button class="btn sm" data-pdf="${x.id}">PDF</button></div></td></tr>`).join('')}
+          <td><div class="btn-row" style="justify-content:flex-end"><button class="btn sm" data-send="${x.id}">Надіслати</button><button class="btn sm" data-word="${x.id}">Word</button><button class="btn sm" data-pdf="${x.id}">PDF</button></div></td></tr>`).join('')}
         </tbody></table></div>`
       : `<div class="card empty"><div class="big">Рахунків ще немає</div>Створений рахунок можна завантажити у Word або PDF і надіслати клієнту.${can('docs.edit') ? '<div class="btn-row" style="justify-content:center;margin-top:12px"><a class="btn primary" href="#/rahunky">Створити рахунок</a></div>' : ''}</div>`) + `<div class="small muted" style="margin-top:8px">Рахунки зберігаються ${r.retentionDays} дн. Наступний номер ручного рахунку: ${esc(r.nextNumber)}.</div>`;
     $$('[data-r]').forEach((tr) => (tr.onclick = (e) => {
       if (e.target.closest('button')) return;
       location.hash = `#/rahunky/edit/${tr.dataset.r}`;
+    }));
+    $$('[data-send]').forEach((b) => (b.onclick = async () => {
+      try { openSend((await api('GET', `/api/rahunky/${b.dataset.send}`)).data); } catch (er) { toast(er.message, true); }
     }));
     $$('[data-word]').forEach((b) => (b.onclick = async () => rahunokDocx((await api('GET', `/api/rahunky/${b.dataset.word}`)).data).catch((er) => toast(er.message, true))));
     $$('[data-pdf]').forEach((b) => (b.onclick = async () => { const d = (await api('GET', `/api/rahunky/${b.dataset.pdf}`)).data; toast('У вікні друку оберіть «Зберегти як PDF»'); printHtml(renderRahunok(d)); }));
@@ -76,7 +88,8 @@ async function rahunokForm({ mode, id }) {
       ${isCrm && !saved ? `<form id="rOrderF"><label for="rOrder" class="sr-only">Замовлення CRM</label><input id="rOrder" placeholder="Номер, код, телефон або ТТН" autofocus><button class="btn primary">Підтягнути</button></form>`
         : `<h2 class="bar-title">${saved ? `Рахунок № ${esc(state.number)}` : 'Рахунок вручну'}</h2>`}
       <div class="bar-actions">
-        <button class="btn primary" id="rWord">Завантажити Word</button>
+        <button class="btn primary" id="rSend">Надіслати</button>
+        <button class="btn" id="rWord">Завантажити Word</button>
         <button class="btn" id="rPdf">PDF / друк</button>
         ${editOk ? '<button class="btn" id="rSave">Зберегти</button>' : ''}
         ${editOk && saved ? '<button class="btn danger" id="rDel">Видалити</button>' : ''}
@@ -197,6 +210,10 @@ async function rahunokForm({ mode, id }) {
     return r.data;
   };
   const getData = async () => (editOk ? persist() : saved.data);
+  // Спершу зберігаємо (номер, QR-посилання), потім — вікно «Надіслати».
+  $('#rSend').onclick = async () => {
+    try { openSend(await getData()); } catch (er) { toast(er.message, true); }
+  };
   $('#rWord').onclick = async () => {
     try { const d = await getData(); await rahunokDocx(d); toast(`Рахунок № ${d.number} збережено і завантажено`); }
     catch (er) { toast(er.message, true); }

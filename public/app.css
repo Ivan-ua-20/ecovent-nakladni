@@ -508,3 +508,10 @@ table.list tr.click:focus-visible td { background: #f6f8f7; }
   .tile:hover { transform: none; }
   .spinner { animation: spin 1.5s linear infinite !important; }
 }
+
+/* ----- Вікно «Надіслати» ----- */
+.send-box { display: flex; flex-direction: column; gap: 16px; }
+.send-sec { display: flex; flex-direction: column; gap: 8px; }
+.send-sec + .send-sec { border-top: 1px solid var(--line); padding-top: 16px; }
+.send-sec h4 { margin: 0; font-size: 14px; }
+.send-apps .btn { flex: 1 1 auto; justify-content: center; }
