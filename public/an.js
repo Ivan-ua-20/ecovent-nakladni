@@ -1,3 +1,4 @@
+import { plural } from './words.js';
 // Розділ «Аналітика»: дашборд (періоди, порівняння, фільтри, таргети, графік, розбивки) і його налаштування.
 // Дані рахує сервер (/api/an/query); тут — лише відображення.
 
@@ -320,15 +321,21 @@ export function createAnalyticsUI(ctx) {
         <p>Попросіть власника або адміністратора вказати ваш логін LP-CRM у розділі «Користувачі» — тоді тут з’являться ваші замовлення.</p></div>`;
       return;
     }
-    const tile = (label, value, sub, dl) => `<div class="kpi"><div class="kpi-l">${label}</div><div class="kpi-v">${value}</div>
+    // Плитка: головне значення, під ним — друга міра (сума або кількість), далі порівняння з попереднім періодом.
+    const tile = (label, value, also, sub, dl) => `<div class="kpi"><div class="kpi-l">${label}</div><div class="kpi-v">${value}</div>
+      ${also ? `<div class="kpi-m">${also}</div>` : ''}
       <div class="kpi-s">${dl || ''}${sub ? `<span class="muted">${sub}</span>` : ''}</div></div>`;
+    const orders = (n) => `${int(n)} ${plural(n, ['замовлення', 'замовлення', 'замовлень'])}`;
+    const ncnt = (x) => x.ncnt ?? (x.cnt - x.rcnt);
+    const rrev = (x) => x.rrev ?? (x.rev - x.net);
     const kpis = [
-      tile('Сума замовлень', uah(c.rev), hasCmp ? `було ${uah(p.rev)}` : 'усі статуси', hasCmp ? delta(c.rev, p.rev) : ''),
-      tile('Оборот без відмов', uah(c.net), hasCmp ? `було ${uah(p.net)}` : 'без відмов і повернень', hasCmp ? delta(c.net, p.net) : ''),
-      tile('Кількість замовлень', int(c.cnt), hasCmp ? `було ${int(p.cnt)}` : '', hasCmp ? delta(c.cnt, p.cnt) : ''),
-      tile('Середній чек', uah(c.avg), hasCmp ? `було ${uah(p.avg)}` : '', hasCmp ? delta(c.avg, p.avg) : ''),
-      tile('Відмови і повернення', `${int(c.rcnt)} <small>· ${pct1(c.rpct)}</small>`, hasCmp ? `було ${int(p.rcnt)} · ${pct1(p.rpct)}` : 'від усіх замовлень', hasCmp ? delta(c.rpct, p.rpct, { inverse: true, pp: true }) : ''),
-    ];
+      tile('Сума замовлень', uah(c.rev), `${orders(c.cnt)} · усі статуси`, hasCmp ? `було ${uah(p.rev)} · ${int(p.cnt)}` : '', hasCmp ? delta(c.rev, p.rev) : ''),
+      tile('Оборот без відмов', uah(c.net), `${orders(ncnt(c))} без відмов і повернень`, hasCmp ? `було ${uah(p.net)} · ${int(ncnt(p))}` : '', hasCmp ? delta(c.net, p.net) : ''),
+      c.drev != null ? tile('Завершені замовлення', uah(c.drev), `${orders(c.dcnt)} · ${pct1(c.dpct)} від усіх`, hasCmp ? `було ${uah(p.drev)} · ${int(p.dcnt)}` : '', hasCmp ? delta(c.drev, p.drev) : '') : '',
+      tile('Кількість замовлень', int(c.cnt), `на суму ${uah(c.rev)}`, hasCmp ? `було ${int(p.cnt)} на ${uah(p.rev)}` : '', hasCmp ? delta(c.cnt, p.cnt) : ''),
+      tile('Середній чек', uah(c.avg), `${orders(c.cnt)} на ${uah(c.rev)}`, hasCmp ? `було ${uah(p.avg)}` : '', hasCmp ? delta(c.avg, p.avg) : ''),
+      tile('Відмови і повернення', `${int(c.rcnt)} <small>· ${pct1(c.rpct)}</small>`, `на суму ${uah(rrev(c))}`, hasCmp ? `було ${int(p.rcnt)} · ${pct1(p.rpct)} на ${uah(rrev(p))}` : 'від усіх замовлень', hasCmp ? delta(c.rpct, p.rpct, { inverse: true, pp: true }) : ''),
+    ].filter(Boolean);
     if (t.applicable) {
       const ahead = t.diff >= 0;
       kpis.push(`<div class="kpi kpi-target"><div class="kpi-l">Виконання плану</div><div class="kpi-v">${pct1(t.pct)}</div>

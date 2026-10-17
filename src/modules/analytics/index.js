@@ -827,7 +827,8 @@ export function mountAnalytics(app, { db, fetchFn, shared = {} }) {
 
     // Готова відповідь з кешу: дані змінюються лише після оновлення або зміни налаштувань.
     const ver = (await db.get(`SELECT value FROM settings WHERE key = 'an_ver'`))?.value || '0';
-    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today }));
+    // kpi: 2 — у відповіді з'явилися завершені замовлення і сума відмов (старі збережені відповіді не підходять).
+    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today, kpi: 2 }));
     const hit = await db.get(`SELECT value FROM an_cache WHERE key = ?`, [cacheKey]);
     if (hit) return c.body(hit.value, 200, { 'content-type': 'application/json; charset=UTF-8' });
 
@@ -892,9 +893,20 @@ export function mountAnalytics(app, { db, fetchFn, shared = {} }) {
 
     // ---- підсумки
     const sumRows = (rows) => rows.reduce((a, r) => ({ rev: a.rev + (r.rev || 0), net: a.net + (r.net || 0), cnt: a.cnt + (r.cnt || 0), rcnt: a.rcnt + (r.rcnt || 0) }), { rev: 0, net: 0, cnt: 0, rcnt: 0 });
+    // Завершені: статус «Завершено» (за назвою статусу LP-CRM) або st.doneStatuses з налаштувань.
+    const statusNames0 = (await getJson('an_status_names')) || {};
+    const done = (Array.isArray(st.doneStatuses) && st.doneStatuses.length ? st.doneStatuses.map(Number)
+      : ok.filter((id) => /заверш|выполн|викон/i.test(statusNames0[id] || ''))).filter((id) => ok.includes(id));
+    const doneIds = done.length ? done : ok.filter((id) => id === 18);
     const kpi = (p) => {
       const t = sumRows(p.groups);
-      return { ...t, rev: round2(t.rev), net: round2(t.net), avg: t.cnt ? round2(t.rev / t.cnt) : 0, rpct: t.cnt ? round2((t.rcnt / t.cnt) * 100) : 0 };
+      const d = sumRows(p.groups.filter((r) => doneIds.includes(Number(r.status))));
+      return {
+        ...t, rev: round2(t.rev), net: round2(t.net), avg: t.cnt ? round2(t.rev / t.cnt) : 0, rpct: t.cnt ? round2((t.rcnt / t.cnt) * 100) : 0,
+        ncnt: t.cnt - t.rcnt, // замовлень без відмов
+        rrev: round2(t.rev - t.net), // сума відмов і повернень
+        drev: round2(d.rev), dcnt: d.cnt, dpct: t.cnt ? round2((d.cnt / t.cnt) * 100) : 0, // завершені
+      };
     };
     const fillDays = (p, a, z) => {
       const map = new Map((p?.daily || []).map((r) => [r.day, r]));
@@ -1010,7 +1022,7 @@ export function mountAnalytics(app, { db, fetchFn, shared = {} }) {
       cmp,
       compareEnabled: st.compare,
       targetBase: st.targetBase,
-      kpi: { cur: kpi(cur), prev: prev ? kpi(prev) : null },
+      kpi: { cur: kpi(cur), prev: prev ? kpi(prev) : null, doneStatuses: doneIds },
       daily: { cur: curDaily, prev: cmp ? fillDays(prev, cmp.from, cmp.to) : null },
       target,
       byDept, bySource, byManager, byStatus, byBrand, byCategory, top,
