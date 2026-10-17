@@ -16,11 +16,17 @@ const docFop = (f) => {
   return rest;
 };
 
-export function mountNakladni(app, { db, fetchFn, onCleanup }) {
+export function mountNakladni(app, { db, fetchFn, onCleanup, shared = {} }) {
   const settings = () => loadSettings(db);
-  const receiptCache = new Map();
+  shared.receiptCache ||= new Map();
+  const receiptCache = shared.receiptCache;
   // Строк зберігання версій накладних — «retention_days» з налаштувань.
   onCleanup((border) => db.run(`DELETE FROM versions WHERE created_at < ?`, [border]));
+  // Індекс пошуку замовлень: тримаємо лише період пошуку з налаштувань (+7 днів запасу).
+  onCleanup(async () => {
+    const days = (Number((await settings()).lpcrm_search_days) || 30) + 7;
+    await db.run(`DELETE FROM orders_index WHERE datetime != '' AND datetime < ?`, [new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)]);
+  });
 
   // ---------- Діагностика LP-CRM ----------
   app.get('/api/lpcrm/diagnose/:orderId', async (c) => {
@@ -91,7 +97,7 @@ export function mountNakladni(app, { db, fetchFn, onCleanup }) {
       );
       for (; i < statuses.length; i++) {
         const codes = await getOrderCodesByStatus(fetchFn, creds, statuses[i], start, end);
-        const known = new Set((await db.all(`SELECT code FROM orders_index`)).map((r) => r.code));
+        const known = new Set((await db.all(`SELECT code FROM orders_index WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => r.code));
         const fresh = codes.filter((c) => !known.has(c));
         for (let k = 0; k < fresh.length; k += 100) {
           await saveOrders(await getOrdersBatch(fetchFn, creds, fresh.slice(k, k + 100)));
@@ -107,19 +113,23 @@ export function mountNakladni(app, { db, fetchFn, onCleanup }) {
   }
 
   const SKIP_KEYS = new Set(['total', 'status', 'office', 'payment', 'delivery_id', 'attribute_status_id', 'localization']);
+  // Пошук у індексі робить база: точний збіг будь-якого простого поля замовлення або ТТН,
+  // інакше — телефон, що закінчується на введені цифри (від 9 цифр). Найновіші — першими.
   async function matchIndex(q) {
-    const rows = await db.all(`SELECT code, datetime, phone, ttn, data FROM orders_index ORDER BY datetime DESC`);
+    const strong = await db.all(
+      `SELECT code, datetime, phone, ttn FROM orders_index o
+       WHERE o.ttn = ? OR EXISTS (SELECT 1 FROM json_each(o.data) j
+         WHERE j.type IN ('text', 'integer', 'real') AND j.key NOT IN (SELECT value FROM json_each(?))
+           AND TRIM(CAST(j.value AS TEXT)) = ?)
+       ORDER BY datetime DESC`,
+      [q, JSON.stringify([...SKIP_KEYS]), q],
+    );
+    if (strong.length) return strong;
     const qd = digits(q);
-    const strong = [];
-    const weak = [];
-    for (const r of rows) {
-      const data = JSON.parse(r.data || '{}');
-      const exact = Object.entries(data).some(([k, v]) => v !== null && typeof v !== 'object' && !SKIP_KEYS.has(k) && String(v).trim() === q);
-      if (exact || r.ttn === q) strong.push(r);
-      else if (qd.length >= 9 && r.phone && r.phone.endsWith(qd)) weak.push(r);
-    }
-    return strong.length ? strong : weak;
+    if (qd.length < 9) return [];
+    return db.all(`SELECT code, datetime, phone, ttn FROM orders_index WHERE phone != '' AND phone LIKE ? ORDER BY datetime DESC`, [`%${qd}`]);
   }
+
 
   async function resolveCode(q, s, creds) {
     if (/^\d{11,}$/.test(q) && !q.startsWith('380')) return { code: q };
@@ -285,13 +295,16 @@ export function mountNakladni(app, { db, fetchFn, onCleanup }) {
     };
   }
 
+  // У версію не потрібна сира відповідь CRM (до 20 КБ) і службові поля — лише те, з чого малюється накладна.
+  const snapshotOf = ({ crmRaw, receiptCandidates, versionsCount, requestedId, ...rest }) => rest;
+
   async function addVersion(orderId, inv, reason, who = '') {
     const dataHash = hash(JSON.stringify([inv.order, inv.fop?.id, inv.template?.id, inv.template?.options]));
     await db.run(
       `INSERT INTO versions (order_id, created_at, reason, fop_id, fop_name, template_id, total, data_hash, data, user_name)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [orderId, nowIso(), reason, inv.fop?.id || null, inv.fop?.short_name || '', inv.template?.id || null,
-        inv.order.total, dataHash, JSON.stringify(inv), who],
+        inv.order.total, dataHash, JSON.stringify(snapshotOf(inv)), who],
     );
   }
 

@@ -204,7 +204,7 @@ function flattenCategories(node, parent = null, out = [], depth = 0) {
 }
 
 // =====================================================================
-export function mountAnalytics(app, { db, fetchFn }) {
+export function mountAnalytics(app, { db, fetchFn, shared = {} }) {
   const settings = () => loadSettings(db);
   const getSt = async () => {
     const r = await db.get(`SELECT value FROM settings WHERE key = 'an_settings'`);
@@ -284,7 +284,6 @@ export function mountAnalytics(app, { db, fetchFn }) {
   // Доступ: власник і адміністратори — усе; менеджер — лише дашборд зі своїми замовленнями
   // (за логінами LP-CRM, прив'язаними в «Користувачах») і оновлення даних.
   const OWN_ALLOWED = new Set(['POST /api/an/query', 'GET /api/an/sync', 'POST /api/an/sync/start', 'POST /api/an/sync/step']);
-  let checkedRemap = false;
   app.use('/api/an/*', async (c, next) => {
     const user = c.get('user');
     if (!can(user, 'analytics')) {
@@ -292,8 +291,8 @@ export function mountAnalytics(app, { db, fetchFn }) {
       if (!OWN_ALLOWED.has(`${c.req.method} ${c.req.path}`)) throw fail(403, 'Недостатньо прав для цієї дії.');
       c.set('anOwn', crmLogins(user.crm_logins));
     }
-    if (!checkedRemap) {
-      checkedRemap = true;
+    if (!shared.anRemapChecked) {
+      shared.anRemapChecked = true;
       const f = await db.get(`SELECT value FROM settings WHERE key = 'an_need_remap'`);
       if (f?.value === '1') {
         await remap(db, await getSt());
