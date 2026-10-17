@@ -2598,8 +2598,9 @@ async function call(fetchFn, subdomain, key, method, params, { sleepFn = sleep }
   let res;
   try {
     res = await doFetch(`https://${subdomain}.lp-crm.biz/api/${method}.html`);
-  } catch {
-    res = await doFetch(`http://${subdomain}.lp-crm.biz/api/${method}.html`);
+  } catch (e) {
+    if (e?.pending) throw e;
+    throw new Error(`\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u0437'\u0454\u0434\u043D\u0430\u0442\u0438\u0441\u044F \u0437 LP-CRM (${subdomain}.lp-crm.biz): ${e?.message || e}`);
   }
   for (let i = 0; res.status === 429 && i < RETRY_DELAYS_MS.length; i++) {
     await sleepFn(RETRY_DELAYS_MS[i]);
@@ -3731,6 +3732,19 @@ async function hashKey(str) {
   return [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
+// src/counters.js
+var FIRST = 10516;
+async function takeRahunokNumber(db) {
+  const r = await db.get(
+    `UPDATE settings SET value = CAST(COALESCE(NULLIF(CAST(value AS INTEGER), 0), ${FIRST}) + 1 AS TEXT)
+     WHERE key = 'rahunok_next_number' RETURNING CAST(value AS INTEGER) - 1 AS n`
+  );
+  if (r?.n) return String(r.n);
+  await db.run(`INSERT INTO settings (key, value) VALUES ('rahunok_next_number', ?) ON CONFLICT(key) DO NOTHING`, [String(FIRST + 1)]);
+  return String(FIRST);
+}
+var peekRahunokNumber = (s) => String(Number(s.rahunok_next_number) || FIRST);
+
 // src/odb.js
 var ODB_BASE = "https://iban.opendatabot.ua";
 var round22 = (n) => Math.round(n * 100) / 100;
@@ -3946,12 +3960,7 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
   });
   const LINK_COLS = `l.id, l.odb_id, l.number, l.order_ref, l.account_id, l.amount, l.purpose, l.client, l.url, l.page, l.status, l.paid_amount, l.paid_at,
     l.rahunok_id, l.created_at, l.created_by_id, l.created_by, ${ACC} AS account_alias, a.kind AS account_kind, a.iban AS account_iban`;
-  async function nextManualNumber() {
-    const s = await settings();
-    const n = Number(s.rahunok_next_number) || 10516;
-    await putSetting("rahunok_next_number", n + 1);
-    return String(n);
-  }
+  const nextManualNumber = () => takeRahunokNumber(db);
   async function createLink(c, { account_id, amount, number, order_ref = "", client = "", purpose = "", force = false, rahunok_id = null }) {
     const acc = await db.get(`SELECT * FROM odb_accounts WHERE id = ?`, [account_id]);
     if (!acc || !acc.enabled) throw fail(400, "\u0426\u0435\u0439 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E \u0434\u043B\u044F \u0444\u043E\u0440\u043C\u0443\u0432\u0430\u043D\u043D\u044F \u2014 \u0443\u0432\u0456\u043C\u043A\u043D\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u0432 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 \u0440\u0430\u0445\u0443\u043D\u043A\u0456\u0432.");
@@ -4028,7 +4037,7 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
       params
     );
     const s = await settings();
-    return c.json({ links: rows, lastSync: s.odb_sync_at || "", nextNumber: s.rahunok_next_number || "10516" });
+    return c.json({ links: rows, lastSync: s.odb_sync_at || "", nextNumber: peekRahunokNumber(s) });
   });
   app.get("/api/odb/links/:id", async (c) => {
     need(c, "docs.edit");
@@ -4443,7 +4452,7 @@ ${h(l.alias || "")}${l.created_by ? `
       const accs = new Map((await db.all(`SELECT iban, COALESCE(NULLIF(name, ''), NULLIF(alias, ''), iban) AS alias FROM odb_accounts`)).map((a) => [a.iban, a.alias]));
       const texts = recent.length > 5 ? [`<b>\u{1F4B0} \u041D\u043E\u0432\u0456 \u043D\u0430\u0434\u0445\u043E\u0434\u0436\u0435\u043D\u043D\u044F: ${recent.length}</b> \u043D\u0430 \u0441\u0443\u043C\u0443 ${uah(recent.reduce((t, r) => t + r.amount, 0))}`] : recent.map((r) => `<b>\u{1F4B0} ${uah(r.amount)}</b> \u2192 ${h(accs.get(r.iban) || r.iban)}
 \u0412\u0456\u0434: ${h(r.payer_name || "\u2014")}
-<i>${h(r.purpose).slice(0, 200)}</i>`);
+<i>${h(String(r.purpose || "").slice(0, 200))}</i>`);
       for (const a of txAdmins) for (const t of texts) out.push([a.tg_chat_id, t]);
     }
     let sent = 0;
@@ -4735,6 +4744,27 @@ async function testCheckbox(fetchFn, fop) {
   return { cashier: me?.full_name || "", organization: me?.organization?.title || "" };
 }
 
+// src/validate.js
+var IMAGE_FIELDS = ["logo", "signature", "stamp"];
+var MAX_IMAGE_CHARS = 3e6;
+var IMAGE_RE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/;
+var isSafeImage = (v) => {
+  const s = String(v ?? "");
+  return s === "" || s.length <= MAX_IMAGE_CHARS && IMAGE_RE.test(s);
+};
+function checkImages(body, fail) {
+  for (const k of IMAGE_FIELDS) {
+    if (body[k] !== void 0 && !isSafeImage(body[k])) {
+      throw fail(400, `\u041F\u043E\u043B\u0435 \xAB${k}\xBB: \u043F\u043E\u0442\u0440\u0456\u0431\u043D\u0430 \u043A\u0430\u0440\u0442\u0438\u043D\u043A\u0430 PNG, JPEG, WebP \u0430\u0431\u043E GIF (\u0434\u043E 2 \u041C\u0411).`);
+    }
+  }
+}
+function dropUnsafeImages(row) {
+  const out = { ...row };
+  for (const k of IMAGE_FIELDS) if (k in out && !isSafeImage(out[k])) out[k] = "";
+  return out;
+}
+
 // src/app.js
 var MASK = "\u2022\u2022\u2022\u2022\u2022\u2022";
 var SECRET_FOP_FIELDS = ["checkbox_password", "checkbox_pin", "checkbox_license"];
@@ -5013,6 +5043,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     const allowed = can(c.get("user"), "api") ? [...apiKeys, ...general] : general;
     if (body.rahunok_next_number !== void 0 && !/^\d{1,12}$/.test(String(body.rahunok_next_number).trim())) throw fail(400, "\u041D\u043E\u043C\u0435\u0440 \u0440\u0430\u0445\u0443\u043D\u043A\u0443 \u2014 \u043B\u0438\u0448\u0435 \u0446\u0438\u0444\u0440\u0438.");
     if (body.retention_days !== void 0 && !(Number(body.retention_days) >= 1)) throw fail(400, "\u0421\u0442\u0440\u043E\u043A \u0437\u0431\u0435\u0440\u0456\u0433\u0430\u043D\u043D\u044F \u2014 \u0449\u043E\u043D\u0430\u0439\u043C\u0435\u043D\u0448\u0435 1 \u0434\u0435\u043D\u044C.");
+    if (body.lpcrm_subdomain !== void 0 && !/^[a-z0-9-]{1,63}$/i.test(String(body.lpcrm_subdomain).trim())) throw fail(400, "\u041F\u0456\u0434\u0434\u043E\u043C\u0435\u043D LP-CRM \u2014 \u043B\u0438\u0448\u0435 \u043B\u0430\u0442\u0438\u043D\u0441\u044C\u043A\u0456 \u043B\u0456\u0442\u0435\u0440\u0438, \u0446\u0438\u0444\u0440\u0438 \u0439 \u0434\u0435\u0444\u0456\u0441.");
     for (const k of allowed) {
       if (body[k] === void 0 || body[k] === MASK) continue;
       await db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [
@@ -5027,6 +5058,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     need(c, "refs.edit");
     const b = await c.req.json();
     if (!b.short_name) return c.json({ error: "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043A\u043E\u0440\u043E\u0442\u043A\u0443 \u043D\u0430\u0437\u0432\u0443 \u0424\u041E\u041F" }, 400);
+    checkImages(b, fail);
     const cols = fopCols(c, b);
     const r = await db.run(
       `INSERT INTO fops (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`,
@@ -5037,6 +5069,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   app.put("/api/fops/:id", async (c) => {
     need(c, "refs.edit");
     const b = await c.req.json();
+    checkImages(b, fail);
     const cols = fopCols(c, b);
     if (!cols.length) return c.json({ ok: true });
     await db.run(`UPDATE fops SET ${cols.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, [
@@ -5060,25 +5093,23 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   app.put("/api/offices", async (c) => {
     need(c, "refs.edit");
     const list = await c.req.json();
-    for (const o of list) {
-      if (!o.office_id) continue;
-      await db.run(
-        `INSERT INTO offices (office_id, name, fop_id, seller_text) VALUES (?, ?, ?, ?)
-         ON CONFLICT(office_id) DO UPDATE SET name = excluded.name, fop_id = excluded.fop_id, seller_text = excluded.seller_text`,
-        [String(o.office_id).trim(), o.name || "", o.fop_id || null, String(o.seller_text || "").trim()]
-      );
-    }
+    await db.batch((Array.isArray(list) ? list : []).filter((o) => o.office_id).map((o) => [
+      `INSERT INTO offices (office_id, name, fop_id, seller_text) VALUES (?, ?, ?, ?)
+       ON CONFLICT(office_id) DO UPDATE SET name = excluded.name, fop_id = excluded.fop_id, seller_text = excluded.seller_text`,
+      [String(o.office_id).trim(), o.name || "", o.fop_id || null, String(o.seller_text || "").trim()]
+    ]));
     return c.json({ ok: true });
   });
   app.put("/api/channels", async (c) => {
     need(c, "refs.edit");
     const list = await c.req.json();
-    await db.run(`DELETE FROM channels`);
-    for (const ch of list) {
+    const st = [[`DELETE FROM channels`, []]];
+    for (const ch of Array.isArray(list) ? list : []) {
       const name = String(ch.name || "").trim();
       if (!name) continue;
-      await db.run(`INSERT INTO channels (name, fop_id, seller_text) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET fop_id = excluded.fop_id, seller_text = excluded.seller_text`, [name, ch.fop_id || null, String(ch.seller_text || "").trim()]);
+      st.push([`INSERT INTO channels (name, fop_id, seller_text) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET fop_id = excluded.fop_id, seller_text = excluded.seller_text`, [name, ch.fop_id || null, String(ch.seller_text || "").trim()]]);
     }
+    await db.batch(st);
     return c.json({ ok: true });
   });
   app.delete("/api/offices/:id", async (c) => {
@@ -5143,14 +5174,13 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     return list;
   }
   async function saveOrders2(orders) {
-    for (const o of orders) {
-      await db.run(
-        `INSERT INTO orders_index (code, datetime, phone, ttn, bayer_name, data, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(code) DO UPDATE SET datetime = excluded.datetime, phone = excluded.phone, ttn = excluded.ttn,
-         bayer_name = excluded.bayer_name, data = excluded.data, fetched_at = excluded.fetched_at`,
-        [String(o.order_id), o.datetime || "", digits(o.phone), String(o.ttn || ""), o.bayer_name || "", JSON.stringify(o), nowIso()]
-      );
-    }
+    const now = nowIso();
+    await db.batch(orders.map((o) => [
+      `INSERT INTO orders_index (code, datetime, phone, ttn, bayer_name, data, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(code) DO UPDATE SET datetime = excluded.datetime, phone = excluded.phone, ttn = excluded.ttn,
+       bayer_name = excluded.bayer_name, data = excluded.data, fetched_at = excluded.fetched_at`,
+      [String(o.order_id), o.datetime || "", digits(o.phone), String(o.ttn || ""), o.bayer_name || "", JSON.stringify(o), now]
+    ]));
   }
   async function syncIndex(creds, days, found = async () => []) {
     if (syncing) {
@@ -5488,21 +5518,26 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     const b = await c.req.json();
     if (!b?.tables) throw fail(400, "\u0426\u0435 \u043D\u0435 \u0444\u0430\u0439\u043B \u0435\u043A\u0441\u043F\u043E\u0440\u0442\u0443 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u044C.");
     const counts = {};
+    const st = [];
     for (const t of EXPORT_TABLES) {
       const rows = b.tables[t];
       if (!Array.isArray(rows)) continue;
       const cols = new Set((await db.all(`PRAGMA table_info(${t})`)).map((x) => x.name));
-      await db.run(`DELETE FROM ${t}`);
-      for (const r of rows) {
+      st.push([`DELETE FROM ${t}`, []]);
+      for (const r0 of rows) {
+        const r = dropUnsafeImages(r0 || {});
         const keys = Object.keys(r).filter((k) => cols.has(k) && !SECRET_COLS.has(k));
-        await db.run(`INSERT INTO ${t} (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`, keys.map((k) => r[k]));
+        if (!keys.length) continue;
+        st.push([`INSERT INTO ${t} (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`, keys.map((k) => r[k])]);
       }
       counts[t] = rows.length;
     }
     for (const [k, v] of Object.entries(b.settings || {})) {
       if (!EXPORT_SETTINGS.includes(k)) continue;
-      await db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, String(v)]);
+      if (k === "lpcrm_subdomain" && !/^[a-z0-9-]{1,63}$/i.test(String(v).trim())) continue;
+      st.push([`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, String(v)]]);
     }
+    await db.batch(st);
     return c.json({ ok: true, counts });
   });
   const INV_FOP_FIELDS = ["short_name", "full_name", "ipn", "iban", "bank", "address", "phone", "warning_text", "signature", "stamp", "active"];
@@ -5510,6 +5545,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     need(c, "users");
     const b = await c.req.json();
     if (!String(b.short_name || "").trim()) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043A\u043E\u0440\u043E\u0442\u043A\u0443 \u043D\u0430\u0437\u0432\u0443 \u0424\u041E\u041F.");
+    checkImages(b, fail);
     const cols = INV_FOP_FIELDS.filter((k) => b[k] !== void 0);
     const r = await db.run(`INSERT INTO inv_fops (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`, cols.map((k) => b[k]));
     return c.json({ id: r.lastId });
@@ -5517,6 +5553,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   app.put("/api/inv-fops/:id", async (c) => {
     need(c, "refs.edit");
     const b = await c.req.json();
+    checkImages(b, fail);
     const cols = INV_FOP_FIELDS.filter((k) => b[k] !== void 0);
     if (cols.length) {
       await db.run(`UPDATE inv_fops SET ${cols.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, [...cols.map((k) => b[k]), c.req.param("id")]);
@@ -5585,7 +5622,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
       q ? [`%${q}%`, `%${q}%`, `%${q}%`] : []
     );
     const s = await settings();
-    return c.json({ rows, nextNumber: s.rahunok_next_number || "10516", retentionDays: Number(s.retention_days) || 7 });
+    return c.json({ rows, nextNumber: peekRahunokNumber(s), retentionDays: Number(s.retention_days) || 7 });
   });
   app.get("/api/rahunky/:id", async (c) => {
     const row = await db.get(`SELECT * FROM invoices WHERE id = ?`, [c.req.param("id")]);
@@ -5595,18 +5632,13 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   app.post("/api/rahunky", async (c) => {
     need(c, "docs.edit");
     const b = await c.req.json();
-    let number;
+    let number = "";
     if (b.source === "crm") {
       number = String(b.number || "").trim();
       if (!number) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u043D\u043E\u043C\u0435\u0440\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F CRM.");
-    } else {
-      const s = await settings();
-      number = String(Number(s.rahunok_next_number) || 10516);
     }
     const data = await buildRahunok(b, number);
-    if (b.source !== "crm") {
-      await db.run(`UPDATE settings SET value = ? WHERE key = 'rahunok_next_number'`, [String(Number(number) + 1)]);
-    }
+    if (b.source !== "crm") data.number = await takeRahunokNumber(db);
     if (b.qr) data.pay = await odbApi.linkForRahunok(c, data);
     const r = await db.run(
       `INSERT INTO invoices (number, source, order_ref, fop_id, fop_name, client_name, total, data, created_at, created_by)
