@@ -515,3 +515,4 @@ table.list tr.click:focus-visible td { background: #f6f8f7; }
 .send-sec + .send-sec { border-top: 1px solid var(--line); padding-top: 16px; }
 .send-sec h4 { margin: 0; font-size: 14px; }
 .send-apps .btn { flex: 1 1 auto; justify-content: center; }
+.kpi-m { font-size: 13px; color: var(--ink); font-variant-numeric: tabular-nums; }

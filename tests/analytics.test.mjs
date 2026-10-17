@@ -122,6 +122,12 @@ assert.equal(q.kpi.cur.cnt, expect.length, 'кількість замовлен�
 assert.ok(Math.abs(q.kpi.cur.rev - expRev) < 0.05, 'сума замовлень');
 assert.equal(q.kpi.cur.rcnt, expRef.length, 'відмови = відмова на пошті + повернуто на склад');
 assert.ok(Math.abs(q.kpi.cur.net - (expRev - expRef.reduce((s, o) => s + Number(o.total), 0))) < 0.05, 'оборот без відмов');
+const expDone = expect.filter((o) => o.status === '18');
+assert.equal(q.kpi.cur.dcnt, expDone.length, 'завершені — статус «Завершено»');
+assert.ok(Math.abs(q.kpi.cur.drev - expDone.reduce((s, o) => s + Number(o.total), 0)) < 0.05, 'сума завершених');
+assert.ok(Math.abs(q.kpi.cur.rrev - expRef.reduce((s, o) => s + Number(o.total), 0)) < 0.05, 'сума відмов і повернень');
+assert.equal(q.kpi.cur.ncnt, expect.length - expRef.length, 'кількість без відмов');
+assert.deepEqual(q.kpi.doneStatuses, [18]);
 assert.equal(q.daily.cur.length, daysBetween(from, today));
 assert.ok(q.kpi.prev && q.kpi.prev.cnt > 0, 'є порівняння');
 assert.ok(q.byStatus.find((x) => x.id === 54).refuse);
