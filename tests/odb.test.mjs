@@ -228,6 +228,15 @@ assert.ok(regAcc.id === reg.id && !regAcc.seen && regAcc.name === 'ФОП Ага
 await req('PUT', '/api/odb/accounts/a2', { name: 'ФОП Агафіца А.М. (моно)' });
 assert.equal(ACCS.find((a) => a.id === 'a2').alias, 'ФОП Агафіца А.М. (моно)', 'перейменування передається в Opendatabot');
 
+// назва «Отримувача» з Opendatabot підтягується; задана вручну — зберігається
+ACCS.find((x) => x.id === 'a3').recipientName = 'ТОВ «ЕКОВЕНТ-ДИСТРИБ’ЮШН»';
+ACCS.find((x) => x.id === 'a3').alias = '';
+let a4 = (await req('GET', '/api/odb/accounts?refresh=1')).accounts.find((x) => x.id === 'a3');
+assert.equal(a4.alias, 'ТОВ «ЕКОВЕНТ-ДИСТРИБ’ЮШН» (Приват)', 'назва отримувача з API');
+await req('PUT', '/api/odb/accounts/a3', { name: 'Ековент ТОВ (Приват)' });
+a4 = (await req('GET', '/api/odb/accounts?refresh=1')).accounts.find((x) => x.id === 'a3');
+assert.equal(a4.alias, 'Ековент ТОВ (Приват)', 'ручна назва не перезаписується');
+
 // ФОП рахунків: назва з рахунку, видалення вручну доданих
 await req('PUT', '/api/odb/accounts/a1', { name: 'ФОП Лупу Віра (Приват)' });
 assert.equal((await db.get(`SELECT short_name FROM inv_fops WHERE odb_id = 'a1'`)).short_name, 'ФОП Лупу Віра (Приват)', 'назва рахунку → ФОП рахунків');
@@ -282,12 +291,12 @@ assert.ok(Math.abs(st.total.sum - exp26.s) < 0.01);
 assert.equal(st.series.reduce((t, r) => t + r.cnt, 0), exp26.n, 'стовпчики по місяцях сходяться з підсумком');
 assert.ok(st.series.every((r) => /^2026-\d{2}$/.test(r.k)));
 assert.equal(st.prevTotal.cnt, 1, 'порівняння з попереднім періодом');
-assert.ok(st.byAccount.some((a) => a.name.startsWith('ТОВ Ековент')));
+assert.ok(st.byAccount.some((a) => a.id === 'a3'));
 assert.ok(st.byPayer.some((p) => p.code === '37193071'), 'платник за ЄДРПОУ');
 const wk = await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31&group=week');
 assert.ok(wk.series.every((r) => new Date(r.k + 'T00:00:00Z').getUTCDay() === 1), 'тижні з понеділка');
 const onlyTov = await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31&accounts=a3');
-assert.ok(onlyTov.byAccount.length === 1 && onlyTov.byAccount[0].name.startsWith('ТОВ Ековент'), 'фільтр за рахунком');
+assert.ok(onlyTov.byAccount.length === 1 && onlyTov.byAccount[0].id === 'a3', 'фільтр за рахунком');
 await req('PUT', '/api/odb/payers/37193071', { name: 'Rozetka' });
 assert.equal((await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31')).byPayer.find((p) => p.code === '37193071').name, 'Rozetka', 'своя назва платника');
 const onlyPayer = await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31&payer=37193071');

@@ -164,6 +164,8 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
       st.push([`UPDATE odb_accounts SET id = 'iban:' || iban, enabled = 0, seen = 1 WHERE id NOT LIKE 'iban:%' AND id NOT IN (SELECT value FROM json_each(?))
         AND NOT EXISTS (SELECT 1 FROM odb_accounts b WHERE b.id = 'iban:' || odb_accounts.iban)`, [JSON.stringify(ids)]]);
       st.push([`DELETE FROM odb_accounts WHERE id NOT LIKE 'iban:%' AND id NOT IN (SELECT value FROM json_each(?))`, [JSON.stringify(ids)]]);
+      // назва з Opendatabot («Отримувач») замінює автоматичну; назви, задані вручну (✎), не чіпаємо
+      st.push([`UPDATE odb_accounts SET name = '' WHERE name_manual = 0 AND alias != '' AND id NOT LIKE 'iban:%'`, []]);
       await db.batch(st);
     }
     await addSeenAccounts();
@@ -187,7 +189,7 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
       // Перейменування: у нас і (для налаштувань IBAN) — в Opendatabot
       const name = String(b.name || '').trim().slice(0, 120);
       const oldName = acc.name || acc.alias || '';
-      await db.run(`UPDATE odb_accounts SET name = ? WHERE id = ?`, [name, acc.id]);
+      await db.run(`UPDATE odb_accounts SET name = ?, name_manual = ? WHERE id = ?`, [name, name ? 1 : 0, acc.id]);
       // ФОП рахунків, створений з цього рахунку, отримує нову назву, якщо її ще не змінювали вручну
       if (name) await db.run(`UPDATE inv_fops SET short_name = ? WHERE odb_id = ? AND (short_name = ? OR short_name = ? OR short_name = '')`, [name, acc.id, oldName, `ФОП ${acc.code}`]);
       if (!acc.id.startsWith('iban:') && name) {

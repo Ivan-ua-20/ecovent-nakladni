@@ -319,6 +319,7 @@ const ADD_COLUMNS = [
   ['users', 'tg_all_tx', 'INTEGER DEFAULT 0'],
   ['odb_accounts', 'name', "TEXT DEFAULT ''"],
   ['odb_accounts', 'seen', 'INTEGER DEFAULT 0'],
+  ['odb_accounts', 'name_manual', 'INTEGER DEFAULT 0'],
   ['odb_tx', 'our_code', "TEXT DEFAULT ''"],
   ['channels', 'seller_text', "TEXT DEFAULT ''"],
   ['versions', 'user_name', "TEXT DEFAULT ''"],
@@ -330,7 +331,7 @@ const ADD_COLUMNS = [
 ];
 
 // Підвищуйте при зміні схеми: тоді міграція виконається знову (на Cloudflare — один раз на запуск ізолята).
-const SCHEMA_VERSION = '16';
+const SCHEMA_VERSION = '17';
 
 // Початкові відділи аналітики, джерела і відповідності (усе редагується в «Налаштуваннях аналітики»).
 const MP_SOURCES = [

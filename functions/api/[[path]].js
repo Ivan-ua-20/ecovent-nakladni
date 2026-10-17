@@ -2269,6 +2269,7 @@ var ADD_COLUMNS = [
   ["users", "tg_all_tx", "INTEGER DEFAULT 0"],
   ["odb_accounts", "name", "TEXT DEFAULT ''"],
   ["odb_accounts", "seen", "INTEGER DEFAULT 0"],
+  ["odb_accounts", "name_manual", "INTEGER DEFAULT 0"],
   ["odb_tx", "our_code", "TEXT DEFAULT ''"],
   ["channels", "seller_text", "TEXT DEFAULT ''"],
   ["versions", "user_name", "TEXT DEFAULT ''"],
@@ -2278,7 +2279,7 @@ var ADD_COLUMNS = [
   ["an_products", "cat_manual", "INTEGER"],
   ["an_products", "seen", "INTEGER NOT NULL DEFAULT 0"]
 ];
-var SCHEMA_VERSION = "16";
+var SCHEMA_VERSION = "17";
 var MP_SOURCES = [
   ["Rozetka (OneDay)", ["rozetka(oneday)"]],
   ["Rozetka (Ecovent)", ["rozetka(ecovent)"]],
@@ -3879,6 +3880,7 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
       st.push([`UPDATE odb_accounts SET id = 'iban:' || iban, enabled = 0, seen = 1 WHERE id NOT LIKE 'iban:%' AND id NOT IN (SELECT value FROM json_each(?))
         AND NOT EXISTS (SELECT 1 FROM odb_accounts b WHERE b.id = 'iban:' || odb_accounts.iban)`, [JSON.stringify(ids)]]);
       st.push([`DELETE FROM odb_accounts WHERE id NOT LIKE 'iban:%' AND id NOT IN (SELECT value FROM json_each(?))`, [JSON.stringify(ids)]]);
+      st.push([`UPDATE odb_accounts SET name = '' WHERE name_manual = 0 AND alias != '' AND id NOT LIKE 'iban:%'`, []]);
       await db.batch(st);
     }
     await addSeenAccounts();
@@ -3898,7 +3900,7 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     if (b.name !== void 0) {
       const name = String(b.name || "").trim().slice(0, 120);
       const oldName = acc.name || acc.alias || "";
-      await db.run(`UPDATE odb_accounts SET name = ? WHERE id = ?`, [name, acc.id]);
+      await db.run(`UPDATE odb_accounts SET name = ?, name_manual = ? WHERE id = ?`, [name, name ? 1 : 0, acc.id]);
       if (name) await db.run(`UPDATE inv_fops SET short_name = ? WHERE odb_id = ? AND (short_name = ? OR short_name = ? OR short_name = '')`, [name, acc.id, oldName, `\u0424\u041E\u041F ${acc.code}`]);
       if (!acc.id.startsWith("iban:") && name) {
         const cr = await creds().catch(() => null);
