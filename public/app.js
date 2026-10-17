@@ -15,11 +15,16 @@ const MASK = '••••••';
 // Сервер на Cloudflare може відповісти «обробка триває» (202), якщо пошук у LP-CRM довгий, — тоді повторюємо запит.
 let onPending = null;
 async function api(method, url, body, attempt = 0) {
-  const res = await fetch(url, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new Error('Немає зв’язку із сервером — зміни не збережено. Перевірте інтернет і спробуйте ще раз.');
+  }
   const json = await res.json().catch(() => ({}));
   if (res.status === 202 && json.pending) {
     if (attempt >= 60) throw new Error('Пошук триває надто довго. Спробуйте ще раз або введіть код замовлення.');
@@ -28,9 +33,17 @@ async function api(method, url, body, attempt = 0) {
     return api(method, url, body, attempt + 1);
   }
   if (res.status === 401 && !url.startsWith('/api/auth/')) { showAuth(); throw new Error(json.error || 'Потрібно увійти'); }
-  if (!res.ok) throw new Error(json.error || `Помилка ${res.status}`);
+  if (!res.ok) throw new Error(json.error || (res.status >= 500 ? 'Сервер не зміг виконати дію. Спробуйте ще раз за хвилину.' : 'Дію не виконано. Оновіть сторінку і спробуйте ще раз.'));
   return json;
 }
+
+// Рядки таблиць, що відкриваються кліком, доступні й з клавіатури (Tab, Enter / Пробіл).
+new MutationObserver(() => {
+  for (const el of document.querySelectorAll('tr.click:not([tabindex])')) el.tabIndex = 0;
+}).observe(document.body, { childList: true, subtree: true });
+document.addEventListener('keydown', (e) => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('tr.click')) { e.preventDefault(); e.target.click(); }
+});
 
 let toastTimer;
 function toast(msg, bad = false) {
@@ -41,18 +54,59 @@ function toast(msg, bad = false) {
   toastTimer = setTimeout(() => (t.className = ''), bad ? 5000 : 2600);
 }
 
-function modal(title, bodyHtml, { footer = '', wide = false } = {}) {
+// Діалог: Esc закриває, Tab не виходить за межі вікна, після закриття фокус повертається туди, звідки відкрили.
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+let modalSeq = 0;
+function modal(title, bodyHtml, { footer = '', wide = false, focus = '' } = {}) {
+  const opener = document.activeElement;
+  const titleId = `modal-title-${++modalSeq}`;
   const bg = document.createElement('div');
   bg.className = 'modal-bg';
-  bg.innerHTML = `<div class="modal" style="${wide ? 'width:min(1000px,100%)' : ''}">
-    <div class="modal-head"><h3>${esc(title)}</h3><button class="btn sm" data-close>✕</button></div>
+  bg.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="${titleId}" style="${wide ? 'width:min(1000px,100%)' : ''}">
+    <div class="modal-head"><h3 id="${titleId}">${esc(title)}</h3><button class="btn sm icon" data-close aria-label="Закрити вікно">✕</button></div>
     <div class="modal-body">${bodyHtml}</div>
     ${footer ? `<div class="modal-foot">${footer}</div>` : ''}
   </div>`;
-  const close = () => bg.remove();
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    bg.remove();
+    document.removeEventListener('keydown', onKey, true);
+    if (opener && document.contains(opener)) opener.focus?.();
+  };
+  const onKey = (e) => {
+    if (!document.contains(bg)) return;
+    const all = document.querySelectorAll('.modal-bg');
+    if (all[all.length - 1] !== bg) return; // діє лише верхнє вікно
+    if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); close(); return; }
+    if (e.key !== 'Tab') return;
+    const items = [...bg.querySelectorAll(FOCUSABLE)].filter((x) => x.offsetParent !== null);
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
   bg.addEventListener('click', (e) => { if (e.target === bg || e.target.closest('[data-close]')) close(); });
+  document.addEventListener('keydown', onKey, true);
   document.body.appendChild(bg);
+  const start = (focus && bg.querySelector(focus)) || bg.querySelector('.modal-body ' + FOCUSABLE) || bg.querySelector('[data-close]');
+  start?.focus();
   return { el: bg, close };
+}
+
+// Підтвердження незворотної дії: назва об'єкта в заголовку, кнопка з дієсловом, фокус на «Скасувати».
+function confirmDanger(title, text, verb) {
+  return new Promise((resolve) => {
+    let done = false;
+    const m = modal(title, `<p style="margin:0">${text}</p>`, {
+      footer: `<button class="btn" data-close id="cdNo">Скасувати</button><button class="btn danger solid" id="cdYes">${esc(verb)}</button>`,
+      focus: '#cdNo',
+    });
+    $('#cdYes', m.el).onclick = () => { done = true; m.close(); resolve(true); };
+    new MutationObserver((_, obs) => { if (!document.contains(m.el)) { obs.disconnect(); if (!done) resolve(false); } }).observe(document.body, { childList: true });
+  });
 }
 
 const fmtDateTime = (iso) => {
@@ -578,7 +632,10 @@ async function viewHistory() {
       ? `<table class="list"><thead><tr><th>Замовлення</th><th>ФОП (остання версія)</th><th>Сума</th><th>Версій</th><th>Остання зміна</th></tr></thead><tbody>
         ${rows.map((r) => `<tr class="click" data-o="${esc(r.order_id)}"><td><b>№${esc(r.order_id)}</b></td><td>${esc(r.fop_name || '—')}</td><td>${money(r.total)} грн</td><td>${r.versions}</td><td>${esc(fmtDateTime(r.last_at))}</td></tr>`).join('')}
         </tbody></table>`
-      : '<div class="card empty">Ще немає сформованих накладних</div>';
+      : ($('#hQ').value || $('#hFop').value
+        ? '<div class="card empty"><div class="big">Нічого не знайдено</div>Спробуйте інший номер або інший ФОП.<div class="btn-row" style="justify-content:center;margin-top:12px"><button class="btn" id="hClear">Скинути фільтри</button></div></div>'
+        : '<div class="card empty"><div class="big">Ще немає сформованих накладних</div>Тут з’являться накладні, які ви відкриєте за номером замовлення.<div class="btn-row" style="justify-content:center;margin-top:12px"><a class="btn primary" href="#/invoice">Сформувати накладну</a></div></div>');
+    $('#hClear') && ($('#hClear').onclick = () => { $('#hQ').value = ''; $('#hFop').value = ''; $('#hQ').dispatchEvent(new Event('input', { bubbles: true })); $('#hFop').dispatchEvent(new Event('change', { bubbles: true })); });
     $$('[data-o]').forEach((tr) => (tr.onclick = () => (location.hash = `#/invoice/${encodeURIComponent(tr.dataset.o)}`)));
   };
   let t;
@@ -787,7 +844,11 @@ async function viewOffices() {
   $('#oBody').addEventListener('click', async (e) => {
     const b = e.target.closest('[data-del]');
     if (!b) return;
-    if (b.dataset.del) await api('DELETE', `/api/offices/${encodeURIComponent(b.dataset.del)}`);
+    if (b.dataset.del) {
+      const name = b.closest('tr').querySelector('[data-k=name]')?.value || '';
+      if (!(await confirmDanger(`Видалити відділ ${b.dataset.del}${name ? ` «${name}»` : ''}?`, 'Відділ зникне з довідника. Накладні, які вже сформовано, не зміняться.', 'Видалити відділ'))) return;
+      try { await api('DELETE', `/api/offices/${encodeURIComponent(b.dataset.del)}`); } catch (er) { toast(er.message, true); return; }
+    }
     b.closest('tr').remove();
   });
   $('#oSave').onclick = async () => {
@@ -906,6 +967,7 @@ function viewTemplateForm(id) {
     location.hash = `#/templates/${r.id}`;
   };
   $('#tDel').onclick = async () => {
+    if (!(await confirmDanger(`Видалити шаблон «${t.name}»?`, 'Шаблон зникне зі списку. Уже збережені версії накладних не зміняться.', 'Видалити шаблон'))) return;
     try { await api('DELETE', `/api/templates/${id}`); toast('Видалено'); location.hash = '#/templates'; } catch (err) { toast(err.message, true); }
   };
 }
@@ -1064,7 +1126,7 @@ async function viewRahunkyList() {
           <td class="small">${esc(fmtDateTime(x.created_at))}<br><span class="muted">${esc(x.created_by || '')}</span></td>
           <td><div class="btn-row" style="justify-content:flex-end"><button class="btn sm" data-word="${x.id}">Word</button><button class="btn sm" data-pdf="${x.id}">PDF</button></div></td></tr>`).join('')}
         </tbody></table></div>`
-      : '<div class="card empty">Рахунків ще немає</div>') + `<div class="small muted" style="margin-top:8px">Рахунки зберігаються ${r.retentionDays} дн. Наступний номер ручного рахунку: ${esc(r.nextNumber)}.</div>`;
+      : `<div class="card empty"><div class="big">Рахунків ще немає</div>Створений рахунок можна завантажити у Word або PDF і надіслати клієнту.${can('docs.edit') ? '<div class="btn-row" style="justify-content:center;margin-top:12px"><a class="btn primary" href="#/rahunky">Створити рахунок</a></div>' : ''}</div>`) + `<div class="small muted" style="margin-top:8px">Рахунки зберігаються ${r.retentionDays} дн. Наступний номер ручного рахунку: ${esc(r.nextNumber)}.</div>`;
     $$('[data-r]').forEach((tr) => (tr.onclick = (e) => {
       if (e.target.closest('button')) return;
       location.hash = `#/rahunky/edit/${tr.dataset.r}`;
@@ -1235,6 +1297,7 @@ async function rahunokForm({ mode, id }) {
     try { const d = await persist(); toast(`Рахунок № ${d.number} збережено`); } catch (er) { toast(er.message, true); }
   });
   $('#rDel') && ($('#rDel').onclick = async () => {
+    if (!(await confirmDanger(`Видалити рахунок № ${saved.number || saved.data?.number || ''}?`, 'Рахунок зникне зі списку назавжди. QR-посилання на оплату, якщо воно є, залишиться в розділі оплат.', 'Видалити рахунок'))) return;
     try { await api('DELETE', `/api/rahunky/${saved.id}`); toast('Рахунок видалено'); location.hash = '#/rlist'; } catch (er) { toast(er.message, true); }
   });
 }
@@ -1256,7 +1319,7 @@ async function viewInvFops(id) {
         <div class="tags">${ok ? '<span class="badge ok">реквізити є</span>' : '<span class="badge warn">заповніть реквізити</span>'}
           ${f.signature ? '<span class="badge">підпис</span>' : ''}${f.stamp ? '<span class="badge">печатка</span>' : ''}
           ${f.odb_id ? '<span class="badge info">Opendatabot · QR</span>' : ''}${f.active ? '' : '<span class="badge bad">вимкнено</span>'}</div></a>`;
-    }).join('')}</div>` : '<div class="card empty">Ще немає ФОПів для рахунків</div>'}`;
+    }).join('')}</div>` : `<div class="card empty"><div class="big">Ще немає ФОПів для рахунків</div>Від цих ФОПів виставляються рахунки на оплату.${can('users') ? '<div class="btn-row" style="justify-content:center;margin-top:12px"><a class="btn primary" href="#/invfops/new">Додати ФОП</a></div>' : ''}</div>`}`;
 }
 
 function invFopForm(id) {
@@ -1304,8 +1367,8 @@ function invFopForm(id) {
   if (!isNew) auditCard('inv_fop', id, $('#ifAudit'));
   const del = $('#ifDel');
   if (del) del.onclick = () => {
-    const m = modal('Видалити ФОП?', `<p>ФОП «${esc(f.short_name)}» зникне зі списку. Уже сформовані рахунки збережуться без змін.</p>`,
-      { footer: '<button class="btn" data-close>Скасувати</button><button class="btn danger" id="ifDelGo">Видалити</button>' });
+    const m = modal(`Видалити ФОП «${f.short_name}»?`, `<p>ФОП «${esc(f.short_name)}» зникне зі списку. Уже сформовані рахунки збережуться без змін.</p>`,
+      { footer: '<button class="btn" data-close id="ifDelNo">Скасувати</button><button class="btn danger solid" id="ifDelGo">Видалити ФОП</button>', focus: '#ifDelNo' });
     $('#ifDelGo', m.el).onclick = async () => {
       try { await api('DELETE', `/api/inv-fops/${id}`); m.close(); toast('ФОП видалено'); await loadBoot(); location.hash = '#/invfops'; } catch (er) { toast(er.message, true); }
     };
@@ -1375,6 +1438,7 @@ async function viewUsers() {
       } catch (e) { toast(e.message, true); }
     };
     $('#uDel', m.el) && ($('#uDel', m.el).onclick = async () => {
+      if (!(await confirmDanger(`Видалити користувача «${u.login}»?`, 'Користувач більше не зможе увійти. Його накладні й рахунки залишаться.', 'Видалити користувача'))) return;
       try { await api('DELETE', `/api/users/${u.id}`); m.close(); toast('Видалено'); viewUsers(); } catch (e) { toast(e.message, true); }
     });
   };
