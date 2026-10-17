@@ -26,6 +26,7 @@ npm start          # http://localhost:8787
 ```
 src/
   app.js           збирає модулі (порядок: auth першим) і передає їм ctx
+  migrate.js       міграції: кожен модуль — свої таблиці і своя версія схеми (ключ settings «schema:<модуль>»)
   core/            спільне: база (SQLite / D1), схема, ролі й паролі, налаштування, гроші, дати,
                    лічильник номерів рахунків, перевірка картинок, журнал змін реквізитів
   integrations/    лише клієнти API: lpcrm.js, checkbox.js
@@ -45,7 +46,8 @@ public/
 ```
 
 Правила: модуль не імпортує внутрішні файли іншого модуля; таблиці модуля пише лише сам модуль;
-спільне — тільки в `core/`. Чистку за строком зберігання кожен модуль реєструє сам (`onCleanup`).
+спільне — тільки в `core/`. Таблиці модуля описані в `modules/<модуль>/schema.js`;
+при зміні схеми підвищуйте `version` цього модуля — міграція виконається лише для нього. Чистку за строком зберігання кожен модуль реєструє сам (`onCleanup`).
 
 ## Аналітика
 
@@ -72,6 +74,7 @@ node --no-warnings tests/d1-budget.test.mjs   # кількість запиті�
 node --no-warnings tests/security.test.mjs    # картинки ФОП (XSS) і номери рахунків без дублів
 node --no-warnings tests/architecture.test.mjs # модулі залежать один від одного лише через index.js
 node --no-warnings tests/ui-smoke.test.mjs     # інтерфейс: усі сторінки відкриваються без помилок JS
+node --no-warnings tests/migrate.test.mjs      # міграції модулів не змінюють наявних даних
 ```
 
 GitHub Actions (`.github/workflows/ci.yml`) запускає всі тести на кожен push і pull request.

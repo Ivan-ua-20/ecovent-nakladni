@@ -6,7 +6,7 @@ import { dirname, join, normalize, sep, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { exec } from 'node:child_process';
 import { openDb } from './core/db-node.js';
-import { migrate } from './core/schema.js';
+import { migrate } from './migrate.js';
 import { createApp } from './app.js';
 import { resetOwnerPassword } from './core/auth.js';
 

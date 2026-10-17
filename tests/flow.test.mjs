@@ -1,7 +1,7 @@
 // Перевірка ланцюжка: LP-CRM → нормалізація → чек Checkbox → вибір ФОП → історія (з підробленими відповідями API).
 import assert from 'node:assert/strict';
 import { openDb } from '../src/core/db-node.js';
-import { migrate } from '../src/core/schema.js';
+import { migrate } from '../src/migrate.js';
 import { createApp } from '../src/app.js';
 
 const db = openDb(':memory:');
