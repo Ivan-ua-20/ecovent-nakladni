@@ -38,7 +38,10 @@ src/
     payments/      Opendatabot: посилання на оплату, надходження (віддає linkForRahunok)
     notify/        Telegram-сповіщення (віддає notify)
     analytics/     аналітика продажів
-public/            інтерфейс (без збірки), шаблони накладних і рахунків, експорт у Word
+public/
+  app.js           оболонка: вхід, меню, роутер
+  core/ui.js       спільне для сторінок: API, діалоги, повідомлення, друк
+  pages/           сторінки: nakladna, refs, rahunky, settings, users (+ an.js, pay.js, anpay.js)
 ```
 
 Правила: модуль не імпортує внутрішні файли іншого модуля; таблиці модуля пише лише сам модуль;
@@ -68,6 +71,7 @@ node --no-warnings tests/analytics.test.mjs
 node --no-warnings tests/d1-budget.test.mjs   # кількість запитів до бази на одне звернення
 node --no-warnings tests/security.test.mjs    # картинки ФОП (XSS) і номери рахунків без дублів
 node --no-warnings tests/architecture.test.mjs # модулі залежать один від одного лише через index.js
+node --no-warnings tests/ui-smoke.test.mjs     # інтерфейс: усі сторінки відкриваються без помилок JS
 ```
 
 GitHub Actions (`.github/workflows/ci.yml`) запускає всі тести на кожен push і pull request.
