@@ -17,6 +17,8 @@ export const STATUS = {
 };
 const KIND = { fop: 'ФОП', company: 'ТОВ / ПП' };
 
+import { sendDialog } from './core/share.js';
+
 export function createPayUI(ctx) {
   const { api, $, $$, esc, toast, modal, can } = ctx;
   const main = () => ctx.main;
@@ -144,11 +146,12 @@ export function createPayUI(ctx) {
           <div><b>${uah(l.amount)}</b> · ${esc(l.account_alias || '')}${l.client ? ` · ${esc(l.client)}` : ''}</div>
           <div class="small muted">${esc(l.purpose)}</div>
           <div class="pl-url"><input readonly value="${esc(l.page)}" aria-label="Посилання"><button class="btn" data-copy="url">Копіювати</button></div>
-          <div class="btn-row"><button class="btn primary" data-copy="msg">Скопіювати повідомлення клієнту</button><a class="btn" href="${esc(l.page)}" target="_blank" rel="noopener">Відкрити</a></div>
+          <div class="btn-row"><button class="btn primary" data-copy="send">Надіслати</button><button class="btn" data-copy="msg">Скопіювати повідомлення клієнту</button><a class="btn" href="${esc(l.page)}" target="_blank" rel="noopener">Відкрити</a></div>
         </div>
       </div></div>`;
     $('[data-copy=url]').onclick = () => copy(l.page, 'Посилання скопійовано');
     $('[data-copy=msg]').onclick = () => copy(message(l), 'Повідомлення скопійовано — вставте його клієнту в месенджер');
+    $('[data-copy=send]').onclick = () => sendDialog({ title: `Надіслати посилання № ${l.number}`, text: message(l), url: l.page });
     $('#plResult').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
@@ -193,7 +196,7 @@ export function createPayUI(ctx) {
           <div class="small muted">${esc(l.purpose)}</div>
           <div class="small muted">Створено ${esc(new Date(l.created_at).toLocaleString('uk-UA'))}${l.created_by ? ` · ${esc(l.created_by)}` : ''}${open ? ` · очікує ${daysSince(l.created_at)} дн.` : ''}</div>
           <div class="pl-url"><input readonly value="${esc(l.page)}" aria-label="Посилання"><button class="btn" data-c="url">Копіювати</button></div>
-          <div class="btn-row"><button class="btn" data-c="msg">${open ? 'Скопіювати нагадування клієнту' : 'Скопіювати повідомлення'}</button><a class="btn" href="${esc(l.page)}" target="_blank" rel="noopener">Відкрити</a></div>
+          <div class="btn-row">${open ? '<button class="btn primary" data-c="send">Надіслати</button>' : ''}<button class="btn" data-c="msg">${open ? 'Скопіювати нагадування клієнту' : 'Скопіювати повідомлення'}</button><a class="btn" href="${esc(l.page)}" target="_blank" rel="noopener">Відкрити</a></div>
         </div>
       </div>
       <h4 style="margin:16px 0 6px">Платежі</h4>
@@ -207,6 +210,7 @@ export function createPayUI(ctx) {
     });
     $('[data-c=url]', m.el).onclick = () => copy(l.page, 'Посилання скопійовано');
     $('[data-c=msg]', m.el).onclick = () => copy(open && l.paid_amount ? `${message(l)}\nУже оплачено: ${nf.format(l.paid_amount)} грн, залишок: ${nf.format(l.amount - l.paid_amount)} грн.` : message(l), 'Повідомлення скопійовано');
+    $('[data-c=send]', m.el) && ($('[data-c=send]', m.el).onclick = () => sendDialog({ title: `Надіслати посилання № ${l.number}`, text: open && l.paid_amount ? `${message(l)}\nУже оплачено: ${nf.format(l.paid_amount)} грн, залишок: ${nf.format(l.amount - l.paid_amount)} грн.` : message(l), url: l.page }));
     $$('[data-attach]', m.el).forEach((b) => (b.onclick = async () => {
       try { await api('PUT', `/api/odb/payments/${b.dataset.attach}`, { link_id: l.id }); m.close(); toast('Платіж прив’язано'); loadList(); } catch (er) { toast(er.message, true); }
     }));

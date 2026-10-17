@@ -37,5 +37,21 @@ for (const r of routes) {
   if (m) errors.push(new Error(`${r}: сторінка показала помилку «${m[1]}»`));
   await new Promise((res) => setTimeout(res, 5));
 }
+// Вікно «Надіслати»: тексти й посилання месенджерів; саме вікно відкривається без помилок
+{
+  const { messengerLinks, sendDialog } = await import(new URL('../public/core/share.js', import.meta.url));
+  const { rahunokMessage } = await import(new URL('../public/rahunok.js', import.meta.url));
+  const r = { number: '107568', total: 8950, fop: { full_name: 'ФОП Ватрич Любов Дмитрівна' }, pay: { page: 'https://iban.opendatabot.ua/invoice/abc' } };
+  const text = rahunokMessage(r);
+  if (!/№ 107568 від ФОП Ватрич Любов Дмитрівна на суму 8\s950,00 грн\.\nОплатити онлайн: https:\/\/iban\.opendatabot\.ua\/invoice\/abc$/.test(text)) errors.push(new Error(`текст рахунку: ${text}`));
+  if (/Оплатити/.test(rahunokMessage({ ...r, pay: null }))) errors.push(new Error('без QR у тексті не має бути посилання'));
+  const l = messengerLinks(text, r.pay.page);
+  const tg = new URL(l.telegram);
+  if (tg.searchParams.get('url') !== r.pay.page || tg.searchParams.get('text').includes(r.pay.page) || !tg.searchParams.get('text').startsWith('Рахунок на оплату № 107568')) errors.push(new Error(`Telegram: ${l.telegram}`));
+  if (!l.whatsapp.startsWith('https://wa.me/?text=') || !l.viber.startsWith('viber://forward?text=')) errors.push(new Error('WhatsApp / Viber'));
+  try { sendDialog({ title: 'Надіслати', text, url: r.pay.page, makeFile: async () => ({ blob: new Blob(['x']), name: 'a.docx' }), download() {} }); sendDialog({ title: 'Надіслати', text }); }
+  catch (e) { errors.push(new Error(`вікно «Надіслати»: ${e.message}`)); }
+}
+
 if (errors.length) { console.log('ПОМИЛКИ:\n' + errors.map((e) => e.stack?.split('\n').slice(0, 2).join(' | ') || e).join('\n')); process.exit(1); }
-console.log(`OK — модулі завантажено, відкрито ${routes.length} сторінок`);
+console.log(`OK — модулі завантажено, відкрито ${routes.length} сторінок, вікно «Надіслати» працює`);
