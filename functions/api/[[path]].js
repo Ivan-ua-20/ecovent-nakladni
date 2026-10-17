@@ -4353,6 +4353,28 @@ function mountAnalytics(app, { db, fetchFn, shared: shared2 = {} }) {
     })).sort((a, b2) => b2.rev - a.rev);
     const statusNames = await getJson("an_status_names") || {};
     const byStatus = tracked.map((id) => ({ id, name: statusNames[id] || `\u0421\u0442\u0430\u0442\u0443\u0441 ${id}`, refuse: rf.includes(id), ...row(stCur, null, id) }));
+    const byName = (re, fallback) => {
+      const ids = ok.filter((id) => re.test(statusNames[id] || ""));
+      return ids.length ? ids : ok.filter((id) => fallback.includes(id));
+    };
+    const stPrev = prev ? group(prev, "status") : null;
+    const groupRow = (id, name, ids) => {
+      const sum = (m) => ids.reduce((a2, s) => {
+        const r = m?.get(s);
+        return r ? { rev: a2.rev + r.rev, cnt: a2.cnt + r.cnt } : a2;
+      }, { rev: 0, cnt: 0 });
+      const a = sum(stCur);
+      const p = stPrev ? sum(stPrev) : null;
+      return { id, name, statuses: ids, rev: round2(a.rev), cnt: a.cnt, prevRev: p ? round2(p.rev) : null, prevCnt: p ? p.cnt : null };
+    };
+    const accepted = byName(/принят|прийн/i, [11]);
+    const shipping = byName(/отправ|відправ|ожида|очіку/i, [14, 53]).filter((id) => !doneIds.includes(id));
+    const byStatusGroup = [
+      groupRow("accepted", "\u041F\u0440\u0438\u0439\u043D\u044F\u0442\u043E", accepted.filter((id) => !doneIds.includes(id) && !shipping.includes(id))),
+      groupRow("done", "\u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u043E", doneIds),
+      groupRow("shipping", "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u0456 \u043E\u0447\u0456\u043A\u0443\u0454 \u0432\u0438\u043A\u0443\u043F\u0443", shipping),
+      groupRow("refused", "\u041F\u043E\u0432\u0435\u0440\u043D\u0443\u0442\u043E \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u0456 \u0432\u0456\u0434\u043C\u043E\u0432\u0438", rf)
+    ];
     const bName = new Map(brands.map((x) => [x.id, x.name]));
     const prevBrands = new Map((prev?.brands || []).map((r) => [r.id, r]));
     const byBrand = cur.brands.map((r) => ({
@@ -4392,6 +4414,7 @@ function mountAnalytics(app, { db, fetchFn, shared: shared2 = {} }) {
       bySource,
       byManager,
       byStatus,
+      byStatusGroup,
       byBrand,
       byCategory,
       top,

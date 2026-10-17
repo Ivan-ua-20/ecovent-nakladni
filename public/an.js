@@ -375,6 +375,7 @@ export function createAnalyticsUI(ctx) {
       <div class="an-grid">
         ${brandTable(d.byBrand, hasCmp)}
         ${breakdown('Категорії', d.byCategory, 'cats', { hasCmp, qty: true })}
+        ${d.byStatusGroup ? statusGroupsCard(d.byStatusGroup, Boolean(d.cmp)) : ''}
         ${statusCard(d.byStatus)}
       </div>
       ${topTable(d.top)}`;
@@ -491,6 +492,25 @@ export function createAnalyticsUI(ctx) {
           <span class="bk-d">${hasCmp ? delta(r.rev, r.prevRev) : ''}${planPct != null ? `<small class="${planPct >= 100 ? 'good' : ''}">план ${pct1(planPct)}</small>` : ''}</span>
         </div>`;
       }).join('')}</div></div>`;
+  }
+
+  // Підсумок за групами статусів: сума і кількість, частка від усіх, порівняння з попереднім періодом.
+  function statusGroupsCard(rows, hasCmp) {
+    const totalCnt = rows.reduce((a, r) => a + r.cnt, 0);
+    const totalRev = rows.reduce((a, r) => a + r.rev, 0);
+    const prevCnt = hasCmp ? rows.reduce((a, r) => a + (r.prevCnt || 0), 0) : null;
+    const prevRev = hasCmp ? rows.reduce((a, r) => a + (r.prevRev || 0), 0) : null;
+    const line = (name, rev, cnt, pRev, pCnt, cls = '') => `<div class="bk-row static ${cls}">
+        <span class="bk-name">${name}</span>
+        <span class="bk-bar"><span class="${cls.includes('refuse') ? 'refuse' : ''}" style="width:${totalRev ? ((rev / totalRev) * 100).toFixed(1) : 0}%"></span></span>
+        <span class="bk-val">${uah(rev)}<small>${int(cnt)} зам.${totalCnt ? ` · ${pct1((cnt / totalCnt) * 100)}` : ''}</small></span>
+        <span class="bk-d">${hasCmp ? `${delta(rev, pRev)}<small class="muted">було ${uah(pRev)} · ${int(pCnt)}</small>` : ''}</span>
+      </div>`;
+    return `<div class="card"><h3>Підсумок за статусами</h3><div class="bk">
+      <div class="bk-row bk-head"><span>Група</span><span></span><span class="bk-hv">Сума · зам.</span><span class="bk-hd">${hasCmp ? 'Динаміка' : ''}</span></div>
+      ${rows.map((r) => line(esc(r.name), r.rev, r.cnt, r.prevRev, r.prevCnt, r.id === 'refused' ? 'refuse-row' : '')).join('')}
+      ${line('<b>Усього</b>', totalRev, totalCnt, prevRev, prevCnt, 'bk-total')}
+    </div></div>`;
   }
 
   function statusCard(rows) {

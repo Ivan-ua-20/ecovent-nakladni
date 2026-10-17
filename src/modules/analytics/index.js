@@ -1000,6 +1000,27 @@ export function mountAnalytics(app, { db, fetchFn, shared = {} }) {
     })).sort((a, b) => b.rev - a.rev);
     const statusNames = (await getJson('an_status_names')) || {};
     const byStatus = tracked.map((id) => ({ id, name: statusNames[id] || `Статус ${id}`, refuse: rf.includes(id), ...row(stCur, null, id) }));
+    // Підсумок за групами статусів: прийнято / завершено / відправлено й очікує викупу / відмови й повернення.
+    // Групи — за назвами статусів LP-CRM (з запасними номерами статусів).
+    const byName = (re, fallback) => {
+      const ids = ok.filter((id) => re.test(statusNames[id] || ''));
+      return ids.length ? ids : ok.filter((id) => fallback.includes(id));
+    };
+    const stPrev = prev ? group(prev, 'status') : null;
+    const groupRow = (id, name, ids) => {
+      const sum = (m) => ids.reduce((a, s) => { const r = m?.get(s); return r ? { rev: a.rev + r.rev, cnt: a.cnt + r.cnt } : a; }, { rev: 0, cnt: 0 });
+      const a = sum(stCur);
+      const p = stPrev ? sum(stPrev) : null;
+      return { id, name, statuses: ids, rev: round2(a.rev), cnt: a.cnt, prevRev: p ? round2(p.rev) : null, prevCnt: p ? p.cnt : null };
+    };
+    const accepted = byName(/принят|прийн/i, [11]);
+    const shipping = byName(/отправ|відправ|ожида|очіку/i, [14, 53]).filter((id) => !doneIds.includes(id));
+    const byStatusGroup = [
+      groupRow('accepted', 'Прийнято', accepted.filter((id) => !doneIds.includes(id) && !shipping.includes(id))),
+      groupRow('done', 'Завершено', doneIds),
+      groupRow('shipping', 'Відправлено і очікує викупу', shipping),
+      groupRow('refused', 'Повернуто на склад і відмови', rf),
+    ];
 
     const bName = new Map(brands.map((x) => [x.id, x.name]));
     const prevBrands = new Map((prev?.brands || []).map((r) => [r.id, r]));
@@ -1025,7 +1046,7 @@ export function mountAnalytics(app, { db, fetchFn, shared = {} }) {
       kpi: { cur: kpi(cur), prev: prev ? kpi(prev) : null, doneStatuses: doneIds },
       daily: { cur: curDaily, prev: cmp ? fillDays(prev, cmp.from, cmp.to) : null },
       target,
-      byDept, bySource, byManager, byStatus, byBrand, byCategory, top,
+      byDept, bySource, byManager, byStatus, byStatusGroup, byBrand, byCategory, top,
       options: {
         depts: [...depts.map((d) => ({ id: d.id, name: d.name })), { id: 0, name: 'Без відділу' }],
         sources: sources.map((s) => ({ id: s.id, name: s.name, dept_id: s.dept_id })),
