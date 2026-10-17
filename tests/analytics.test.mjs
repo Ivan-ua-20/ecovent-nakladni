@@ -180,6 +180,10 @@ assert.equal(next.rows.length, 3, 'таргет скопійовано на на
 // ---------- 7. Оновлення: зміна статусу і нове замовлення ----------
 const someCode = expect.find((o) => o.status === '11').order_id;
 orders.get(someCode).status = '54';
+orders.get(someCode).total = '123.00'; // зі зміною статусу змінилась і сума — має підтягнутися
+const quiet = expect.find((o) => o.status === '18' && o.datetime.slice(0, 10) < today && o.order_id !== someCode);
+const quietTotal = (await db.get(`SELECT total FROM an_orders WHERE code = ?`, [quiet.order_id])).total;
+orders.get(quiet.order_id).total = '1.00'; // статус той самий — щоденне оновлення повні дані не перечитує
 const leave = expect.find((o) => o.status === '14' && o.order_id !== someCode).order_id;
 orders.get(leave).status = '13'; // пішло у невідстежуваний статус
 id++;
@@ -188,6 +192,9 @@ orders.set(newCode, { id: String(id), order_id: newCode, datetime: `${today} 18:
 const callsBefore = calls;
 await runSync('daily');
 assert.equal((await db.get(`SELECT status FROM an_orders WHERE code = ?`, [someCode])).status, 54, 'статус оновлено');
+assert.equal((await db.get(`SELECT total FROM an_orders WHERE code = ?`, [someCode])).total, 123, 'для зміненого статусу повні дані перечитано');
+assert.equal((await db.get(`SELECT total FROM an_orders WHERE code = ?`, [quiet.order_id])).total, quietTotal, 'без зміни статусу повні дані не перечитуються');
+orders.get(quiet.order_id).total = String(quietTotal);
 assert.equal((await db.get(`SELECT status FROM an_orders WHERE code = ?`, [leave])).status, 0, 'замовлення поза статусами виключено');
 assert.ok(await db.get(`SELECT id FROM an_orders WHERE code = ?`, [newCode]), 'нове замовлення додано');
 console.log(`  щоденне оновлення: ${calls - callsBefore} запитів до LP-CRM`);
