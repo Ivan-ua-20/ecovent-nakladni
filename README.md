@@ -20,11 +20,29 @@ npm start          # http://localhost:8787
 
 ## Структура
 
-- `src/app.js` — API (Hono), не залежить від середовища (Node.js / Cloudflare Workers)
-- `src/lpcrm.js`, `src/checkbox.js` — клієнти LP-CRM і Checkbox
-- `src/schema.js` — схема БД (SQLite / Cloudflare D1)
-- `src/auth.js` — ролі й паролі
-- `public/` — інтерфейс (без збірки), шаблони накладних і рахунків, експорт у Word
+Код поділено на незалежні блоки: кожен модуль має свої маршрути, свої таблиці й тести,
+а до інших модулів звертається лише через їхній публічний вхід (`index.js`). Це перевіряє `tests/architecture.test.mjs`.
+
+```
+src/
+  app.js           збирає модулі (порядок: auth першим) і передає їм ctx
+  core/            спільне: база (SQLite / D1), схема, ролі й паролі, налаштування, гроші, дати,
+                   лічильник номерів рахунків, перевірка картинок, журнал змін реквізитів
+  integrations/    лише клієнти API: lpcrm.js, checkbox.js
+  modules/
+    auth/          вхід, сесії, користувачі, ролі
+    refs/          ФОПи накладних, відділи, «Поле 1», шаблони, загальні налаштування
+    nakladni/      пошук замовлення, накладна, версії, історія (віддає loadOrder, normalizeOrder)
+    rahunky/       рахунки на оплату (Word), ФОПи рахунків
+    admin/         експорт / імпорт налаштувань, журнал змін
+    payments/      Opendatabot: посилання на оплату, надходження (віддає linkForRahunok)
+    notify/        Telegram-сповіщення (віддає notify)
+    analytics/     аналітика продажів
+public/            інтерфейс (без збірки), шаблони накладних і рахунків, експорт у Word
+```
+
+Правила: модуль не імпортує внутрішні файли іншого модуля; таблиці модуля пише лише сам модуль;
+спільне — тільки в `core/`. Чистку за строком зберігання кожен модуль реєструє сам (`onCleanup`).
 
 ## Аналітика
 
@@ -49,6 +67,7 @@ node --no-warnings tests/ratelimit.test.mjs
 node --no-warnings tests/analytics.test.mjs
 node --no-warnings tests/d1-budget.test.mjs   # кількість запитів до бази на одне звернення
 node --no-warnings tests/security.test.mjs    # картинки ФОП (XSS) і номери рахунків без дублів
+node --no-warnings tests/architecture.test.mjs # модулі залежать один від одного лише через index.js
 ```
 
 GitHub Actions (`.github/workflows/ci.yml`) запускає всі тести на кожен push і pull request.

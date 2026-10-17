@@ -1,7 +1,7 @@
 // Перевірка на реальній структурі відповіді LP-CRM (дані знеособлено).
 import assert from 'node:assert/strict';
-import { findOrders } from '../src/lpcrm.js';
-import { normalizeOrder } from '../src/normalize.js';
+import { findOrders } from '../src/integrations/lpcrm.js';
+import { normalizeOrder } from '../src/modules/nakladni/normalize.js';
 const resp = { status: 'ok', data: { id: '106593', order_id: '1791608184877250', bayer_name: 'Тест Покупець', phone: '380750000000',
   total: '22200.00', datetime: '2026-10-10 07:56:24', status: '11', delivery_id: '1', delivery_adress: 'Билбасівка, Відділення №1',
   ttn: '20451557024903', office: '4', payment: '16', delivery: 'Нова Пошта', comment: 'Поклеїти плівку',

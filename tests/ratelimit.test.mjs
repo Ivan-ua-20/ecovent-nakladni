@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { getOrder } from '../src/lpcrm.js';
+import { getOrder } from '../src/integrations/lpcrm.js';
 let n = 0; const urls = [];
 const fetchFn = async (url) => { n++; urls.push(url);
   if (n <= 2) return new Response('<html><title>429 Too Many Requests</title></html>', { status: 429 });

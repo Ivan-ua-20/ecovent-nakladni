@@ -1,5 +1,6 @@
 // Telegram-бот для сповіщень про оплати: власник вставляє токен бота, кожен користувач підключає себе кнопкою.
-import { randomToken } from './auth.js';
+import { randomToken } from '../../core/auth.js';
+import { fail, need, loadSettings, putSetting as putSettingDb } from '../../core/common.js';
 
 const TG = 'https://api.telegram.org';
 const h = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -7,10 +8,9 @@ const nf = new Intl.NumberFormat('uk-UA', { minimumFractionDigits: 2, maximumFra
 const uah = (n) => `${nf.format(Number(n) || 0)} ₴`;
 const kyivAt = (ms) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(ms)).replace(' ', 'T');
 
-export function mountTg(app, { db, fetchFn, settings, need, fail }) {
-  const putSetting = (key, value) => db.run(
-    `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, String(value)],
-  );
+export function mountTg(app, { db, fetchFn }) {
+  const settings = () => loadSettings(db);
+  const putSetting = (key, value) => putSettingDb(db, key, value);
   async function tg(token, method, body) {
     const r = await fetchFn(`${TG}/bot${token}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
     let j = null;

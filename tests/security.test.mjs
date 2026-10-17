@@ -1,9 +1,9 @@
 // Перевірки безпеки: картинки ФОП (XSS) і атомарний лічильник номерів рахунків.
 import assert from 'node:assert/strict';
-import { openDb } from '../src/db-node.js';
-import { migrate } from '../src/schema.js';
-import { isSafeImage, checkImages, dropUnsafeImages } from '../src/validate.js';
-import { takeRahunokNumber, peekRahunokNumber } from '../src/counters.js';
+import { openDb } from '../src/core/db-node.js';
+import { migrate } from '../src/core/schema.js';
+import { isSafeImage, checkImages, dropUnsafeImages } from '../src/core/validate.js';
+import { takeRahunokNumber, peekRahunokNumber } from '../src/core/counters.js';
 
 // ---------- картинки ----------
 const png = 'data:image/png;base64,iVBORw0KGgo=';
