@@ -614,8 +614,10 @@ export function mountAnalytics(app, { db, fetchFn, shared = {} }) {
     const firstRun = !(await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`))?.value;
     const today = kyivDay();
     const keepFrom = addMonths(monthStart(today), -st.months);
-    // today — лише сьогоднішні замовлення; daily — останні 30 днів; full/reset — усе вікно (6 міс).
-    const start = mode === 'today' ? today : mode === 'daily' ? addDays(today, -29) : keepFrom;
+    // today — нові замовлення за сьогодні + звірка статусів за 30 днів (лише списки номерів, без повних даних);
+    // daily — останні 30 днів повністю; full/reset — усе вікно (6 міс).
+    // Без звірки замовлення, що за ці дні перейшли з «Принят» в інший статус, лишалися б «Принят» до щоденного оновлення.
+    const start = mode === 'today' || mode === 'daily' ? addDays(today, -29) : keepFrom;
     const statuses = [...st.okStatuses, ...st.refuseStatuses];
     const units = [];
     // Від найновіших місяців до старіших — поточні дані з'являються першими.

@@ -151,7 +151,7 @@ export function createAnalyticsUI(ctx) {
     el.innerHTML = `
       <div class="head-row an-head">
         <div><h2>Аналітика продажів</h2><div class="small muted" id="anFresh"></div></div>
-        <div class="btn-row"><button class="btn" id="anRefresh" title="Швидко: лише замовлення за сьогодні">Оновити сьогодні</button></div>
+        <div class="btn-row"><button class="btn" id="anRefresh" title="Нові замовлення за сьогодні і статуси замовлень за 30 днів">Оновити сьогодні</button></div>
       </div>
       <div id="anSync"></div>
       <div id="anAttn"></div>
@@ -507,8 +507,8 @@ export function createAnalyticsUI(ctx) {
         <span class="bk-d">${hasCmp ? `${delta(rev, pRev)}<small class="muted">було ${uah(pRev)} · ${int(pCnt)}</small>` : ''}</span>
       </div>`;
     return `<div class="card"><h3>Підсумок за статусами</h3><div class="bk">
-      <div class="bk-row bk-head"><span>Група</span><span></span><span class="bk-hv">Сума · зам.</span><span class="bk-hd">${hasCmp ? 'Динаміка' : ''}</span></div>
-      ${rows.map((r) => line(esc(r.name), r.rev, r.cnt, r.prevRev, r.prevCnt, r.id === 'refused' ? 'refuse-row' : '')).join('')}
+      <div class="bk-row bk-head"><span>${sortBtn('stgroups', 'name', 'Група')}</span><span></span><span class="bk-hv">${sortBtn('stgroups', 'rev', 'Сума')}${sortBtn('stgroups', 'cnt', 'Зам.')}</span><span class="bk-hd">${hasCmp ? sortBtn('stgroups', 'dyn', 'Динаміка') : ''}</span></div>
+      ${sortRows('stgroups', rows).map((r) => line(esc(r.name), r.rev, r.cnt, r.prevRev, r.prevCnt, r.id === 'refused' ? 'refuse-row' : '')).join('')}
       ${line('<b>Усього</b>', totalRev, totalCnt, prevRev, prevCnt, 'bk-total')}
     </div></div>`;
   }

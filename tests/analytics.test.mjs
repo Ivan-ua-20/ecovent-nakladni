@@ -217,9 +217,13 @@ id++;
 const todayCode = String(1790000000000000 + id * 37);
 orders.set(todayCode, { id: String(id), order_id: todayCode, datetime: `${today} 19:00:00`, status: '11', office: '99', user: 'newbie', additional_1: 'NewShop', total: '500.00', products: [{ product_id: '777', name: 'Зволожувач DREO HM311', price: '500.00', quantity: '1' }] });
 PRODUCTS[777] = { name: 'Зволожувач DREO HM311', price: 500, cat: 31 };
+// старіше замовлення змінило статус «Принят» → «Повернуто на склад»: «Оновити сьогодні» має це підхопити
+const older = [...orders.values()].find((o) => o.status === '11' && o.datetime.slice(0, 10) < today && o.datetime.slice(0, 10) >= addDays(today, -20));
+older.status = '58';
 const callsToday = calls;
 const st7 = (await runSync('today')).s;
 assert.equal(st7.mode, 'today');
+assert.equal((await db.get(`SELECT status FROM an_orders WHERE code = ?`, [older.order_id])).status, 58, '«Оновити сьогодні» оновлює статуси старіших замовлень');
 console.log(`  оновлення за сьогодні: ${calls - callsToday} запитів до LP-CRM`);
 assert.ok(await db.get(`SELECT id FROM an_orders WHERE code = ?`, [todayCode]), 'сьогоднішнє замовлення додано');
 assert.ok(!(await db.get(`SELECT key FROM an_cache LIMIT 1`)), 'кеш очищено після оновлення');
