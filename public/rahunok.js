@@ -76,8 +76,8 @@ export function renderRahunok(r) {
     <div class="rh-sign">
       <span class="rh-sign-label">Виписав(ла):</span>
       <span class="rh-sign-line">
-        ${f.signature ? `<img class="rh-sig" src="${f.signature}" alt="">` : ''}
-        ${f.stamp ? `<img class="rh-stamp" src="${f.stamp}" alt="">` : ''}
+        ${f.signature ? `<img class="rh-sig" src="${esc(f.signature)}" alt="">` : ''}
+        ${f.stamp ? `<img class="rh-stamp" src="${esc(f.stamp)}" alt="">` : ''}
       </span>
       <span class="rh-sign-name">${esc(p.signer)}</span>
     </div>

@@ -1,0 +1,51 @@
+# Перевірка кожної зміни: усі тести + готовий файл для Cloudflare (functions/api/[[path]].js).
+# У pull request файл збирається і комітиться в гілку автоматично; у main — лише перевіряється.
+name: Тести
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Тести
+        run: |
+          set -e
+          for t in tests/*.test.mjs; do
+            echo "== $t"
+            node --no-warnings "$t"
+          done
+      - name: Збірка
+        run: npm run build
+      - name: Закомітити зібраний файл (pull request)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          if ! git diff --quiet -- functions/; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add functions/
+            git commit -m "Збірка functions/api/[[path]].js"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
+      - name: Готовий файл для Cloudflare оновлено (main)
+        if: github.event_name == 'push'
+        run: |
+          if ! git diff --quiet -- functions/; then
+            echo "::error::Після змін у src/ виконайте npm run build і закомітьте functions/api/[[path]].js"
+            git diff --stat -- functions/
+            exit 1
+          fi

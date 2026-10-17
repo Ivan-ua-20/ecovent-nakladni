@@ -1,5 +1,7 @@
 // Opendatabot IBAN: рахунки (ФОП/ТОВ/ПП), посилання на оплату з QR, надходження з усіх «Автоклієнтів».
 // Документація: https://iban.opendatabot.ua/api-docs
+import { takeRahunokNumber, peekRahunokNumber } from './counters.js';
+
 export const ODB_BASE = 'https://iban.opendatabot.ua';
 
 const round2 = (n) => Math.round(n * 100) / 100;
@@ -238,12 +240,7 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
   const LINK_COLS = `l.id, l.odb_id, l.number, l.order_ref, l.account_id, l.amount, l.purpose, l.client, l.url, l.page, l.status, l.paid_amount, l.paid_at,
     l.rahunok_id, l.created_at, l.created_by_id, l.created_by, ${ACC} AS account_alias, a.kind AS account_kind, a.iban AS account_iban`;
 
-  async function nextManualNumber() {
-    const s = await settings();
-    const n = Number(s.rahunok_next_number) || 10516;
-    await putSetting('rahunok_next_number', n + 1);
-    return String(n);
-  }
+  const nextManualNumber = () => takeRahunokNumber(db);
 
   // Створення рахунку в Opendatabot і запис у базу. Дублікати: неоплачене посилання з тим самим номером/замовленням.
   async function createLink(c, { account_id, amount, number, order_ref = '', client = '', purpose = '', force = false, rahunok_id = null }) {
@@ -314,7 +311,7 @@ export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, 
        ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY l.id DESC LIMIT 300`, params,
     );
     const s = await settings();
-    return c.json({ links: rows, lastSync: s.odb_sync_at || '', nextNumber: s.rahunok_next_number || '10516' });
+    return c.json({ links: rows, lastSync: s.odb_sync_at || '', nextNumber: peekRahunokNumber(s) });
   });
 
   app.get('/api/odb/links/:id', async (c) => {

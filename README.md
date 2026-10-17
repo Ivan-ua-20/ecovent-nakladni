@@ -48,7 +48,15 @@ node --no-warnings tests/real-shape.test.mjs
 node --no-warnings tests/ratelimit.test.mjs
 node --no-warnings tests/analytics.test.mjs
 node --no-warnings tests/d1-budget.test.mjs   # кількість запитів до бази на одне звернення
+node --no-warnings tests/security.test.mjs    # картинки ФОП (XSS) і номери рахунків без дублів
 ```
+
+GitHub Actions (`.github/workflows/ci.yml`) запускає всі тести на кожен push і pull request.
+У pull request він сам збирає `functions/api/[[path]].js` і комітить його в гілку; у `main` — перевіряє,
+що файл зібрано з поточного `src/`.
+
+Заголовки безпеки сторінок (Content-Security-Policy та інші) — у `public/_headers` (Cloudflare Pages)
+і в `src/server-node.js` (локальна версія).
 
 Ключі API, база даних і папка `data/` у репозиторій не потрапляють.
 

@@ -27,12 +27,13 @@ export async function call(fetchFn, subdomain, key, method, params, { sleepFn = 
     body,
   }));
 
+  // Лише HTTPS: API-ключ іде в тілі запиту, тож відкритий http його б розкрив.
   let res;
   try {
     res = await doFetch(`https://${subdomain}.lp-crm.biz/api/${method}.html`);
-  } catch {
-    // http — лише якщо https узагалі не відповів (мережева помилка), а не на кожну відповідь з помилкою
-    res = await doFetch(`http://${subdomain}.lp-crm.biz/api/${method}.html`);
+  } catch (e) {
+    if (e?.pending) throw e; // вичерпано ліміт запитів на звернення — продовжимо в наступному
+    throw new Error(`Не вдалося з'єднатися з LP-CRM (${subdomain}.lp-crm.biz): ${e?.message || e}`);
   }
   for (let i = 0; res.status === 429 && i < RETRY_DELAYS_MS.length; i++) {
     await sleepFn(RETRY_DELAYS_MS[i]);

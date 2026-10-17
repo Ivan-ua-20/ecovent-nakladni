@@ -39,12 +39,18 @@ const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json',
 };
+// Ті самі заголовки безпеки, що й на Cloudflare (public/_headers): чужий скрипт на сторінці не виконається.
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'same-origin',
+};
 root.get('*', (c) => {
   let rel = decodeURIComponent(new URL(c.req.url).pathname);
   if (rel === '/' || !extname(rel)) rel = '/index.html';
   const file = normalize(join(publicDir, rel));
   if (!file.startsWith(publicDir + sep) || !existsSync(file) || !statSync(file).isFile()) return c.text('Not found', 404);
-  return c.body(readFileSync(file), 200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+  return c.body(readFileSync(file), 200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache', ...SECURITY_HEADERS });
 });
 
 const port = Number(process.env.PORT || 8787);

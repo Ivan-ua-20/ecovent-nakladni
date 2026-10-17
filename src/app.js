@@ -11,6 +11,8 @@ import { normalizeOrder, applyEdits } from './normalize.js';
 import { getOrder, getProducts, diagnose, getStatuses, getOrderCodesByStatus, getOrdersBatch } from './lpcrm.js';
 import { DEMO_ORDER } from './demo.js';
 import { findReceiptByRef, findReceiptForOrder, hasCheckbox, testCheckbox } from './checkbox.js';
+import { checkImages, dropUnsafeImages } from './validate.js';
+import { takeRahunokNumber, peekRahunokNumber } from './counters.js';
 
 const MASK = '••••••';
 const SECRET_FOP_FIELDS = ['checkbox_password', 'checkbox_pin', 'checkbox_license'];
@@ -291,6 +293,8 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     const allowed = can(c.get('user'), 'api') ? [...apiKeys, ...general] : general;
     if (body.rahunok_next_number !== undefined && !/^\d{1,12}$/.test(String(body.rahunok_next_number).trim())) throw fail(400, 'Номер рахунку — лише цифри.');
     if (body.retention_days !== undefined && !(Number(body.retention_days) >= 1)) throw fail(400, 'Строк зберігання — щонайменше 1 день.');
+    // Піддомен підставляється в адресу LP-CRM: лише літери, цифри й дефіс (інакше ключ міг би піти на чужий сайт).
+    if (body.lpcrm_subdomain !== undefined && !/^[a-z0-9-]{1,63}$/i.test(String(body.lpcrm_subdomain).trim())) throw fail(400, 'Піддомен LP-CRM — лише латинські літери, цифри й дефіс.');
     for (const k of allowed) {
       if (body[k] === undefined || body[k] === MASK) continue;
       await db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [
@@ -306,6 +310,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     need(c, 'refs.edit');
     const b = await c.req.json();
     if (!b.short_name) return c.json({ error: 'Вкажіть коротку назву ФОП' }, 400);
+    checkImages(b, fail);
     const cols = fopCols(c, b);
     const r = await db.run(
       `INSERT INTO fops (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
@@ -317,6 +322,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   app.put('/api/fops/:id', async (c) => {
     need(c, 'refs.edit');
     const b = await c.req.json();
+    checkImages(b, fail);
     const cols = fopCols(c, b);
     if (!cols.length) return c.json({ ok: true });
     await db.run(`UPDATE fops SET ${cols.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [
@@ -343,26 +349,26 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   app.put('/api/offices', async (c) => {
     need(c, 'refs.edit');
     const list = await c.req.json();
-    for (const o of list) {
-      if (!o.office_id) continue;
-      await db.run(
-        `INSERT INTO offices (office_id, name, fop_id, seller_text) VALUES (?, ?, ?, ?)
-         ON CONFLICT(office_id) DO UPDATE SET name = excluded.name, fop_id = excluded.fop_id, seller_text = excluded.seller_text`,
-        [String(o.office_id).trim(), o.name || '', o.fop_id || null, String(o.seller_text || '').trim()],
-      );
-    }
+    // Одним пакетом: атомарно і один запит до D1 замість одного на кожен відділ.
+    await db.batch((Array.isArray(list) ? list : []).filter((o) => o.office_id).map((o) => [
+      `INSERT INTO offices (office_id, name, fop_id, seller_text) VALUES (?, ?, ?, ?)
+       ON CONFLICT(office_id) DO UPDATE SET name = excluded.name, fop_id = excluded.fop_id, seller_text = excluded.seller_text`,
+      [String(o.office_id).trim(), o.name || '', o.fop_id || null, String(o.seller_text || '').trim()],
+    ]));
     return c.json({ ok: true });
   });
 
   app.put('/api/channels', async (c) => {
     need(c, 'refs.edit');
     const list = await c.req.json();
-    await db.run(`DELETE FROM channels`);
-    for (const ch of list) {
+    // Видалення і вставки — одним пакетом (транзакція): обрив посередині не залишить таблицю порожньою.
+    const st = [[`DELETE FROM channels`, []]];
+    for (const ch of Array.isArray(list) ? list : []) {
       const name = String(ch.name || '').trim();
       if (!name) continue;
-      await db.run(`INSERT INTO channels (name, fop_id, seller_text) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET fop_id = excluded.fop_id, seller_text = excluded.seller_text`, [name, ch.fop_id || null, String(ch.seller_text || '').trim()]);
+      st.push([`INSERT INTO channels (name, fop_id, seller_text) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET fop_id = excluded.fop_id, seller_text = excluded.seller_text`, [name, ch.fop_id || null, String(ch.seller_text || '').trim()]]);
     }
+    await db.batch(st);
     return c.json({ ok: true });
   });
 
@@ -439,15 +445,15 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     return list;
   }
 
+  // Одним пакетом: 100 замовлень = один запит до D1, а не 100.
   async function saveOrders(orders) {
-    for (const o of orders) {
-      await db.run(
-        `INSERT INTO orders_index (code, datetime, phone, ttn, bayer_name, data, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(code) DO UPDATE SET datetime = excluded.datetime, phone = excluded.phone, ttn = excluded.ttn,
-         bayer_name = excluded.bayer_name, data = excluded.data, fetched_at = excluded.fetched_at`,
-        [String(o.order_id), o.datetime || '', digits(o.phone), String(o.ttn || ''), o.bayer_name || '', JSON.stringify(o), nowIso()],
-      );
-    }
+    const now = nowIso();
+    await db.batch(orders.map((o) => [
+      `INSERT INTO orders_index (code, datetime, phone, ttn, bayer_name, data, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(code) DO UPDATE SET datetime = excluded.datetime, phone = excluded.phone, ttn = excluded.ttn,
+       bayer_name = excluded.bayer_name, data = excluded.data, fetched_at = excluded.fetched_at`,
+      [String(o.order_id), o.datetime || '', digits(o.phone), String(o.ttn || ''), o.bayer_name || '', JSON.stringify(o), now],
+    ]));
   }
 
   // Завантажує в індекс замовлення за останні `days` днів, статус за статусом, і зупиняється, щойно `found()` дає збіг.
@@ -776,21 +782,27 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     const b = await c.req.json();
     if (!b?.tables) throw fail(400, 'Це не файл експорту налаштувань.');
     const counts = {};
+    // Усе одним пакетом (транзакція): якщо щось не так — жодна таблиця не залишиться напівпорожньою.
+    const st = [];
     for (const t of EXPORT_TABLES) {
       const rows = b.tables[t];
       if (!Array.isArray(rows)) continue;
       const cols = new Set((await db.all(`PRAGMA table_info(${t})`)).map((x) => x.name));
-      await db.run(`DELETE FROM ${t}`);
-      for (const r of rows) {
+      st.push([`DELETE FROM ${t}`, []]);
+      for (const r0 of rows) {
+        const r = dropUnsafeImages(r0 || {});
         const keys = Object.keys(r).filter((k) => cols.has(k) && !SECRET_COLS.has(k));
-        await db.run(`INSERT INTO ${t} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`, keys.map((k) => r[k]));
+        if (!keys.length) continue;
+        st.push([`INSERT INTO ${t} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`, keys.map((k) => r[k])]);
       }
       counts[t] = rows.length;
     }
     for (const [k, v] of Object.entries(b.settings || {})) {
       if (!EXPORT_SETTINGS.includes(k)) continue;
-      await db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, String(v)]);
+      if (k === 'lpcrm_subdomain' && !/^[a-z0-9-]{1,63}$/i.test(String(v).trim())) continue;
+      st.push([`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, String(v)]]);
     }
+    await db.batch(st);
     return c.json({ ok: true, counts });
   });
 
@@ -803,6 +815,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     need(c, 'users'); // створювати ФОП рахунків вручну — лише власник і адміни
     const b = await c.req.json();
     if (!String(b.short_name || '').trim()) throw fail(400, 'Вкажіть коротку назву ФОП.');
+    checkImages(b, fail);
     const cols = INV_FOP_FIELDS.filter((k) => b[k] !== undefined);
     const r = await db.run(`INSERT INTO inv_fops (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`, cols.map((k) => b[k]));
     return c.json({ id: r.lastId });
@@ -811,6 +824,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   app.put('/api/inv-fops/:id', async (c) => {
     need(c, 'refs.edit');
     const b = await c.req.json();
+    checkImages(b, fail);
     const cols = INV_FOP_FIELDS.filter((k) => b[k] !== undefined);
     if (cols.length) {
       await db.run(`UPDATE inv_fops SET ${cols.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [...cols.map((k) => b[k]), c.req.param('id')]);
@@ -888,7 +902,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
       q ? [`%${q}%`, `%${q}%`, `%${q}%`] : [],
     );
     const s = await settings();
-    return c.json({ rows, nextNumber: s.rahunok_next_number || '10516', retentionDays: Number(s.retention_days) || 7 });
+    return c.json({ rows, nextNumber: peekRahunokNumber(s), retentionDays: Number(s.retention_days) || 7 });
   });
 
   app.get('/api/rahunky/:id', async (c) => {
@@ -900,19 +914,14 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   app.post('/api/rahunky', async (c) => {
     need(c, 'docs.edit');
     const b = await c.req.json();
-    let number;
+    let number = '';
     if (b.source === 'crm') {
       number = String(b.number || '').trim();
       if (!number) throw fail(400, 'Немає номера замовлення CRM.');
-    } else {
-      // Наступний номер із спільного лічильника (для всіх ФОПів рахунків).
-      const s = await settings();
-      number = String(Number(s.rahunok_next_number) || 10516);
     }
     const data = await buildRahunok(b, number);
-    if (b.source !== 'crm') {
-      await db.run(`UPDATE settings SET value = ? WHERE key = 'rahunok_next_number'`, [String(Number(number) + 1)]);
-    }
+    // Номер беремо зі спільного лічильника лише після перевірки даних — атомарно, без дублів.
+    if (b.source !== 'crm') data.number = await takeRahunokNumber(db);
     if (b.qr) data.pay = await odbApi.linkForRahunok(c, data);
     const r = await db.run(
       `INSERT INTO invoices (number, source, order_ref, fop_id, fop_name, client_name, total, data, created_at, created_by)
