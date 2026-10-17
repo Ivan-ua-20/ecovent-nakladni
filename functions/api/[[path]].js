@@ -1772,6 +1772,100 @@ var Hono3 = class extends Hono {
   }
 };
 
+// src/core/auth.js
+var ROLES = {
+  owner: "\u0412\u043B\u0430\u0441\u043D\u0438\u043A",
+  admin: "\u0410\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440",
+  manager: "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440",
+  viewer: "\u041F\u0435\u0440\u0435\u0433\u043B\u044F\u0434"
+};
+var PERMS = {
+  owner: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "analytics", "an.view"],
+  admin: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "analytics", "an.view"],
+  manager: ["docs.view", "docs.edit", "refs.edit", "an.view"],
+  viewer: ["docs.view"]
+};
+var permsOf = (role) => PERMS[role] || [];
+var can = (user, perm) => Boolean(user && permsOf(user.role).includes(perm));
+var enc = new TextEncoder();
+var toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+var fromHex = (hex) => new Uint8Array(hex.match(/.{2}/g).map((h2) => parseInt(h2, 16)));
+function randomToken(bytes = 32) {
+  const a = new Uint8Array(bytes);
+  crypto.getRandomValues(a);
+  return toHex(a);
+}
+var ITER = 1e5;
+function setIterations(n) {
+  if (n >= 1e3) ITER = Math.min(n, 1e5);
+}
+async function derive(password, saltBytes, iterations) {
+  const key = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: saltBytes, iterations }, key, 256);
+  return toHex(bits);
+}
+async function hashPassword(password) {
+  const salt = fromHex(randomToken(16));
+  const h2 = await derive(password, salt, ITER);
+  return `pbkdf2$${ITER}$${toHex(salt)}$${h2}`;
+}
+async function verifyPassword(password, stored) {
+  const [scheme, iter, saltHex, hashHex] = String(stored || "").split("$");
+  if (scheme !== "pbkdf2" || !saltHex || !hashHex) return false;
+  const h2 = await derive(password, fromHex(saltHex), Number(iter));
+  let diff = h2.length ^ hashHex.length;
+  for (let i = 0; i < Math.min(h2.length, hashHex.length); i++) diff |= h2.charCodeAt(i) ^ hashHex.charCodeAt(i);
+  return diff === 0;
+}
+var publicUser = (u) => u ? {
+  id: u.id,
+  login: u.login,
+  name: u.name || u.login,
+  role: u.role,
+  role_name: ROLES[u.role] || u.role,
+  active: u.active,
+  created_at: u.created_at,
+  perms: permsOf(u.role),
+  crm_logins: crmLogins(u.crm_logins)
+} : null;
+var crmLogins = (v) => [...new Set((Array.isArray(v) ? v : String(v || "").split(",")).map((x) => String(x).trim().toLowerCase()).filter(Boolean))].slice(0, 20);
+async function resetOwnerPassword(db, newPassword) {
+  const owner = await db.get(`SELECT id, login FROM users WHERE role = 'owner' LIMIT 1`);
+  if (!owner) return null;
+  await db.run(`UPDATE users SET password_hash = ?, active = 1 WHERE id = ?`, [await hashPassword(newPassword), owner.id]);
+  await db.run(`DELETE FROM sessions WHERE user_id = ?`, [owner.id]);
+  return owner.login;
+}
+
+// src/core/common.js
+var MASK = "\u2022\u2022\u2022\u2022\u2022\u2022";
+var nowIso = () => (/* @__PURE__ */ new Date()).toISOString();
+var fail = (status, message) => Object.assign(new Error(message), { status });
+var need = (c, perm) => {
+  if (!can(c.get("user"), perm)) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432 \u0434\u043B\u044F \u0446\u0456\u0454\u0457 \u0434\u0456\u0457.");
+};
+var userName = (c) => c.get("user")?.name || c.get("user")?.login || "";
+var loadSettings = async (db) => Object.fromEntries((await db.all(`SELECT key, value FROM settings`)).map((r) => [r.key, r.value]));
+var putSetting = (db, key, value) => db.run(
+  `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  [key, String(value)]
+);
+var round2 = (n) => Math.round(n * 100) / 100;
+var num = (v) => {
+  const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+};
+var kyivDay = (d = /* @__PURE__ */ new Date()) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv" }).format(d);
+var parseTpl = (t) => t ? { ...t, options: JSON.parse(t.options || "{}") } : null;
+var hash = (s) => {
+  let h2 = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h2 ^= s.charCodeAt(i);
+    h2 = Math.imul(h2, 16777619) >>> 0;
+  }
+  return h2.toString(16);
+};
+
 // node_modules/hono/dist/utils/cookie.js
 var validCookieNameRegEx = /^[\w!#$%&'*.^`|~+-]+$/;
 var relaxedCookieNameRegEx = /^[!#-:<>-[\]-~]+$/;
@@ -1894,72 +1988,177 @@ var deleteCookie = (c, name, opt) => {
   return deletedCookie;
 };
 
-// src/auth.js
-var ROLES = {
-  owner: "\u0412\u043B\u0430\u0441\u043D\u0438\u043A",
-  admin: "\u0410\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440",
-  manager: "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440",
-  viewer: "\u041F\u0435\u0440\u0435\u0433\u043B\u044F\u0434"
-};
-var PERMS = {
-  owner: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "analytics", "an.view"],
-  admin: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "analytics", "an.view"],
-  manager: ["docs.view", "docs.edit", "refs.edit", "an.view"],
-  viewer: ["docs.view"]
-};
-var permsOf = (role) => PERMS[role] || [];
-var can = (user, perm) => Boolean(user && permsOf(user.role).includes(perm));
-var enc = new TextEncoder();
-var toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-var fromHex = (hex) => new Uint8Array(hex.match(/.{2}/g).map((h2) => parseInt(h2, 16)));
-function randomToken(bytes = 32) {
-  const a = new Uint8Array(bytes);
-  crypto.getRandomValues(a);
-  return toHex(a);
-}
-var ITER = 1e5;
-function setIterations(n) {
-  if (n >= 1e3) ITER = Math.min(n, 1e5);
-}
-async function derive(password, saltBytes, iterations) {
-  const key = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: saltBytes, iterations }, key, 256);
-  return toHex(bits);
-}
-async function hashPassword(password) {
-  const salt = fromHex(randomToken(16));
-  const h2 = await derive(password, salt, ITER);
-  return `pbkdf2$${ITER}$${toHex(salt)}$${h2}`;
-}
-async function verifyPassword(password, stored) {
-  const [scheme, iter, saltHex, hashHex] = String(stored || "").split("$");
-  if (scheme !== "pbkdf2" || !saltHex || !hashHex) return false;
-  const h2 = await derive(password, fromHex(saltHex), Number(iter));
-  let diff = h2.length ^ hashHex.length;
-  for (let i = 0; i < Math.min(h2.length, hashHex.length); i++) diff |= h2.charCodeAt(i) ^ hashHex.charCodeAt(i);
-  return diff === 0;
-}
-var publicUser = (u) => u ? {
-  id: u.id,
-  login: u.login,
-  name: u.name || u.login,
-  role: u.role,
-  role_name: ROLES[u.role] || u.role,
-  active: u.active,
-  created_at: u.created_at,
-  perms: permsOf(u.role),
-  crm_logins: crmLogins(u.crm_logins)
-} : null;
-var crmLogins = (v) => [...new Set((Array.isArray(v) ? v : String(v || "").split(",")).map((x) => String(x).trim().toLowerCase()).filter(Boolean))].slice(0, 20);
-async function resetOwnerPassword(db, newPassword) {
-  const owner = await db.get(`SELECT id, login FROM users WHERE role = 'owner' LIMIT 1`);
-  if (!owner) return null;
-  await db.run(`UPDATE users SET password_hash = ?, active = 1 WHERE id = ?`, [await hashPassword(newPassword), owner.id]);
-  await db.run(`DELETE FROM sessions WHERE user_id = ?`, [owner.id]);
-  return owner.login;
+// src/modules/auth/index.js
+function mountAuth(app, { db, runCleanup, onCleanup }) {
+  onCleanup(() => db.run(`DELETE FROM sessions WHERE created_at < ?`, [new Date(Date.now() - 90 * 864e5).toISOString()]));
+  const COOKIE = "nk_sid";
+  async function sessionUser(c) {
+    const token = getCookie(c, COOKIE);
+    if (!token) return null;
+    const u = await db.get(
+      `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND u.active = 1`,
+      [token]
+    );
+    return u || null;
+  }
+  async function startSession(c, user) {
+    const token = randomToken();
+    await db.run(`INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)`, [token, user.id, nowIso()]);
+    setCookie(c, COOKIE, token, { httpOnly: true, sameSite: "Lax", path: "/", maxAge: 90 * 86400, secure: new URL(c.req.url).protocol === "https:" });
+  }
+  app.get("/api/auth/state", async (c) => {
+    const n = await db.get(`SELECT COUNT(*) AS n FROM users`);
+    if (!n?.n) return c.json({ needsSetup: true, user: null });
+    return c.json({ needsSetup: false, user: publicUser(await sessionUser(c)) });
+  });
+  app.post("/api/auth/setup", async (c) => {
+    const n = await db.get(`SELECT COUNT(*) AS n FROM users`);
+    if (n?.n) throw fail(400, "\u0412\u043B\u0430\u0441\u043D\u0438\u043A\u0430 \u0432\u0436\u0435 \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E.");
+    const b = await c.req.json();
+    const login = String(b.login || "").trim().toLowerCase();
+    if (!login || String(b.password || "").length < 6) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043B\u043E\u0433\u0456\u043D \u0456 \u043F\u0430\u0440\u043E\u043B\u044C (\u043D\u0435 \u043C\u0435\u043D\u0448\u0435 6 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432).");
+    const r = await db.run(`INSERT INTO users (login, name, password_hash, role, active, created_at) VALUES (?, ?, ?, 'owner', 1, ?)`, [
+      login,
+      String(b.name || "").trim(),
+      await hashPassword(b.password),
+      nowIso()
+    ]);
+    const user = await db.get(`SELECT * FROM users WHERE id = ?`, [r.lastId]);
+    await startSession(c, user);
+    return c.json({ user: publicUser(user) });
+  });
+  app.post("/api/auth/login", async (c) => {
+    const b = await c.req.json();
+    const user = await db.get(`SELECT * FROM users WHERE login = ?`, [String(b.login || "").trim().toLowerCase()]);
+    if (user?.locked_until && user.locked_until > nowIso()) {
+      const mins = Math.max(1, Math.ceil((new Date(user.locked_until) - Date.now()) / 6e4));
+      throw fail(429, `\u0417\u0430\u0431\u0430\u0433\u0430\u0442\u043E \u043D\u0435\u0432\u0434\u0430\u043B\u0438\u0445 \u0441\u043F\u0440\u043E\u0431. \u0421\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0447\u0435\u0440\u0435\u0437 ${mins} \u0445\u0432.`);
+    }
+    if (!user || !user.active || !await verifyPassword(String(b.password || ""), user.password_hash)) {
+      if (user) {
+        const n = (Number(user.failed_logins) || 0) + 1;
+        const lock = n >= 5 ? new Date(Date.now() + 5 * 6e4).toISOString() : "";
+        await db.run(`UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?`, [lock ? 0 : n, lock, user.id]);
+      }
+      throw fail(401, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043B\u043E\u0433\u0456\u043D \u0430\u0431\u043E \u043F\u0430\u0440\u043E\u043B\u044C.");
+    }
+    if (user.failed_logins || user.locked_until) await db.run(`UPDATE users SET failed_logins = 0, locked_until = '' WHERE id = ?`, [user.id]);
+    await startSession(c, user);
+    return c.json({ user: publicUser(user) });
+  });
+  app.post("/api/auth/logout", async (c) => {
+    const token = getCookie(c, COOKIE);
+    if (token) await db.run(`DELETE FROM sessions WHERE token = ?`, [token]);
+    deleteCookie(c, COOKIE, { path: "/" });
+    return c.json({ ok: true });
+  });
+  app.use("/api/*", async (c, next) => {
+    if (c.req.path.startsWith("/api/auth/") || c.req.path === "/api/odb/hook" || c.req.path === "/api/tg/hook") return next();
+    const user = await sessionUser(c);
+    if (!user) throw fail(401, "\u041F\u043E\u0442\u0440\u0456\u0431\u043D\u043E \u0443\u0432\u0456\u0439\u0442\u0438.");
+    c.set("user", user);
+    await runCleanup();
+    return next();
+  });
+  app.put("/api/me/password", async (c) => {
+    const b = await c.req.json();
+    const me = c.get("user");
+    if (!await verifyPassword(String(b.old || ""), me.password_hash)) throw fail(400, "\u041F\u043E\u0442\u043E\u0447\u043D\u0438\u0439 \u043F\u0430\u0440\u043E\u043B\u044C \u043D\u0435\u0432\u0456\u0440\u043D\u0438\u0439.");
+    if (String(b.password || "").length < 6) throw fail(400, "\u041D\u043E\u0432\u0438\u0439 \u043F\u0430\u0440\u043E\u043B\u044C \u2014 \u043D\u0435 \u043C\u0435\u043D\u0448\u0435 6 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432.");
+    await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [await hashPassword(b.password), me.id]);
+    return c.json({ ok: true });
+  });
+  const ASSIGNABLE = ["admin", "manager", "viewer"];
+  app.get("/api/users", async (c) => {
+    need(c, "users");
+    const rows = await db.all(`SELECT * FROM users ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'manager' THEN 2 ELSE 3 END, login`);
+    return c.json({ users: rows.map(publicUser), roles: ROLES });
+  });
+  app.post("/api/users", async (c) => {
+    need(c, "users");
+    const b = await c.req.json();
+    const login = String(b.login || "").trim().toLowerCase();
+    if (!/^[a-z0-9._@-]{2,40}$/.test(login)) throw fail(400, "\u041B\u043E\u0433\u0456\u043D: \u043B\u0430\u0442\u0438\u043D\u0441\u044C\u043A\u0456 \u043B\u0456\u0442\u0435\u0440\u0438, \u0446\u0438\u0444\u0440\u0438, \u043A\u0440\u0430\u043F\u043A\u0430, \u0434\u0435\u0444\u0456\u0441 (2\u201340 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432).");
+    if (!ASSIGNABLE.includes(b.role)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0430 \u0440\u043E\u043B\u044C.");
+    if (String(b.password || "").length < 6) throw fail(400, "\u041F\u0430\u0440\u043E\u043B\u044C \u2014 \u043D\u0435 \u043C\u0435\u043D\u0448\u0435 6 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432.");
+    if (await db.get(`SELECT id FROM users WHERE login = ?`, [login])) throw fail(400, "\u0422\u0430\u043A\u0438\u0439 \u043B\u043E\u0433\u0456\u043D \u0443\u0436\u0435 \u0454.");
+    const r = await db.run(`INSERT INTO users (login, name, password_hash, role, active, created_at, crm_logins) VALUES (?, ?, ?, ?, 1, ?, ?)`, [
+      login,
+      String(b.name || "").trim(),
+      await hashPassword(b.password),
+      b.role,
+      nowIso(),
+      crmLogins(b.crm_logins).join(",")
+    ]);
+    return c.json({ id: r.lastId });
+  });
+  app.put("/api/users/:id", async (c) => {
+    need(c, "users");
+    const me = c.get("user");
+    const target = await db.get(`SELECT * FROM users WHERE id = ?`, [c.req.param("id")]);
+    if (!target) throw fail(404, "\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    if (target.role === "owner" && me.role !== "owner") throw fail(403, "\u0410\u043A\u0430\u0443\u043D\u0442 \u0432\u043B\u0430\u0441\u043D\u0438\u043A\u0430 \u043C\u043E\u0436\u0435 \u0437\u043C\u0456\u043D\u044E\u0432\u0430\u0442\u0438 \u043B\u0438\u0448\u0435 \u0432\u043B\u0430\u0441\u043D\u0438\u043A.");
+    const b = await c.req.json();
+    const sets = [];
+    const vals = [];
+    if (b.name !== void 0) {
+      sets.push("name = ?");
+      vals.push(String(b.name).trim());
+    }
+    if (b.crm_logins !== void 0) {
+      sets.push("crm_logins = ?");
+      vals.push(crmLogins(b.crm_logins).join(","));
+    }
+    if (b.role !== void 0 && target.role !== "owner") {
+      if (!ASSIGNABLE.includes(b.role)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0430 \u0440\u043E\u043B\u044C.");
+      sets.push("role = ?");
+      vals.push(b.role);
+    }
+    if (b.active !== void 0 && target.role !== "owner") {
+      if (String(target.id) === String(me.id)) throw fail(400, "\u041D\u0435 \u043C\u043E\u0436\u043D\u0430 \u0432\u0438\u043C\u043A\u043D\u0443\u0442\u0438 \u0432\u043B\u0430\u0441\u043D\u0438\u0439 \u0430\u043A\u0430\u0443\u043D\u0442.");
+      sets.push("active = ?");
+      vals.push(b.active ? 1 : 0);
+    }
+    if (b.password) {
+      if (String(b.password).length < 6) throw fail(400, "\u041F\u0430\u0440\u043E\u043B\u044C \u2014 \u043D\u0435 \u043C\u0435\u043D\u0448\u0435 6 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432.");
+      sets.push("password_hash = ?");
+      vals.push(await hashPassword(b.password));
+    }
+    if (sets.length) await db.run(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`, [...vals, target.id]);
+    if (b.password || b.active === false || b.active === 0 || b.role !== void 0) {
+      await db.run(`DELETE FROM sessions WHERE user_id = ? AND user_id != ?`, [target.id, me.id]);
+    }
+    return c.json({ ok: true });
+  });
+  app.post("/api/users/transfer-owner", async (c) => {
+    const me = c.get("user");
+    if (me.role !== "owner") throw fail(403, "\u041F\u0435\u0440\u0435\u0434\u0430\u0442\u0438 \u043F\u0440\u0430\u0432\u0430 \u043C\u043E\u0436\u0435 \u043B\u0438\u0448\u0435 \u0432\u043B\u0430\u0441\u043D\u0438\u043A.");
+    const b = await c.req.json();
+    if (!await verifyPassword(String(b.password || ""), me.password_hash)) throw fail(400, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043F\u0430\u0440\u043E\u043B\u044C.");
+    if (!ASSIGNABLE.includes(b.myRole)) throw fail(400, "\u0412\u0438\u0431\u0435\u0440\u0456\u0442\u044C \u0441\u0432\u043E\u044E \u043D\u043E\u0432\u0443 \u0440\u043E\u043B\u044C.");
+    const target = await db.get(`SELECT * FROM users WHERE id = ?`, [b.userId]);
+    if (!target || String(target.id) === String(me.id)) throw fail(400, "\u0412\u0438\u0431\u0435\u0440\u0456\u0442\u044C \u0456\u043D\u0448\u043E\u0433\u043E \u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430.");
+    if (!target.active) throw fail(400, "\u0426\u0435\u0439 \u0430\u043A\u0430\u0443\u043D\u0442 \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0443\u0432\u0456\u043C\u043A\u043D\u0456\u0442\u044C \u0439\u043E\u0433\u043E.");
+    await db.batch([
+      [`UPDATE users SET role = 'owner' WHERE id = ?`, [target.id]],
+      [`UPDATE users SET role = ? WHERE id = ?`, [b.myRole, me.id]]
+    ]);
+    return c.json({ ok: true });
+  });
+  app.delete("/api/users/:id", async (c) => {
+    need(c, "users");
+    const me = c.get("user");
+    const target = await db.get(`SELECT * FROM users WHERE id = ?`, [c.req.param("id")]);
+    if (!target) throw fail(404, "\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    if (target.role === "owner") throw fail(403, "\u0410\u043A\u0430\u0443\u043D\u0442 \u0432\u043B\u0430\u0441\u043D\u0438\u043A\u0430 \u0432\u0438\u0434\u0430\u043B\u0438\u0442\u0438 \u043D\u0435 \u043C\u043E\u0436\u043D\u0430.");
+    if (String(target.id) === String(me.id)) throw fail(400, "\u041D\u0435 \u043C\u043E\u0436\u043D\u0430 \u0432\u0438\u0434\u0430\u043B\u0438\u0442\u0438 \u0432\u043B\u0430\u0441\u043D\u0438\u0439 \u0430\u043A\u0430\u0443\u043D\u0442.");
+    await db.run(`DELETE FROM sessions WHERE user_id = ?`, [target.id]);
+    await db.run(`DELETE FROM users WHERE id = ?`, [target.id]);
+    return c.json({ ok: true });
+  });
 }
 
-// src/schema.js
+// src/core/schema.js
 var SCHEMA = [
   `CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -2580,7 +2779,372 @@ async function upgradeV10(db) {
   await db.batch(st);
 }
 
-// src/lpcrm.js
+// src/core/validate.js
+var IMAGE_FIELDS = ["logo", "signature", "stamp"];
+var MAX_IMAGE_CHARS = 3e6;
+var IMAGE_RE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/;
+var isSafeImage = (v) => {
+  const s = String(v ?? "");
+  return s === "" || s.length <= MAX_IMAGE_CHARS && IMAGE_RE.test(s);
+};
+function checkImages(body, fail2) {
+  for (const k of IMAGE_FIELDS) {
+    if (body[k] !== void 0 && !isSafeImage(body[k])) {
+      throw fail2(400, `\u041F\u043E\u043B\u0435 \xAB${k}\xBB: \u043F\u043E\u0442\u0440\u0456\u0431\u043D\u0430 \u043A\u0430\u0440\u0442\u0438\u043D\u043A\u0430 PNG, JPEG, WebP \u0430\u0431\u043E GIF (\u0434\u043E 2 \u041C\u0411).`);
+    }
+  }
+}
+function dropUnsafeImages(row) {
+  const out = { ...row };
+  for (const k of IMAGE_FIELDS) if (k in out && !isSafeImage(out[k])) out[k] = "";
+  return out;
+}
+
+// src/core/requisites.js
+var FOP_REQUISITES = ["short_name", "full_name", "ipn", "address", "iban", "bank", "phone", "email", "extra", "logo", "signature", "stamp"];
+var INV_FOP_REQUISITES = ["short_name", "full_name", "ipn", "iban", "bank", "address", "phone", "warning_text", "signature", "stamp"];
+var IMAGES = /* @__PURE__ */ new Set(["logo", "signature", "stamp"]);
+var REQUISITES_DENIED = "\u0420\u0435\u043A\u0432\u0456\u0437\u0438\u0442\u0438 \u0424\u041E\u041F (IBAN, \u0406\u041F\u041D, \u043D\u0430\u0437\u0432\u0443, \u0430\u0434\u0440\u0435\u0441\u0443, \u043F\u0456\u0434\u043F\u0438\u0441, \u043F\u0435\u0447\u0430\u0442\u043A\u0443) \u0437\u043C\u0456\u043D\u044E\u044E\u0442\u044C \u043B\u0438\u0448\u0435 \u0432\u043B\u0430\u0441\u043D\u0438\u043A \u0456 \u0430\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0438.";
+function changedFields(current, body, fields) {
+  return fields.filter((k) => body[k] !== void 0 && String(body[k] ?? "") !== String(current?.[k] ?? ""));
+}
+function describeChanges(current, body, fields) {
+  return fields.map((k) => IMAGES.has(k) ? { field: k, from: current?.[k] ? "\u0454" : "\u043D\u0435\u043C\u0430\u0454", to: body[k] ? "\u043D\u043E\u0432\u0435 \u0437\u043E\u0431\u0440\u0430\u0436\u0435\u043D\u043D\u044F" : "\u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E" } : { field: k, from: String(current?.[k] ?? ""), to: String(body[k] ?? "") });
+}
+async function logAudit(db, { user, kind, refId = "", action, changes = [] }) {
+  await db.run(
+    `INSERT INTO audit_log (at, user_id, user_name, kind, ref_id, action, changes) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [(/* @__PURE__ */ new Date()).toISOString(), user?.id || null, user?.name || user?.login || "", kind, String(refId), action, JSON.stringify(changes)]
+  );
+}
+
+// src/integrations/checkbox.js
+var BASE = "https://api.checkbox.ua/api/v1";
+var CLIENT = { "X-Client-Name": "nakladni-local", "X-Client-Version": "0.1" };
+var tokens = /* @__PURE__ */ new Map();
+async function req(fetchFn, path, { method = "GET", token, license, body } = {}) {
+  const headers = { ...CLIENT, Accept: "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (license) headers["X-License-Key"] = license;
+  if (body) headers["Content-Type"] = "application/json";
+  const res = await fetchFn(BASE + path, { method, headers, body: body ? JSON.stringify(body) : void 0 });
+  const text = await res.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+  }
+  if (!res.ok) {
+    const msg = json?.message || json?.detail || text.slice(0, 200);
+    const err = new Error(`Checkbox ${res.status}: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
+    err.status = res.status;
+    throw err;
+  }
+  return json;
+}
+var hasCheckbox = (fop) => Boolean(fop.checkbox_login && fop.checkbox_password || fop.checkbox_license && fop.checkbox_pin);
+async function signIn(fetchFn, fop, force = false) {
+  if (!force && tokens.has(fop.id)) return tokens.get(fop.id);
+  let json;
+  if (fop.checkbox_login && fop.checkbox_password) {
+    json = await req(fetchFn, "/cashier/signin", {
+      method: "POST",
+      body: { login: fop.checkbox_login, password: fop.checkbox_password }
+    });
+  } else {
+    json = await req(fetchFn, "/cashier/signinPinCode", {
+      method: "POST",
+      license: fop.checkbox_license,
+      body: { pin_code: fop.checkbox_pin }
+    });
+  }
+  const token = json?.access_token;
+  if (!token) throw new Error("Checkbox \u043D\u0435 \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u0432 \u0442\u043E\u043A\u0435\u043D \u0434\u043E\u0441\u0442\u0443\u043F\u0443");
+  tokens.set(fop.id, token);
+  return token;
+}
+async function authed(fetchFn, fop, path, opts = {}) {
+  let token = await signIn(fetchFn, fop);
+  try {
+    return await req(fetchFn, path, { ...opts, token, license: fop.checkbox_license || void 0 });
+  } catch (e) {
+    if (e.status === 401 || e.status === 403) {
+      token = await signIn(fetchFn, fop, true);
+      return req(fetchFn, path, { ...opts, token, license: fop.checkbox_license || void 0 });
+    }
+    throw e;
+  }
+}
+var parseDate = (s) => {
+  if (!s) return /* @__PURE__ */ new Date();
+  const d = new Date(String(s).replace(" ", "T"));
+  return Number.isNaN(d.getTime()) ? /* @__PURE__ */ new Date() : d;
+};
+function summarize(receipt, fop, how) {
+  return {
+    fopId: fop.id,
+    fopName: fop.short_name,
+    receiptId: receipt.id,
+    fiscalCode: receipt.fiscal_code || "",
+    date: receipt.fiscal_date || receipt.created_at || "",
+    total: receipt.total_sum != null ? receipt.total_sum / 100 : null,
+    url: receipt.id ? `https://check.checkbox.ua/${receipt.id}` : "",
+    match: how
+    // 'order' | 'sum' | 'manual'
+  };
+}
+async function findReceiptByRef(fetchFn, fops, ref) {
+  const clean = String(ref).trim();
+  const uuid = clean.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0];
+  const errors = [];
+  for (const fop of fops.filter(hasCheckbox)) {
+    try {
+      if (uuid) {
+        const r = await authed(fetchFn, fop, `/receipts/${uuid}`);
+        if (r?.id) return { receipt: summarize(r, fop, "manual"), errors };
+      } else {
+        const r = await authed(fetchFn, fop, `/receipts/search?fiscal_code=${encodeURIComponent(clean)}&limit=5`);
+        const hit = (r?.results || [])[0];
+        if (hit) return { receipt: summarize(hit, fop, "manual"), errors };
+      }
+    } catch (e) {
+      if (e.status !== 404) errors.push(`${fop.short_name}: ${e.message}`);
+    }
+  }
+  return { receipt: null, errors };
+}
+async function findReceiptForOrder(fetchFn, fops, order2, { days = 7 } = {}) {
+  const errors = [];
+  const from = parseDate(order2.date);
+  from.setDate(from.getDate() - 1);
+  const to = new Date(from);
+  to.setDate(to.getDate() + Number(days) + 1);
+  const orderNo = String(order2.orderId);
+  const orderNoRe = new RegExp(`(^|\\D)${orderNo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\D|$)`);
+  const sumMatches = [];
+  for (const fop of fops.filter(hasCheckbox)) {
+    try {
+      let offset = 0;
+      for (let page = 0; page < 10; page++) {
+        const qs = new URLSearchParams({
+          from_date: from.toISOString(),
+          to_date: to.toISOString(),
+          limit: "100",
+          offset: String(offset),
+          self_receipts: "false"
+        });
+        const r = await authed(fetchFn, fop, `/receipts/search?${qs}`);
+        const results = r?.results || [];
+        for (const rc of results) {
+          const text = [
+            rc.header,
+            rc.footer,
+            rc.barcode,
+            rc.order_id,
+            rc.external_id,
+            ...(rc.goods || []).map((g) => `${g.good?.code || ""} ${g.good?.name || ""}`)
+          ].filter(Boolean).join(" ");
+          if (orderNoRe.test(text)) return { receipt: summarize(rc, fop, "order"), errors };
+          if (rc.type !== "RETURN" && rc.total_sum != null && Math.abs(rc.total_sum / 100 - order2.total) < 0.01) {
+            sumMatches.push(summarize(rc, fop, "sum"));
+          }
+        }
+        if (results.length < 100) break;
+        offset += 100;
+      }
+    } catch (e) {
+      errors.push(`${fop.short_name}: ${e.message}`);
+    }
+  }
+  if (sumMatches.length === 1) return { receipt: sumMatches[0], errors };
+  if (sumMatches.length > 1) {
+    errors.push(`\u0417\u043D\u0430\u0439\u0434\u0435\u043D\u043E ${sumMatches.length} \u0447\u0435\u043A\u0438(\u0456\u0432) \u043D\u0430 \u0441\u0443\u043C\u0443 ${order2.total} \u0433\u0440\u043D \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0424\u041E\u041F \u0432\u0440\u0443\u0447\u043D\u0443 \u0430\u0431\u043E \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u0447\u0435\u043A.`);
+  }
+  return { receipt: null, errors, candidates: sumMatches };
+}
+async function testCheckbox(fetchFn, fop) {
+  tokens.delete(fop.id);
+  const me = await authed(fetchFn, fop, "/cashier/me");
+  return { cashier: me?.full_name || "", organization: me?.organization?.title || "" };
+}
+
+// src/modules/refs/index.js
+var SECRET_FOP_FIELDS = ["checkbox_password", "checkbox_pin", "checkbox_license"];
+var FOP_FIELDS = [
+  "short_name",
+  "full_name",
+  "ipn",
+  "address",
+  "iban",
+  "bank",
+  "phone",
+  "email",
+  "extra",
+  "template_id",
+  "logo",
+  "signature",
+  "stamp",
+  "checkbox_login",
+  "checkbox_password",
+  "checkbox_license",
+  "checkbox_pin",
+  "active"
+];
+var publicFop = (f) => {
+  if (!f) return null;
+  const out = { ...f };
+  for (const k of SECRET_FOP_FIELDS) out[k] = f[k] ? MASK : "";
+  out.has_checkbox = hasCheckbox(f);
+  return out;
+};
+function mountRefs(app, { db, fetchFn }) {
+  const settings = () => loadSettings(db);
+  app.get("/api/bootstrap", async (c) => {
+    const s = await settings();
+    const user = c.get("user");
+    const apiOk = can(user, "api");
+    const fops = (await db.all(`SELECT * FROM fops ORDER BY active DESC, short_name`)).map(publicFop).map((f) => {
+      if (apiOk) return f;
+      const { checkbox_login, checkbox_password, checkbox_license, checkbox_pin, ...rest } = f;
+      return rest;
+    });
+    const invFops = await db.all(`SELECT * FROM inv_fops ORDER BY active DESC, short_name`);
+    const templates = (await db.all(`SELECT * FROM templates ORDER BY id`)).map(parseTpl);
+    const offices = await db.all(`SELECT * FROM offices ORDER BY CAST(office_id AS INTEGER)`);
+    const channels = await db.all(`SELECT * FROM channels ORDER BY name`);
+    return c.json({
+      fops,
+      templates,
+      offices,
+      channels,
+      invFops,
+      defaultWarning: DEFAULT_WARNING,
+      user: publicUser(user),
+      settings: apiOk ? { ...s, lpcrm_key: s.lpcrm_key ? MASK : "", odb_key: s.odb_key ? MASK : "", tg_token: s.tg_token ? MASK : "", tg_secret: "" } : Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith("lpcrm_") && !k.startsWith("checkbox_") && !k.startsWith("odb_") && !k.startsWith("tg_")).concat([["lpcrm_key", s.lpcrm_key ? MASK : ""], ["lpcrm_subdomain", s.lpcrm_subdomain || ""]]))
+    });
+  });
+  app.put("/api/settings", async (c) => {
+    need(c, "refs.edit");
+    const body = await c.req.json();
+    const apiKeys = ["lpcrm_subdomain", "lpcrm_key", "lpcrm_search_days", "checkbox_enabled", "checkbox_search_days", "odb_key", "odb_name"];
+    const general = ["invoice_date_mode", "default_fop_id", "seller_note", "retention_days", "rahunok_next_number"];
+    const allowed = can(c.get("user"), "api") ? [...apiKeys, ...general] : general;
+    if (body.rahunok_next_number !== void 0 && !/^\d{1,12}$/.test(String(body.rahunok_next_number).trim())) throw fail(400, "\u041D\u043E\u043C\u0435\u0440 \u0440\u0430\u0445\u0443\u043D\u043A\u0443 \u2014 \u043B\u0438\u0448\u0435 \u0446\u0438\u0444\u0440\u0438.");
+    if (body.retention_days !== void 0 && !(Number(body.retention_days) >= 1)) throw fail(400, "\u0421\u0442\u0440\u043E\u043A \u0437\u0431\u0435\u0440\u0456\u0433\u0430\u043D\u043D\u044F \u2014 \u0449\u043E\u043D\u0430\u0439\u043C\u0435\u043D\u0448\u0435 1 \u0434\u0435\u043D\u044C.");
+    if (body.lpcrm_subdomain !== void 0 && !/^[a-z0-9-]{1,63}$/i.test(String(body.lpcrm_subdomain).trim())) throw fail(400, "\u041F\u0456\u0434\u0434\u043E\u043C\u0435\u043D LP-CRM \u2014 \u043B\u0438\u0448\u0435 \u043B\u0430\u0442\u0438\u043D\u0441\u044C\u043A\u0456 \u043B\u0456\u0442\u0435\u0440\u0438, \u0446\u0438\u0444\u0440\u0438 \u0439 \u0434\u0435\u0444\u0456\u0441.");
+    for (const k of allowed) {
+      if (body[k] === void 0 || body[k] === MASK) continue;
+      await db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [
+        k,
+        String(body[k]).trim()
+      ]);
+    }
+    return c.json({ ok: true });
+  });
+  const fopCols = (c, b) => FOP_FIELDS.filter((k) => b[k] !== void 0 && b[k] !== MASK && (can(c.get("user"), "api") || !k.startsWith("checkbox_")));
+  app.post("/api/fops", async (c) => {
+    need(c, "refs.edit");
+    if (!can(c.get("user"), "requisites")) throw fail(403, REQUISITES_DENIED);
+    const b = await c.req.json();
+    if (!b.short_name) return c.json({ error: "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043A\u043E\u0440\u043E\u0442\u043A\u0443 \u043D\u0430\u0437\u0432\u0443 \u0424\u041E\u041F" }, 400);
+    checkImages(b, fail);
+    const cols = fopCols(c, b);
+    const r = await db.run(
+      `INSERT INTO fops (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`,
+      cols.map((k) => b[k])
+    );
+    const fields = changedFields({}, b, FOP_REQUISITES);
+    await logAudit(db, { user: c.get("user"), kind: "fop", refId: r.lastId, action: "\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E", changes: describeChanges({}, b, fields) });
+    return c.json({ id: r.lastId });
+  });
+  app.put("/api/fops/:id", async (c) => {
+    need(c, "refs.edit");
+    const b = await c.req.json();
+    checkImages(b, fail);
+    const cur = await db.get(`SELECT * FROM fops WHERE id = ?`, [c.req.param("id")]);
+    if (!cur) throw fail(404, "\u0424\u041E\u041F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const req2 = changedFields(cur, b, FOP_REQUISITES);
+    if (req2.length && !can(c.get("user"), "requisites")) throw fail(403, REQUISITES_DENIED);
+    const cols = fopCols(c, b);
+    if (!cols.length) return c.json({ ok: true });
+    await db.run(`UPDATE fops SET ${cols.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, [
+      ...cols.map((k) => b[k]),
+      cur.id
+    ]);
+    if (req2.length) await logAudit(db, { user: c.get("user"), kind: "fop", refId: cur.id, action: "\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0440\u0435\u043A\u0432\u0456\u0437\u0438\u0442\u0438", changes: describeChanges(cur, b, req2) });
+    return c.json({ ok: true });
+  });
+  app.delete("/api/fops/:id", async (c) => {
+    need(c, "refs.edit");
+    await db.run(`UPDATE fops SET active = 0 WHERE id = ?`, [c.req.param("id")]);
+    return c.json({ ok: true });
+  });
+  app.post("/api/fops/:id/checkbox-test", async (c) => {
+    need(c, "api");
+    const fop = await db.get(`SELECT * FROM fops WHERE id = ?`, [c.req.param("id")]);
+    if (!fop) return c.json({ error: "\u0424\u041E\u041F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E" }, 404);
+    if (!hasCheckbox(fop)) return c.json({ error: "\u041D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E \u0434\u043E\u0441\u0442\u0443\u043F \u0434\u043E Checkbox" }, 400);
+    return c.json(await testCheckbox(fetchFn, fop));
+  });
+  app.put("/api/offices", async (c) => {
+    need(c, "refs.edit");
+    const list = await c.req.json();
+    await db.batch((Array.isArray(list) ? list : []).filter((o) => o.office_id).map((o) => [
+      `INSERT INTO offices (office_id, name, fop_id, seller_text) VALUES (?, ?, ?, ?)
+       ON CONFLICT(office_id) DO UPDATE SET name = excluded.name, fop_id = excluded.fop_id, seller_text = excluded.seller_text`,
+      [String(o.office_id).trim(), o.name || "", o.fop_id || null, String(o.seller_text || "").trim()]
+    ]));
+    return c.json({ ok: true });
+  });
+  app.put("/api/channels", async (c) => {
+    need(c, "refs.edit");
+    const list = await c.req.json();
+    const st = [[`DELETE FROM channels`, []]];
+    for (const ch of Array.isArray(list) ? list : []) {
+      const name = String(ch.name || "").trim();
+      if (!name) continue;
+      st.push([`INSERT INTO channels (name, fop_id, seller_text) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET fop_id = excluded.fop_id, seller_text = excluded.seller_text`, [name, ch.fop_id || null, String(ch.seller_text || "").trim()]]);
+    }
+    await db.batch(st);
+    return c.json({ ok: true });
+  });
+  app.delete("/api/offices/:id", async (c) => {
+    need(c, "refs.edit");
+    await db.run(`DELETE FROM offices WHERE office_id = ?`, [c.req.param("id")]);
+    return c.json({ ok: true });
+  });
+  app.post("/api/templates", async (c) => {
+    need(c, "refs.edit");
+    const b = await c.req.json();
+    const r = await db.run(`INSERT INTO templates (name, layout, options) VALUES (?, ?, ?)`, [
+      b.name || "\u041D\u043E\u0432\u0438\u0439 \u0448\u0430\u0431\u043B\u043E\u043D",
+      b.layout || "classic",
+      JSON.stringify(b.options || {})
+    ]);
+    return c.json({ id: r.lastId });
+  });
+  app.put("/api/templates/:id", async (c) => {
+    need(c, "refs.edit");
+    const b = await c.req.json();
+    await db.run(`UPDATE templates SET name = ?, layout = ?, options = ? WHERE id = ?`, [
+      b.name,
+      b.layout,
+      JSON.stringify(b.options || {}),
+      c.req.param("id")
+    ]);
+    return c.json({ ok: true });
+  });
+  app.delete("/api/templates/:id", async (c) => {
+    need(c, "refs.edit");
+    const id = c.req.param("id");
+    const used = await db.get(`SELECT COUNT(*) AS n FROM fops WHERE template_id = ? AND active = 1`, [id]);
+    if (used?.n) return c.json({ error: "\u0428\u0430\u0431\u043B\u043E\u043D \u0432\u0438\u043A\u043E\u0440\u0438\u0441\u0442\u043E\u0432\u0443\u0454\u0442\u044C\u0441\u044F \u0424\u041E\u041F\u0430\u043C\u0438 \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u0457\u043C \u0448\u0430\u0431\u043B\u043E\u043D" }, 400);
+    await db.run(`DELETE FROM templates WHERE id = ?`, [id]);
+    return c.json({ ok: true });
+  });
+}
+
+// src/integrations/lpcrm.js
 var MIN_GAP_MS = 1500;
 var RETRY_DELAYS_MS = [3e3, 6e3, 12e3];
 var queue = Promise.resolve();
@@ -2746,8 +3310,702 @@ ${(typeof v === "string" ? v : JSON.stringify(v, null, 1)).slice(0, 3e3)}`);
   return lines.join("\n\n");
 }
 
-// src/analytics.js
-var kyivDay = (d = /* @__PURE__ */ new Date()) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv" }).format(d);
+// src/modules/nakladni/normalize.js
+var pick = (obj, keys) => {
+  if (!obj) return "";
+  for (const k of keys) {
+    const v = obj[k];
+    if (v !== void 0 && v !== null && String(v).trim() !== "") return v;
+  }
+  return "";
+};
+var num2 = (v) => {
+  if (v === "" || v === null || v === void 0) return 0;
+  const n = parseFloat(String(v).replace(/\s/g, "").replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+};
+var round22 = (n) => Math.round(n * 100) / 100;
+var textOnly = (v) => /^\s*\d*\s*$/.test(String(v)) ? "" : String(v);
+function normalizeOrder(raw2, productNames = {}) {
+  const productsRaw = raw2.products || raw2.goods || raw2.items || [];
+  const list = Array.isArray(productsRaw) ? productsRaw : Object.values(productsRaw);
+  const items = list.map((p) => {
+    const productId = String(pick(p, ["product_id", "id", "productId"]) || "");
+    const qty = num2(pick(p, ["quantity", "count", "qty", "amount"])) || 1;
+    const price = num2(pick(p, ["price", "cost", "price_sale"]));
+    const known = productNames[productId] || {};
+    const name = pick(p, ["name", "title", "product_name", "product_title"]) || known.name || (productId ? `\u0422\u043E\u0432\u0430\u0440 #${productId}` : "\u0422\u043E\u0432\u0430\u0440");
+    let article = String(pick(p, ["article", "sku", "code", "vendor_code"]) || known.article || "");
+    let cleanName = String(name);
+    const br = cleanName.match(/^(.*\S)\s*\[([^\]]{1,40})\]\s*$/);
+    if (br && !article) {
+      cleanName = br[1];
+      article = br[2];
+    }
+    return {
+      productId,
+      name: cleanName,
+      article,
+      unit: "\u0448\u0442",
+      qty,
+      price: round22(price),
+      sum: round22(qty * price)
+    };
+  });
+  const itemsTotal = round22(items.reduce((s, i) => s + i.sum, 0));
+  const discount = num2(pick(raw2, ["discount", "sale", "discount_sum"]));
+  const deliveryCost = num2(pick(raw2, ["delivery_price", "delivery_cost"]));
+  const crmTotal = num2(pick(raw2, ["total", "total_sum", "sum", "order_sum"]));
+  return {
+    orderId: String(pick(raw2, ["order_id", "id", "orderId"])),
+    shortId: raw2.order_id && raw2.id && String(raw2.id) !== String(raw2.order_id) ? String(raw2.id) : "",
+    date: String(pick(raw2, ["order_time", "date", "created_at", "datetime"])),
+    status: String(pick(raw2, ["status", "status_id"])),
+    office: String(pick(raw2, ["office", "office_id", "department"])),
+    buyer: {
+      name: String(pick(raw2, ["bayer_name", "buyer_name", "fio", "name", "client_name"])),
+      phone: String(pick(raw2, ["phone", "buyer_phone", "tel"])),
+      email: String(pick(raw2, ["email", "mail"]))
+    },
+    delivery: {
+      method: textOnly(pick(raw2, ["delivery_name", "delivery"])),
+      address: String(pick(raw2, ["delivery_adress", "delivery_address", "address", "city"])),
+      ttn: String(pick(raw2, ["ttn", "ttn_number", "declaration"]))
+    },
+    payment: textOnly(pick(raw2, ["payment_name", "payment"])),
+    comment: String(pick(raw2, ["comment", "note"])),
+    channel: String(pick(raw2, ["additional_1"])).trim(),
+    items,
+    itemsTotal,
+    discount: round22(discount),
+    deliveryCost: round22(deliveryCost),
+    total: round22(itemsTotal - discount + deliveryCost),
+    crmTotal: crmTotal ? round22(crmTotal) : null,
+    receiptHint: String(pick(raw2, ["receipt_id", "check_id", "fiscal_code", "checkbox_id", "receipt"]))
+  };
+}
+function applyEdits(order2, edits) {
+  if (!edits) return order2;
+  const o = structuredClone(order2);
+  if (edits.buyer) o.buyer = { ...o.buyer, ...edits.buyer };
+  if (edits.delivery) o.delivery = { ...o.delivery, ...edits.delivery };
+  if (edits.payment !== void 0) o.payment = edits.payment;
+  if (edits.comment !== void 0) o.comment = edits.comment;
+  if (edits.date !== void 0 && edits.date !== "") o.invoiceDate = edits.date;
+  if (Array.isArray(edits.items)) {
+    o.items = edits.items.map((i) => {
+      const qty = num2(i.qty);
+      const price = num2(i.price);
+      return {
+        productId: i.productId || "",
+        name: String(i.name || ""),
+        article: String(i.article || ""),
+        unit: i.unit || "\u0448\u0442",
+        qty,
+        price: round22(price),
+        sum: round22(qty * price)
+      };
+    });
+  }
+  if (edits.discount !== void 0) o.discount = round22(num2(edits.discount));
+  if (edits.deliveryCost !== void 0) o.deliveryCost = round22(num2(edits.deliveryCost));
+  o.itemsTotal = round22(o.items.reduce((s, i) => s + i.sum, 0));
+  o.total = round22(o.itemsTotal - o.discount + o.deliveryCost);
+  o.edited = true;
+  return o;
+}
+
+// src/modules/nakladni/demo.js
+var DEMO_ORDER = {
+  order_id: "demo",
+  order_time: "2026-10-12 14:35:00",
+  status: "11",
+  office: "25",
+  bayer_name: "\u041A\u043E\u0432\u0430\u043B\u0435\u043D\u043A\u043E \u041E\u043B\u0435\u043D\u0430 \u041F\u0435\u0442\u0440\u0456\u0432\u043D\u0430",
+  phone: "380671234567",
+  email: "olena@example.com",
+  delivery: "\u041D\u043E\u0432\u0430 \u041F\u043E\u0448\u0442\u0430",
+  delivery_adress: "\u043C. \u041A\u0438\u0457\u0432, \u0412\u0456\u0434\u0434\u0456\u043B\u0435\u043D\u043D\u044F \u211612, \u0432\u0443\u043B. \u0412\u0435\u043B\u0438\u043A\u0430 \u0412\u0430\u0441\u0438\u043B\u044C\u043A\u0456\u0432\u0441\u044C\u043A\u0430, 72",
+  ttn: "20450912345678",
+  payment: "\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 NovaPay",
+  comment: "\u041F\u043E\u0434\u0437\u0432\u043E\u043D\u0438\u0442\u0438 \u043F\u0435\u0440\u0435\u0434 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u043E\u044E",
+  products: [
+    { product_id: "101", name: "\u0420\u0435\u043A\u0443\u043F\u0435\u0440\u0430\u0442\u043E\u0440 Ecovent VS-60 Pro", article: "EV-VS60", price: "6450", count: "1" },
+    { product_id: "102", name: "\u0417\u043E\u0432\u043D\u0456\u0448\u043D\u044F \u0440\u0435\u0448\u0456\u0442\u043A\u0430, \u0431\u0456\u043B\u0430", article: "EV-GR100", price: "390", count: "2" },
+    { product_id: "103", name: "\u0424\u0456\u043B\u044C\u0442\u0440 \u0437\u043C\u0456\u043D\u043D\u0438\u0439 G3 (\u043A\u043E\u043C\u043F\u043B\u0435\u043A\u0442 2 \u0448\u0442)", article: "EV-F-G3", price: "280", count: "1" }
+  ]
+};
+
+// src/modules/nakladni/index.js
+var docFop = (f) => {
+  if (!f) return null;
+  const { checkbox_login, checkbox_password, checkbox_license, checkbox_pin, ...rest } = f;
+  return rest;
+};
+function mountNakladni(app, { db, fetchFn, onCleanup }) {
+  const settings = () => loadSettings(db);
+  const receiptCache = /* @__PURE__ */ new Map();
+  onCleanup((border) => db.run(`DELETE FROM versions WHERE created_at < ?`, [border]));
+  app.get("/api/lpcrm/diagnose/:orderId", async (c) => {
+    need(c, "api");
+    const s = await settings();
+    const text = await diagnose(fetchFn, { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key }, c.req.param("orderId"));
+    return c.json({ text });
+  });
+  app.get("/api/lpcrm/raw/:orderId", async (c) => {
+    need(c, "api");
+    const s = await settings();
+    const { raw: raw2 } = await getOrder(fetchFn, { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key }, c.req.param("orderId"), { fresh: true });
+    return c.json(raw2);
+  });
+  let syncing = null;
+  const ymd2 = (d) => d.toISOString().slice(0, 10);
+  const digits = (v) => String(v || "").replace(/\D/g, "");
+  const STATUS_PRIORITY = ["11", "3", "56", "14", "18", "66", "60", "53"];
+  async function cachedStatuses(creds) {
+    const row = await db.get(`SELECT value FROM settings WHERE key = 'statuses_cache'`);
+    const cache = row?.value ? JSON.parse(row.value) : null;
+    if (cache && cache.sub === creds.subdomain && Date.now() - cache.at < 864e5) return cache.list;
+    const list = Object.keys(await getStatuses(fetchFn, creds));
+    await db.run(`INSERT INTO settings (key, value) VALUES ('statuses_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [
+      JSON.stringify({ at: Date.now(), sub: creds.subdomain, list })
+    ]);
+    return list;
+  }
+  async function saveOrders2(orders) {
+    const now = nowIso();
+    await db.batch(orders.map((o) => [
+      `INSERT INTO orders_index (code, datetime, phone, ttn, bayer_name, data, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(code) DO UPDATE SET datetime = excluded.datetime, phone = excluded.phone, ttn = excluded.ttn,
+       bayer_name = excluded.bayer_name, data = excluded.data, fetched_at = excluded.fetched_at`,
+      [String(o.order_id), o.datetime || "", digits(o.phone), String(o.ttn || ""), o.bayer_name || "", JSON.stringify(o), now]
+    ]));
+  }
+  async function syncIndex(creds, days, found = async () => []) {
+    if (syncing) {
+      await syncing;
+      return found();
+    }
+    let result = [];
+    syncing = (async () => {
+      const all = await cachedStatuses(creds);
+      const statuses = [...STATUS_PRIORITY.filter((x) => all.includes(x)), ...all.filter((x) => !STATUS_PRIORITY.includes(x))];
+      const start = ymd2(new Date(Date.now() - days * 864e5));
+      const end = ymd2(new Date(Date.now() + 864e5));
+      const key = `${creds.subdomain}|${days}|${start}`;
+      const pr = await db.get(`SELECT value FROM settings WHERE key = 'sync_progress'`);
+      const prog = pr?.value ? JSON.parse(pr.value) : null;
+      let i = prog && prog.key === key && Date.now() - prog.at < 30 * 6e4 ? prog.i : 0;
+      const saveProgress = (idx) => db.run(
+        `INSERT INTO settings (key, value) VALUES ('sync_progress', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        [JSON.stringify({ key, i: idx, at: Date.now() })]
+      );
+      for (; i < statuses.length; i++) {
+        const codes = await getOrderCodesByStatus(fetchFn, creds, statuses[i], start, end);
+        const known = new Set((await db.all(`SELECT code FROM orders_index`)).map((r) => r.code));
+        const fresh = codes.filter((c) => !known.has(c));
+        for (let k = 0; k < fresh.length; k += 100) {
+          await saveOrders2(await getOrdersBatch(fetchFn, creds, fresh.slice(k, k + 100)));
+        }
+        await saveProgress(i + 1);
+        result = await found();
+        if (result.length) break;
+      }
+      await db.run(`DELETE FROM settings WHERE key = 'sync_progress'`);
+    })();
+    try {
+      await syncing;
+    } finally {
+      syncing = null;
+    }
+    return result;
+  }
+  const SKIP_KEYS = /* @__PURE__ */ new Set(["total", "status", "office", "payment", "delivery_id", "attribute_status_id", "localization"]);
+  async function matchIndex(q) {
+    const rows = await db.all(`SELECT code, datetime, phone, ttn, data FROM orders_index ORDER BY datetime DESC`);
+    const qd = digits(q);
+    const strong = [];
+    const weak = [];
+    for (const r of rows) {
+      const data = JSON.parse(r.data || "{}");
+      const exact = Object.entries(data).some(([k, v]) => v !== null && typeof v !== "object" && !SKIP_KEYS.has(k) && String(v).trim() === q);
+      if (exact || r.ttn === q) strong.push(r);
+      else if (qd.length >= 9 && r.phone && r.phone.endsWith(qd)) weak.push(r);
+    }
+    return strong.length ? strong : weak;
+  }
+  async function resolveCode(q, s, creds) {
+    if (/^\d{11,}$/.test(q) && !q.startsWith("380")) return { code: q };
+    const alias = await db.get(`SELECT code FROM order_alias WHERE alias = ?`, [q]);
+    if (alias) return { code: alias.code };
+    let hits = await matchIndex(q);
+    const maxDays = Number(s.lpcrm_search_days) || 30;
+    if (!hits.length) hits = await syncIndex(creds, Math.min(7, maxDays), () => matchIndex(q));
+    if (!hits.length && maxDays > 7) hits = await syncIndex(creds, maxDays, () => matchIndex(q));
+    if (!hits.length) {
+      throw new Error(`\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \xAB${q}\xBB \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0441\u0435\u0440\u0435\u0434 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u0437\u0430 \u043E\u0441\u0442\u0430\u043D\u043D\u0456 ${Number(s.lpcrm_search_days) || 30} \u0434\u043D\u0456\u0432. \u0412\u0432\u0435\u0434\u0456\u0442\u044C \u043A\u043E\u0434 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F (ID-o \u0443 \u0448\u0430\u043F\u0446\u0456 \u043A\u0430\u0440\u0442\u043A\u0438 LP-CRM), \u0442\u0435\u043B\u0435\u0444\u043E\u043D \u043F\u043E\u043A\u0443\u043F\u0446\u044F \u0430\u0431\u043E \u0422\u0422\u041D.`);
+    }
+    const note = hits.length > 1 ? `\u0417\u043D\u0430\u0439\u0434\u0435\u043D\u043E ${hits.length} \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F(\u043D\u044C) \u0437\u0430 \xAB${q}\xBB \u2014 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u043D\u0430\u0439\u043D\u043E\u0432\u0456\u0448\u0435.` : "";
+    if (hits.length === 1 && !/^\d{9,}$/.test(digits(q))) {
+      await db.run(`INSERT INTO order_alias (alias, code) VALUES (?, ?) ON CONFLICT(alias) DO UPDATE SET code = excluded.code`, [q, hits[0].code]);
+    }
+    return { code: hits[0].code, note };
+  }
+  async function loadOrder(orderId, s, fresh = false) {
+    if (orderId === "demo" || orderId === "0") {
+      return { rawOrder: DEMO_ORDER, demo: true };
+    }
+    const creds = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
+    if (!creds.subdomain || !creds.key) throw new Error("\u041D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E LP-CRM: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u043F\u0456\u0434\u0434\u043E\u043C\u0435\u043D \u0456 API-\u043A\u043B\u044E\u0447 \u0443 \u0440\u043E\u0437\u0434\u0456\u043B\u0456 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\xBB.");
+    const { code, note } = await resolveCode(orderId, s, creds);
+    const { order: order2, raw: raw2 } = await getOrder(fetchFn, creds, code, { fresh });
+    const prods = order2.products || order2.goods || [];
+    const list = Array.isArray(prods) ? prods : Object.values(prods);
+    const missing = list.filter((p) => !(p.name || p.title || p.product_name)).map((p) => String(p.product_id ?? p.id ?? ""));
+    const productNames = missing.length ? await getProducts(fetchFn, creds, missing) : {};
+    return { rawOrder: order2, crmRaw: raw2, productNames, demo: false, code, note };
+  }
+  async function buildInvoice(orderId, { skipCheckbox = false, fresh = false } = {}) {
+    const s = await settings();
+    const { rawOrder, crmRaw, productNames, demo, code, note } = await loadOrder(orderId, s, fresh);
+    const crmOrder = normalizeOrder(rawOrder, productNames);
+    if (demo) crmOrder.orderId = "demo";
+    if (!crmOrder.orderId) crmOrder.orderId = String(orderId);
+    if (!demo && crmOrder.shortId) crmOrder.orderId = crmOrder.shortId;
+    else if (!demo && /^\d{1,8}$/.test(orderId)) crmOrder.orderId = String(orderId);
+    const prefs = await db.get(`SELECT * FROM order_prefs WHERE order_id = ?`, [orderId]);
+    const edits = prefs?.edits ? JSON.parse(prefs.edits) : null;
+    const today = kyivDay();
+    const autoInvoiceDate = s.invoice_date_mode === "order" ? String(crmOrder.date || "").slice(0, 10) || today : today;
+    crmOrder.invoiceDate = autoInvoiceDate;
+    const order2 = applyEdits(crmOrder, edits);
+    const allFops = await db.all(`SELECT * FROM fops WHERE active = 1`);
+    const byId = (id) => allFops.find((f) => String(f.id) === String(id)) || null;
+    const warnings = [];
+    if (note) warnings.push(note);
+    if (!crmOrder.items.length) warnings.push("\u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0431\u043B\u043E\u043A \xAB\u0414\u0430\u043D\u0456 \u0437 CRM\xBB \u0443\u043D\u0438\u0437\u0443 \u0456 \u043D\u0430\u0434\u0456\u0448\u043B\u0456\u0442\u044C \u0441\u043A\u0440\u0456\u043D\u0448\u043E\u0442 \u0441\u0438\u0440\u043E\u0457 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0456.");
+    let receipt = null;
+    let receiptCandidates = [];
+    const cbFops = allFops.filter(hasCheckbox);
+    const receiptRef = prefs?.receipt_ref || crmOrder.receiptHint;
+    if (!skipCheckbox && cbFops.length && (receiptRef || s.checkbox_enabled === "1")) {
+      try {
+        const cacheKey = `${orderId}|${receiptRef}|${order2.total}|${order2.date}|${cbFops.map((f) => f.id).join(",")}`;
+        const hit = receiptCache.get(cacheKey);
+        let r;
+        if (hit && Date.now() - hit.at < 10 * 60 * 1e3) r = hit.r;
+        else {
+          r = receiptRef ? await findReceiptByRef(fetchFn, cbFops, receiptRef) : await findReceiptForOrder(fetchFn, cbFops, order2, { days: Number(s.checkbox_search_days) || 7 });
+          if (r.receipt) receiptCache.set(cacheKey, { at: Date.now(), r });
+        }
+        receipt = r.receipt;
+        receiptCandidates = r.candidates || [];
+        warnings.push(...r.errors);
+        if (!receipt && receiptRef) warnings.push(`\u0427\u0435\u043A \xAB${receiptRef}\xBB \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 \u0436\u043E\u0434\u043D\u043E\u043C\u0443 \u0430\u043A\u0430\u0443\u043D\u0442\u0456 Checkbox.`);
+      } catch (e) {
+        warnings.push(`Checkbox: ${e.message}`);
+      }
+    }
+    const office = crmOrder.office ? await db.get(`SELECT * FROM offices WHERE office_id = ?`, [crmOrder.office]) : null;
+    const officeFop = office?.fop_id ? byId(office.fop_id) : null;
+    if (crmOrder.office && !office) warnings.push(`\u0412\u0456\u0434\u0434\u0456\u043B ${crmOrder.office} \u043D\u0435 \u0434\u043E\u0434\u0430\u043D\u043E \u0432 \u0434\u043E\u0432\u0456\u0434\u043D\u0438\u043A \u0432\u0456\u0434\u0434\u0456\u043B\u0456\u0432.`);
+    let channelFop = null;
+    let ch = null;
+    if (crmOrder.channel) {
+      ch = (await db.all(`SELECT * FROM channels`)).find((x) => x.name.trim().toLowerCase() === crmOrder.channel.toLowerCase());
+      channelFop = ch?.fop_id ? byId(ch.fop_id) : null;
+      if (!ch) warnings.push(`\u0417\u043D\u0430\u0447\u0435\u043D\u043D\u044F \u043F\u043E\u043B\u044F 1 \xAB${crmOrder.channel}\xBB \u043D\u0435 \u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u0435 \u0434\u043E \u0424\u041E\u041F (\u0440\u043E\u0437\u0434\u0456\u043B \xAB\u0412\u0456\u0434\u0434\u0456\u043B\u0438 \u2192 \u0424\u041E\u041F\xBB).`);
+    }
+    let fop = null;
+    let fopSource = "";
+    const manual = prefs?.fop_id ? byId(prefs.fop_id) : null;
+    if (manual) {
+      fop = manual;
+      fopSource = "manual";
+    } else if (receipt) {
+      fop = byId(receipt.fopId);
+      fopSource = "receipt";
+    } else if (channelFop) {
+      fop = channelFop;
+      fopSource = "channel";
+    } else if (officeFop) {
+      fop = officeFop;
+      fopSource = "office";
+    } else if (s.default_fop_id && byId(s.default_fop_id)) {
+      fop = byId(s.default_fop_id);
+      fopSource = "default";
+    }
+    if (channelFop && officeFop && String(channelFop.id) !== String(officeFop.id) && !receipt) {
+      warnings.push(`\u0417\u0430 \u043F\u043E\u043B\u0435\u043C 1 \u2014 ${channelFop.short_name}, \u0430 \u0437\u0430 \u0432\u0456\u0434\u0434\u0456\u043B\u043E\u043C \u2014 ${officeFop.short_name}. \u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0424\u041E\u041F.`);
+    }
+    const autoFop = channelFop || officeFop;
+    if (receipt && autoFop && String(receipt.fopId) !== String(autoFop.id)) {
+      warnings.push(`\u0417\u0430 ${channelFop ? "\u043F\u043E\u043B\u0435\u043C 1" : "\u0432\u0456\u0434\u0434\u0456\u043B\u043E\u043C"} \u043C\u0430\u0432 \u0431\u0438 \u0431\u0443\u0442\u0438 ${autoFop.short_name}, \u0430\u043B\u0435 \u0447\u0435\u043A \u043F\u0440\u043E\u0431\u0438\u0442\u043E \u043D\u0430 ${receipt.fopName}.`);
+    }
+    if (manual && receipt && String(receipt.fopId) !== String(manual.id)) {
+      warnings.push(`\u041E\u0431\u0440\u0430\u043D\u043E \u0432\u0440\u0443\u0447\u043D\u0443 ${manual.short_name}, \u0430 \u0447\u0435\u043A \u043F\u0440\u043E\u0431\u0438\u0442\u043E \u043D\u0430 ${receipt.fopName}.`);
+    }
+    if (!fop) warnings.push("\u0424\u041E\u041F \u043D\u0435 \u0432\u0438\u0437\u043D\u0430\u0447\u0435\u043D\u043E \u0430\u0432\u0442\u043E\u043C\u0430\u0442\u0438\u0447\u043D\u043E \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u0437\u0456 \u0441\u043F\u0438\u0441\u043A\u0443.");
+    else {
+      const missing = [];
+      if (!fop.full_name) missing.push("\u041F\u0406\u0411");
+      if (!fop.ipn) missing.push("\u0406\u041F\u041D");
+      if (missing.length) warnings.push(`\u0423 ${fop.short_name} \u043D\u0435 \u0437\u0430\u043F\u043E\u0432\u043D\u0435\u043D\u043E: ${missing.join(", ")}.`);
+    }
+    const fits = (row) => row && row.seller_text && (!row.fop_id || String(row.fop_id) === String(fop?.id));
+    let sellerText = "";
+    let sellerTextSource = "";
+    if (edits?.sellerText) {
+      sellerText = edits.sellerText;
+      sellerTextSource = "manual";
+    } else if (fits(ch)) {
+      sellerText = ch.seller_text;
+      sellerTextSource = `\u043F\u043E\u043B\u0435 1 \xAB${ch.name}\xBB`;
+    } else if (fits(office)) {
+      sellerText = office.seller_text;
+      sellerTextSource = `\u0432\u0456\u0434\u0434\u0456\u043B ${office.office_id}`;
+    }
+    const tplId = prefs?.template_id || fop?.template_id;
+    let template = tplId ? await db.get(`SELECT * FROM templates WHERE id = ?`, [tplId]) : null;
+    if (!template) template = await db.get(`SELECT * FROM templates ORDER BY id LIMIT 1`);
+    return {
+      order: order2,
+      crmOrder,
+      demo,
+      edited: Boolean(edits),
+      edits,
+      office: office || (crmOrder.office ? { office_id: crmOrder.office, name: "" } : null),
+      fop: docFop(fop),
+      sellerText,
+      sellerTextSource,
+      autoInvoiceDate,
+      fopSource,
+      officeFopId: officeFop?.id || null,
+      receipt,
+      receiptCandidates,
+      receiptRef: prefs?.receipt_ref || "",
+      template: parseTpl(template),
+      templateManual: Boolean(prefs?.template_id),
+      warnings,
+      sellerNote: s.seller_note || "",
+      crmCode: code || "",
+      crmRaw: crmRaw ? JSON.stringify(crmRaw, null, 2).slice(0, 2e4) : ""
+    };
+  }
+  async function addVersion(orderId, inv, reason, who = "") {
+    const dataHash = hash(JSON.stringify([inv.order, inv.fop?.id, inv.template?.id, inv.template?.options]));
+    await db.run(
+      `INSERT INTO versions (order_id, created_at, reason, fop_id, fop_name, template_id, total, data_hash, data, user_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        orderId,
+        nowIso(),
+        reason,
+        inv.fop?.id || null,
+        inv.fop?.short_name || "",
+        inv.template?.id || null,
+        inv.order.total,
+        dataHash,
+        JSON.stringify(inv),
+        who
+      ]
+    );
+  }
+  async function trackChanges(orderId, inv, who = "") {
+    const last = await db.get(`SELECT data_hash FROM versions WHERE order_id = ? ORDER BY id DESC LIMIT 1`, [orderId]);
+    const dataHash = hash(JSON.stringify([inv.order, inv.fop?.id, inv.template?.id, inv.template?.options]));
+    if (!last) await addVersion(orderId, inv, "\u041F\u0435\u0440\u0448\u0435 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0442\u044F", who);
+    else if (last.data_hash !== dataHash) await addVersion(orderId, inv, "\u0417\u043C\u0456\u043D\u0438\u043B\u0438\u0441\u044F \u0434\u0430\u043D\u0456 (CRM, \u0424\u041E\u041F \u0430\u0431\u043E \u0448\u0430\u0431\u043B\u043E\u043D)", who);
+  }
+  app.get("/api/invoice/:orderId", async (c) => {
+    const orderId = c.req.param("orderId").trim().replace(/^№/, "");
+    const inv = await buildInvoice(orderId, { fresh: c.req.query("fresh") === "1" });
+    await trackChanges(orderId, inv, userName(c));
+    const n = await db.get(`SELECT COUNT(*) AS n FROM versions WHERE order_id = ?`, [orderId]);
+    return c.json({ ...inv, versionsCount: n?.n || 0 });
+  });
+  app.put("/api/invoice/:orderId/prefs", async (c) => {
+    need(c, "docs.edit");
+    const orderId = c.req.param("orderId");
+    const b = await c.req.json();
+    const cur = await db.get(`SELECT * FROM order_prefs WHERE order_id = ?`, [orderId]) || {};
+    const next = {
+      fop_id: b.fop_id !== void 0 ? b.fop_id || null : cur.fop_id ?? null,
+      template_id: b.template_id !== void 0 ? b.template_id || null : cur.template_id ?? null,
+      receipt_ref: b.receipt_ref !== void 0 ? b.receipt_ref || "" : cur.receipt_ref || "",
+      edits: b.edits !== void 0 ? b.edits ? JSON.stringify(b.edits) : "" : cur.edits || ""
+    };
+    await db.run(
+      `INSERT INTO order_prefs (order_id, fop_id, template_id, receipt_ref, edits, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(order_id) DO UPDATE SET fop_id = excluded.fop_id, template_id = excluded.template_id,
+       receipt_ref = excluded.receipt_ref, edits = excluded.edits, updated_at = excluded.updated_at`,
+      [orderId, next.fop_id, next.template_id, next.receipt_ref, next.edits, nowIso()]
+    );
+    const inv = await buildInvoice(orderId);
+    const reason = b.reason || "\u0417\u043C\u0456\u043D\u0430 \u0432\u0440\u0443\u0447\u043D\u0443";
+    await addVersion(orderId, inv, reason, userName(c));
+    return c.json({ ok: true });
+  });
+  app.post("/api/invoice/:orderId/versions", async (c) => {
+    const orderId = c.req.param("orderId");
+    const b = await c.req.json();
+    if (!b.snapshot?.order) return c.json({ error: "\u041D\u0435\u043C\u0430\u0454 \u0434\u0430\u043D\u0438\u0445 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u043E\u0457" }, 400);
+    await addVersion(orderId, b.snapshot, b.reason || "\u0417\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u043E", userName(c));
+    return c.json({ ok: true });
+  });
+  app.get("/api/invoice/:orderId/versions", async (c) => {
+    const rows = await db.all(
+      `SELECT id, order_id, created_at, reason, fop_name, template_id, total, user_name FROM versions WHERE order_id = ? ORDER BY id DESC`,
+      [c.req.param("orderId")]
+    );
+    return c.json(rows);
+  });
+  app.get("/api/versions/:id", async (c) => {
+    const row = await db.get(`SELECT * FROM versions WHERE id = ?`, [c.req.param("id")]);
+    if (!row) return c.json({ error: "\u0412\u0435\u0440\u0441\u0456\u044E \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E" }, 404);
+    return c.json({ ...row, data: JSON.parse(row.data) });
+  });
+  app.get("/api/history", async (c) => {
+    const q = (c.req.query("q") || "").trim();
+    const fop = (c.req.query("fop") || "").trim();
+    const where = [];
+    const params = [];
+    if (q) {
+      where.push("order_id LIKE ?");
+      params.push(`%${q}%`);
+    }
+    if (fop) {
+      where.push("fop_id = ?");
+      params.push(fop);
+    }
+    const rows = await db.all(
+      `SELECT v.order_id, v.id AS last_id, v.created_at AS last_at, v.fop_name, v.total,
+        (SELECT COUNT(*) FROM versions c WHERE c.order_id = v.order_id) AS versions
+       FROM versions v
+       WHERE v.id IN (SELECT MAX(id) FROM versions GROUP BY order_id) ${where.length ? "AND " + where.map((w) => "v." + w).join(" AND ") : ""}
+       ORDER BY v.id DESC LIMIT 200`,
+      params
+    );
+    return c.json(rows);
+  });
+  return { loadOrder };
+}
+
+// src/modules/admin/index.js
+function mountAdmin(app, { db }) {
+  const settings = () => loadSettings(db);
+  const EXPORT_TABLES = ["templates", "fops", "offices", "channels", "inv_fops"];
+  const EXPORT_SETTINGS = [
+    "lpcrm_subdomain",
+    "lpcrm_search_days",
+    "default_fop_id",
+    "checkbox_enabled",
+    "checkbox_search_days",
+    "invoice_date_mode",
+    "rahunok_next_number",
+    "retention_days",
+    "seller_note"
+  ];
+  const SECRET_COLS = /* @__PURE__ */ new Set(["checkbox_password", "checkbox_pin", "checkbox_license", "checkbox_login"]);
+  app.get("/api/admin/export", async (c) => {
+    need(c, "users");
+    const out = { version: 1, exported_at: nowIso(), tables: {}, settings: {} };
+    for (const t of EXPORT_TABLES) {
+      out.tables[t] = (await db.all(`SELECT * FROM ${t}`)).map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !SECRET_COLS.has(k))));
+    }
+    const s = await settings();
+    for (const k of EXPORT_SETTINGS) if (s[k] !== void 0) out.settings[k] = s[k];
+    return c.json(out);
+  });
+  app.get("/api/audit", async (c) => {
+    need(c, "users");
+    const kind = String(c.req.query("kind") || "");
+    const ref = String(c.req.query("ref") || "");
+    const rows = await db.all(
+      `SELECT id, at, user_name, kind, ref_id, action, changes FROM audit_log
+       ${kind ? `WHERE kind = ?${ref ? " AND ref_id = ?" : ""}` : ""} ORDER BY id DESC LIMIT 100`,
+      kind ? ref ? [kind, ref] : [kind] : []
+    );
+    return c.json(rows.map((r) => ({ ...r, changes: JSON.parse(r.changes || "[]") })));
+  });
+  app.post("/api/admin/import", async (c) => {
+    need(c, "users");
+    const b = await c.req.json();
+    if (!b?.tables) throw fail(400, "\u0426\u0435 \u043D\u0435 \u0444\u0430\u0439\u043B \u0435\u043A\u0441\u043F\u043E\u0440\u0442\u0443 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u044C.");
+    const counts = {};
+    const st = [];
+    for (const t of EXPORT_TABLES) {
+      const rows = b.tables[t];
+      if (!Array.isArray(rows)) continue;
+      const cols = new Set((await db.all(`PRAGMA table_info(${t})`)).map((x) => x.name));
+      st.push([`DELETE FROM ${t}`, []]);
+      for (const r0 of rows) {
+        const r = dropUnsafeImages(r0 || {});
+        const keys = Object.keys(r).filter((k) => cols.has(k) && !SECRET_COLS.has(k));
+        if (!keys.length) continue;
+        st.push([`INSERT INTO ${t} (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`, keys.map((k) => r[k])]);
+      }
+      counts[t] = rows.length;
+    }
+    for (const [k, v] of Object.entries(b.settings || {})) {
+      if (!EXPORT_SETTINGS.includes(k)) continue;
+      if (k === "lpcrm_subdomain" && !/^[a-z0-9-]{1,63}$/i.test(String(v).trim())) continue;
+      st.push([`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, String(v)]]);
+    }
+    await db.batch(st);
+    await logAudit(db, { user: c.get("user"), kind: "settings", action: "\u0456\u043C\u043F\u043E\u0440\u0442 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u044C", changes: Object.entries(counts).map(([field, n]) => ({ field, from: "", to: `${n} \u0440\u044F\u0434\u043A\u0456\u0432` })) });
+    return c.json({ ok: true, counts });
+  });
+}
+
+// src/core/counters.js
+var FIRST = 10516;
+async function takeRahunokNumber(db) {
+  const r = await db.get(
+    `UPDATE settings SET value = CAST(COALESCE(NULLIF(CAST(value AS INTEGER), 0), ${FIRST}) + 1 AS TEXT)
+     WHERE key = 'rahunok_next_number' RETURNING CAST(value AS INTEGER) - 1 AS n`
+  );
+  if (r?.n) return String(r.n);
+  await db.run(`INSERT INTO settings (key, value) VALUES ('rahunok_next_number', ?) ON CONFLICT(key) DO NOTHING`, [String(FIRST + 1)]);
+  return String(FIRST);
+}
+var peekRahunokNumber = (s) => String(Number(s.rahunok_next_number) || FIRST);
+
+// src/modules/rahunky/index.js
+function mountRahunky(app, { db, services, onCleanup }) {
+  const settings = () => loadSettings(db);
+  const loadOrder = (...a) => services.nakladni.loadOrder(...a);
+  onCleanup((border) => db.run(`DELETE FROM invoices WHERE COALESCE(updated_at, created_at) < ?`, [border]));
+  const INV_FOP_FIELDS = ["short_name", "full_name", "ipn", "iban", "bank", "address", "phone", "warning_text", "signature", "stamp", "active"];
+  app.post("/api/inv-fops", async (c) => {
+    need(c, "users");
+    const b = await c.req.json();
+    if (!String(b.short_name || "").trim()) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043A\u043E\u0440\u043E\u0442\u043A\u0443 \u043D\u0430\u0437\u0432\u0443 \u0424\u041E\u041F.");
+    checkImages(b, fail);
+    const cols = INV_FOP_FIELDS.filter((k) => b[k] !== void 0);
+    const r = await db.run(`INSERT INTO inv_fops (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`, cols.map((k) => b[k]));
+    await logAudit(db, { user: c.get("user"), kind: "inv_fop", refId: r.lastId, action: "\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E", changes: describeChanges({}, b, changedFields({}, b, INV_FOP_REQUISITES)) });
+    return c.json({ id: r.lastId });
+  });
+  app.put("/api/inv-fops/:id", async (c) => {
+    need(c, "refs.edit");
+    const b = await c.req.json();
+    checkImages(b, fail);
+    const cur = await db.get(`SELECT * FROM inv_fops WHERE id = ?`, [c.req.param("id")]);
+    if (!cur) throw fail(404, "\u0424\u041E\u041F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const req2 = changedFields(cur, b, INV_FOP_REQUISITES);
+    if (req2.length && !can(c.get("user"), "requisites")) throw fail(403, REQUISITES_DENIED);
+    const cols = INV_FOP_FIELDS.filter((k) => b[k] !== void 0);
+    if (cols.length) {
+      await db.run(`UPDATE inv_fops SET ${cols.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, [...cols.map((k) => b[k]), cur.id]);
+    }
+    if (req2.length) await logAudit(db, { user: c.get("user"), kind: "inv_fop", refId: cur.id, action: "\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0440\u0435\u043A\u0432\u0456\u0437\u0438\u0442\u0438", changes: describeChanges(cur, b, req2) });
+    return c.json({ ok: true });
+  });
+  app.delete("/api/inv-fops/:id", async (c) => {
+    need(c, "users");
+    const f = await db.get(`SELECT id, odb_id FROM inv_fops WHERE id = ?`, [c.req.param("id")]);
+    if (!f) throw fail(404, "\u0424\u041E\u041F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    if (f.odb_id) throw fail(400, "\u0426\u0435\u0439 \u0424\u041E\u041F \u0434\u043E\u0434\u0430\u043D\u043E \u0437 Opendatabot \u2014 \u0432\u0438\u043C\u043A\u043D\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 \u0440\u0430\u0445\u0443\u043D\u043A\u0456\u0432\xBB.");
+    await db.run(`DELETE FROM inv_fops WHERE id = ?`, [f.id]);
+    return c.json({ ok: true });
+  });
+  app.get("/api/rahunok-order/:q", async (c) => {
+    need(c, "docs.edit");
+    const q = c.req.param("q").trim().replace(/^№\s*/, "");
+    const s = await settings();
+    const { rawOrder, productNames, demo, code, note } = await loadOrder(q, s);
+    const o = normalizeOrder(rawOrder, productNames);
+    const number = demo ? "demo" : o.shortId || (/^\d{1,8}$/.test(q) ? q : o.orderId);
+    return c.json({
+      number,
+      crmCode: code || "",
+      note: note || "",
+      buyer: o.buyer,
+      items: o.items.map((i) => ({ name: i.article ? `${i.name} [${i.article}]` : i.name, qty: i.qty, price: i.price }))
+    });
+  });
+  async function buildRahunok(b, number) {
+    const fop = await db.get(`SELECT * FROM inv_fops WHERE id = ?`, [b.fop_id]);
+    if (!fop) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u0424\u041E\u041F, \u0432\u0456\u0434 \u044F\u043A\u043E\u0433\u043E \u0432\u0438\u0441\u0442\u0430\u0432\u043B\u044F\u0454\u0442\u044C\u0441\u044F \u0440\u0430\u0445\u0443\u043D\u043E\u043A.");
+    const clientName = String(b.client?.name || "").trim();
+    if (!clientName) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043D\u0430\u0437\u0432\u0443 \u043A\u043B\u0456\u0454\u043D\u0442\u0430.");
+    const items = (b.items || []).map((i) => ({ name: String(i.name || "").trim(), qty: num(i.qty), price: round2(num(i.price)) })).filter((i) => i.name);
+    if (!items.length) throw fail(400, "\u0414\u043E\u0434\u0430\u0439\u0442\u0435 \u0445\u043E\u0447\u0430 \u0431 \u043E\u0434\u0438\u043D \u0442\u043E\u0432\u0430\u0440.");
+    for (const i of items) {
+      if (!(i.qty > 0)) throw fail(400, `\u041A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C \u0434\u043B\u044F \xAB${i.name}\xBB \u043C\u0430\u0454 \u0431\u0443\u0442\u0438 \u0431\u0456\u043B\u044C\u0448\u043E\u044E \u0437\u0430 0.`);
+      i.unit = "\u0448\u0442";
+      i.sum = round2(i.qty * i.price);
+    }
+    const today = kyivDay();
+    const { signature, stamp, ...fopRest } = fop;
+    return {
+      number: String(number),
+      date: /^\d{4}-\d{2}-\d{2}$/.test(String(b.date || "")) ? b.date : today,
+      source: b.source === "crm" ? "crm" : "manual",
+      orderRef: String(b.order_ref || ""),
+      fop: { ...fopRest, signature, stamp, warning_text: fop.warning_text || DEFAULT_WARNING },
+      client: { name: clientName, edrpou: String(b.client?.edrpou || "").trim(), contract: String(b.client?.contract || "").trim() },
+      items,
+      total: round2(items.reduce((t, i) => t + i.sum, 0))
+    };
+  }
+  app.get("/api/rahunky", async (c) => {
+    const q = (c.req.query("q") || "").trim();
+    const rows = await db.all(
+      `SELECT id, number, source, order_ref, fop_name, client_name, total, created_at, created_by, updated_at, updated_by,
+         (SELECT p.status FROM pay_links p WHERE p.id = json_extract(invoices.data, '$.pay.link_id')) AS pay_status FROM invoices
+       ${q ? "WHERE number LIKE ? OR client_name LIKE ? OR order_ref LIKE ?" : ""} ORDER BY id DESC LIMIT 300`,
+      q ? [`%${q}%`, `%${q}%`, `%${q}%`] : []
+    );
+    const s = await settings();
+    return c.json({ rows, nextNumber: peekRahunokNumber(s), retentionDays: Number(s.retention_days) || 7 });
+  });
+  app.get("/api/rahunky/:id", async (c) => {
+    const row = await db.get(`SELECT * FROM invoices WHERE id = ?`, [c.req.param("id")]);
+    if (!row) throw fail(404, "\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (\u043C\u043E\u0436\u043B\u0438\u0432\u043E, \u043C\u0438\u043D\u0443\u0432 \u0441\u0442\u0440\u043E\u043A \u0437\u0431\u0435\u0440\u0456\u0433\u0430\u043D\u043D\u044F).");
+    return c.json({ ...row, data: JSON.parse(row.data) });
+  });
+  app.post("/api/rahunky", async (c) => {
+    need(c, "docs.edit");
+    const b = await c.req.json();
+    let number = "";
+    if (b.source === "crm") {
+      number = String(b.number || "").trim();
+      if (!number) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u043D\u043E\u043C\u0435\u0440\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F CRM.");
+    }
+    const data = await buildRahunok(b, number);
+    if (b.source !== "crm") data.number = await takeRahunokNumber(db);
+    if (b.qr) data.pay = await services.payments.linkForRahunok(c, data);
+    const r = await db.run(
+      `INSERT INTO invoices (number, source, order_ref, fop_id, fop_name, client_name, total, data, created_at, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [data.number, data.source, data.orderRef, data.fop.id, data.fop.short_name, data.client.name, data.total, JSON.stringify(data), nowIso(), userName(c)]
+    );
+    return c.json({ id: r.lastId, data });
+  });
+  app.put("/api/rahunky/:id", async (c) => {
+    need(c, "docs.edit");
+    const row = await db.get(`SELECT * FROM invoices WHERE id = ?`, [c.req.param("id")]);
+    if (!row) throw fail(404, "\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const b = await c.req.json();
+    const prev = JSON.parse(row.data);
+    const data = await buildRahunok({ ...b, source: prev.source, order_ref: prev.orderRef }, row.number);
+    if (b.qr) data.pay = await services.payments.linkForRahunok(c, data);
+    await db.run(
+      `UPDATE invoices SET fop_id = ?, fop_name = ?, client_name = ?, total = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
+      [data.fop.id, data.fop.short_name, data.client.name, data.total, JSON.stringify(data), nowIso(), userName(c), row.id]
+    );
+    return c.json({ id: row.id, data });
+  });
+  app.delete("/api/rahunky/:id", async (c) => {
+    need(c, "docs.edit");
+    await db.run(`DELETE FROM invoices WHERE id = ?`, [c.req.param("id")]);
+    return c.json({ ok: true });
+  });
+}
+
+// src/modules/analytics/index.js
 var toUtc = (day) => Date.UTC(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10));
 var fromUtc = (ms) => new Date(ms).toISOString().slice(0, 10);
 var addDays = (day, n) => fromUtc(toUtc(day) + n * 864e5);
@@ -2762,11 +4020,6 @@ function addMonths(day, n) {
   return fromUtc(d.getTime());
 }
 var isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
-var num = (v) => {
-  const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", "."));
-  return Number.isFinite(n) ? n : 0;
-};
-var round2 = (n) => Math.round(n * 100) / 100;
 var low = (v) => String(v ?? "").trim().toLowerCase();
 var AN_DEFAULTS = {
   compare: true,
@@ -2921,7 +4174,8 @@ function flattenCategories(node, parent = null, out = [], depth = 0) {
   }
   return out;
 }
-function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2 }) {
+function mountAnalytics(app, { db, fetchFn }) {
+  const settings = () => loadSettings(db);
   const getSt = async () => {
     const r = await db.get(`SELECT value FROM settings WHERE key = 'an_settings'`);
     let v = {};
@@ -2931,7 +4185,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     }
     return { ...AN_DEFAULTS, ...v };
   };
-  const putSetting = (key, value) => db.run(
+  const putSetting2 = (key, value) => db.run(
     `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [key, value]
   );
@@ -2972,13 +4226,13 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
       }
     }
     const data = {
-      at: nowIso2(),
+      at: nowIso(),
       values: [...values.values()].sort((a, b) => b.n - a.n),
       users,
       offices,
       sold: Object.fromEntries(sold.map((r) => [r.id, r.q]))
     };
-    await putSetting("an_values", JSON.stringify(data));
+    await putSetting2("an_values", JSON.stringify(data));
     return data;
   }
   async function mergeTodayValues(day) {
@@ -2995,7 +4249,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
       if (o.user && !has(cur.users, o.user)) cur.users.push({ v: o.user, n: 1 });
       if (o.office && !has(cur.offices, o.office)) cur.offices.push({ v: o.office, n: 1 });
     }
-    await putSetting("an_values", JSON.stringify(cur));
+    await putSetting2("an_values", JSON.stringify(cur));
     return cur;
   }
   const OWN_ALLOWED = /* @__PURE__ */ new Set(["POST /api/an/query", "GET /api/an/sync", "POST /api/an/sync/start", "POST /api/an/sync/step"]);
@@ -3087,7 +4341,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     const ig = await ignored();
     const v = String(b.value ?? "");
     ig[b.kind] = b.on ? [.../* @__PURE__ */ new Set([...ig[b.kind], v])] : ig[b.kind].filter((x) => x !== v);
-    await putSetting("an_ignored", JSON.stringify(ig));
+    await putSetting2("an_ignored", JSON.stringify(ig));
     return c.json({ ok: true, ignored: ig });
   });
   app.get("/api/an/products", async (c) => {
@@ -3126,7 +4380,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     if (["manager", "office"].includes(b.deptPriority)) next.deptPriority = b.deptPriority;
     if (["net", "all"].includes(b.targetBase)) next.targetBase = b.targetBase;
     if (b.months !== void 0) next.months = Math.min(18, Math.max(1, parseInt(b.months, 10) || 6));
-    await putSetting("an_settings", JSON.stringify(next));
+    await putSetting2("an_settings", JSON.stringify(next));
     if (next.deptPriority !== cur.deptPriority) await remap(db, next, { src: false });
     await bump();
     return c.json({ ok: true, settings: next });
@@ -3299,7 +4553,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     const st = await getSt();
     const cr = await creds();
     const statusNames = await lp(cr, "getStatuses", {}).then((j) => j.status === "ok" ? j.data || {} : {}).catch(() => ({}));
-    if (Object.keys(statusNames).length) await putSetting("an_status_names", JSON.stringify(statusNames));
+    if (Object.keys(statusNames).length) await putSetting2("an_status_names", JSON.stringify(statusNames));
     if (mode === "reset") {
       await db.batch([[`DELETE FROM an_items`, []], [`DELETE FROM an_orders`, []], [`DELETE FROM an_day_bounds`, []], [`UPDATE an_products SET fetched = 0`, []]]);
     }
@@ -3316,7 +4570,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     }
     const state = {
       mode,
-      startedAt: nowIso2(),
+      startedAt: nowIso(),
       start,
       keepFrom,
       firstRun,
@@ -3330,7 +4584,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
       stats: { listed: 0, fetched: 0, changed: 0, products: 0 },
       warnings: []
     };
-    await putSetting("an_sync", JSON.stringify(state));
+    await putSetting2("an_sync", JSON.stringify(state));
     return c.json({ state: summary(state) });
   });
   app.post("/api/an/sync/step", async (c) => {
@@ -3339,7 +4593,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     if (state.phase === "done" || state.error) return c.json({ state: summary(state) });
     if (state.lockUntil && state.lockUntil > Date.now()) return c.json({ state: summary(state), busy: true });
     state.lockUntil = Date.now() + 12e4;
-    await putSetting("an_sync", JSON.stringify(state));
+    await putSetting2("an_sync", JSON.stringify(state));
     const st = await getSt();
     const cr = await creds();
     const maps = await loadMaps(db, st);
@@ -3349,7 +4603,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     const warn = (w) => {
       if (!state.warnings.includes(w) && state.warnings.length < 10) state.warnings.push(w);
     };
-    const save = () => putSetting("an_sync", JSON.stringify(state));
+    const save = () => putSetting2("an_sync", JSON.stringify(state));
     try {
       while (calls < MAX_CALLS && Date.now() - started < 25e3 && state.phase !== "done") {
         if (state.phase === "units" && state.units.length && state.pending.length < 100) {
@@ -3456,9 +4710,9 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
           if (state.mode === "today") await mergeTodayValues(state.today);
           else await computeValues();
           state.phase = "done";
-          state.finishedAt = nowIso2();
-          await putSetting("an_last_sync", state.finishedAt);
-          if (state.mode !== "today") await putSetting("an_last_daily", state.finishedAt);
+          state.finishedAt = nowIso();
+          await putSetting2("an_last_sync", state.finishedAt);
+          if (state.mode !== "today") await putSetting2("an_last_daily", state.finishedAt);
           await bump();
         }
       }
@@ -3477,7 +4731,7 @@ function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso: nowIso
     if (s && s.phase !== "done") {
       s.error = "\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E";
       s.lockUntil = 0;
-      await putSetting("an_sync", JSON.stringify(s));
+      await putSetting2("an_sync", JSON.stringify(s));
     }
     return c.json({ ok: true });
   });
@@ -3744,26 +4998,140 @@ async function hashKey(str) {
   return [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-// src/counters.js
-var FIRST = 10516;
-async function takeRahunokNumber(db) {
-  const r = await db.get(
-    `UPDATE settings SET value = CAST(COALESCE(NULLIF(CAST(value AS INTEGER), 0), ${FIRST}) + 1 AS TEXT)
-     WHERE key = 'rahunok_next_number' RETURNING CAST(value AS INTEGER) - 1 AS n`
-  );
-  if (r?.n) return String(r.n);
-  await db.run(`INSERT INTO settings (key, value) VALUES ('rahunok_next_number', ?) ON CONFLICT(key) DO NOTHING`, [String(FIRST + 1)]);
-  return String(FIRST);
+// src/modules/notify/index.js
+var TG = "https://api.telegram.org";
+var h = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+var nf = new Intl.NumberFormat("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+var uah = (n) => `${nf.format(Number(n) || 0)} \u20B4`;
+var kyivAt = (ms) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(ms)).replace(" ", "T");
+function mountTg(app, { db, fetchFn }) {
+  const settings = () => loadSettings(db);
+  const putSetting2 = (key, value) => putSetting(db, key, value);
+  async function tg(token, method, body) {
+    const r = await fetchFn(`${TG}/bot${token}/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    let j = null;
+    try {
+      j = await r.json();
+    } catch {
+    }
+    if (!j?.ok) throw fail(400, `Telegram: ${j?.description || `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${r.status}`}`);
+    return j.result;
+  }
+  app.put("/api/tg/settings", async (c) => {
+    need(c, "api");
+    const b = await c.req.json();
+    const token = String(b.token || "").trim();
+    if (!token) {
+      const s = await settings();
+      if (s.tg_token) await tg(s.tg_token, "deleteWebhook", {}).catch(() => {
+      });
+      await db.batch([[`DELETE FROM settings WHERE key IN ('tg_token', 'tg_bot', 'tg_secret')`, []]]);
+      return c.json({ ok: true, bot: "" });
+    }
+    if (!/^\d+:[\w-]{20,}$/.test(token)) throw fail(400, "\u0421\u0445\u043E\u0436\u0435, \u0446\u0435 \u043D\u0435 \u0442\u043E\u043A\u0435\u043D \u0431\u043E\u0442\u0430. \u0412\u0456\u043D \u0432\u0438\u0433\u043B\u044F\u0434\u0430\u0454 \u0442\u0430\u043A: 1234567890:AAH\u2026");
+    const me = await tg(token, "getMe");
+    const secret = randomToken(16);
+    const url = `${new URL(c.req.url).origin}/api/tg/hook`;
+    await tg(token, "setWebhook", { url, secret_token: secret, allowed_updates: ["message"] });
+    await putSetting2("tg_token", token);
+    await putSetting2("tg_bot", me.username || "");
+    await putSetting2("tg_secret", secret);
+    return c.json({ ok: true, bot: me.username || "" });
+  });
+  app.get("/api/tg/me", async (c) => {
+    const s = await settings();
+    const u = await db.get(`SELECT tg_chat_id, tg_all_links, tg_all_tx FROM users WHERE id = ?`, [c.get("user").id]);
+    return c.json({ bot: s.tg_bot || "", connected: Boolean(u?.tg_chat_id), allLinks: Boolean(u?.tg_all_links), allTx: Boolean(u?.tg_all_tx) });
+  });
+  app.post("/api/tg/link", async (c) => {
+    const s = await settings();
+    if (!s.tg_token || !s.tg_bot) throw fail(400, "Telegram-\u0431\u043E\u0442\u0430 \u0449\u0435 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u2014 \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u0432\u043B\u0430\u0441\u043D\u0438\u043A\u0430 \u0430\u0431\u043E \u0430\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0430.");
+    const code = randomToken(12);
+    await db.run(`UPDATE users SET tg_code = ? WHERE id = ?`, [`${code}|${Date.now() + 15 * 6e4}`, c.get("user").id]);
+    return c.json({ url: `https://t.me/${s.tg_bot}?start=${code}` });
+  });
+  app.delete("/api/tg/me", async (c) => {
+    await db.run(`UPDATE users SET tg_chat_id = '', tg_code = '' WHERE id = ?`, [c.get("user").id]);
+    return c.json({ ok: true });
+  });
+  app.put("/api/tg/me", async (c) => {
+    need(c, "users");
+    const b = await c.req.json();
+    await db.run(`UPDATE users SET tg_all_links = ?, tg_all_tx = ? WHERE id = ?`, [b.allLinks ? 1 : 0, b.allTx ? 1 : 0, c.get("user").id]);
+    return c.json({ ok: true });
+  });
+  app.post("/api/tg/hook", async (c) => {
+    const s = await settings();
+    if (!s.tg_token || !s.tg_secret || c.req.header("x-telegram-bot-api-secret-token") !== s.tg_secret) return c.json({ ok: false }, 401);
+    const upd = await c.req.json().catch(() => ({}));
+    const msg = upd.message;
+    const chat = msg?.chat?.id;
+    if (!chat) return c.json({ ok: true });
+    const m = /^\/start(?:@\w+)?\s+([0-9a-f]{24})\b/.exec(String(msg.text || ""));
+    let reply = "\u0429\u043E\u0431 \u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0442\u0438 \u0441\u043F\u043E\u0432\u0456\u0449\u0435\u043D\u043D\u044F \u043F\u0440\u043E \u043E\u043F\u043B\u0430\u0442\u0438, \u0432\u0456\u0434\u043A\u0440\u0438\u0439\u0442\u0435 \u0441\u0430\u0439\u0442, \u043D\u0430\u0442\u0438\u0441\u043D\u0456\u0442\u044C \xABTelegram\xBB \u0443\u0433\u043E\u0440\u0456 \u0456 \u043F\u043E\u0442\u0456\u043C \xAB\u041F\u0456\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u0438 Telegram\xBB.";
+    if (m) {
+      const u = await db.get(`SELECT id, name, login, tg_code FROM users WHERE tg_code LIKE ? AND active = 1`, [`${m[1]}|%`]);
+      const exp = Number(String(u?.tg_code || "").split("|")[1]) || 0;
+      if (u && exp > Date.now()) {
+        await db.run(`UPDATE users SET tg_chat_id = ?, tg_code = '' WHERE id = ?`, [String(chat), u.id]);
+        reply = `\u2705 \u0413\u043E\u0442\u043E\u0432\u043E, ${h(u.name || u.login)}! \u0421\u044E\u0434\u0438 \u043D\u0430\u0434\u0445\u043E\u0434\u0438\u0442\u0438\u043C\u0443\u0442\u044C \u0441\u043F\u043E\u0432\u0456\u0449\u0435\u043D\u043D\u044F \u043F\u0440\u043E \u043E\u043F\u043B\u0430\u0442\u0443 \u0432\u0430\u0448\u0438\u0445 \u0440\u0430\u0445\u0443\u043D\u043A\u0456\u0432.`;
+      } else {
+        reply = "\u041F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u0434\u043B\u044F \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043D\u044F \u0437\u0430\u0441\u0442\u0430\u0440\u0456\u043B\u043E. \u041D\u0430\u0442\u0438\u0441\u043D\u0456\u0442\u044C \xAB\u041F\u0456\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u0438 Telegram\xBB \u043D\u0430 \u0441\u0430\u0439\u0442\u0456 \u0449\u0435 \u0440\u0430\u0437.";
+      }
+    }
+    await tg(s.tg_token, "sendMessage", { chat_id: chat, text: reply, parse_mode: "HTML" }).catch(() => {
+    });
+    return c.json({ ok: true });
+  });
+  const LABEL = { paid: "\u2705 \u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E", over: "\u2705 \u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E (\u043F\u0435\u0440\u0435\u043F\u043B\u0430\u0442\u0430)", partial: "\u{1F7E1} \u0427\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430" };
+  async function notify({ linkIds = [], freshRows = [] }) {
+    const s = await settings();
+    if (!s.tg_token) return 0;
+    const out = [];
+    const admins = await db.all(`SELECT id, tg_chat_id, tg_all_links, tg_all_tx FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin') AND (tg_all_links = 1 OR tg_all_tx = 1)`);
+    if (linkIds.length) {
+      const links = await db.all(
+        `SELECT l.id, l.number, l.amount, l.paid_amount, l.status, l.client, l.created_by_id, l.created_by, COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, ''), a.iban) AS alias, u.tg_chat_id AS chat
+         FROM pay_links l LEFT JOIN odb_accounts a ON a.id = l.account_id LEFT JOIN users u ON u.id = l.created_by_id AND u.active = 1
+         WHERE l.id IN (SELECT value FROM json_each(?))`,
+        [JSON.stringify(linkIds)]
+      );
+      for (const l of links) {
+        const text = `<b>${LABEL[l.status] || "\u041E\u043F\u043B\u0430\u0442\u0430"}: \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h(l.number)}</b>
+${uah(l.paid_amount)} \u0437 ${uah(l.amount)}${l.client ? ` \xB7 ${h(l.client)}` : ""}
+${h(l.alias || "")}${l.created_by ? `
+\u0421\u0442\u0432\u043E\u0440\u0438\u0432(\u043B\u0430): ${h(l.created_by)}` : ""}`;
+        const chats = /* @__PURE__ */ new Set();
+        if (l.chat) chats.add(l.chat);
+        for (const a of admins) if (a.tg_all_links) chats.add(a.tg_chat_id);
+        for (const ch of chats) out.push([ch, text]);
+      }
+    }
+    const since = kyivAt(Date.now() - 864e5);
+    const recent = freshRows.filter((r) => r.date >= since);
+    const txAdmins = admins.filter((a) => a.tg_all_tx);
+    if (recent.length && txAdmins.length) {
+      const accs = new Map((await db.all(`SELECT iban, COALESCE(NULLIF(name, ''), NULLIF(alias, ''), iban) AS alias FROM odb_accounts`)).map((a) => [a.iban, a.alias]));
+      const texts = recent.length > 5 ? [`<b>\u{1F4B0} \u041D\u043E\u0432\u0456 \u043D\u0430\u0434\u0445\u043E\u0434\u0436\u0435\u043D\u043D\u044F: ${recent.length}</b> \u043D\u0430 \u0441\u0443\u043C\u0443 ${uah(recent.reduce((t, r) => t + r.amount, 0))}`] : recent.map((r) => `<b>\u{1F4B0} ${uah(r.amount)}</b> \u2192 ${h(accs.get(r.iban) || r.iban)}
+\u0412\u0456\u0434: ${h(r.payer_name || "\u2014")}
+<i>${h(String(r.purpose || "").slice(0, 200))}</i>`);
+      for (const a of txAdmins) for (const t of texts) out.push([a.tg_chat_id, t]);
+    }
+    let sent = 0;
+    for (const [chat, text] of out.slice(0, 15)) {
+      try {
+        await tg(s.tg_token, "sendMessage", { chat_id: chat, text, parse_mode: "HTML", disable_web_page_preview: true });
+        sent++;
+      } catch {
+      }
+    }
+    return sent;
+  }
+  return { notify };
 }
-var peekRahunokNumber = (s) => String(Number(s.rahunok_next_number) || FIRST);
 
-// src/odb.js
+// src/modules/payments/index.js
 var ODB_BASE = "https://iban.opendatabot.ua";
-var round22 = (n) => Math.round(n * 100) / 100;
-var num2 = (v) => {
-  const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", "."));
-  return Number.isFinite(n) ? n : 0;
-};
 var kindOf = (code) => /^\d{10}$/.test(String(code || "").trim()) ? "fop" : "company";
 var kyivParts = (d) => {
   const f = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -3799,7 +5167,7 @@ var sameHex = (a, b) => {
 async function txRow(item) {
   const t = item?.transaction || {};
   const type = String(t.transactionType || "").toLowerCase();
-  const amount = round22(num2(t.amount));
+  const amount = round2(num(t.amount));
   if (type === "debit" || !type && amount <= 0 || amount <= 0) return null;
   const date = normDate(t.date);
   const id = await sha1([String(t.date ?? ""), amount.toFixed(2), t.iban || "", t.counterpartyAcc || t.counterpartyEdrpou || "", t.purpose || ""].join("|"));
@@ -3835,11 +5203,9 @@ function pickName(x) {
 var BANKS = { 305299: "\u041F\u0440\u0438\u0432\u0430\u0442", 322001: "\u043C\u043E\u043D\u043E", 300465: "\u041E\u0449\u0430\u0434", 300528: "\u041E\u0422\u041F", 380805: "\u0420\u0430\u0439\u0444\u0444\u0430\u0439\u0437\u0435\u043D", 334851: "\u041F\u0423\u041C\u0411", 351005: "\u0423\u043A\u0440\u0421\u0438\u0431\u0431\u0430\u043D\u043A", 320478: "\u0423\u043A\u0440\u0433\u0430\u0437\u0431\u0430\u043D\u043A", 322313: "\u0423\u043A\u0440\u0435\u043A\u0441\u0456\u043C\u0431\u0430\u043D\u043A", 380775: "\u041A\u0440\u0435\u0434\u0456 \u0410\u0433\u0440\u0456\u043A\u043E\u043B\u044C", 339500: "\u0413\u043B\u043E\u0431\u0443\u0441", 325365: "\u041A\u0440\u0435\u0434\u043E\u0431\u0430\u043D\u043A", 336503: "\u0406\u0434\u0435\u044F \u0411\u0430\u043D\u043A", 320649: "Sense", 380838: "\u041F\u0456\u0432\u0434\u0435\u043D\u043D\u0438\u0439", 313849: "\u0422\u0430\u0441\u043A\u043E\u043C\u0431\u0430\u043D\u043A" };
 var bankOf = (iban) => BANKS[String(iban || "").replace(/\s/g, "").slice(4, 10)] || "";
 var ACC = `COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, ''), a.iban)`;
-function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can: can2, userName, base = ODB_BASE, notify = async () => 0 }) {
-  const putSetting = (key, value) => db.run(
-    `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-    [key, String(value)]
-  );
+function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 }) {
+  const settings = () => loadSettings(db);
+  const putSetting2 = (key, value) => putSetting(db, key, value);
   async function creds() {
     const s = await settings();
     if (!s.odb_key || !s.odb_name) throw fail(400, "Opendatabot \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u043A\u043B\u044E\u0447 \u0456 \u043D\u0430\u0437\u0432\u0443 \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u0432 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 \u0440\u0430\u0445\u0443\u043D\u043A\u0456\u0432\xBB.");
@@ -3976,7 +5342,7 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
   async function createLink(c, { account_id, amount, number, order_ref = "", client = "", purpose = "", force = false, rahunok_id = null }) {
     const acc = await db.get(`SELECT * FROM odb_accounts WHERE id = ?`, [account_id]);
     if (!acc || !acc.enabled) throw fail(400, "\u0426\u0435\u0439 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E \u0434\u043B\u044F \u0444\u043E\u0440\u043C\u0443\u0432\u0430\u043D\u043D\u044F \u2014 \u0443\u0432\u0456\u043C\u043A\u043D\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u0432 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 \u0440\u0430\u0445\u0443\u043D\u043A\u0456\u0432.");
-    const sum = round22(num2(amount));
+    const sum = round2(num(amount));
     if (!(sum > 0)) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u0441\u0443\u043C\u0443 \u0431\u0456\u043B\u044C\u0448\u0435 0.");
     order_ref = String(order_ref || "").trim();
     if (!force && (order_ref || number)) {
@@ -3998,7 +5364,7 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     const r = await db.run(
       `INSERT INTO pay_links (odb_id, number, order_ref, account_id, amount, purpose, client, url, page, qr, status, rahunok_id, created_at, created_by_id, created_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
-      [String(j.id), no, order_ref, acc.id, sum, text, String(client || "").trim(), String(j.url || page), page, String(j.qrcode || ""), rahunok_id, nowIso2(), me.id, userName(c)]
+      [String(j.id), no, order_ref, acc.id, sum, text, String(client || "").trim(), String(j.url || page), page, String(j.qrcode || ""), rahunok_id, nowIso(), me.id, userName(c)]
     );
     const link = await db.get(`SELECT ${LINK_COLS}, l.qr FROM pay_links l LEFT JOIN odb_accounts a ON a.id = l.account_id WHERE l.id = ?`, [r.lastId]);
     return { link };
@@ -4087,14 +5453,14 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     if (!link) throw fail(404, "\u041F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     const cr = await creds();
     await odb(cr, "POST", `/api/invoice/${encodeURIComponent(link.odb_id)}/paid`);
-    await db.run(`UPDATE pay_links SET status = 'manual', paid_at = COALESCE(paid_at, ?) WHERE id = ?`, [nowIso2(), link.id]);
+    await db.run(`UPDATE pay_links SET status = 'manual', paid_at = COALESCE(paid_at, ?) WHERE id = ?`, [nowIso(), link.id]);
     return c.json({ ok: true });
   });
   async function saveTx(items) {
     const rows = (await Promise.all(items.map(txRow))).filter(Boolean);
     if (!rows.length) return { rows, fresh: 0, freshRows: [] };
     const known = new Set((await db.all(`SELECT id FROM odb_tx WHERE id IN (SELECT value FROM json_each(?))`, [JSON.stringify(rows.map((r) => r.id))])).map((r) => r.id));
-    const now = nowIso2();
+    const now = nowIso();
     await db.batch(rows.map((r) => [
       `INSERT INTO odb_tx (id, date, amount, currency, purpose, iban, payer_name, payer_code, payer_acc, invoice_id, possible, config_id, our_code, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -4140,7 +5506,7 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     }
     const { fresh, freshRows } = await saveTx([body]);
     const paid = await relink();
-    await putSetting("odb_hook_at", nowIso2());
+    await putSetting2("odb_hook_at", nowIso());
     await notify({ linkIds: paid, freshRows }).catch(() => 0);
     return c.json({ ok: true, fresh, paid: paid.length });
   });
@@ -4152,7 +5518,7 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     if (!s.odb_key || !s.odb_name) return c.json({ ok: false, connected: false });
     const last = Date.parse(s.odb_sync_at || "") || 0;
     if (!b.force && Date.now() - last < 6e4) return c.json({ ok: true, skipped: true, lastSync: s.odb_sync_at, hist: JSON.parse(s.odb_hist || "{}") });
-    await putSetting("odb_sync_at", nowIso2());
+    await putSetting2("odb_sync_at", nowIso());
     const cr = { key: s.odb_key, name: s.odb_name };
     let added = 0;
     const newRows = [];
@@ -4171,7 +5537,7 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     }
     if (!s.odb_hist_v2) {
       hist = {};
-      await putSetting("odb_hist_v2", "1");
+      await putSetting2("odb_hist_v2", "1");
     }
     if (!hist.done) {
       let off = hist.offset || 0;
@@ -4188,19 +5554,19 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
         }
       }
       hist.offset = off;
-      await putSetting("odb_hist", JSON.stringify(hist));
+      await putSetting2("odb_hist", JSON.stringify(hist));
     }
     const open = await db.get(`SELECT COUNT(*) AS n FROM pay_links WHERE status IN ('pending', 'check')`);
     if (open?.n) {
       const j = await odb(cr, "GET", `/api/invoices?status=paid&limit=${PAGE}&offset=0`);
       const paidIds = (Array.isArray(j.items) ? j.items : []).filter((x) => String(x.paymentStatus || "paid") === "paid").map((x) => String(x.id));
-      if (paidIds.length) await db.run(`UPDATE pay_links SET odb_paid = 1, paid_at = COALESCE(paid_at, ?) WHERE odb_paid = 0 AND odb_id IN (SELECT value FROM json_each(?))`, [nowIso2(), JSON.stringify(paidIds)]);
+      if (paidIds.length) await db.run(`UPDATE pay_links SET odb_paid = 1, paid_at = COALESCE(paid_at, ?) WHERE odb_paid = 0 AND odb_id IN (SELECT value FROM json_each(?))`, [nowIso(), JSON.stringify(paidIds)]);
     }
     const paid = await relink();
     await notify({ linkIds: paid, freshRows: hist.done ? newRows : [] }).catch(() => 0);
     const me = c.get("user");
     const minePaid = paid.length ? await db.all(`SELECT id, number, amount, client FROM pay_links WHERE created_by_id = ? AND id IN (SELECT value FROM json_each(?))`, [me.id, JSON.stringify(paid)]) : [];
-    return c.json({ ok: true, added, paid: paid.length, minePaid, hist, lastSync: nowIso2() });
+    return c.json({ ok: true, added, paid: paid.length, minePaid, hist, lastSync: nowIso() });
   });
   app.get("/api/odb/payments", async (c) => {
     need(c, "docs.edit");
@@ -4247,13 +5613,13 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
       hist = JSON.parse(s.odb_hist || "{}");
     } catch {
     }
-    return c.json({ rows, count: tot?.n || 0, sum: round22(tot?.sum || 0), accounts, lastSync: s.odb_sync_at || "", hist, connected: Boolean(s.odb_key && s.odb_name) });
+    return c.json({ rows, count: tot?.n || 0, sum: round2(tot?.sum || 0), accounts, lastSync: s.odb_sync_at || "", hist, connected: Boolean(s.odb_key && s.odb_name) });
   });
   app.put("/api/odb/payments/:id", async (c) => {
     need(c, "docs.edit");
     const b = await c.req.json();
     const me = c.get("user");
-    const admin = can2(me, "users");
+    const admin = can(me, "users");
     const linkId = b.link_id ? parseInt(b.link_id, 10) : null;
     const link = linkId ? await db.get(`SELECT id, created_by_id FROM pay_links WHERE id = ?`, [linkId]) : null;
     if (linkId && !link) throw fail(404, "\u041F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
@@ -4323,22 +5689,22 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
     }
     return c.json({
       group,
-      total: { sum: round22(tot[0].sum), cnt: tot[0].cnt, avg: tot[0].cnt ? round22(tot[0].sum / tot[0].cnt) : 0 },
-      prevTotal: ptot ? { sum: round22(ptot[0].sum), cnt: ptot[0].cnt, avg: ptot[0].cnt ? round22(ptot[0].sum / ptot[0].cnt) : 0 } : null,
-      series: series.map((r) => ({ k: r.k, sum: round22(r.sum), cnt: r.cnt })),
-      prevSeries: pseries ? pseries.map((r) => ({ k: r.k, sum: round22(r.sum), cnt: r.cnt })) : null,
+      total: { sum: round2(tot[0].sum), cnt: tot[0].cnt, avg: tot[0].cnt ? round2(tot[0].sum / tot[0].cnt) : 0 },
+      prevTotal: ptot ? { sum: round2(ptot[0].sum), cnt: ptot[0].cnt, avg: ptot[0].cnt ? round2(ptot[0].sum / ptot[0].cnt) : 0 } : null,
+      series: series.map((r) => ({ k: r.k, sum: round2(r.sum), cnt: r.cnt })),
+      prevSeries: pseries ? pseries.map((r) => ({ k: r.k, sum: round2(r.sum), cnt: r.cnt })) : null,
       byAccount: byAcc.map((r) => {
         const a = accBy.get(r.iban);
-        return { id: a?.id || "", iban: r.iban, name: a?.alias || r.iban || "\u2014", kind: a?.kind || "", sum: round22(r.sum), cnt: r.cnt, prevSum: prev ? round22(pA.get(r.iban) || 0) : null };
+        return { id: a?.id || "", iban: r.iban, name: a?.alias || r.iban || "\u2014", kind: a?.kind || "", sum: round2(r.sum), cnt: r.cnt, prevSum: prev ? round2(pA.get(r.iban) || 0) : null };
       }).sort((x, y) => y.sum - x.sum),
       byPayer: byPayer.map((r) => ({
         key: r.k,
         name: r.k === PERSON ? "\u0424\u0456\u0437\u0438\u0447\u043D\u0456 \u043E\u0441\u043E\u0431\u0438" : nameBy.get(r.k) || r.name || "\u2014",
         auto: r.k === PERSON ? "" : r.name || "",
         code: r.k === PERSON || r.k.startsWith("name:") ? "" : r.k,
-        sum: round22(r.sum),
+        sum: round2(r.sum),
         cnt: r.cnt,
-        prevSum: prev ? round22(pP.get(r.k) || 0) : null
+        prevSum: prev ? round2(pP.get(r.k) || 0) : null
       })),
       accounts: accounts.map((a) => ({ id: a.id, name: a.alias, kind: a.kind })),
       range: { min: range?.min?.slice(0, 10) || "", max: range?.max?.slice(0, 10) || "" },
@@ -4357,502 +5723,8 @@ function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso: nowIso2, can
   return { linkForRahunok };
 }
 
-// src/tg.js
-var TG = "https://api.telegram.org";
-var h = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-var nf = new Intl.NumberFormat("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-var uah = (n) => `${nf.format(Number(n) || 0)} \u20B4`;
-var kyivAt = (ms) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(ms)).replace(" ", "T");
-function mountTg(app, { db, fetchFn, settings, need, fail }) {
-  const putSetting = (key, value) => db.run(
-    `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-    [key, String(value)]
-  );
-  async function tg(token, method, body) {
-    const r = await fetchFn(`${TG}/bot${token}/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
-    let j = null;
-    try {
-      j = await r.json();
-    } catch {
-    }
-    if (!j?.ok) throw fail(400, `Telegram: ${j?.description || `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${r.status}`}`);
-    return j.result;
-  }
-  app.put("/api/tg/settings", async (c) => {
-    need(c, "api");
-    const b = await c.req.json();
-    const token = String(b.token || "").trim();
-    if (!token) {
-      const s = await settings();
-      if (s.tg_token) await tg(s.tg_token, "deleteWebhook", {}).catch(() => {
-      });
-      await db.batch([[`DELETE FROM settings WHERE key IN ('tg_token', 'tg_bot', 'tg_secret')`, []]]);
-      return c.json({ ok: true, bot: "" });
-    }
-    if (!/^\d+:[\w-]{20,}$/.test(token)) throw fail(400, "\u0421\u0445\u043E\u0436\u0435, \u0446\u0435 \u043D\u0435 \u0442\u043E\u043A\u0435\u043D \u0431\u043E\u0442\u0430. \u0412\u0456\u043D \u0432\u0438\u0433\u043B\u044F\u0434\u0430\u0454 \u0442\u0430\u043A: 1234567890:AAH\u2026");
-    const me = await tg(token, "getMe");
-    const secret = randomToken(16);
-    const url = `${new URL(c.req.url).origin}/api/tg/hook`;
-    await tg(token, "setWebhook", { url, secret_token: secret, allowed_updates: ["message"] });
-    await putSetting("tg_token", token);
-    await putSetting("tg_bot", me.username || "");
-    await putSetting("tg_secret", secret);
-    return c.json({ ok: true, bot: me.username || "" });
-  });
-  app.get("/api/tg/me", async (c) => {
-    const s = await settings();
-    const u = await db.get(`SELECT tg_chat_id, tg_all_links, tg_all_tx FROM users WHERE id = ?`, [c.get("user").id]);
-    return c.json({ bot: s.tg_bot || "", connected: Boolean(u?.tg_chat_id), allLinks: Boolean(u?.tg_all_links), allTx: Boolean(u?.tg_all_tx) });
-  });
-  app.post("/api/tg/link", async (c) => {
-    const s = await settings();
-    if (!s.tg_token || !s.tg_bot) throw fail(400, "Telegram-\u0431\u043E\u0442\u0430 \u0449\u0435 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u2014 \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u0432\u043B\u0430\u0441\u043D\u0438\u043A\u0430 \u0430\u0431\u043E \u0430\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0430.");
-    const code = randomToken(12);
-    await db.run(`UPDATE users SET tg_code = ? WHERE id = ?`, [`${code}|${Date.now() + 15 * 6e4}`, c.get("user").id]);
-    return c.json({ url: `https://t.me/${s.tg_bot}?start=${code}` });
-  });
-  app.delete("/api/tg/me", async (c) => {
-    await db.run(`UPDATE users SET tg_chat_id = '', tg_code = '' WHERE id = ?`, [c.get("user").id]);
-    return c.json({ ok: true });
-  });
-  app.put("/api/tg/me", async (c) => {
-    need(c, "users");
-    const b = await c.req.json();
-    await db.run(`UPDATE users SET tg_all_links = ?, tg_all_tx = ? WHERE id = ?`, [b.allLinks ? 1 : 0, b.allTx ? 1 : 0, c.get("user").id]);
-    return c.json({ ok: true });
-  });
-  app.post("/api/tg/hook", async (c) => {
-    const s = await settings();
-    if (!s.tg_token || !s.tg_secret || c.req.header("x-telegram-bot-api-secret-token") !== s.tg_secret) return c.json({ ok: false }, 401);
-    const upd = await c.req.json().catch(() => ({}));
-    const msg = upd.message;
-    const chat = msg?.chat?.id;
-    if (!chat) return c.json({ ok: true });
-    const m = /^\/start(?:@\w+)?\s+([0-9a-f]{24})\b/.exec(String(msg.text || ""));
-    let reply = "\u0429\u043E\u0431 \u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0442\u0438 \u0441\u043F\u043E\u0432\u0456\u0449\u0435\u043D\u043D\u044F \u043F\u0440\u043E \u043E\u043F\u043B\u0430\u0442\u0438, \u0432\u0456\u0434\u043A\u0440\u0438\u0439\u0442\u0435 \u0441\u0430\u0439\u0442, \u043D\u0430\u0442\u0438\u0441\u043D\u0456\u0442\u044C \xABTelegram\xBB \u0443\u0433\u043E\u0440\u0456 \u0456 \u043F\u043E\u0442\u0456\u043C \xAB\u041F\u0456\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u0438 Telegram\xBB.";
-    if (m) {
-      const u = await db.get(`SELECT id, name, login, tg_code FROM users WHERE tg_code LIKE ? AND active = 1`, [`${m[1]}|%`]);
-      const exp = Number(String(u?.tg_code || "").split("|")[1]) || 0;
-      if (u && exp > Date.now()) {
-        await db.run(`UPDATE users SET tg_chat_id = ?, tg_code = '' WHERE id = ?`, [String(chat), u.id]);
-        reply = `\u2705 \u0413\u043E\u0442\u043E\u0432\u043E, ${h(u.name || u.login)}! \u0421\u044E\u0434\u0438 \u043D\u0430\u0434\u0445\u043E\u0434\u0438\u0442\u0438\u043C\u0443\u0442\u044C \u0441\u043F\u043E\u0432\u0456\u0449\u0435\u043D\u043D\u044F \u043F\u0440\u043E \u043E\u043F\u043B\u0430\u0442\u0443 \u0432\u0430\u0448\u0438\u0445 \u0440\u0430\u0445\u0443\u043D\u043A\u0456\u0432.`;
-      } else {
-        reply = "\u041F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u0434\u043B\u044F \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043D\u044F \u0437\u0430\u0441\u0442\u0430\u0440\u0456\u043B\u043E. \u041D\u0430\u0442\u0438\u0441\u043D\u0456\u0442\u044C \xAB\u041F\u0456\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u0438 Telegram\xBB \u043D\u0430 \u0441\u0430\u0439\u0442\u0456 \u0449\u0435 \u0440\u0430\u0437.";
-      }
-    }
-    await tg(s.tg_token, "sendMessage", { chat_id: chat, text: reply, parse_mode: "HTML" }).catch(() => {
-    });
-    return c.json({ ok: true });
-  });
-  const LABEL = { paid: "\u2705 \u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E", over: "\u2705 \u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E (\u043F\u0435\u0440\u0435\u043F\u043B\u0430\u0442\u0430)", partial: "\u{1F7E1} \u0427\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430" };
-  async function notify({ linkIds = [], freshRows = [] }) {
-    const s = await settings();
-    if (!s.tg_token) return 0;
-    const out = [];
-    const admins = await db.all(`SELECT id, tg_chat_id, tg_all_links, tg_all_tx FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin') AND (tg_all_links = 1 OR tg_all_tx = 1)`);
-    if (linkIds.length) {
-      const links = await db.all(
-        `SELECT l.id, l.number, l.amount, l.paid_amount, l.status, l.client, l.created_by_id, l.created_by, COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, ''), a.iban) AS alias, u.tg_chat_id AS chat
-         FROM pay_links l LEFT JOIN odb_accounts a ON a.id = l.account_id LEFT JOIN users u ON u.id = l.created_by_id AND u.active = 1
-         WHERE l.id IN (SELECT value FROM json_each(?))`,
-        [JSON.stringify(linkIds)]
-      );
-      for (const l of links) {
-        const text = `<b>${LABEL[l.status] || "\u041E\u043F\u043B\u0430\u0442\u0430"}: \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h(l.number)}</b>
-${uah(l.paid_amount)} \u0437 ${uah(l.amount)}${l.client ? ` \xB7 ${h(l.client)}` : ""}
-${h(l.alias || "")}${l.created_by ? `
-\u0421\u0442\u0432\u043E\u0440\u0438\u0432(\u043B\u0430): ${h(l.created_by)}` : ""}`;
-        const chats = /* @__PURE__ */ new Set();
-        if (l.chat) chats.add(l.chat);
-        for (const a of admins) if (a.tg_all_links) chats.add(a.tg_chat_id);
-        for (const ch of chats) out.push([ch, text]);
-      }
-    }
-    const since = kyivAt(Date.now() - 864e5);
-    const recent = freshRows.filter((r) => r.date >= since);
-    const txAdmins = admins.filter((a) => a.tg_all_tx);
-    if (recent.length && txAdmins.length) {
-      const accs = new Map((await db.all(`SELECT iban, COALESCE(NULLIF(name, ''), NULLIF(alias, ''), iban) AS alias FROM odb_accounts`)).map((a) => [a.iban, a.alias]));
-      const texts = recent.length > 5 ? [`<b>\u{1F4B0} \u041D\u043E\u0432\u0456 \u043D\u0430\u0434\u0445\u043E\u0434\u0436\u0435\u043D\u043D\u044F: ${recent.length}</b> \u043D\u0430 \u0441\u0443\u043C\u0443 ${uah(recent.reduce((t, r) => t + r.amount, 0))}`] : recent.map((r) => `<b>\u{1F4B0} ${uah(r.amount)}</b> \u2192 ${h(accs.get(r.iban) || r.iban)}
-\u0412\u0456\u0434: ${h(r.payer_name || "\u2014")}
-<i>${h(String(r.purpose || "").slice(0, 200))}</i>`);
-      for (const a of txAdmins) for (const t of texts) out.push([a.tg_chat_id, t]);
-    }
-    let sent = 0;
-    for (const [chat, text] of out.slice(0, 15)) {
-      try {
-        await tg(s.tg_token, "sendMessage", { chat_id: chat, text, parse_mode: "HTML", disable_web_page_preview: true });
-        sent++;
-      } catch {
-      }
-    }
-    return sent;
-  }
-  return { notify };
-}
-
-// src/normalize.js
-var pick = (obj, keys) => {
-  if (!obj) return "";
-  for (const k of keys) {
-    const v = obj[k];
-    if (v !== void 0 && v !== null && String(v).trim() !== "") return v;
-  }
-  return "";
-};
-var num3 = (v) => {
-  if (v === "" || v === null || v === void 0) return 0;
-  const n = parseFloat(String(v).replace(/\s/g, "").replace(",", "."));
-  return Number.isFinite(n) ? n : 0;
-};
-var round23 = (n) => Math.round(n * 100) / 100;
-var textOnly = (v) => /^\s*\d*\s*$/.test(String(v)) ? "" : String(v);
-function normalizeOrder(raw2, productNames = {}) {
-  const productsRaw = raw2.products || raw2.goods || raw2.items || [];
-  const list = Array.isArray(productsRaw) ? productsRaw : Object.values(productsRaw);
-  const items = list.map((p) => {
-    const productId = String(pick(p, ["product_id", "id", "productId"]) || "");
-    const qty = num3(pick(p, ["quantity", "count", "qty", "amount"])) || 1;
-    const price = num3(pick(p, ["price", "cost", "price_sale"]));
-    const known = productNames[productId] || {};
-    const name = pick(p, ["name", "title", "product_name", "product_title"]) || known.name || (productId ? `\u0422\u043E\u0432\u0430\u0440 #${productId}` : "\u0422\u043E\u0432\u0430\u0440");
-    let article = String(pick(p, ["article", "sku", "code", "vendor_code"]) || known.article || "");
-    let cleanName = String(name);
-    const br = cleanName.match(/^(.*\S)\s*\[([^\]]{1,40})\]\s*$/);
-    if (br && !article) {
-      cleanName = br[1];
-      article = br[2];
-    }
-    return {
-      productId,
-      name: cleanName,
-      article,
-      unit: "\u0448\u0442",
-      qty,
-      price: round23(price),
-      sum: round23(qty * price)
-    };
-  });
-  const itemsTotal = round23(items.reduce((s, i) => s + i.sum, 0));
-  const discount = num3(pick(raw2, ["discount", "sale", "discount_sum"]));
-  const deliveryCost = num3(pick(raw2, ["delivery_price", "delivery_cost"]));
-  const crmTotal = num3(pick(raw2, ["total", "total_sum", "sum", "order_sum"]));
-  return {
-    orderId: String(pick(raw2, ["order_id", "id", "orderId"])),
-    shortId: raw2.order_id && raw2.id && String(raw2.id) !== String(raw2.order_id) ? String(raw2.id) : "",
-    date: String(pick(raw2, ["order_time", "date", "created_at", "datetime"])),
-    status: String(pick(raw2, ["status", "status_id"])),
-    office: String(pick(raw2, ["office", "office_id", "department"])),
-    buyer: {
-      name: String(pick(raw2, ["bayer_name", "buyer_name", "fio", "name", "client_name"])),
-      phone: String(pick(raw2, ["phone", "buyer_phone", "tel"])),
-      email: String(pick(raw2, ["email", "mail"]))
-    },
-    delivery: {
-      method: textOnly(pick(raw2, ["delivery_name", "delivery"])),
-      address: String(pick(raw2, ["delivery_adress", "delivery_address", "address", "city"])),
-      ttn: String(pick(raw2, ["ttn", "ttn_number", "declaration"]))
-    },
-    payment: textOnly(pick(raw2, ["payment_name", "payment"])),
-    comment: String(pick(raw2, ["comment", "note"])),
-    channel: String(pick(raw2, ["additional_1"])).trim(),
-    items,
-    itemsTotal,
-    discount: round23(discount),
-    deliveryCost: round23(deliveryCost),
-    total: round23(itemsTotal - discount + deliveryCost),
-    crmTotal: crmTotal ? round23(crmTotal) : null,
-    receiptHint: String(pick(raw2, ["receipt_id", "check_id", "fiscal_code", "checkbox_id", "receipt"]))
-  };
-}
-function applyEdits(order2, edits) {
-  if (!edits) return order2;
-  const o = structuredClone(order2);
-  if (edits.buyer) o.buyer = { ...o.buyer, ...edits.buyer };
-  if (edits.delivery) o.delivery = { ...o.delivery, ...edits.delivery };
-  if (edits.payment !== void 0) o.payment = edits.payment;
-  if (edits.comment !== void 0) o.comment = edits.comment;
-  if (edits.date !== void 0 && edits.date !== "") o.invoiceDate = edits.date;
-  if (Array.isArray(edits.items)) {
-    o.items = edits.items.map((i) => {
-      const qty = num3(i.qty);
-      const price = num3(i.price);
-      return {
-        productId: i.productId || "",
-        name: String(i.name || ""),
-        article: String(i.article || ""),
-        unit: i.unit || "\u0448\u0442",
-        qty,
-        price: round23(price),
-        sum: round23(qty * price)
-      };
-    });
-  }
-  if (edits.discount !== void 0) o.discount = round23(num3(edits.discount));
-  if (edits.deliveryCost !== void 0) o.deliveryCost = round23(num3(edits.deliveryCost));
-  o.itemsTotal = round23(o.items.reduce((s, i) => s + i.sum, 0));
-  o.total = round23(o.itemsTotal - o.discount + o.deliveryCost);
-  o.edited = true;
-  return o;
-}
-
-// src/demo.js
-var DEMO_ORDER = {
-  order_id: "demo",
-  order_time: "2026-10-12 14:35:00",
-  status: "11",
-  office: "25",
-  bayer_name: "\u041A\u043E\u0432\u0430\u043B\u0435\u043D\u043A\u043E \u041E\u043B\u0435\u043D\u0430 \u041F\u0435\u0442\u0440\u0456\u0432\u043D\u0430",
-  phone: "380671234567",
-  email: "olena@example.com",
-  delivery: "\u041D\u043E\u0432\u0430 \u041F\u043E\u0448\u0442\u0430",
-  delivery_adress: "\u043C. \u041A\u0438\u0457\u0432, \u0412\u0456\u0434\u0434\u0456\u043B\u0435\u043D\u043D\u044F \u211612, \u0432\u0443\u043B. \u0412\u0435\u043B\u0438\u043A\u0430 \u0412\u0430\u0441\u0438\u043B\u044C\u043A\u0456\u0432\u0441\u044C\u043A\u0430, 72",
-  ttn: "20450912345678",
-  payment: "\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 NovaPay",
-  comment: "\u041F\u043E\u0434\u0437\u0432\u043E\u043D\u0438\u0442\u0438 \u043F\u0435\u0440\u0435\u0434 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u043E\u044E",
-  products: [
-    { product_id: "101", name: "\u0420\u0435\u043A\u0443\u043F\u0435\u0440\u0430\u0442\u043E\u0440 Ecovent VS-60 Pro", article: "EV-VS60", price: "6450", count: "1" },
-    { product_id: "102", name: "\u0417\u043E\u0432\u043D\u0456\u0448\u043D\u044F \u0440\u0435\u0448\u0456\u0442\u043A\u0430, \u0431\u0456\u043B\u0430", article: "EV-GR100", price: "390", count: "2" },
-    { product_id: "103", name: "\u0424\u0456\u043B\u044C\u0442\u0440 \u0437\u043C\u0456\u043D\u043D\u0438\u0439 G3 (\u043A\u043E\u043C\u043F\u043B\u0435\u043A\u0442 2 \u0448\u0442)", article: "EV-F-G3", price: "280", count: "1" }
-  ]
-};
-
-// src/checkbox.js
-var BASE = "https://api.checkbox.ua/api/v1";
-var CLIENT = { "X-Client-Name": "nakladni-local", "X-Client-Version": "0.1" };
-var tokens = /* @__PURE__ */ new Map();
-async function req(fetchFn, path, { method = "GET", token, license, body } = {}) {
-  const headers = { ...CLIENT, Accept: "application/json" };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  if (license) headers["X-License-Key"] = license;
-  if (body) headers["Content-Type"] = "application/json";
-  const res = await fetchFn(BASE + path, { method, headers, body: body ? JSON.stringify(body) : void 0 });
-  const text = await res.text();
-  let json = null;
-  try {
-    json = JSON.parse(text);
-  } catch {
-  }
-  if (!res.ok) {
-    const msg = json?.message || json?.detail || text.slice(0, 200);
-    const err = new Error(`Checkbox ${res.status}: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
-    err.status = res.status;
-    throw err;
-  }
-  return json;
-}
-var hasCheckbox = (fop) => Boolean(fop.checkbox_login && fop.checkbox_password || fop.checkbox_license && fop.checkbox_pin);
-async function signIn(fetchFn, fop, force = false) {
-  if (!force && tokens.has(fop.id)) return tokens.get(fop.id);
-  let json;
-  if (fop.checkbox_login && fop.checkbox_password) {
-    json = await req(fetchFn, "/cashier/signin", {
-      method: "POST",
-      body: { login: fop.checkbox_login, password: fop.checkbox_password }
-    });
-  } else {
-    json = await req(fetchFn, "/cashier/signinPinCode", {
-      method: "POST",
-      license: fop.checkbox_license,
-      body: { pin_code: fop.checkbox_pin }
-    });
-  }
-  const token = json?.access_token;
-  if (!token) throw new Error("Checkbox \u043D\u0435 \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u0432 \u0442\u043E\u043A\u0435\u043D \u0434\u043E\u0441\u0442\u0443\u043F\u0443");
-  tokens.set(fop.id, token);
-  return token;
-}
-async function authed(fetchFn, fop, path, opts = {}) {
-  let token = await signIn(fetchFn, fop);
-  try {
-    return await req(fetchFn, path, { ...opts, token, license: fop.checkbox_license || void 0 });
-  } catch (e) {
-    if (e.status === 401 || e.status === 403) {
-      token = await signIn(fetchFn, fop, true);
-      return req(fetchFn, path, { ...opts, token, license: fop.checkbox_license || void 0 });
-    }
-    throw e;
-  }
-}
-var parseDate = (s) => {
-  if (!s) return /* @__PURE__ */ new Date();
-  const d = new Date(String(s).replace(" ", "T"));
-  return Number.isNaN(d.getTime()) ? /* @__PURE__ */ new Date() : d;
-};
-function summarize(receipt, fop, how) {
-  return {
-    fopId: fop.id,
-    fopName: fop.short_name,
-    receiptId: receipt.id,
-    fiscalCode: receipt.fiscal_code || "",
-    date: receipt.fiscal_date || receipt.created_at || "",
-    total: receipt.total_sum != null ? receipt.total_sum / 100 : null,
-    url: receipt.id ? `https://check.checkbox.ua/${receipt.id}` : "",
-    match: how
-    // 'order' | 'sum' | 'manual'
-  };
-}
-async function findReceiptByRef(fetchFn, fops, ref) {
-  const clean = String(ref).trim();
-  const uuid = clean.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0];
-  const errors = [];
-  for (const fop of fops.filter(hasCheckbox)) {
-    try {
-      if (uuid) {
-        const r = await authed(fetchFn, fop, `/receipts/${uuid}`);
-        if (r?.id) return { receipt: summarize(r, fop, "manual"), errors };
-      } else {
-        const r = await authed(fetchFn, fop, `/receipts/search?fiscal_code=${encodeURIComponent(clean)}&limit=5`);
-        const hit = (r?.results || [])[0];
-        if (hit) return { receipt: summarize(hit, fop, "manual"), errors };
-      }
-    } catch (e) {
-      if (e.status !== 404) errors.push(`${fop.short_name}: ${e.message}`);
-    }
-  }
-  return { receipt: null, errors };
-}
-async function findReceiptForOrder(fetchFn, fops, order2, { days = 7 } = {}) {
-  const errors = [];
-  const from = parseDate(order2.date);
-  from.setDate(from.getDate() - 1);
-  const to = new Date(from);
-  to.setDate(to.getDate() + Number(days) + 1);
-  const orderNo = String(order2.orderId);
-  const orderNoRe = new RegExp(`(^|\\D)${orderNo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\D|$)`);
-  const sumMatches = [];
-  for (const fop of fops.filter(hasCheckbox)) {
-    try {
-      let offset = 0;
-      for (let page = 0; page < 10; page++) {
-        const qs = new URLSearchParams({
-          from_date: from.toISOString(),
-          to_date: to.toISOString(),
-          limit: "100",
-          offset: String(offset),
-          self_receipts: "false"
-        });
-        const r = await authed(fetchFn, fop, `/receipts/search?${qs}`);
-        const results = r?.results || [];
-        for (const rc of results) {
-          const text = [
-            rc.header,
-            rc.footer,
-            rc.barcode,
-            rc.order_id,
-            rc.external_id,
-            ...(rc.goods || []).map((g) => `${g.good?.code || ""} ${g.good?.name || ""}`)
-          ].filter(Boolean).join(" ");
-          if (orderNoRe.test(text)) return { receipt: summarize(rc, fop, "order"), errors };
-          if (rc.type !== "RETURN" && rc.total_sum != null && Math.abs(rc.total_sum / 100 - order2.total) < 0.01) {
-            sumMatches.push(summarize(rc, fop, "sum"));
-          }
-        }
-        if (results.length < 100) break;
-        offset += 100;
-      }
-    } catch (e) {
-      errors.push(`${fop.short_name}: ${e.message}`);
-    }
-  }
-  if (sumMatches.length === 1) return { receipt: sumMatches[0], errors };
-  if (sumMatches.length > 1) {
-    errors.push(`\u0417\u043D\u0430\u0439\u0434\u0435\u043D\u043E ${sumMatches.length} \u0447\u0435\u043A\u0438(\u0456\u0432) \u043D\u0430 \u0441\u0443\u043C\u0443 ${order2.total} \u0433\u0440\u043D \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0424\u041E\u041F \u0432\u0440\u0443\u0447\u043D\u0443 \u0430\u0431\u043E \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u0447\u0435\u043A.`);
-  }
-  return { receipt: null, errors, candidates: sumMatches };
-}
-async function testCheckbox(fetchFn, fop) {
-  tokens.delete(fop.id);
-  const me = await authed(fetchFn, fop, "/cashier/me");
-  return { cashier: me?.full_name || "", organization: me?.organization?.title || "" };
-}
-
-// src/validate.js
-var IMAGE_FIELDS = ["logo", "signature", "stamp"];
-var MAX_IMAGE_CHARS = 3e6;
-var IMAGE_RE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/;
-var isSafeImage = (v) => {
-  const s = String(v ?? "");
-  return s === "" || s.length <= MAX_IMAGE_CHARS && IMAGE_RE.test(s);
-};
-function checkImages(body, fail) {
-  for (const k of IMAGE_FIELDS) {
-    if (body[k] !== void 0 && !isSafeImage(body[k])) {
-      throw fail(400, `\u041F\u043E\u043B\u0435 \xAB${k}\xBB: \u043F\u043E\u0442\u0440\u0456\u0431\u043D\u0430 \u043A\u0430\u0440\u0442\u0438\u043D\u043A\u0430 PNG, JPEG, WebP \u0430\u0431\u043E GIF (\u0434\u043E 2 \u041C\u0411).`);
-    }
-  }
-}
-function dropUnsafeImages(row) {
-  const out = { ...row };
-  for (const k of IMAGE_FIELDS) if (k in out && !isSafeImage(out[k])) out[k] = "";
-  return out;
-}
-
-// src/requisites.js
-var FOP_REQUISITES = ["short_name", "full_name", "ipn", "address", "iban", "bank", "phone", "email", "extra", "logo", "signature", "stamp"];
-var INV_FOP_REQUISITES = ["short_name", "full_name", "ipn", "iban", "bank", "address", "phone", "warning_text", "signature", "stamp"];
-var IMAGES = /* @__PURE__ */ new Set(["logo", "signature", "stamp"]);
-var REQUISITES_DENIED = "\u0420\u0435\u043A\u0432\u0456\u0437\u0438\u0442\u0438 \u0424\u041E\u041F (IBAN, \u0406\u041F\u041D, \u043D\u0430\u0437\u0432\u0443, \u0430\u0434\u0440\u0435\u0441\u0443, \u043F\u0456\u0434\u043F\u0438\u0441, \u043F\u0435\u0447\u0430\u0442\u043A\u0443) \u0437\u043C\u0456\u043D\u044E\u044E\u0442\u044C \u043B\u0438\u0448\u0435 \u0432\u043B\u0430\u0441\u043D\u0438\u043A \u0456 \u0430\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0438.";
-function changedFields(current, body, fields) {
-  return fields.filter((k) => body[k] !== void 0 && String(body[k] ?? "") !== String(current?.[k] ?? ""));
-}
-function describeChanges(current, body, fields) {
-  return fields.map((k) => IMAGES.has(k) ? { field: k, from: current?.[k] ? "\u0454" : "\u043D\u0435\u043C\u0430\u0454", to: body[k] ? "\u043D\u043E\u0432\u0435 \u0437\u043E\u0431\u0440\u0430\u0436\u0435\u043D\u043D\u044F" : "\u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E" } : { field: k, from: String(current?.[k] ?? ""), to: String(body[k] ?? "") });
-}
-async function logAudit(db, { user, kind, refId = "", action, changes = [] }) {
-  await db.run(
-    `INSERT INTO audit_log (at, user_id, user_name, kind, ref_id, action, changes) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [(/* @__PURE__ */ new Date()).toISOString(), user?.id || null, user?.name || user?.login || "", kind, String(refId), action, JSON.stringify(changes)]
-  );
-}
-
 // src/app.js
-var MASK = "\u2022\u2022\u2022\u2022\u2022\u2022";
-var SECRET_FOP_FIELDS = ["checkbox_password", "checkbox_pin", "checkbox_license"];
-var FOP_FIELDS = [
-  "short_name",
-  "full_name",
-  "ipn",
-  "address",
-  "iban",
-  "bank",
-  "phone",
-  "email",
-  "extra",
-  "template_id",
-  "logo",
-  "signature",
-  "stamp",
-  "checkbox_login",
-  "checkbox_password",
-  "checkbox_license",
-  "checkbox_pin",
-  "active"
-];
-var hash = (s) => {
-  let h2 = 2166136261;
-  for (let i = 0; i < s.length; i++) {
-    h2 ^= s.charCodeAt(i);
-    h2 = Math.imul(h2, 16777619) >>> 0;
-  }
-  return h2.toString(16);
-};
-var nowIso = () => (/* @__PURE__ */ new Date()).toISOString();
-var publicFop = (f) => {
-  if (!f) return null;
-  const out = { ...f };
-  for (const k of SECRET_FOP_FIELDS) out[k] = f[k] ? MASK : "";
-  out.has_checkbox = hasCheckbox(f);
-  return out;
-};
-var docFop = (f) => {
-  if (!f) return null;
-  const { checkbox_login, checkbox_password, checkbox_license, checkbox_pin, ...rest } = f;
-  return rest;
-};
-var parseTpl = (t) => t ? { ...t, options: JSON.parse(t.options || "{}") } : null;
 function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, odbBase = ODB_BASE }) {
-  let odbApi = null;
   const app = new Hono3();
   let usedSubrequests = 0;
   const fetchFn = async (...args) => {
@@ -4861,885 +5733,36 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     }
     return rawFetch(...args);
   };
-  const receiptCache = /* @__PURE__ */ new Map();
-  const settings = async () => {
-    const rows = await db.all(`SELECT key, value FROM settings`);
-    return Object.fromEntries(rows.map((r) => [r.key, r.value]));
-  };
   app.onError((err, c) => {
     if (err.pending) return c.json({ pending: true, message: err.message }, 202);
     if (!err.status) console.error(err);
     return c.json({ error: err.message || String(err) }, err.status || 500);
   });
-  const fail = (status, message) => Object.assign(new Error(message), { status });
-  const need = (c, perm) => {
-    if (!can(c.get("user"), perm)) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432 \u0434\u043B\u044F \u0446\u0456\u0454\u0457 \u0434\u0456\u0457.");
-  };
-  const userName = (c) => c.get("user")?.name || c.get("user")?.login || "";
+  const cleanupTasks = [];
+  const onCleanup = (fn) => cleanupTasks.push(fn);
   let lastCleanup = 0;
-  async function cleanup() {
+  async function runCleanup() {
     if (Date.now() - lastCleanup < 60 * 60 * 1e3) return;
     lastCleanup = Date.now();
-    const s = await settings();
+    const s = await loadSettings(db);
     const days = Math.max(1, Number(s.retention_days) || 7);
     const border = new Date(Date.now() - days * 864e5).toISOString();
-    await db.run(`DELETE FROM versions WHERE created_at < ?`, [border]);
-    await db.run(`DELETE FROM invoices WHERE COALESCE(updated_at, created_at) < ?`, [border]);
-    await db.run(`DELETE FROM sessions WHERE created_at < ?`, [new Date(Date.now() - 90 * 864e5).toISOString()]);
+    for (const task of cleanupTasks) await task(border);
   }
-  const COOKIE = "nk_sid";
-  async function sessionUser(c) {
-    const token = getCookie(c, COOKIE);
-    if (!token) return null;
-    const u = await db.get(
-      `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND u.active = 1`,
-      [token]
-    );
-    return u || null;
-  }
-  async function startSession(c, user) {
-    const token = randomToken();
-    await db.run(`INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)`, [token, user.id, nowIso()]);
-    setCookie(c, COOKIE, token, { httpOnly: true, sameSite: "Lax", path: "/", maxAge: 90 * 86400, secure: new URL(c.req.url).protocol === "https:" });
-  }
-  app.get("/api/auth/state", async (c) => {
-    const n = await db.get(`SELECT COUNT(*) AS n FROM users`);
-    if (!n?.n) return c.json({ needsSetup: true, user: null });
-    return c.json({ needsSetup: false, user: publicUser(await sessionUser(c)) });
-  });
-  app.post("/api/auth/setup", async (c) => {
-    const n = await db.get(`SELECT COUNT(*) AS n FROM users`);
-    if (n?.n) throw fail(400, "\u0412\u043B\u0430\u0441\u043D\u0438\u043A\u0430 \u0432\u0436\u0435 \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E.");
-    const b = await c.req.json();
-    const login = String(b.login || "").trim().toLowerCase();
-    if (!login || String(b.password || "").length < 6) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043B\u043E\u0433\u0456\u043D \u0456 \u043F\u0430\u0440\u043E\u043B\u044C (\u043D\u0435 \u043C\u0435\u043D\u0448\u0435 6 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432).");
-    const r = await db.run(`INSERT INTO users (login, name, password_hash, role, active, created_at) VALUES (?, ?, ?, 'owner', 1, ?)`, [
-      login,
-      String(b.name || "").trim(),
-      await hashPassword(b.password),
-      nowIso()
-    ]);
-    const user = await db.get(`SELECT * FROM users WHERE id = ?`, [r.lastId]);
-    await startSession(c, user);
-    return c.json({ user: publicUser(user) });
-  });
-  app.post("/api/auth/login", async (c) => {
-    const b = await c.req.json();
-    const user = await db.get(`SELECT * FROM users WHERE login = ?`, [String(b.login || "").trim().toLowerCase()]);
-    if (user?.locked_until && user.locked_until > nowIso()) {
-      const mins = Math.max(1, Math.ceil((new Date(user.locked_until) - Date.now()) / 6e4));
-      throw fail(429, `\u0417\u0430\u0431\u0430\u0433\u0430\u0442\u043E \u043D\u0435\u0432\u0434\u0430\u043B\u0438\u0445 \u0441\u043F\u0440\u043E\u0431. \u0421\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0447\u0435\u0440\u0435\u0437 ${mins} \u0445\u0432.`);
-    }
-    if (!user || !user.active || !await verifyPassword(String(b.password || ""), user.password_hash)) {
-      if (user) {
-        const n = (Number(user.failed_logins) || 0) + 1;
-        const lock = n >= 5 ? new Date(Date.now() + 5 * 6e4).toISOString() : "";
-        await db.run(`UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?`, [lock ? 0 : n, lock, user.id]);
-      }
-      throw fail(401, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043B\u043E\u0433\u0456\u043D \u0430\u0431\u043E \u043F\u0430\u0440\u043E\u043B\u044C.");
-    }
-    if (user.failed_logins || user.locked_until) await db.run(`UPDATE users SET failed_logins = 0, locked_until = '' WHERE id = ?`, [user.id]);
-    await startSession(c, user);
-    return c.json({ user: publicUser(user) });
-  });
-  app.post("/api/auth/logout", async (c) => {
-    const token = getCookie(c, COOKIE);
-    if (token) await db.run(`DELETE FROM sessions WHERE token = ?`, [token]);
-    deleteCookie(c, COOKIE, { path: "/" });
-    return c.json({ ok: true });
-  });
-  app.use("/api/*", async (c, next) => {
-    if (c.req.path.startsWith("/api/auth/") || c.req.path === "/api/odb/hook" || c.req.path === "/api/tg/hook") return next();
-    const user = await sessionUser(c);
-    if (!user) throw fail(401, "\u041F\u043E\u0442\u0440\u0456\u0431\u043D\u043E \u0443\u0432\u0456\u0439\u0442\u0438.");
-    c.set("user", user);
-    await cleanup();
-    return next();
-  });
-  app.put("/api/me/password", async (c) => {
-    const b = await c.req.json();
-    const me = c.get("user");
-    if (!await verifyPassword(String(b.old || ""), me.password_hash)) throw fail(400, "\u041F\u043E\u0442\u043E\u0447\u043D\u0438\u0439 \u043F\u0430\u0440\u043E\u043B\u044C \u043D\u0435\u0432\u0456\u0440\u043D\u0438\u0439.");
-    if (String(b.password || "").length < 6) throw fail(400, "\u041D\u043E\u0432\u0438\u0439 \u043F\u0430\u0440\u043E\u043B\u044C \u2014 \u043D\u0435 \u043C\u0435\u043D\u0448\u0435 6 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432.");
-    await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [await hashPassword(b.password), me.id]);
-    return c.json({ ok: true });
-  });
-  const ASSIGNABLE = ["admin", "manager", "viewer"];
-  app.get("/api/users", async (c) => {
-    need(c, "users");
-    const rows = await db.all(`SELECT * FROM users ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'manager' THEN 2 ELSE 3 END, login`);
-    return c.json({ users: rows.map(publicUser), roles: ROLES });
-  });
-  app.post("/api/users", async (c) => {
-    need(c, "users");
-    const b = await c.req.json();
-    const login = String(b.login || "").trim().toLowerCase();
-    if (!/^[a-z0-9._@-]{2,40}$/.test(login)) throw fail(400, "\u041B\u043E\u0433\u0456\u043D: \u043B\u0430\u0442\u0438\u043D\u0441\u044C\u043A\u0456 \u043B\u0456\u0442\u0435\u0440\u0438, \u0446\u0438\u0444\u0440\u0438, \u043A\u0440\u0430\u043F\u043A\u0430, \u0434\u0435\u0444\u0456\u0441 (2\u201340 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432).");
-    if (!ASSIGNABLE.includes(b.role)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0430 \u0440\u043E\u043B\u044C.");
-    if (String(b.password || "").length < 6) throw fail(400, "\u041F\u0430\u0440\u043E\u043B\u044C \u2014 \u043D\u0435 \u043C\u0435\u043D\u0448\u0435 6 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432.");
-    if (await db.get(`SELECT id FROM users WHERE login = ?`, [login])) throw fail(400, "\u0422\u0430\u043A\u0438\u0439 \u043B\u043E\u0433\u0456\u043D \u0443\u0436\u0435 \u0454.");
-    const r = await db.run(`INSERT INTO users (login, name, password_hash, role, active, created_at, crm_logins) VALUES (?, ?, ?, ?, 1, ?, ?)`, [
-      login,
-      String(b.name || "").trim(),
-      await hashPassword(b.password),
-      b.role,
-      nowIso(),
-      crmLogins(b.crm_logins).join(",")
-    ]);
-    return c.json({ id: r.lastId });
-  });
-  app.put("/api/users/:id", async (c) => {
-    need(c, "users");
-    const me = c.get("user");
-    const target = await db.get(`SELECT * FROM users WHERE id = ?`, [c.req.param("id")]);
-    if (!target) throw fail(404, "\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
-    if (target.role === "owner" && me.role !== "owner") throw fail(403, "\u0410\u043A\u0430\u0443\u043D\u0442 \u0432\u043B\u0430\u0441\u043D\u0438\u043A\u0430 \u043C\u043E\u0436\u0435 \u0437\u043C\u0456\u043D\u044E\u0432\u0430\u0442\u0438 \u043B\u0438\u0448\u0435 \u0432\u043B\u0430\u0441\u043D\u0438\u043A.");
-    const b = await c.req.json();
-    const sets = [];
-    const vals = [];
-    if (b.name !== void 0) {
-      sets.push("name = ?");
-      vals.push(String(b.name).trim());
-    }
-    if (b.crm_logins !== void 0) {
-      sets.push("crm_logins = ?");
-      vals.push(crmLogins(b.crm_logins).join(","));
-    }
-    if (b.role !== void 0 && target.role !== "owner") {
-      if (!ASSIGNABLE.includes(b.role)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0430 \u0440\u043E\u043B\u044C.");
-      sets.push("role = ?");
-      vals.push(b.role);
-    }
-    if (b.active !== void 0 && target.role !== "owner") {
-      if (String(target.id) === String(me.id)) throw fail(400, "\u041D\u0435 \u043C\u043E\u0436\u043D\u0430 \u0432\u0438\u043C\u043A\u043D\u0443\u0442\u0438 \u0432\u043B\u0430\u0441\u043D\u0438\u0439 \u0430\u043A\u0430\u0443\u043D\u0442.");
-      sets.push("active = ?");
-      vals.push(b.active ? 1 : 0);
-    }
-    if (b.password) {
-      if (String(b.password).length < 6) throw fail(400, "\u041F\u0430\u0440\u043E\u043B\u044C \u2014 \u043D\u0435 \u043C\u0435\u043D\u0448\u0435 6 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432.");
-      sets.push("password_hash = ?");
-      vals.push(await hashPassword(b.password));
-    }
-    if (sets.length) await db.run(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`, [...vals, target.id]);
-    if (b.password || b.active === false || b.active === 0 || b.role !== void 0) {
-      await db.run(`DELETE FROM sessions WHERE user_id = ? AND user_id != ?`, [target.id, me.id]);
-    }
-    return c.json({ ok: true });
-  });
-  app.post("/api/users/transfer-owner", async (c) => {
-    const me = c.get("user");
-    if (me.role !== "owner") throw fail(403, "\u041F\u0435\u0440\u0435\u0434\u0430\u0442\u0438 \u043F\u0440\u0430\u0432\u0430 \u043C\u043E\u0436\u0435 \u043B\u0438\u0448\u0435 \u0432\u043B\u0430\u0441\u043D\u0438\u043A.");
-    const b = await c.req.json();
-    if (!await verifyPassword(String(b.password || ""), me.password_hash)) throw fail(400, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043F\u0430\u0440\u043E\u043B\u044C.");
-    if (!ASSIGNABLE.includes(b.myRole)) throw fail(400, "\u0412\u0438\u0431\u0435\u0440\u0456\u0442\u044C \u0441\u0432\u043E\u044E \u043D\u043E\u0432\u0443 \u0440\u043E\u043B\u044C.");
-    const target = await db.get(`SELECT * FROM users WHERE id = ?`, [b.userId]);
-    if (!target || String(target.id) === String(me.id)) throw fail(400, "\u0412\u0438\u0431\u0435\u0440\u0456\u0442\u044C \u0456\u043D\u0448\u043E\u0433\u043E \u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430.");
-    if (!target.active) throw fail(400, "\u0426\u0435\u0439 \u0430\u043A\u0430\u0443\u043D\u0442 \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0443\u0432\u0456\u043C\u043A\u043D\u0456\u0442\u044C \u0439\u043E\u0433\u043E.");
-    await db.batch([
-      [`UPDATE users SET role = 'owner' WHERE id = ?`, [target.id]],
-      [`UPDATE users SET role = ? WHERE id = ?`, [b.myRole, me.id]]
-    ]);
-    return c.json({ ok: true });
-  });
-  app.delete("/api/users/:id", async (c) => {
-    need(c, "users");
-    const me = c.get("user");
-    const target = await db.get(`SELECT * FROM users WHERE id = ?`, [c.req.param("id")]);
-    if (!target) throw fail(404, "\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
-    if (target.role === "owner") throw fail(403, "\u0410\u043A\u0430\u0443\u043D\u0442 \u0432\u043B\u0430\u0441\u043D\u0438\u043A\u0430 \u0432\u0438\u0434\u0430\u043B\u0438\u0442\u0438 \u043D\u0435 \u043C\u043E\u0436\u043D\u0430.");
-    if (String(target.id) === String(me.id)) throw fail(400, "\u041D\u0435 \u043C\u043E\u0436\u043D\u0430 \u0432\u0438\u0434\u0430\u043B\u0438\u0442\u0438 \u0432\u043B\u0430\u0441\u043D\u0438\u0439 \u0430\u043A\u0430\u0443\u043D\u0442.");
-    await db.run(`DELETE FROM sessions WHERE user_id = ?`, [target.id]);
-    await db.run(`DELETE FROM users WHERE id = ?`, [target.id]);
-    return c.json({ ok: true });
-  });
-  app.get("/api/bootstrap", async (c) => {
-    const s = await settings();
-    const user = c.get("user");
-    const apiOk = can(user, "api");
-    const fops = (await db.all(`SELECT * FROM fops ORDER BY active DESC, short_name`)).map(publicFop).map((f) => {
-      if (apiOk) return f;
-      const { checkbox_login, checkbox_password, checkbox_license, checkbox_pin, ...rest } = f;
-      return rest;
-    });
-    const invFops = await db.all(`SELECT * FROM inv_fops ORDER BY active DESC, short_name`);
-    const templates = (await db.all(`SELECT * FROM templates ORDER BY id`)).map(parseTpl);
-    const offices = await db.all(`SELECT * FROM offices ORDER BY CAST(office_id AS INTEGER)`);
-    const channels = await db.all(`SELECT * FROM channels ORDER BY name`);
-    return c.json({
-      fops,
-      templates,
-      offices,
-      channels,
-      invFops,
-      defaultWarning: DEFAULT_WARNING,
-      user: publicUser(user),
-      settings: apiOk ? { ...s, lpcrm_key: s.lpcrm_key ? MASK : "", odb_key: s.odb_key ? MASK : "", tg_token: s.tg_token ? MASK : "", tg_secret: "" } : Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith("lpcrm_") && !k.startsWith("checkbox_") && !k.startsWith("odb_") && !k.startsWith("tg_")).concat([["lpcrm_key", s.lpcrm_key ? MASK : ""], ["lpcrm_subdomain", s.lpcrm_subdomain || ""]]))
-    });
-  });
-  app.put("/api/settings", async (c) => {
-    need(c, "refs.edit");
-    const body = await c.req.json();
-    const apiKeys = ["lpcrm_subdomain", "lpcrm_key", "lpcrm_search_days", "checkbox_enabled", "checkbox_search_days", "odb_key", "odb_name"];
-    const general = ["invoice_date_mode", "default_fop_id", "seller_note", "retention_days", "rahunok_next_number"];
-    const allowed = can(c.get("user"), "api") ? [...apiKeys, ...general] : general;
-    if (body.rahunok_next_number !== void 0 && !/^\d{1,12}$/.test(String(body.rahunok_next_number).trim())) throw fail(400, "\u041D\u043E\u043C\u0435\u0440 \u0440\u0430\u0445\u0443\u043D\u043A\u0443 \u2014 \u043B\u0438\u0448\u0435 \u0446\u0438\u0444\u0440\u0438.");
-    if (body.retention_days !== void 0 && !(Number(body.retention_days) >= 1)) throw fail(400, "\u0421\u0442\u0440\u043E\u043A \u0437\u0431\u0435\u0440\u0456\u0433\u0430\u043D\u043D\u044F \u2014 \u0449\u043E\u043D\u0430\u0439\u043C\u0435\u043D\u0448\u0435 1 \u0434\u0435\u043D\u044C.");
-    if (body.lpcrm_subdomain !== void 0 && !/^[a-z0-9-]{1,63}$/i.test(String(body.lpcrm_subdomain).trim())) throw fail(400, "\u041F\u0456\u0434\u0434\u043E\u043C\u0435\u043D LP-CRM \u2014 \u043B\u0438\u0448\u0435 \u043B\u0430\u0442\u0438\u043D\u0441\u044C\u043A\u0456 \u043B\u0456\u0442\u0435\u0440\u0438, \u0446\u0438\u0444\u0440\u0438 \u0439 \u0434\u0435\u0444\u0456\u0441.");
-    for (const k of allowed) {
-      if (body[k] === void 0 || body[k] === MASK) continue;
-      await db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [
-        k,
-        String(body[k]).trim()
-      ]);
-    }
-    return c.json({ ok: true });
-  });
-  const fopCols = (c, b) => FOP_FIELDS.filter((k) => b[k] !== void 0 && b[k] !== MASK && (can(c.get("user"), "api") || !k.startsWith("checkbox_")));
-  app.post("/api/fops", async (c) => {
-    need(c, "refs.edit");
-    if (!can(c.get("user"), "requisites")) throw fail(403, REQUISITES_DENIED);
-    const b = await c.req.json();
-    if (!b.short_name) return c.json({ error: "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043A\u043E\u0440\u043E\u0442\u043A\u0443 \u043D\u0430\u0437\u0432\u0443 \u0424\u041E\u041F" }, 400);
-    checkImages(b, fail);
-    const cols = fopCols(c, b);
-    const r = await db.run(
-      `INSERT INTO fops (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`,
-      cols.map((k) => b[k])
-    );
-    const fields = changedFields({}, b, FOP_REQUISITES);
-    await logAudit(db, { user: c.get("user"), kind: "fop", refId: r.lastId, action: "\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E", changes: describeChanges({}, b, fields) });
-    return c.json({ id: r.lastId });
-  });
-  app.put("/api/fops/:id", async (c) => {
-    need(c, "refs.edit");
-    const b = await c.req.json();
-    checkImages(b, fail);
-    const cur = await db.get(`SELECT * FROM fops WHERE id = ?`, [c.req.param("id")]);
-    if (!cur) throw fail(404, "\u0424\u041E\u041F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
-    const req2 = changedFields(cur, b, FOP_REQUISITES);
-    if (req2.length && !can(c.get("user"), "requisites")) throw fail(403, REQUISITES_DENIED);
-    const cols = fopCols(c, b);
-    if (!cols.length) return c.json({ ok: true });
-    await db.run(`UPDATE fops SET ${cols.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, [
-      ...cols.map((k) => b[k]),
-      cur.id
-    ]);
-    if (req2.length) await logAudit(db, { user: c.get("user"), kind: "fop", refId: cur.id, action: "\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0440\u0435\u043A\u0432\u0456\u0437\u0438\u0442\u0438", changes: describeChanges(cur, b, req2) });
-    return c.json({ ok: true });
-  });
-  app.delete("/api/fops/:id", async (c) => {
-    need(c, "refs.edit");
-    await db.run(`UPDATE fops SET active = 0 WHERE id = ?`, [c.req.param("id")]);
-    return c.json({ ok: true });
-  });
-  app.post("/api/fops/:id/checkbox-test", async (c) => {
-    need(c, "api");
-    const fop = await db.get(`SELECT * FROM fops WHERE id = ?`, [c.req.param("id")]);
-    if (!fop) return c.json({ error: "\u0424\u041E\u041F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E" }, 404);
-    if (!hasCheckbox(fop)) return c.json({ error: "\u041D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E \u0434\u043E\u0441\u0442\u0443\u043F \u0434\u043E Checkbox" }, 400);
-    return c.json(await testCheckbox(fetchFn, fop));
-  });
-  app.put("/api/offices", async (c) => {
-    need(c, "refs.edit");
-    const list = await c.req.json();
-    await db.batch((Array.isArray(list) ? list : []).filter((o) => o.office_id).map((o) => [
-      `INSERT INTO offices (office_id, name, fop_id, seller_text) VALUES (?, ?, ?, ?)
-       ON CONFLICT(office_id) DO UPDATE SET name = excluded.name, fop_id = excluded.fop_id, seller_text = excluded.seller_text`,
-      [String(o.office_id).trim(), o.name || "", o.fop_id || null, String(o.seller_text || "").trim()]
-    ]));
-    return c.json({ ok: true });
-  });
-  app.put("/api/channels", async (c) => {
-    need(c, "refs.edit");
-    const list = await c.req.json();
-    const st = [[`DELETE FROM channels`, []]];
-    for (const ch of Array.isArray(list) ? list : []) {
-      const name = String(ch.name || "").trim();
-      if (!name) continue;
-      st.push([`INSERT INTO channels (name, fop_id, seller_text) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET fop_id = excluded.fop_id, seller_text = excluded.seller_text`, [name, ch.fop_id || null, String(ch.seller_text || "").trim()]]);
-    }
-    await db.batch(st);
-    return c.json({ ok: true });
-  });
-  app.delete("/api/offices/:id", async (c) => {
-    need(c, "refs.edit");
-    await db.run(`DELETE FROM offices WHERE office_id = ?`, [c.req.param("id")]);
-    return c.json({ ok: true });
-  });
-  app.post("/api/templates", async (c) => {
-    need(c, "refs.edit");
-    const b = await c.req.json();
-    const r = await db.run(`INSERT INTO templates (name, layout, options) VALUES (?, ?, ?)`, [
-      b.name || "\u041D\u043E\u0432\u0438\u0439 \u0448\u0430\u0431\u043B\u043E\u043D",
-      b.layout || "classic",
-      JSON.stringify(b.options || {})
-    ]);
-    return c.json({ id: r.lastId });
-  });
-  app.put("/api/templates/:id", async (c) => {
-    need(c, "refs.edit");
-    const b = await c.req.json();
-    await db.run(`UPDATE templates SET name = ?, layout = ?, options = ? WHERE id = ?`, [
-      b.name,
-      b.layout,
-      JSON.stringify(b.options || {}),
-      c.req.param("id")
-    ]);
-    return c.json({ ok: true });
-  });
-  app.delete("/api/templates/:id", async (c) => {
-    need(c, "refs.edit");
-    const id = c.req.param("id");
-    const used = await db.get(`SELECT COUNT(*) AS n FROM fops WHERE template_id = ? AND active = 1`, [id]);
-    if (used?.n) return c.json({ error: "\u0428\u0430\u0431\u043B\u043E\u043D \u0432\u0438\u043A\u043E\u0440\u0438\u0441\u0442\u043E\u0432\u0443\u0454\u0442\u044C\u0441\u044F \u0424\u041E\u041F\u0430\u043C\u0438 \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u0457\u043C \u0448\u0430\u0431\u043B\u043E\u043D" }, 400);
-    await db.run(`DELETE FROM templates WHERE id = ?`, [id]);
-    return c.json({ ok: true });
-  });
-  app.get("/api/lpcrm/diagnose/:orderId", async (c) => {
-    need(c, "api");
-    const s = await settings();
-    const text = await diagnose(fetchFn, { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key }, c.req.param("orderId"));
-    return c.json({ text });
-  });
-  app.get("/api/lpcrm/raw/:orderId", async (c) => {
-    need(c, "api");
-    const s = await settings();
-    const { raw: raw2 } = await getOrder(fetchFn, { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key }, c.req.param("orderId"), { fresh: true });
-    return c.json(raw2);
-  });
-  let syncing = null;
-  let lastSync = 0;
-  const ymd2 = (d) => d.toISOString().slice(0, 10);
-  const digits = (v) => String(v || "").replace(/\D/g, "");
-  const STATUS_PRIORITY = ["11", "3", "56", "14", "18", "66", "60", "53"];
-  async function cachedStatuses(creds) {
-    const row = await db.get(`SELECT value FROM settings WHERE key = 'statuses_cache'`);
-    const cache = row?.value ? JSON.parse(row.value) : null;
-    if (cache && cache.sub === creds.subdomain && Date.now() - cache.at < 864e5) return cache.list;
-    const list = Object.keys(await getStatuses(fetchFn, creds));
-    await db.run(`INSERT INTO settings (key, value) VALUES ('statuses_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [
-      JSON.stringify({ at: Date.now(), sub: creds.subdomain, list })
-    ]);
-    return list;
-  }
-  async function saveOrders2(orders) {
-    const now = nowIso();
-    await db.batch(orders.map((o) => [
-      `INSERT INTO orders_index (code, datetime, phone, ttn, bayer_name, data, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(code) DO UPDATE SET datetime = excluded.datetime, phone = excluded.phone, ttn = excluded.ttn,
-       bayer_name = excluded.bayer_name, data = excluded.data, fetched_at = excluded.fetched_at`,
-      [String(o.order_id), o.datetime || "", digits(o.phone), String(o.ttn || ""), o.bayer_name || "", JSON.stringify(o), now]
-    ]));
-  }
-  async function syncIndex(creds, days, found = async () => []) {
-    if (syncing) {
-      await syncing;
-      return found();
-    }
-    let result = [];
-    syncing = (async () => {
-      const all = await cachedStatuses(creds);
-      const statuses = [...STATUS_PRIORITY.filter((x) => all.includes(x)), ...all.filter((x) => !STATUS_PRIORITY.includes(x))];
-      const start = ymd2(new Date(Date.now() - days * 864e5));
-      const end = ymd2(new Date(Date.now() + 864e5));
-      const key = `${creds.subdomain}|${days}|${start}`;
-      const pr = await db.get(`SELECT value FROM settings WHERE key = 'sync_progress'`);
-      const prog = pr?.value ? JSON.parse(pr.value) : null;
-      let i = prog && prog.key === key && Date.now() - prog.at < 30 * 6e4 ? prog.i : 0;
-      const saveProgress = (idx) => db.run(
-        `INSERT INTO settings (key, value) VALUES ('sync_progress', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-        [JSON.stringify({ key, i: idx, at: Date.now() })]
-      );
-      for (; i < statuses.length; i++) {
-        const codes = await getOrderCodesByStatus(fetchFn, creds, statuses[i], start, end);
-        const known = new Set((await db.all(`SELECT code FROM orders_index`)).map((r) => r.code));
-        const fresh = codes.filter((c) => !known.has(c));
-        for (let k = 0; k < fresh.length; k += 100) {
-          await saveOrders2(await getOrdersBatch(fetchFn, creds, fresh.slice(k, k + 100)));
-        }
-        await saveProgress(i + 1);
-        result = await found();
-        if (result.length) break;
-      }
-      await db.run(`DELETE FROM settings WHERE key = 'sync_progress'`);
-      lastSync = Date.now();
-    })();
-    try {
-      await syncing;
-    } finally {
-      syncing = null;
-    }
-    return result;
-  }
-  const SKIP_KEYS = /* @__PURE__ */ new Set(["total", "status", "office", "payment", "delivery_id", "attribute_status_id", "localization"]);
-  async function matchIndex(q) {
-    const rows = await db.all(`SELECT code, datetime, phone, ttn, data FROM orders_index ORDER BY datetime DESC`);
-    const qd = digits(q);
-    const strong = [];
-    const weak = [];
-    for (const r of rows) {
-      const data = JSON.parse(r.data || "{}");
-      const exact = Object.entries(data).some(([k, v]) => v !== null && typeof v !== "object" && !SKIP_KEYS.has(k) && String(v).trim() === q);
-      if (exact || r.ttn === q) strong.push(r);
-      else if (qd.length >= 9 && r.phone && r.phone.endsWith(qd)) weak.push(r);
-    }
-    return strong.length ? strong : weak;
-  }
-  async function resolveCode(q, s, creds) {
-    if (/^\d{11,}$/.test(q) && !q.startsWith("380")) return { code: q };
-    const alias = await db.get(`SELECT code FROM order_alias WHERE alias = ?`, [q]);
-    if (alias) return { code: alias.code };
-    let hits = await matchIndex(q);
-    const maxDays = Number(s.lpcrm_search_days) || 30;
-    if (!hits.length) hits = await syncIndex(creds, Math.min(7, maxDays), () => matchIndex(q));
-    if (!hits.length && maxDays > 7) hits = await syncIndex(creds, maxDays, () => matchIndex(q));
-    if (!hits.length) {
-      throw new Error(`\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \xAB${q}\xBB \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0441\u0435\u0440\u0435\u0434 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u0437\u0430 \u043E\u0441\u0442\u0430\u043D\u043D\u0456 ${Number(s.lpcrm_search_days) || 30} \u0434\u043D\u0456\u0432. \u0412\u0432\u0435\u0434\u0456\u0442\u044C \u043A\u043E\u0434 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F (ID-o \u0443 \u0448\u0430\u043F\u0446\u0456 \u043A\u0430\u0440\u0442\u043A\u0438 LP-CRM), \u0442\u0435\u043B\u0435\u0444\u043E\u043D \u043F\u043E\u043A\u0443\u043F\u0446\u044F \u0430\u0431\u043E \u0422\u0422\u041D.`);
-    }
-    const note = hits.length > 1 ? `\u0417\u043D\u0430\u0439\u0434\u0435\u043D\u043E ${hits.length} \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F(\u043D\u044C) \u0437\u0430 \xAB${q}\xBB \u2014 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u043D\u0430\u0439\u043D\u043E\u0432\u0456\u0448\u0435.` : "";
-    if (hits.length === 1 && !/^\d{9,}$/.test(digits(q))) {
-      await db.run(`INSERT INTO order_alias (alias, code) VALUES (?, ?) ON CONFLICT(alias) DO UPDATE SET code = excluded.code`, [q, hits[0].code]);
-    }
-    return { code: hits[0].code, note };
-  }
-  async function loadOrder(orderId, s, fresh = false) {
-    if (orderId === "demo" || orderId === "0") {
-      return { rawOrder: DEMO_ORDER, demo: true };
-    }
-    const creds = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
-    if (!creds.subdomain || !creds.key) throw new Error("\u041D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E LP-CRM: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u043F\u0456\u0434\u0434\u043E\u043C\u0435\u043D \u0456 API-\u043A\u043B\u044E\u0447 \u0443 \u0440\u043E\u0437\u0434\u0456\u043B\u0456 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\xBB.");
-    const { code, note } = await resolveCode(orderId, s, creds);
-    const { order: order2, raw: raw2 } = await getOrder(fetchFn, creds, code, { fresh });
-    const prods = order2.products || order2.goods || [];
-    const list = Array.isArray(prods) ? prods : Object.values(prods);
-    const missing = list.filter((p) => !(p.name || p.title || p.product_name)).map((p) => String(p.product_id ?? p.id ?? ""));
-    const productNames = missing.length ? await getProducts(fetchFn, creds, missing) : {};
-    return { rawOrder: order2, crmRaw: raw2, productNames, demo: false, code, note };
-  }
-  async function buildInvoice(orderId, { skipCheckbox = false, fresh = false } = {}) {
-    const s = await settings();
-    const { rawOrder, crmRaw, productNames, demo, code, note } = await loadOrder(orderId, s, fresh);
-    const crmOrder = normalizeOrder(rawOrder, productNames);
-    if (demo) crmOrder.orderId = "demo";
-    if (!crmOrder.orderId) crmOrder.orderId = String(orderId);
-    if (!demo && crmOrder.shortId) crmOrder.orderId = crmOrder.shortId;
-    else if (!demo && /^\d{1,8}$/.test(orderId)) crmOrder.orderId = String(orderId);
-    const prefs = await db.get(`SELECT * FROM order_prefs WHERE order_id = ?`, [orderId]);
-    const edits = prefs?.edits ? JSON.parse(prefs.edits) : null;
-    const today = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv" }).format(/* @__PURE__ */ new Date());
-    const autoInvoiceDate = s.invoice_date_mode === "order" ? String(crmOrder.date || "").slice(0, 10) || today : today;
-    crmOrder.invoiceDate = autoInvoiceDate;
-    const order2 = applyEdits(crmOrder, edits);
-    const allFops = await db.all(`SELECT * FROM fops WHERE active = 1`);
-    const byId = (id) => allFops.find((f) => String(f.id) === String(id)) || null;
-    const warnings = [];
-    if (note) warnings.push(note);
-    if (!crmOrder.items.length) warnings.push("\u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0431\u043B\u043E\u043A \xAB\u0414\u0430\u043D\u0456 \u0437 CRM\xBB \u0443\u043D\u0438\u0437\u0443 \u0456 \u043D\u0430\u0434\u0456\u0448\u043B\u0456\u0442\u044C \u0441\u043A\u0440\u0456\u043D\u0448\u043E\u0442 \u0441\u0438\u0440\u043E\u0457 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0456.");
-    let receipt = null;
-    let receiptCandidates = [];
-    const cbFops = allFops.filter(hasCheckbox);
-    const receiptRef = prefs?.receipt_ref || crmOrder.receiptHint;
-    if (!skipCheckbox && cbFops.length && (receiptRef || s.checkbox_enabled === "1")) {
-      try {
-        const cacheKey = `${orderId}|${receiptRef}|${order2.total}|${order2.date}|${cbFops.map((f) => f.id).join(",")}`;
-        const hit = receiptCache.get(cacheKey);
-        let r;
-        if (hit && Date.now() - hit.at < 10 * 60 * 1e3) r = hit.r;
-        else {
-          r = receiptRef ? await findReceiptByRef(fetchFn, cbFops, receiptRef) : await findReceiptForOrder(fetchFn, cbFops, order2, { days: Number(s.checkbox_search_days) || 7 });
-          if (r.receipt) receiptCache.set(cacheKey, { at: Date.now(), r });
-        }
-        receipt = r.receipt;
-        receiptCandidates = r.candidates || [];
-        warnings.push(...r.errors);
-        if (!receipt && receiptRef) warnings.push(`\u0427\u0435\u043A \xAB${receiptRef}\xBB \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 \u0436\u043E\u0434\u043D\u043E\u043C\u0443 \u0430\u043A\u0430\u0443\u043D\u0442\u0456 Checkbox.`);
-      } catch (e) {
-        warnings.push(`Checkbox: ${e.message}`);
-      }
-    }
-    const office = crmOrder.office ? await db.get(`SELECT * FROM offices WHERE office_id = ?`, [crmOrder.office]) : null;
-    const officeFop = office?.fop_id ? byId(office.fop_id) : null;
-    if (crmOrder.office && !office) warnings.push(`\u0412\u0456\u0434\u0434\u0456\u043B ${crmOrder.office} \u043D\u0435 \u0434\u043E\u0434\u0430\u043D\u043E \u0432 \u0434\u043E\u0432\u0456\u0434\u043D\u0438\u043A \u0432\u0456\u0434\u0434\u0456\u043B\u0456\u0432.`);
-    let channelFop = null;
-    let ch = null;
-    if (crmOrder.channel) {
-      ch = (await db.all(`SELECT * FROM channels`)).find((x) => x.name.trim().toLowerCase() === crmOrder.channel.toLowerCase());
-      channelFop = ch?.fop_id ? byId(ch.fop_id) : null;
-      if (!ch) warnings.push(`\u0417\u043D\u0430\u0447\u0435\u043D\u043D\u044F \u043F\u043E\u043B\u044F 1 \xAB${crmOrder.channel}\xBB \u043D\u0435 \u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u0435 \u0434\u043E \u0424\u041E\u041F (\u0440\u043E\u0437\u0434\u0456\u043B \xAB\u0412\u0456\u0434\u0434\u0456\u043B\u0438 \u2192 \u0424\u041E\u041F\xBB).`);
-    }
-    let fop = null;
-    let fopSource = "";
-    const manual = prefs?.fop_id ? byId(prefs.fop_id) : null;
-    if (manual) {
-      fop = manual;
-      fopSource = "manual";
-    } else if (receipt) {
-      fop = byId(receipt.fopId);
-      fopSource = "receipt";
-    } else if (channelFop) {
-      fop = channelFop;
-      fopSource = "channel";
-    } else if (officeFop) {
-      fop = officeFop;
-      fopSource = "office";
-    } else if (s.default_fop_id && byId(s.default_fop_id)) {
-      fop = byId(s.default_fop_id);
-      fopSource = "default";
-    }
-    if (channelFop && officeFop && String(channelFop.id) !== String(officeFop.id) && !receipt) {
-      warnings.push(`\u0417\u0430 \u043F\u043E\u043B\u0435\u043C 1 \u2014 ${channelFop.short_name}, \u0430 \u0437\u0430 \u0432\u0456\u0434\u0434\u0456\u043B\u043E\u043C \u2014 ${officeFop.short_name}. \u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0424\u041E\u041F.`);
-    }
-    const autoFop = channelFop || officeFop;
-    if (receipt && autoFop && String(receipt.fopId) !== String(autoFop.id)) {
-      warnings.push(`\u0417\u0430 ${channelFop ? "\u043F\u043E\u043B\u0435\u043C 1" : "\u0432\u0456\u0434\u0434\u0456\u043B\u043E\u043C"} \u043C\u0430\u0432 \u0431\u0438 \u0431\u0443\u0442\u0438 ${autoFop.short_name}, \u0430\u043B\u0435 \u0447\u0435\u043A \u043F\u0440\u043E\u0431\u0438\u0442\u043E \u043D\u0430 ${receipt.fopName}.`);
-    }
-    if (manual && receipt && String(receipt.fopId) !== String(manual.id)) {
-      warnings.push(`\u041E\u0431\u0440\u0430\u043D\u043E \u0432\u0440\u0443\u0447\u043D\u0443 ${manual.short_name}, \u0430 \u0447\u0435\u043A \u043F\u0440\u043E\u0431\u0438\u0442\u043E \u043D\u0430 ${receipt.fopName}.`);
-    }
-    if (!fop) warnings.push("\u0424\u041E\u041F \u043D\u0435 \u0432\u0438\u0437\u043D\u0430\u0447\u0435\u043D\u043E \u0430\u0432\u0442\u043E\u043C\u0430\u0442\u0438\u0447\u043D\u043E \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u0437\u0456 \u0441\u043F\u0438\u0441\u043A\u0443.");
-    else {
-      const missing = [];
-      if (!fop.full_name) missing.push("\u041F\u0406\u0411");
-      if (!fop.ipn) missing.push("\u0406\u041F\u041D");
-      if (missing.length) warnings.push(`\u0423 ${fop.short_name} \u043D\u0435 \u0437\u0430\u043F\u043E\u0432\u043D\u0435\u043D\u043E: ${missing.join(", ")}.`);
-    }
-    const fits = (row) => row && row.seller_text && (!row.fop_id || String(row.fop_id) === String(fop?.id));
-    let sellerText = "";
-    let sellerTextSource = "";
-    if (edits?.sellerText) {
-      sellerText = edits.sellerText;
-      sellerTextSource = "manual";
-    } else if (fits(ch)) {
-      sellerText = ch.seller_text;
-      sellerTextSource = `\u043F\u043E\u043B\u0435 1 \xAB${ch.name}\xBB`;
-    } else if (fits(office)) {
-      sellerText = office.seller_text;
-      sellerTextSource = `\u0432\u0456\u0434\u0434\u0456\u043B ${office.office_id}`;
-    }
-    const tplId = prefs?.template_id || fop?.template_id;
-    let template = tplId ? await db.get(`SELECT * FROM templates WHERE id = ?`, [tplId]) : null;
-    if (!template) template = await db.get(`SELECT * FROM templates ORDER BY id LIMIT 1`);
-    return {
-      order: order2,
-      crmOrder,
-      demo,
-      edited: Boolean(edits),
-      edits,
-      office: office || (crmOrder.office ? { office_id: crmOrder.office, name: "" } : null),
-      fop: docFop(fop),
-      sellerText,
-      sellerTextSource,
-      autoInvoiceDate,
-      fopSource,
-      officeFopId: officeFop?.id || null,
-      receipt,
-      receiptCandidates,
-      receiptRef: prefs?.receipt_ref || "",
-      template: parseTpl(template),
-      templateManual: Boolean(prefs?.template_id),
-      warnings,
-      sellerNote: s.seller_note || "",
-      crmCode: code || "",
-      crmRaw: crmRaw ? JSON.stringify(crmRaw, null, 2).slice(0, 2e4) : ""
-    };
-  }
-  async function addVersion(orderId, inv, reason, who = "") {
-    const dataHash = hash(JSON.stringify([inv.order, inv.fop?.id, inv.template?.id, inv.template?.options]));
-    await db.run(
-      `INSERT INTO versions (order_id, created_at, reason, fop_id, fop_name, template_id, total, data_hash, data, user_name)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        orderId,
-        nowIso(),
-        reason,
-        inv.fop?.id || null,
-        inv.fop?.short_name || "",
-        inv.template?.id || null,
-        inv.order.total,
-        dataHash,
-        JSON.stringify(inv),
-        who
-      ]
-    );
-  }
-  async function trackChanges(orderId, inv, who = "") {
-    const last = await db.get(`SELECT data_hash FROM versions WHERE order_id = ? ORDER BY id DESC LIMIT 1`, [orderId]);
-    const dataHash = hash(JSON.stringify([inv.order, inv.fop?.id, inv.template?.id, inv.template?.options]));
-    if (!last) await addVersion(orderId, inv, "\u041F\u0435\u0440\u0448\u0435 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0442\u044F", who);
-    else if (last.data_hash !== dataHash) await addVersion(orderId, inv, "\u0417\u043C\u0456\u043D\u0438\u043B\u0438\u0441\u044F \u0434\u0430\u043D\u0456 (CRM, \u0424\u041E\u041F \u0430\u0431\u043E \u0448\u0430\u0431\u043B\u043E\u043D)", who);
-  }
-  app.get("/api/invoice/:orderId", async (c) => {
-    const orderId = c.req.param("orderId").trim().replace(/^№/, "");
-    const inv = await buildInvoice(orderId, { fresh: c.req.query("fresh") === "1" });
-    await trackChanges(orderId, inv, userName(c));
-    const n = await db.get(`SELECT COUNT(*) AS n FROM versions WHERE order_id = ?`, [orderId]);
-    return c.json({ ...inv, versionsCount: n?.n || 0 });
-  });
-  app.put("/api/invoice/:orderId/prefs", async (c) => {
-    need(c, "docs.edit");
-    const orderId = c.req.param("orderId");
-    const b = await c.req.json();
-    const cur = await db.get(`SELECT * FROM order_prefs WHERE order_id = ?`, [orderId]) || {};
-    const next = {
-      fop_id: b.fop_id !== void 0 ? b.fop_id || null : cur.fop_id ?? null,
-      template_id: b.template_id !== void 0 ? b.template_id || null : cur.template_id ?? null,
-      receipt_ref: b.receipt_ref !== void 0 ? b.receipt_ref || "" : cur.receipt_ref || "",
-      edits: b.edits !== void 0 ? b.edits ? JSON.stringify(b.edits) : "" : cur.edits || ""
-    };
-    await db.run(
-      `INSERT INTO order_prefs (order_id, fop_id, template_id, receipt_ref, edits, updated_at) VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(order_id) DO UPDATE SET fop_id = excluded.fop_id, template_id = excluded.template_id,
-       receipt_ref = excluded.receipt_ref, edits = excluded.edits, updated_at = excluded.updated_at`,
-      [orderId, next.fop_id, next.template_id, next.receipt_ref, next.edits, nowIso()]
-    );
-    const inv = await buildInvoice(orderId);
-    const reason = b.reason || "\u0417\u043C\u0456\u043D\u0430 \u0432\u0440\u0443\u0447\u043D\u0443";
-    await addVersion(orderId, inv, reason, userName(c));
-    return c.json({ ok: true });
-  });
-  app.post("/api/invoice/:orderId/versions", async (c) => {
-    const orderId = c.req.param("orderId");
-    const b = await c.req.json();
-    if (!b.snapshot?.order) return c.json({ error: "\u041D\u0435\u043C\u0430\u0454 \u0434\u0430\u043D\u0438\u0445 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u043E\u0457" }, 400);
-    await addVersion(orderId, b.snapshot, b.reason || "\u0417\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u043E", userName(c));
-    return c.json({ ok: true });
-  });
-  app.get("/api/invoice/:orderId/versions", async (c) => {
-    const rows = await db.all(
-      `SELECT id, order_id, created_at, reason, fop_name, template_id, total, user_name FROM versions WHERE order_id = ? ORDER BY id DESC`,
-      [c.req.param("orderId")]
-    );
-    return c.json(rows);
-  });
-  app.get("/api/versions/:id", async (c) => {
-    const row = await db.get(`SELECT * FROM versions WHERE id = ?`, [c.req.param("id")]);
-    if (!row) return c.json({ error: "\u0412\u0435\u0440\u0441\u0456\u044E \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E" }, 404);
-    return c.json({ ...row, data: JSON.parse(row.data) });
-  });
-  app.get("/api/history", async (c) => {
-    const q = (c.req.query("q") || "").trim();
-    const fop = (c.req.query("fop") || "").trim();
-    const where = [];
-    const params = [];
-    if (q) {
-      where.push("order_id LIKE ?");
-      params.push(`%${q}%`);
-    }
-    if (fop) {
-      where.push("fop_id = ?");
-      params.push(fop);
-    }
-    const rows = await db.all(
-      `SELECT v.order_id, v.id AS last_id, v.created_at AS last_at, v.fop_name, v.total,
-        (SELECT COUNT(*) FROM versions c WHERE c.order_id = v.order_id) AS versions
-       FROM versions v
-       WHERE v.id IN (SELECT MAX(id) FROM versions GROUP BY order_id) ${where.length ? "AND " + where.map((w) => "v." + w).join(" AND ") : ""}
-       ORDER BY v.id DESC LIMIT 200`,
-      params
-    );
-    return c.json(rows);
-  });
-  const EXPORT_TABLES = ["templates", "fops", "offices", "channels", "inv_fops"];
-  const EXPORT_SETTINGS = [
-    "lpcrm_subdomain",
-    "lpcrm_search_days",
-    "default_fop_id",
-    "checkbox_enabled",
-    "checkbox_search_days",
-    "invoice_date_mode",
-    "rahunok_next_number",
-    "retention_days",
-    "seller_note"
-  ];
-  const SECRET_COLS = /* @__PURE__ */ new Set(["checkbox_password", "checkbox_pin", "checkbox_license", "checkbox_login"]);
-  app.get("/api/admin/export", async (c) => {
-    need(c, "users");
-    const out = { version: 1, exported_at: nowIso(), tables: {}, settings: {} };
-    for (const t of EXPORT_TABLES) {
-      out.tables[t] = (await db.all(`SELECT * FROM ${t}`)).map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !SECRET_COLS.has(k))));
-    }
-    const s = await settings();
-    for (const k of EXPORT_SETTINGS) if (s[k] !== void 0) out.settings[k] = s[k];
-    return c.json(out);
-  });
-  app.get("/api/audit", async (c) => {
-    need(c, "users");
-    const kind = String(c.req.query("kind") || "");
-    const ref = String(c.req.query("ref") || "");
-    const rows = await db.all(
-      `SELECT id, at, user_name, kind, ref_id, action, changes FROM audit_log
-       ${kind ? `WHERE kind = ?${ref ? " AND ref_id = ?" : ""}` : ""} ORDER BY id DESC LIMIT 100`,
-      kind ? ref ? [kind, ref] : [kind] : []
-    );
-    return c.json(rows.map((r) => ({ ...r, changes: JSON.parse(r.changes || "[]") })));
-  });
-  app.post("/api/admin/import", async (c) => {
-    need(c, "users");
-    const b = await c.req.json();
-    if (!b?.tables) throw fail(400, "\u0426\u0435 \u043D\u0435 \u0444\u0430\u0439\u043B \u0435\u043A\u0441\u043F\u043E\u0440\u0442\u0443 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u044C.");
-    const counts = {};
-    const st = [];
-    for (const t of EXPORT_TABLES) {
-      const rows = b.tables[t];
-      if (!Array.isArray(rows)) continue;
-      const cols = new Set((await db.all(`PRAGMA table_info(${t})`)).map((x) => x.name));
-      st.push([`DELETE FROM ${t}`, []]);
-      for (const r0 of rows) {
-        const r = dropUnsafeImages(r0 || {});
-        const keys = Object.keys(r).filter((k) => cols.has(k) && !SECRET_COLS.has(k));
-        if (!keys.length) continue;
-        st.push([`INSERT INTO ${t} (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`, keys.map((k) => r[k])]);
-      }
-      counts[t] = rows.length;
-    }
-    for (const [k, v] of Object.entries(b.settings || {})) {
-      if (!EXPORT_SETTINGS.includes(k)) continue;
-      if (k === "lpcrm_subdomain" && !/^[a-z0-9-]{1,63}$/i.test(String(v).trim())) continue;
-      st.push([`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, String(v)]]);
-    }
-    await db.batch(st);
-    await logAudit(db, { user: c.get("user"), kind: "settings", action: "\u0456\u043C\u043F\u043E\u0440\u0442 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u044C", changes: Object.entries(counts).map(([field, n]) => ({ field, from: "", to: `${n} \u0440\u044F\u0434\u043A\u0456\u0432` })) });
-    return c.json({ ok: true, counts });
-  });
-  const INV_FOP_FIELDS = ["short_name", "full_name", "ipn", "iban", "bank", "address", "phone", "warning_text", "signature", "stamp", "active"];
-  app.post("/api/inv-fops", async (c) => {
-    need(c, "users");
-    const b = await c.req.json();
-    if (!String(b.short_name || "").trim()) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043A\u043E\u0440\u043E\u0442\u043A\u0443 \u043D\u0430\u0437\u0432\u0443 \u0424\u041E\u041F.");
-    checkImages(b, fail);
-    const cols = INV_FOP_FIELDS.filter((k) => b[k] !== void 0);
-    const r = await db.run(`INSERT INTO inv_fops (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`, cols.map((k) => b[k]));
-    await logAudit(db, { user: c.get("user"), kind: "inv_fop", refId: r.lastId, action: "\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E", changes: describeChanges({}, b, changedFields({}, b, INV_FOP_REQUISITES)) });
-    return c.json({ id: r.lastId });
-  });
-  app.put("/api/inv-fops/:id", async (c) => {
-    need(c, "refs.edit");
-    const b = await c.req.json();
-    checkImages(b, fail);
-    const cur = await db.get(`SELECT * FROM inv_fops WHERE id = ?`, [c.req.param("id")]);
-    if (!cur) throw fail(404, "\u0424\u041E\u041F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
-    const req2 = changedFields(cur, b, INV_FOP_REQUISITES);
-    if (req2.length && !can(c.get("user"), "requisites")) throw fail(403, REQUISITES_DENIED);
-    const cols = INV_FOP_FIELDS.filter((k) => b[k] !== void 0);
-    if (cols.length) {
-      await db.run(`UPDATE inv_fops SET ${cols.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, [...cols.map((k) => b[k]), cur.id]);
-    }
-    if (req2.length) await logAudit(db, { user: c.get("user"), kind: "inv_fop", refId: cur.id, action: "\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0440\u0435\u043A\u0432\u0456\u0437\u0438\u0442\u0438", changes: describeChanges(cur, b, req2) });
-    return c.json({ ok: true });
-  });
-  app.delete("/api/inv-fops/:id", async (c) => {
-    need(c, "users");
-    const f = await db.get(`SELECT id, odb_id FROM inv_fops WHERE id = ?`, [c.req.param("id")]);
-    if (!f) throw fail(404, "\u0424\u041E\u041F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
-    if (f.odb_id) throw fail(400, "\u0426\u0435\u0439 \u0424\u041E\u041F \u0434\u043E\u0434\u0430\u043D\u043E \u0437 Opendatabot \u2014 \u0432\u0438\u043C\u043A\u043D\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 \u0440\u0430\u0445\u0443\u043D\u043A\u0456\u0432\xBB.");
-    await db.run(`DELETE FROM inv_fops WHERE id = ?`, [f.id]);
-    return c.json({ ok: true });
-  });
-  app.get("/api/rahunok-order/:q", async (c) => {
-    need(c, "docs.edit");
-    const q = c.req.param("q").trim().replace(/^№\s*/, "");
-    const s = await settings();
-    const { rawOrder, productNames, demo, code, note } = await loadOrder(q, s);
-    const o = normalizeOrder(rawOrder, productNames);
-    const number = demo ? "demo" : o.shortId || (/^\d{1,8}$/.test(q) ? q : o.orderId);
-    return c.json({
-      number,
-      crmCode: code || "",
-      note: note || "",
-      buyer: o.buyer,
-      items: o.items.map((i) => ({ name: i.article ? `${i.name} [${i.article}]` : i.name, qty: i.qty, price: i.price }))
-    });
-  });
-  const round24 = (n) => Math.round(n * 100) / 100;
-  const toNum = (v) => {
-    const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", "."));
-    return Number.isFinite(n) ? n : 0;
-  };
-  async function buildRahunok(b, number) {
-    const fop = await db.get(`SELECT * FROM inv_fops WHERE id = ?`, [b.fop_id]);
-    if (!fop) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u0424\u041E\u041F, \u0432\u0456\u0434 \u044F\u043A\u043E\u0433\u043E \u0432\u0438\u0441\u0442\u0430\u0432\u043B\u044F\u0454\u0442\u044C\u0441\u044F \u0440\u0430\u0445\u0443\u043D\u043E\u043A.");
-    const clientName = String(b.client?.name || "").trim();
-    if (!clientName) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043D\u0430\u0437\u0432\u0443 \u043A\u043B\u0456\u0454\u043D\u0442\u0430.");
-    const items = (b.items || []).map((i) => ({ name: String(i.name || "").trim(), qty: toNum(i.qty), price: round24(toNum(i.price)) })).filter((i) => i.name);
-    if (!items.length) throw fail(400, "\u0414\u043E\u0434\u0430\u0439\u0442\u0435 \u0445\u043E\u0447\u0430 \u0431 \u043E\u0434\u0438\u043D \u0442\u043E\u0432\u0430\u0440.");
-    for (const i of items) {
-      if (!(i.qty > 0)) throw fail(400, `\u041A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C \u0434\u043B\u044F \xAB${i.name}\xBB \u043C\u0430\u0454 \u0431\u0443\u0442\u0438 \u0431\u0456\u043B\u044C\u0448\u043E\u044E \u0437\u0430 0.`);
-      i.unit = "\u0448\u0442";
-      i.sum = round24(i.qty * i.price);
-    }
-    const today = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv" }).format(/* @__PURE__ */ new Date());
-    const { signature, stamp, ...fopRest } = fop;
-    return {
-      number: String(number),
-      date: /^\d{4}-\d{2}-\d{2}$/.test(String(b.date || "")) ? b.date : today,
-      source: b.source === "crm" ? "crm" : "manual",
-      orderRef: String(b.order_ref || ""),
-      fop: { ...fopRest, signature, stamp, warning_text: fop.warning_text || DEFAULT_WARNING },
-      client: { name: clientName, edrpou: String(b.client?.edrpou || "").trim(), contract: String(b.client?.contract || "").trim() },
-      items,
-      total: round24(items.reduce((t, i) => t + i.sum, 0))
-    };
-  }
-  app.get("/api/rahunky", async (c) => {
-    const q = (c.req.query("q") || "").trim();
-    const rows = await db.all(
-      `SELECT id, number, source, order_ref, fop_name, client_name, total, created_at, created_by, updated_at, updated_by,
-         (SELECT p.status FROM pay_links p WHERE p.id = json_extract(invoices.data, '$.pay.link_id')) AS pay_status FROM invoices
-       ${q ? "WHERE number LIKE ? OR client_name LIKE ? OR order_ref LIKE ?" : ""} ORDER BY id DESC LIMIT 300`,
-      q ? [`%${q}%`, `%${q}%`, `%${q}%`] : []
-    );
-    const s = await settings();
-    return c.json({ rows, nextNumber: peekRahunokNumber(s), retentionDays: Number(s.retention_days) || 7 });
-  });
-  app.get("/api/rahunky/:id", async (c) => {
-    const row = await db.get(`SELECT * FROM invoices WHERE id = ?`, [c.req.param("id")]);
-    if (!row) throw fail(404, "\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (\u043C\u043E\u0436\u043B\u0438\u0432\u043E, \u043C\u0438\u043D\u0443\u0432 \u0441\u0442\u0440\u043E\u043A \u0437\u0431\u0435\u0440\u0456\u0433\u0430\u043D\u043D\u044F).");
-    return c.json({ ...row, data: JSON.parse(row.data) });
-  });
-  app.post("/api/rahunky", async (c) => {
-    need(c, "docs.edit");
-    const b = await c.req.json();
-    let number = "";
-    if (b.source === "crm") {
-      number = String(b.number || "").trim();
-      if (!number) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u043D\u043E\u043C\u0435\u0440\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F CRM.");
-    }
-    const data = await buildRahunok(b, number);
-    if (b.source !== "crm") data.number = await takeRahunokNumber(db);
-    if (b.qr) data.pay = await odbApi.linkForRahunok(c, data);
-    const r = await db.run(
-      `INSERT INTO invoices (number, source, order_ref, fop_id, fop_name, client_name, total, data, created_at, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [data.number, data.source, data.orderRef, data.fop.id, data.fop.short_name, data.client.name, data.total, JSON.stringify(data), nowIso(), userName(c)]
-    );
-    return c.json({ id: r.lastId, data });
-  });
-  app.put("/api/rahunky/:id", async (c) => {
-    need(c, "docs.edit");
-    const row = await db.get(`SELECT * FROM invoices WHERE id = ?`, [c.req.param("id")]);
-    if (!row) throw fail(404, "\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
-    const b = await c.req.json();
-    const prev = JSON.parse(row.data);
-    const data = await buildRahunok({ ...b, source: prev.source, order_ref: prev.orderRef }, row.number);
-    if (b.qr) data.pay = await odbApi.linkForRahunok(c, data);
-    await db.run(
-      `UPDATE invoices SET fop_id = ?, fop_name = ?, client_name = ?, total = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
-      [data.fop.id, data.fop.short_name, data.client.name, data.total, JSON.stringify(data), nowIso(), userName(c), row.id]
-    );
-    return c.json({ id: row.id, data });
-  });
-  app.delete("/api/rahunky/:id", async (c) => {
-    need(c, "docs.edit");
-    await db.run(`DELETE FROM invoices WHERE id = ?`, [c.req.param("id")]);
-    return c.json({ ok: true });
-  });
-  mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso });
-  const tgApi = mountTg(app, { db, fetchFn, settings, need, fail });
-  odbApi = mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, userName, base: odbBase, notify: tgApi.notify });
+  const services = {};
+  const ctx = { db, fetchFn, services, onCleanup, runCleanup };
+  mountAuth(app, ctx);
+  mountRefs(app, ctx);
+  services.nakladni = mountNakladni(app, ctx);
+  mountAdmin(app, ctx);
+  mountRahunky(app, ctx);
+  mountAnalytics(app, ctx);
+  services.notify = mountTg(app, ctx);
+  services.payments = mountOdb(app, { ...ctx, base: odbBase, notify: (...a) => services.notify.notify(...a) });
   return app;
 }
 
-// src/db-d1.js
+// src/core/db-d1.js
 function d1Db(D1) {
   const bind = (sql, params) => {
     const st = D1.prepare(sql);
