@@ -1,8 +1,8 @@
 // Opendatabot: рахунки, посилання на оплату, дублі, QR у Word-рахунку, надходження, повідомлення з підписом, статуси.
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { openDb } from '../src/db-node.js';
-import { migrate } from '../src/schema.js';
+import { openDb } from '../src/core/db-node.js';
+import { migrate } from '../src/core/schema.js';
 import { createApp } from '../src/app.js';
 
 const db = openDb(':memory:');

@@ -5,11 +5,13 @@
 //  - завантаження йде кроками (кожне звернення — до ~8 запитів у LP-CRM), браузер повторює кроки сам;
 //  - підсумки рахує база (GROUP BY), щоб воркер не витрачав процесорний час;
 //  - мінімум індексів, щоб не перевищити 100 тис. записів у базу на добу.
-import { call, asList, findOrders } from './lpcrm.js';
-import { can, crmLogins } from './auth.js';
+import { call, asList, findOrders } from '../../integrations/lpcrm.js';
+import { can, crmLogins } from '../../core/auth.js';
+import { fail, need, nowIso, num, round2, kyivDay, loadSettings } from '../../core/common.js';
+
+export { kyivDay };
 
 // ---------- дати (дні у форматі YYYY-MM-DD, за київським часом) ----------
-export const kyivDay = (d = new Date()) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv' }).format(d);
 const toUtc = (day) => Date.UTC(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10));
 const fromUtc = (ms) => new Date(ms).toISOString().slice(0, 10);
 export const addDays = (day, n) => fromUtc(toUtc(day) + n * 86400000);
@@ -25,11 +27,6 @@ export function addMonths(day, n) {
 }
 const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
 
-const num = (v) => {
-  const n = parseFloat(String(v ?? '').replace(/\s/g, '').replace(',', '.'));
-  return Number.isFinite(n) ? n : 0;
-};
-const round2 = (n) => Math.round(n * 100) / 100;
 const low = (v) => String(v ?? '').trim().toLowerCase();
 
 export const AN_DEFAULTS = {
@@ -207,7 +204,8 @@ function flattenCategories(node, parent = null, out = [], depth = 0) {
 }
 
 // =====================================================================
-export function mountAnalytics(app, { db, fetchFn, settings, need, fail, nowIso }) {
+export function mountAnalytics(app, { db, fetchFn }) {
+  const settings = () => loadSettings(db);
   const getSt = async () => {
     const r = await db.get(`SELECT value FROM settings WHERE key = 'an_settings'`);
     let v = {};

@@ -1,9 +1,9 @@
 // Права доступу і рахунки.
 import assert from 'node:assert/strict';
-import { openDb } from '../src/db-node.js';
-import { migrate } from '../src/schema.js';
+import { openDb } from '../src/core/db-node.js';
+import { migrate } from '../src/core/schema.js';
 import { createApp } from '../src/app.js';
-import { resetOwnerPassword } from '../src/auth.js';
+import { resetOwnerPassword } from '../src/core/auth.js';
 
 const db = openDb(':memory:');
 await migrate(db);

@@ -1,14 +1,11 @@
 // Opendatabot IBAN: рахунки (ФОП/ТОВ/ПП), посилання на оплату з QR, надходження з усіх «Автоклієнтів».
 // Документація: https://iban.opendatabot.ua/api-docs
-import { takeRahunokNumber, peekRahunokNumber } from './counters.js';
+import { takeRahunokNumber, peekRahunokNumber } from '../../core/counters.js';
+import { can } from '../../core/auth.js';
+import { fail, need, nowIso, userName, round2, num, loadSettings, putSetting as putSettingDb } from '../../core/common.js';
 
 export const ODB_BASE = 'https://iban.opendatabot.ua';
 
-const round2 = (n) => Math.round(n * 100) / 100;
-const num = (v) => {
-  const n = parseFloat(String(v ?? '').replace(/\s/g, '').replace(',', '.'));
-  return Number.isFinite(n) ? n : 0;
-};
 // 10 цифр — РНОКПП (ФОП), 8 — ЄДРПОУ (ТОВ, ПП та інші юрособи)
 export const kindOf = (code) => (/^\d{10}$/.test(String(code || '').trim()) ? 'fop' : 'company');
 
@@ -92,10 +89,9 @@ const BANKS = { 305299: 'Приват', 322001: 'моно', 300465: 'Ощад', 
 export const bankOf = (iban) => BANKS[String(iban || '').replace(/\s/g, '').slice(4, 10)] || '';
 const ACC = `COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, ''), a.iban)`;
 
-export function mountOdb(app, { db, fetchFn, settings, need, fail, nowIso, can, userName, base = ODB_BASE, notify = async () => 0 }) {
-  const putSetting = (key, value) => db.run(
-    `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, String(value)],
-  );
+export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 }) {
+  const settings = () => loadSettings(db);
+  const putSetting = (key, value) => putSettingDb(db, key, value);
   async function creds() {
     const s = await settings();
     if (!s.odb_key || !s.odb_name) throw fail(400, 'Opendatabot не підключено: вкажіть ключ і назву клієнта в «Налаштуваннях рахунків».');

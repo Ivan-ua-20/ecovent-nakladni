@@ -5,10 +5,10 @@ import { mkdirSync, existsSync, readFileSync, statSync, unlinkSync } from 'node:
 import { dirname, join, normalize, sep, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { exec } from 'node:child_process';
-import { openDb } from './db-node.js';
-import { migrate } from './schema.js';
+import { openDb } from './core/db-node.js';
+import { migrate } from './core/schema.js';
 import { createApp } from './app.js';
-import { resetOwnerPassword } from './auth.js';
+import { resetOwnerPassword } from './core/auth.js';
 
 process.removeAllListeners('warning');
 
