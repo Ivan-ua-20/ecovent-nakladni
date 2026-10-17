@@ -3978,7 +3978,9 @@ function mountAnalytics(app, { db, fetchFn, shared: shared2 = {} }) {
       keepFrom,
       firstRun,
       today,
-      refetchFrom: mode === "today" ? today : mode === "daily" ? addDays(today, -7) : "9999-12-31",
+      // Повні дані (сума, товари, менеджер) наново — лише для сьогоднішніх замовлень; решта — лише нові
+      // і ті, у яких змінився статус (щоденне оновлення більше не перечитує весь тиждень).
+      refetchFrom: mode === "today" || mode === "daily" ? today : "9999-12-31",
       phase: "units",
       units,
       unitsTotal: units.length,
@@ -4038,16 +4040,21 @@ function mountAnalytics(app, { db, fetchFn, shared: shared2 = {} }) {
               }
             }
             const rest = codes.filter((x) => !known.has(x));
+            const changedStatus = /* @__PURE__ */ new Set();
             if (rest.length) {
               const rows = await db.all(`SELECT id, code, day, status FROM an_orders WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(rest)]);
               for (const r of rows) {
                 known.set(r.code, r);
-                if (r.status !== u.s) upd.push([`UPDATE an_orders SET status = ? WHERE id = ?`, [u.s, r.id]]);
+                if (r.status !== u.s) {
+                  upd.push([`UPDATE an_orders SET status = ? WHERE id = ?`, [u.s, r.id]]);
+                  changedStatus.add(r.code);
+                }
               }
             }
             state.stats.changed += upd.length;
             await db.batch(upd);
-            state.pending.push(...codes.filter((x) => !known.has(x) || known.get(x).day >= state.refetchFrom));
+            const queued = new Set(state.pending);
+            state.pending.push(...codes.filter((x) => !queued.has(x) && (!known.has(x) || changedStatus.has(x) || known.get(x).day >= state.refetchFrom)));
             state.units.shift();
             continue;
           }
