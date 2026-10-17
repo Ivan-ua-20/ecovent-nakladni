@@ -1,7 +1,7 @@
 // Аналітика: завантаження з імітованої LP-CRM, зміна статусів, підсумки, фільтри, таргети.
 import assert from 'node:assert/strict';
 import { openDb } from '../src/core/db-node.js';
-import { migrate } from '../src/core/schema.js';
+import { migrate } from '../src/migrate.js';
 import { createApp } from '../src/app.js';
 import { kyivDay, addDays, monthStart, daysInMonth, daysBetween } from '../src/modules/analytics/index.js';
 

@@ -1,6 +1,6 @@
 // Cloudflare Pages Functions: обробляє всі запити /api/*. Статичні файли віддає Pages з папки public/.
 import { createApp } from './app.js';
-import { migrate } from './core/schema.js';
+import { migrate } from './migrate.js';
 import { d1Db } from './core/db-d1.js';
 import { setIterations, resetOwnerPassword } from './core/auth.js';
 

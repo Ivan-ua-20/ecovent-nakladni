@@ -1,7 +1,7 @@
 // Кількість звернень до бази на один запит (D1 безкоштовно: до 50). batch рахується як одне.
 import assert from 'node:assert/strict';
 import { openDb } from '../src/core/db-node.js';
-import { migrate } from '../src/core/schema.js';
+import { migrate } from '../src/migrate.js';
 import { createApp } from '../src/app.js';
 import { kyivDay, addDays, monthStart } from '../src/modules/analytics/index.js';
 
