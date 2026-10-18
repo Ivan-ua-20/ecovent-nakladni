@@ -256,9 +256,29 @@ export function createAnalyticsUI(ctx) {
   }
 
   // ---------- фільтри ----------
+  // Порядок значень у фільтрах — від більшого обороту до меншого (за поточним періодом).
+  // Поки в рядку щось вибрано, його порядок не змінюється — щоб кнопки не «стрибали» під курсором.
+  const filterRank = {};
+  function byTurnover(key, list, id, rows) {
+    if (!ui[key].length || !filterRank[key]) {
+      const rev = new Map((rows || []).map((r) => [String(r[key === 'managers' ? 'login' : 'id']), r.rev || 0]));
+      filterRank[key] = new Map([...list].map((x, i) => [String(x[id]), { rev: rev.get(String(x[id])) || 0, i }]));
+    }
+    const rank = filterRank[key];
+    const at = (x) => rank.get(String(x[id])) || { rev: -1, i: Infinity };
+    return [...list].sort((a, b) => at(b).rev - at(a).rev || at(a).i - at(b).i);
+  }
+
   function renderFilters(d) {
     if (d.own) ui.managers = [];
-    const o = d.options;
+    const o = {
+      ...d.options,
+      depts: byTurnover('depts', d.options.depts, 'id', d.byDept),
+      sources: byTurnover('sources', d.options.sources, 'id', d.bySource),
+      managers: byTurnover('managers', d.options.managers, 'login', d.byManager),
+      brands: byTurnover('brands', d.options.brands, 'id', d.byBrand),
+      cats: byTurnover('cats', d.options.cats, 'id', d.byCategory),
+    };
     const deptSel = ui.depts;
     const srcOpts = o.sources.filter((s) => !deptSel.length || deptSel.includes(s.dept_id));
     const mgrOpts = o.managers.filter((m) => !deptSel.length || deptSel.includes(m.dept_id) || ui.managers.includes(m.login));
