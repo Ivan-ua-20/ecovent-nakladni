@@ -51,7 +51,12 @@ export async function txRow(item) {
   if (type === 'debit' || (!type && amount <= 0) || amount <= 0) return null;
   const date = normDate(t.date);
   const id = await sha1([String(t.date ?? ''), amount.toFixed(2), t.iban || '', t.counterpartyAcc || t.counterpartyEdrpou || '', t.purpose || ''].join('|'));
-  const possible = (Array.isArray(item.possibleInvoices) ? item.possibleInvoices : []).map((p) => String(p?.id ?? p ?? '')).filter(Boolean);
+  // Можливі рахунки: за документацією Opendatabot — { matches, transaction, invoice: { id } };
+  // підтримуємо й простий { id } або рядок з id.
+  const possible = (Array.isArray(item.possibleInvoices) ? item.possibleInvoices : [])
+    .map((p) => (typeof p === 'object' && p !== null ? p.invoice?.id ?? p.id : p))
+    .filter((v) => v != null && typeof v !== 'object' && String(v) !== '')
+    .map(String);
   return {
     id,
     date,
