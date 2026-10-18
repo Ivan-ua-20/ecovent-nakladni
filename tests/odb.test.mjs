@@ -185,7 +185,7 @@ assert.equal((await req('GET', `/api/odb/links/${l2.id}`)).link.status, 'paid', 
 // формат з документації Opendatabot: possibleInvoices = [{ matches, transaction, invoice: { id } }]
 const lDoc = (await req('POST', '/api/odb/links', { account_id: 'a3', amount: 777, order_ref: 'DOC-1' })).link;
 const invDoc = invoices.get(lDoc.odb_id);
-await hook(tx(903, { iban: ACCS[2].iban, amount: 776.5, possible: [{ matches: { purpose: false, counterpartyCode: false, amount: true }, transaction: { amount: 776.5 }, invoice: { id: invDoc.id, amount: 777 } }] }));
+await hook(tx(904, { iban: ACCS[2].iban, amount: 776.5, possible: [{ matches: { purpose: false, counterpartyCode: false, amount: true }, transaction: { amount: 776.5 }, invoice: { id: invDoc.id, amount: 777 } }] }));
 assert.equal((await req('GET', `/api/odb/links/${lDoc.id}`)).link.status, 'check', 'можливий рахунок у форматі документації → «перевірити»');
 assert.ok(!(await db.get(`SELECT id FROM odb_tx WHERE possible LIKE '%object%'`)), 'у можливих рахунках немає «[object Object]»');
 
@@ -197,7 +197,7 @@ assert.equal((await req('GET', `/api/odb/links/${l3.id}`)).link.status, 'manual'
 const unpaid = (await req('GET', '/api/odb/links?filter=unpaid')).links;
 assert.ok(unpaid.every((x) => ['pending', 'partial', 'check'].includes(x.status)) && unpaid.length >= 1);
 const all = await req('GET', '/api/odb/payments');
-assert.equal(all.count, credits + 3);
+assert.equal(all.count, credits + 4); // + платіж «перевірити» у форматі документації
 const ours = await req('GET', '/api/odb/payments?only=ours');
 assert.equal(ours.count, 3);
 const per = await req('GET', '/api/odb/payments?from=2026-10-16&to=2026-10-16');
