@@ -182,6 +182,13 @@ assert.equal(chk.rows.length, 1);
 await req('PUT', `/api/odb/payments/${chk.rows[0].id}`, { link_id: l2.id });
 assert.equal((await req('GET', `/api/odb/links/${l2.id}`)).link.status, 'paid', 'прив’язано вручну, ±1 грн — оплачено');
 
+// формат з документації Opendatabot: possibleInvoices = [{ matches, transaction, invoice: { id } }]
+const lDoc = (await req('POST', '/api/odb/links', { account_id: 'a3', amount: 777, order_ref: 'DOC-1' })).link;
+const invDoc = invoices.get(lDoc.odb_id);
+await hook(tx(903, { iban: ACCS[2].iban, amount: 776.5, possible: [{ matches: { purpose: false, counterpartyCode: false, amount: true }, transaction: { amount: 776.5 }, invoice: { id: invDoc.id, amount: 777 } }] }));
+assert.equal((await req('GET', `/api/odb/links/${lDoc.id}`)).link.status, 'check', 'можливий рахунок у форматі документації → «перевірити»');
+assert.ok(!(await db.get(`SELECT id FROM odb_tx WHERE possible LIKE '%object%'`)), 'у можливих рахунках немає «[object Object]»');
+
 // Opendatabot сам відмітив оплату (без платежу в стрічці)
 await req('POST', `/api/odb/links/${l3.id}/paid`);
 assert.equal((await req('GET', `/api/odb/links/${l3.id}`)).link.status, 'manual');
