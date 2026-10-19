@@ -24,11 +24,20 @@ jobs:
       - run: npm ci
       - name: Тести
         run: |
-          set -e
+          # Помилка тесту — ще й анотацією (видно у підсумку запуску без завантаження журналу).
+          fail=0
           for t in tests/*.test.mjs; do
             echo "== $t"
-            node --no-warnings "$t"
+            if ! node --no-warnings "$t" > out.txt 2>&1; then
+              fail=1
+              cat out.txt
+              msg=$(grep -v '^\s*at ' out.txt | tail -n 25 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+              echo "::error title=$t::$msg"
+            else
+              cat out.txt
+            fi
           done
+          exit $fail
       - name: Збірка
         run: npm run build
       - name: Закомітити зібраний файл (pull request)
