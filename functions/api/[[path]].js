@@ -3199,6 +3199,7 @@ function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {} }) {
 function mountAdmin(app, { db }) {
   const settings = () => loadSettings(db);
   const EXPORT_TABLES = ["templates", "fops", "offices", "channels", "inv_fops"];
+  const HISTORY_TABLES = ["order_prefs", "versions"];
   const EXPORT_SETTINGS = [
     "lpcrm_subdomain",
     "lpcrm_search_days",
@@ -3214,7 +3215,7 @@ function mountAdmin(app, { db }) {
   app.get("/api/admin/export", async (c) => {
     need(c, "users");
     const out = { version: 1, exported_at: nowIso(), tables: {}, settings: {} };
-    for (const t of EXPORT_TABLES) {
+    for (const t of [...EXPORT_TABLES, ...HISTORY_TABLES]) {
       out.tables[t] = (await db.all(`SELECT * FROM ${t}`)).map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !SECRET_COLS.has(k))));
     }
     const s = await settings();
