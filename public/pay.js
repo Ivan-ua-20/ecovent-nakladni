@@ -41,7 +41,7 @@ export function createPayUI(ctx) {
   let timer = null;
   const poll = (fn) => {
     clearInterval(timer);
-    timer = setInterval(() => { if (!document.hidden && document.body.contains(fn.anchor())) fn.run(); else if (!document.body.contains(fn.anchor())) clearInterval(timer); }, 120000);
+    timer = setInterval(() => { if (!document.hidden && document.body.contains(fn.anchor())) fn.run(); else if (!document.body.contains(fn.anchor())) clearInterval(timer); }, 300000); // раз на 5 хв; оплати миттєво приносить вебхук
   };
 
   // =====================================================================

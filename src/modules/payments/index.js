@@ -170,8 +170,8 @@ export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () 
       // назва з Opendatabot («Отримувач») замінює автоматичну; назви, задані вручну (✎), не чіпаємо
       st.push([`UPDATE odb_accounts SET name = '' WHERE name_manual = 0 AND alias != '' AND id NOT LIKE 'iban:%'`, []]);
       await db.batch(st);
+      await addSeenAccounts(); // повна перевірка — лише на «Оновити список» (рідко)
     }
-    await addSeenAccounts();
     await fillNames();
     // ФОП рахунків з назвою за замовчуванням («ФОП <код>») отримує назву рахунку
     await db.run(`UPDATE inv_fops SET short_name = (SELECT COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, '')) FROM odb_accounts a WHERE a.id = inv_fops.odb_id)
@@ -321,8 +321,8 @@ export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () 
     if (!link) throw fail(404, 'Посилання не знайдено.');
     const payments = await db.all(`SELECT id, date, amount, currency, purpose, payer_name, payer_code, manual FROM odb_tx WHERE link_id = ? ORDER BY date`, [link.id]);
     const possible = await db.all(
-      `SELECT t.id, t.date, t.amount, t.purpose, t.payer_name FROM odb_tx t, json_each(t.possible) j
-       WHERE t.link_id IS NULL AND j.value = ? ORDER BY t.date DESC LIMIT 10`, [link.odb_id],
+      `SELECT t.id, t.date, t.amount, t.purpose, t.payer_name FROM odb_tx_possible p JOIN odb_tx t ON t.id = p.tx_id
+       WHERE p.odb_id = ? AND t.link_id IS NULL ORDER BY t.date DESC LIMIT 10`, [link.odb_id],
     );
     return c.json({ link, payments, possible });
   });
@@ -355,43 +355,92 @@ export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () 
   });
 
   // ---------------------------------------------------------------- надходження
+  // Нові або змінені платежі → база. Уже відомі й незмінені не перезаписуються (менше записів у D1).
+  // Повертає changedIds — для перерахунку лише тих посилань, яких ці платежі стосуються.
   async function saveTx(items) {
     const rows = (await Promise.all(items.map(txRow))).filter(Boolean);
-    if (!rows.length) return { rows, fresh: 0, freshRows: [] };
-    const known = new Set((await db.all(`SELECT id FROM odb_tx WHERE id IN (SELECT value FROM json_each(?))`, [JSON.stringify(rows.map((r) => r.id))])).map((r) => r.id));
-    const now = nowIso();
-    await db.batch(rows.map((r) => [
-      `INSERT INTO odb_tx (id, date, amount, currency, purpose, iban, payer_name, payer_code, payer_acc, invoice_id, possible, config_id, our_code, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET invoice_id = COALESCE(odb_tx.invoice_id, excluded.invoice_id), possible = excluded.possible, our_code = excluded.our_code`,
-      [r.id, r.date, r.amount, r.currency, r.purpose, r.iban, r.payer_name, r.payer_code, r.payer_acc, r.invoice_id, r.possible, r.config_id, r.our_code, now],
-    ]));
-    await addSeenAccounts();
+    if (!rows.length) return { rows, fresh: 0, freshRows: [], changedIds: [] };
+    const known = new Map((await db.all(
+      `SELECT id, invoice_id, possible, our_code FROM odb_tx WHERE id IN (SELECT value FROM json_each(?))`, [JSON.stringify(rows.map((r) => r.id))],
+    )).map((r) => [r.id, r]));
+    const changed = rows.filter((r) => {
+      const k = known.get(r.id);
+      return !k || (r.invoice_id && !k.invoice_id) || r.possible !== k.possible || (r.our_code && r.our_code !== k.our_code);
+    });
     const freshRows = rows.filter((r) => !known.has(r.id));
-    return { rows, fresh: freshRows.length, freshRows };
+    if (!changed.length) return { rows, fresh: 0, freshRows, changedIds: [] };
+    const now = nowIso();
+    const st = [];
+    for (const r of changed) {
+      st.push([
+        `INSERT INTO odb_tx (id, date, amount, currency, purpose, iban, payer_name, payer_code, payer_acc, invoice_id, possible, config_id, our_code, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET invoice_id = COALESCE(odb_tx.invoice_id, excluded.invoice_id), possible = excluded.possible, our_code = excluded.our_code`,
+        [r.id, r.date, r.amount, r.currency, r.purpose, r.iban, r.payer_name, r.payer_code, r.payer_acc, r.invoice_id, r.possible, r.config_id, r.our_code, now],
+      ]);
+      if (known.has(r.id)) st.push([`DELETE FROM odb_tx_possible WHERE tx_id = ?`, [r.id]]);
+      for (const odbId of JSON.parse(r.possible)) st.push([`INSERT OR IGNORE INTO odb_tx_possible (tx_id, odb_id) VALUES (?, ?)`, [r.id, odbId]]);
+    }
+    await db.batch(st);
+    await addSeenIbans(changed);
+    return { rows, fresh: freshRows.length, freshRows, changedIds: changed.map((r) => r.id) };
   }
 
-  // Прив'язка платежів до наших посилань і перерахунок статусів. Повертає посилання, що щойно стали оплаченими.
-  async function relink() {
-    const before = await db.all(`SELECT id, status FROM pay_links WHERE status NOT IN ('closed', 'manual')`);
+  // Рахунки «лише платежі» — тільки для IBAN з нових платежів (без перегляду всієї історії).
+  async function addSeenIbans(rows) {
+    const by = new Map();
+    for (const r of rows) {
+      if (!r.iban) continue;
+      const cur = by.get(r.iban) || '';
+      by.set(r.iban, r.our_code > cur ? r.our_code : cur);
+    }
+    if (!by.size) return;
+    const st = [];
+    for (const [iban, code] of by) {
+      const kind = String(code).length === 8 ? 'company' : 'fop';
+      if (code) st.push([`UPDATE odb_accounts SET code = ?, kind = ? WHERE iban = ? AND code = ''`, [code, kind, iban]]);
+      st.push([`INSERT INTO odb_accounts (id, iban, code, alias, kind, enabled, sort, seen)
+        SELECT ?, ?, ?, '', ?, 0, 1000, 1 WHERE NOT EXISTS (SELECT 1 FROM odb_accounts WHERE iban = ?)`, [`iban:${iban}`, iban, code, kind, iban]]);
+    }
+    await db.batch(st);
+  }
+
+  // Перерахунок лише посилань, яких стосуються ці платежі (txIds) або які передано явно (linkIds).
+  // Повертає посилання, що щойно стали оплаченими. Нічого не передано — нічого не читаємо.
+  async function relink({ txIds = [], linkIds = [] } = {}) {
+    if (!txIds.length && !linkIds.length) return [];
+    const tx = JSON.stringify(txIds);
+    if (txIds.length) {
+      await db.run(`UPDATE odb_tx SET link_id = (SELECT p.id FROM pay_links p WHERE p.odb_id = odb_tx.invoice_id)
+        WHERE id IN (SELECT value FROM json_each(?)) AND +link_id IS NULL AND manual = 0 AND invoice_id IS NOT NULL
+          AND EXISTS (SELECT 1 FROM pay_links p WHERE p.odb_id = odb_tx.invoice_id)`, [tx]);
+    }
+    const targets = txIds.length ? await db.all(
+      `SELECT l.id, l.status FROM pay_links l WHERE l.status NOT IN ('closed', 'manual') AND (
+         l.id IN (SELECT value FROM json_each(?))
+         OR l.id IN (SELECT link_id FROM odb_tx WHERE id IN (SELECT value FROM json_each(?)) AND link_id IS NOT NULL)
+         OR l.odb_id IN (SELECT invoice_id FROM odb_tx WHERE id IN (SELECT value FROM json_each(?)) AND invoice_id IS NOT NULL)
+         OR l.odb_id IN (SELECT odb_id FROM odb_tx_possible WHERE tx_id IN (SELECT value FROM json_each(?))))`,
+      [JSON.stringify(linkIds), tx, tx, tx],
+    ) : await db.all(`SELECT id, status FROM pay_links WHERE status NOT IN ('closed', 'manual') AND id IN (SELECT value FROM json_each(?))`, [JSON.stringify(linkIds)]);
+    if (!targets.length) return [];
+    const ids = JSON.stringify(targets.map((t) => t.id));
     await db.batch([
-      [`UPDATE odb_tx SET link_id = (SELECT p.id FROM pay_links p WHERE p.odb_id = odb_tx.invoice_id)
-        WHERE link_id IS NULL AND manual = 0 AND invoice_id IS NOT NULL AND EXISTS (SELECT 1 FROM pay_links p WHERE p.odb_id = odb_tx.invoice_id)`, []],
       [`UPDATE pay_links SET
           paid_amount = (SELECT COALESCE(SUM(t.amount), 0) FROM odb_tx t WHERE t.link_id = pay_links.id),
           paid_at = COALESCE((SELECT MAX(t.date) FROM odb_tx t WHERE t.link_id = pay_links.id), CASE WHEN odb_paid = 1 THEN paid_at END)
-        WHERE status NOT IN ('closed', 'manual')`, []],
+        WHERE id IN (SELECT value FROM json_each(?))`, [ids]],
       [`UPDATE pay_links SET status = CASE
           WHEN paid_amount > amount + 1 THEN 'over'
           WHEN paid_amount >= amount - 1 AND paid_amount > 0 THEN 'paid'
           WHEN paid_amount > 0 THEN 'partial'
           WHEN odb_paid = 1 THEN 'paid'
-          WHEN EXISTS (SELECT 1 FROM odb_tx t, json_each(t.possible) j WHERE t.link_id IS NULL AND j.value = pay_links.odb_id) THEN 'check'
+          WHEN EXISTS (SELECT 1 FROM odb_tx_possible p JOIN odb_tx t ON t.id = p.tx_id WHERE p.odb_id = pay_links.odb_id AND t.link_id IS NULL) THEN 'check'
           ELSE 'pending' END
-        WHERE status NOT IN ('closed', 'manual')`, []],
+        WHERE id IN (SELECT value FROM json_each(?))`, [ids]],
     ]);
-    const after = new Map((await db.all(`SELECT id, status FROM pay_links WHERE status IN ('paid', 'over', 'partial')`)).map((r) => [r.id, r.status]));
-    return before.filter((r) => after.has(r.id) && after.get(r.id) !== r.status).map((r) => r.id);
+    const after = new Map((await db.all(`SELECT id, status FROM pay_links WHERE id IN (SELECT value FROM json_each(?))`, [ids])).map((r) => [r.id, r.status]));
+    return targets.filter((r) => ['paid', 'over', 'partial'].includes(after.get(r.id)) && after.get(r.id) !== r.status).map((r) => r.id);
   }
 
   // Повідомлення «Автоклієнта» про оплату (без входу, перевірка підпису ключем клієнта)
@@ -403,8 +452,8 @@ export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () 
     if (!sameHex(sig, await hmacHex(s.odb_key, raw))) throw fail(401, 'Невірний підпис.');
     let body;
     try { body = JSON.parse(raw); } catch { throw fail(400, 'Невірний JSON.'); }
-    const { fresh, freshRows } = await saveTx([body]);
-    const paid = await relink();
+    const { fresh, freshRows, changedIds } = await saveTx([body]);
+    const paid = await relink({ txIds: changedIds });
     await putSetting('odb_hook_at', nowIso());
     await notify({ linkIds: paid, freshRows }).catch(() => 0);
     return c.json({ ok: true, fresh, paid: paid.length });
@@ -418,18 +467,21 @@ export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () 
     const s = await settings();
     if (!s.odb_key || !s.odb_name) return c.json({ ok: false, connected: false });
     const last = Date.parse(s.odb_sync_at || '') || 0;
-    if (!b.force && Date.now() - last < 60000) return c.json({ ok: true, skipped: true, lastSync: s.odb_sync_at, hist: JSON.parse(s.odb_hist || '{}') });
+    // Без «force» — не частіше разу на 4 хв (сторінки опитують раз на 5 хв; оплати миттєво приносить вебхук).
+    if (!b.force && Date.now() - last < 4 * 60000) return c.json({ ok: true, skipped: true, lastSync: s.odb_sync_at, hist: JSON.parse(s.odb_hist || '{}') });
     await putSetting('odb_sync_at', nowIso());
     const cr = { key: s.odb_key, name: s.odb_name };
     let added = 0;
     const newRows = [];
+    const changedIds = [];
     // 1) нові: з початку стрічки, доки не підуть уже відомі
     for (let p = 0; p < 5; p++) {
       const j = await odb(cr, 'GET', `/api/transactions?limit=${PAGE}&offset=${p * PAGE}`);
       const items = Array.isArray(j.items) ? j.items : [];
-      const { rows, fresh, freshRows } = await saveTx(items);
+      const { rows, fresh, freshRows, changedIds: ch } = await saveTx(items);
       added += fresh;
       newRows.push(...freshRows);
+      changedIds.push(...ch);
       if (items.length < PAGE || (rows.length && fresh === 0)) break;
     }
     // 2) історія — кілька сторінок за раз, з місця, де зупинились
@@ -442,8 +494,9 @@ export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () 
       for (let p = 0; p < 3; p++) { // небагато сторінок за раз — ліміт процесорного часу Cloudflare
         const j = await odb(cr, 'GET', `/api/transactions?limit=${PAGE}&offset=${off}`);
         const items = Array.isArray(j.items) ? j.items : [];
-        const { fresh } = await saveTx(items);
+        const { fresh, changedIds: ch } = await saveTx(items);
         added += fresh;
+        changedIds.push(...ch);
         off += items.length;
         hist.total = Number(j.count) || hist.total || 0;
         if (items.length < PAGE) { hist.done = true; break; }
@@ -452,13 +505,21 @@ export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () 
       await putSetting('odb_hist', JSON.stringify(hist));
     }
     // 3) оплачені рахунки за даними Opendatabot (на випадок, якщо платіж ще не потрапив у стрічку)
+    const linkIds = [];
     const open = await db.get(`SELECT COUNT(*) AS n FROM pay_links WHERE status IN ('pending', 'check')`);
     if (open?.n) {
       const j = await odb(cr, 'GET', `/api/invoices?status=paid&limit=${PAGE}&offset=0`);
       const paidIds = (Array.isArray(j.items) ? j.items : []).filter((x) => String(x.paymentStatus || 'paid') === 'paid').map((x) => String(x.id));
-      if (paidIds.length) await db.run(`UPDATE pay_links SET odb_paid = 1, paid_at = COALESCE(paid_at, ?) WHERE odb_paid = 0 AND odb_id IN (SELECT value FROM json_each(?))`, [nowIso(), JSON.stringify(paidIds)]);
+      if (paidIds.length) {
+        const hit = await db.all(`SELECT id FROM pay_links WHERE odb_paid = 0 AND odb_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(paidIds)]);
+        if (hit.length) {
+          linkIds.push(...hit.map((r) => r.id));
+          await db.run(`UPDATE pay_links SET odb_paid = 1, paid_at = COALESCE(paid_at, ?) WHERE id IN (SELECT value FROM json_each(?))`, [nowIso(), JSON.stringify(linkIds)]);
+        }
+      }
     }
-    const paid = await relink();
+    // Перераховуємо лише те, чого торкнулися нові платежі й нові оплати; нічого нового — нічого не перераховуємо.
+    const paid = await relink({ txIds: changedIds, linkIds });
     // сповіщення: лише якщо історію вже завантажено (інакше це старі платежі)
     await notify({ linkIds: paid, freshRows: hist.done ? newRows : [] }).catch(() => 0);
     const me = c.get('user');
@@ -518,8 +579,9 @@ export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () 
         throw fail(403, 'Прив’язувати платежі до чужих посилань можуть лише власник і адміністратори.');
       }
     }
+    const prev = await db.get(`SELECT link_id FROM odb_tx WHERE id = ?`, [c.req.param('id')]);
     await db.run(`UPDATE odb_tx SET link_id = ?, manual = 1 WHERE id = ?`, [linkId, c.req.param('id')]);
-    await relink();
+    await relink({ txIds: [c.req.param('id')], linkIds: [linkId, prev?.link_id].filter(Boolean) });
     return c.json({ ok: true });
   });
 

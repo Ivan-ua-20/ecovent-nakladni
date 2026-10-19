@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'payments',
-  version: 1,
+  version: 2,
   tables: [
   `CREATE TABLE IF NOT EXISTS odb_accounts (
     id TEXT PRIMARY KEY,
@@ -56,6 +56,14 @@ export const schema = {
   `CREATE INDEX IF NOT EXISTS odb_tx_date ON odb_tx (date)`,
   `CREATE INDEX IF NOT EXISTS odb_tx_link ON odb_tx (link_id)`,
   `CREATE TABLE IF NOT EXISTS odb_payers (code TEXT PRIMARY KEY, name TEXT NOT NULL)`,
+  // Можливі рахунки платежу окремою таблицею з індексом: статус «перевірити» рахується без перегляду всіх платежів.
+  `CREATE TABLE IF NOT EXISTS odb_tx_possible (
+    tx_id TEXT NOT NULL,
+    odb_id TEXT NOT NULL,
+    PRIMARY KEY (tx_id, odb_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS odb_tx_possible_odb ON odb_tx_possible (odb_id)`,
+  `CREATE INDEX IF NOT EXISTS odb_accounts_iban ON odb_accounts (iban)`,
   ],
   columns: [
     ['inv_fops', 'odb_id', "TEXT DEFAULT ''"],
@@ -64,4 +72,12 @@ export const schema = {
     ['odb_accounts', 'name_manual', "INTEGER DEFAULT 0"],
     ['odb_tx', 'our_code', "TEXT DEFAULT ''"]
   ],
+  // Один раз: зіпсовані «[object Object]» прибрати, можливі рахунки перенести в odb_tx_possible.
+  async seed(db) {
+    await db.batch([
+      [`UPDATE odb_tx SET possible = '[]' WHERE possible LIKE '%object Object%'`, []],
+      [`INSERT OR IGNORE INTO odb_tx_possible (tx_id, odb_id)
+        SELECT t.id, j.value FROM odb_tx t, json_each(t.possible) j WHERE t.possible != '[]' AND typeof(j.value) = 'text' AND j.value != ''`, []],
+    ]);
+  },
 };

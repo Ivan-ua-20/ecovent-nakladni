@@ -9,7 +9,15 @@ const db = openDb(':memory:');
 await migrate(db);
 // лічильник запитів до бази (ліміт D1 — 50 на одне звернення; batch = 1)
 let q = 0;
-for (const k of ['all', 'get', 'run', 'batch']) { const f = db[k].bind(db); db[k] = (...a) => { q++; return f(...a); }; }
+let sqlLog = null; // [sql, params] — для перевірки планів запитів (розділ 9)
+for (const k of ['all', 'get', 'run', 'batch']) {
+  const f = db[k].bind(db);
+  db[k] = (...a) => {
+    q++;
+    if (sqlLog) { if (k === 'batch') for (const [s, p] of a[0]) sqlLog.push([s, p]); else sqlLog.push([a[0], a[1]]); }
+    return f(...a);
+  };
+}
 const maxQ = {};
 
 const BASE = 'https://odb.test';
@@ -308,6 +316,42 @@ await req('PUT', '/api/odb/payers/37193071', { name: 'Rozetka' });
 assert.equal((await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31')).byPayer.find((p) => p.code === '37193071').name, 'Rozetka', 'своя назва платника');
 const onlyPayer = await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31&payer=37193071');
 assert.ok(onlyPayer.byPayer.length === 1);
+
+// ---------- 9. Багато платежів: оновлення не переглядають усю таблицю (ліміт читань D1) ----------
+const bigCols = 'id, date, amount, currency, purpose, iban, payer_name, payer_code, payer_acc, invoice_id, possible, config_id, our_code, created_at';
+const big = [];
+for (let i = 0; i < 3000; i++) big.push([`INSERT INTO odb_tx (${bigCols}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  [`big${i}`, `2025-0${1 + (i % 9)}-10T10:00:00`, 10, 'UAH', 'x', ACCS[i % 3].iban, 'p', '1', 'UA', null, '[]', 'cfg1', '2882618253', '2025-01-01']]);
+await db.batch(big);
+const lBig = (await req('POST', '/api/odb/links', { account_id: 'a3', amount: 900, order_ref: 'BIG-1' })).link;
+const invBig = invoices.get(lBig.odb_id);
+sqlLog = [];
+await hook(tx(990, { iban: ACCS[2].iban, amount: 899, possible: [{ invoice: { id: invBig.id } }] }));
+assert.equal((await req('GET', `/api/odb/links/${lBig.id}`)).link.status, 'check');
+q = 0;
+await hook(tx(990, { iban: ACCS[2].iban, amount: 899, possible: [{ invoice: { id: invBig.id } }] }));
+assert.ok(q <= 8, `повтор без змін — майже без запитів (${q})`);
+feed.unshift(tx(991, { iban: ACCS[2].iban, amount: 900, invoice: { id: invBig.id } }));
+await req('POST', '/api/odb/sync', { force: true });
+assert.equal((await req('GET', `/api/odb/links/${lBig.id}`)).link.status, 'paid');
+const keepLog = sqlLog; sqlLog = null; // службова вибірка тесту — не в журнал
+const t990 = (await db.get(`SELECT id FROM odb_tx WHERE purpose = 'Платіж 990'`)).id;
+sqlLog = keepLog;
+await req('PUT', `/api/odb/payments/${t990}`, { link_id: lBig.id });
+assert.equal((await req('GET', `/api/odb/links/${lBig.id}`)).link.status, 'over', 'ручна прив’язка перераховує посилання');
+await req('PUT', `/api/odb/payments/${t990}`, { link_id: null });
+assert.equal((await req('GET', `/api/odb/links/${lBig.id}`)).link.status, 'paid', 'відв’язка теж');
+const logged = sqlLog;
+sqlLog = null;
+const scans = [];
+for (const [sql, params] of logged) {
+  if (!/\bodb_tx/.test(sql)) continue;
+  for (const r of await db.all(`EXPLAIN QUERY PLAN ${sql}`, params || [])) {
+    // «SEARCH … odb_tx_link» для link_id IS NULL — це теж перегляд усіх неприв’язаних
+    if (/^SCAN (odb_tx|odb_tx_possible|t|p)\b/.test(r.detail) || (/odb_tx_link/.test(r.detail) && !/link_id = /.test(sql))) scans.push(`${r.detail} ← ${sql.replace(/\s+/g, ' ').slice(0, 140)}`);
+  }
+}
+assert.deepEqual(scans, [], 'вебхук, звірка, прив’язка і перегляд посилання не переглядають усі платежі');
 
 console.log('  виклики Opendatabot:', calls);
 console.log('  запитів до бази (макс.):', maxQ);
