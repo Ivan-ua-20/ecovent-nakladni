@@ -334,9 +334,10 @@ assert.ok(q <= 8, `повтор без змін — майже без запит
 feed.unshift(tx(991, { iban: ACCS[2].iban, amount: 900, invoice: { id: invBig.id } }));
 await req('POST', '/api/odb/sync', { force: true });
 assert.equal((await req('GET', `/api/odb/links/${lBig.id}`)).link.status, 'paid');
-await req('PUT', '/api/odb/payments/t990', { link_id: lBig.id });
+const t990 = (await db.get(`SELECT id FROM odb_tx WHERE purpose = 'Платіж 990'`)).id;
+await req('PUT', `/api/odb/payments/${t990}`, { link_id: lBig.id });
 assert.equal((await req('GET', `/api/odb/links/${lBig.id}`)).link.status, 'over', 'ручна прив’язка перераховує посилання');
-await req('PUT', '/api/odb/payments/t990', { link_id: null });
+await req('PUT', `/api/odb/payments/${t990}`, { link_id: null });
 assert.equal((await req('GET', `/api/odb/links/${lBig.id}`)).link.status, 'paid', 'відв’язка теж');
 const logged = sqlLog;
 sqlLog = null;
