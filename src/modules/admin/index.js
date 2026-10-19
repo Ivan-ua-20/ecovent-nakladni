@@ -8,6 +8,8 @@ export function mountAdmin(app, { db }) {
 
   // ---------- Перенесення налаштувань між копіями (локально ⇄ Cloudflare) ----------
   const EXPORT_TABLES = ['templates', 'fops', 'offices', 'channels', 'inv_fops'];
+  // Історія накладних — лише у файлі (для перенесення в окремий сервіс накладних); тут не імпортується.
+  const HISTORY_TABLES = ['order_prefs', 'versions'];
   const EXPORT_SETTINGS = ['lpcrm_subdomain', 'lpcrm_search_days', 'default_fop_id', 'checkbox_enabled', 'checkbox_search_days',
     'invoice_date_mode', 'rahunok_next_number', 'retention_days', 'seller_note'];
   const SECRET_COLS = new Set(['checkbox_password', 'checkbox_pin', 'checkbox_license', 'checkbox_login']);
@@ -15,7 +17,7 @@ export function mountAdmin(app, { db }) {
   app.get('/api/admin/export', async (c) => {
     need(c, 'users');
     const out = { version: 1, exported_at: nowIso(), tables: {}, settings: {} };
-    for (const t of EXPORT_TABLES) {
+    for (const t of [...EXPORT_TABLES, ...HISTORY_TABLES]) {
       out.tables[t] = (await db.all(`SELECT * FROM ${t}`)).map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !SECRET_COLS.has(k))));
     }
     const s = await settings();
