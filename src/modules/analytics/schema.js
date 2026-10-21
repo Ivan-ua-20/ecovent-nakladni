@@ -214,7 +214,7 @@ async function upgradeV10(db) {
 
 export const schema = {
   name: 'analytics',
-  version: 1,
+  version: 2,
   tables: [
   // ---------- Аналітика ----------
   // Замовлення: id = короткий номер LP-CRM (зростає з часом), code = довгий код для API.
@@ -256,7 +256,9 @@ export const schema = {
     ['an_managers', 'depts', "TEXT DEFAULT ''"],
     ['an_products', 'brand_manual', "INTEGER"],
     ['an_products', 'cat_manual', "INTEGER"],
-    ['an_products', 'seen', "INTEGER NOT NULL DEFAULT 0"]
+    ['an_products', 'seen', "INTEGER NOT NULL DEFAULT 0"],
+    // Служба доставки з LP-CRM (назва); NULL — ще не дозаповнено для старих замовлень.
+    ['an_orders', 'deliv', "TEXT"]
   ],
   // Нова база: засіяти й позначити старі оновлення виконаними; стара — догнати оновлення v9–v12.
   async seed(db, { fresh }) {

@@ -21,6 +21,7 @@ const OFFICES = ['5', '4', '6', '25'];
 const USERS = ['rybchuk', 'ivan', 'denys', 'vlad', 'olena'];
 const CH = ['Rozetka(oneday)', 'Prom(Amsterdam)', '', 'iHunt', 'Epicentr(Ecovent)'];
 const STATUSES = [11, 14, 53, 18, 54, 58, 13];
+const DELIV = ['Нова Пошта', 'Укрпошта', 'Rozetka Delivery', 'Самовивіз', 'Нова пошта (адресна)', ''];
 const orders = new Map();
 let id = 100000;
 for (let d = addDays(today, -200); d <= today; d = addDays(d, 1)) {
@@ -36,7 +37,7 @@ for (let d = addDays(today, -200); d <= today; d = addDays(d, 1)) {
     orders.set(code, {
       id: String(id), order_id: code, datetime: `${d} 12:00:00`, status: String(STATUSES[id % STATUSES.length]),
       office: OFFICES[id % 4], user: USERS[id % 5], additional_1: CH[id % 5], site: '', utm_source: '',
-      total: (sum - discount).toFixed(2), products: lines,
+      total: (sum - discount).toFixed(2), products: lines, delivery: DELIV[id % DELIV.length], delivery_id: DELIV[id % DELIV.length] ? String(1 + (id % DELIV.length)) : '0',
     });
   }
 }
@@ -138,6 +139,29 @@ assert.equal(q.byStatusGroup.reduce((a, g) => a + g.cnt, 0), q.kpi.cur.cnt, 'г�
 assert.equal(q.daily.cur.length, daysBetween(from, today));
 assert.ok(q.kpi.prev && q.kpi.prev.cnt > 0, 'є порівняння');
 assert.ok(q.byStatus.find((x) => x.id === 54).refuse);
+// Служби доставки: усі статуси за період, схожі назви — в одну групу.
+const dv = Object.fromEntries(q.byDelivery.map((r) => [r.name, r]));
+const dcnt = (names) => expect.filter((o) => names.includes(o.delivery)).length;
+assert.equal(dv['Нова пошта'].cnt, dcnt(['Нова Пошта', 'Нова пошта (адресна)']), '«Нова Пошта» і «Нова пошта (адресна)» — одна група');
+assert.equal(dv['Укрпошта'].cnt, dcnt(['Укрпошта']));
+assert.equal(dv['Розетка'].cnt, dcnt(['Rozetka Delivery']));
+assert.equal(dv['Самовивіз'].cnt, dcnt(['Самовивіз']));
+assert.equal(dv['Не вказано'].cnt, dcnt(['']));
+assert.equal(q.byDelivery.reduce((a, r) => a + r.cnt, 0), q.kpi.cur.cnt, 'служби доставки покривають усі замовлення');
+assert.ok(q.byDelivery.every((r) => r.prevCnt != null), 'є порівняння з попереднім періодом');
+
+// Дозаповнення історії: старі замовлення без служби доставки заповнюються під час оновлення.
+await db.run(`UPDATE an_orders SET deliv = NULL WHERE day < ?`, [addDays(today, -3)]);
+await db.run(`DELETE FROM settings WHERE key = 'an_deliv_fill'`);
+await db.run(`UPDATE settings SET value = CAST(value AS INTEGER) + 1 WHERE key = 'an_ver'`);
+const qPend = await req('POST', '/api/an/query', { from: addDays(today, -60), to: today });
+assert.ok(qPend.byDelivery.some((r) => r.pending && r.cnt > 0), '«Ще завантажується» видно до дозаповнення');
+await runSync('today');
+assert.equal((await db.get(`SELECT COUNT(*) AS n FROM an_orders WHERE deliv IS NULL`)).n, 0, 'історію дозаповнено');
+const fillState = JSON.parse((await db.get(`SELECT value FROM settings WHERE key = 'an_deliv_fill'`)).value);
+assert.ok(fillState.done, 'дозаповнення завершено і більше не запускається');
+const qFilled = await req('POST', '/api/an/query', { from, to: today, cmpFrom: prevFrom, cmpTo });
+assert.deepEqual(qFilled.byDelivery.map((r) => [r.name, r.cnt]), q.byDelivery.map((r) => [r.name, r.cnt]), 'після дозаповнення — ті самі цифри');
 
 // ---------- 3. Відділ за менеджером ----------
 const cfg = await req('GET', '/api/an/config');
