@@ -2846,7 +2846,11 @@ function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {} }) {
   onCleanup((border) => db.run(`DELETE FROM versions WHERE created_at < ?`, [border]));
   onCleanup(async () => {
     const days = (Number((await settings()).lpcrm_search_days) || 30) + 7;
-    await db.run(`DELETE FROM orders_index WHERE datetime != '' AND datetime < ?`, [new Date(Date.now() - days * 864e5).toISOString().slice(0, 10)]);
+    const border = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+    await db.batch([
+      [`DELETE FROM orders_index WHERE datetime != '' AND datetime < ?`, [border]],
+      [`DELETE FROM order_keys WHERE day != '' AND day < ?`, [border]]
+    ]);
   });
   app.get("/api/lpcrm/diagnose/:orderId", async (c) => {
     need(c, "api");
@@ -2874,14 +2878,30 @@ function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {} }) {
     ]);
     return list;
   }
+  const orderKeys = (o) => {
+    const ks = [o.id, o.order_id, o.ttn].map((x) => String(x ?? "").trim()).filter(Boolean);
+    const p = digits(o.phone);
+    if (p.length >= 9) ks.push(`p:${p.slice(-9)}`);
+    return [...new Set(ks)];
+  };
+  const queryKeys = (q) => {
+    const ks = [String(q).trim()];
+    const qd = digits(q);
+    if (qd.length >= 9) ks.push(`p:${qd.slice(-9)}`);
+    return ks;
+  };
   async function saveOrders2(orders) {
     const now = nowIso();
-    await db.batch(orders.map((o) => [
+    const keys = orders.flatMap((o) => orderKeys(o).map((k) => [
+      `INSERT OR IGNORE INTO order_keys (k, code, day) VALUES (?, ?, ?)`,
+      [k, String(o.order_id), String(o.datetime || "").slice(0, 10)]
+    ]));
+    await db.batch([...keys, ...orders.map((o) => [
       `INSERT INTO orders_index (code, datetime, phone, ttn, bayer_name, data, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(code) DO UPDATE SET datetime = excluded.datetime, phone = excluded.phone, ttn = excluded.ttn,
        bayer_name = excluded.bayer_name, data = excluded.data, fetched_at = excluded.fetched_at`,
       [String(o.order_id), o.datetime || "", digits(o.phone), String(o.ttn || ""), o.bayer_name || "", JSON.stringify(o), now]
-    ]));
+    ])]);
   }
   async function syncIndex(creds, days, found = async () => []) {
     if (syncing) {
@@ -2922,20 +2942,12 @@ function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {} }) {
     }
     return result;
   }
-  const SKIP_KEYS = /* @__PURE__ */ new Set(["total", "status", "office", "payment", "delivery_id", "attribute_status_id", "localization"]);
   async function matchIndex(q) {
-    const strong = await db.all(
-      `SELECT code, datetime, phone, ttn FROM orders_index o
-       WHERE o.ttn = ? OR EXISTS (SELECT 1 FROM json_each(o.data) j
-         WHERE j.type IN ('text', 'integer', 'real') AND j.key NOT IN (SELECT value FROM json_each(?))
-           AND TRIM(CAST(j.value AS TEXT)) = ?)
-       ORDER BY datetime DESC`,
-      [q, JSON.stringify([...SKIP_KEYS]), q]
+    return db.all(
+      `SELECT DISTINCT o.code, o.datetime, o.phone, o.ttn FROM order_keys k JOIN orders_index o ON o.code = k.code
+       WHERE k.k IN (SELECT value FROM json_each(?)) ORDER BY o.datetime DESC`,
+      [JSON.stringify(queryKeys(q))]
     );
-    if (strong.length) return strong;
-    const qd = digits(q);
-    if (qd.length < 9) return [];
-    return db.all(`SELECT code, datetime, phone, ttn FROM orders_index WHERE phone != '' AND phone LIKE ? ORDER BY datetime DESC`, [`%${qd}`]);
   }
   async function resolveCode(q, s, creds) {
     if (/^\d{11,}$/.test(q) && !q.startsWith("380")) return { code: q };
@@ -5498,7 +5510,7 @@ var schema4 = {
 // src/modules/nakladni/schema.js
 var schema5 = {
   name: "nakladni",
-  version: 1,
+  version: 2,
   tables: [
     `CREATE TABLE IF NOT EXISTS order_prefs (
     order_id TEXT PRIMARY KEY,
@@ -5530,6 +5542,17 @@ var schema5 = {
     data TEXT,
     fetched_at TEXT
   )`,
+    // Ключі пошуку замовлення (номер, код, ТТН, телефон «p:» + 9 цифр) — пошук читає кілька рядків, а не весь індекс.
+    `CREATE TABLE IF NOT EXISTS order_keys (
+    k TEXT NOT NULL,
+    code TEXT NOT NULL,
+    day TEXT DEFAULT '',
+    PRIMARY KEY (k, code)
+  )`,
+    `CREATE INDEX IF NOT EXISTS order_keys_day ON order_keys (day)`,
+    // Для щогодинної чистки за датою — без перегляду всієї таблиці.
+    `CREATE INDEX IF NOT EXISTS orders_index_dt ON orders_index (datetime)`,
+    `CREATE INDEX IF NOT EXISTS versions_created ON versions (created_at)`,
     `CREATE TABLE IF NOT EXISTS order_alias (
     alias TEXT PRIMARY KEY,
     code TEXT NOT NULL
@@ -5537,7 +5560,17 @@ var schema5 = {
   ],
   columns: [
     ["versions", "user_name", "TEXT DEFAULT ''"]
-  ]
+  ],
+  // Один раз: ключі пошуку для вже завантажених замовлень.
+  async seed(db) {
+    await db.batch([
+      [`INSERT OR IGNORE INTO order_keys (k, code, day)
+        SELECT TRIM(CAST(json_extract(data, '$.id') AS TEXT)), code, substr(datetime, 1, 10) FROM orders_index WHERE json_extract(data, '$.id') IS NOT NULL
+        UNION ALL SELECT code, code, substr(datetime, 1, 10) FROM orders_index
+        UNION ALL SELECT TRIM(ttn), code, substr(datetime, 1, 10) FROM orders_index WHERE TRIM(ttn) != ''
+        UNION ALL SELECT 'p:' || substr(phone, -9), code, substr(datetime, 1, 10) FROM orders_index WHERE length(phone) >= 9`, []]
+    ]);
+  }
 };
 
 // src/modules/rahunky/schema.js
