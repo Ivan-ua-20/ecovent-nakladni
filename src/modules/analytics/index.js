@@ -28,6 +28,9 @@ export function addMonths(day, n) {
 const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
 
 const low = (v) => String(v ?? '').trim().toLowerCase();
+// Дозаповнення служби доставки для старих замовлень: не більше за добу і за одне оновлення (ліміт записів D1).
+const DELIV_PER_DAY = 15000;
+const DELIV_PER_RUN = 3000;
 
 export const AN_DEFAULTS = {
   compare: true,
@@ -147,8 +150,34 @@ export function normalizeAnOrder(raw) {
     site: low(raw.site),
     utm: low(raw.utm_source),
     total: round2(total),
+    deliv: delivName(raw),
     lines,
   };
+}
+
+// Назва служби доставки з замовлення LP-CRM (якщо замість назви число — «служба №…»).
+export function delivName(raw) {
+  const name = String(raw.delivery_name ?? raw.delivery ?? '').trim();
+  if (name && !/^\d+$/.test(name)) return name.slice(0, 80);
+  const id = String(raw.delivery_id ?? (name || '')).trim();
+  return id && id !== '0' ? `служба №${id}` : '';
+}
+
+// Група служби доставки для аналітики: схожі назви — в одну.
+const DELIV_GROUPS = [
+  [/нов[аі]\s*(пошт|почт)|nova\s*po(st|sh)|^(нп|np)(?![a-zа-яіїєґ])/i, 'Нова пошта'],
+  [/укр\s*(пошт|почт)|ukr\s*posh/i, 'Укрпошта'],
+  [/розетк|rozetka/i, 'Розетка'],
+  [/meest|міст\s*експрес|мист\s*экспресс|^міст(?![a-zа-яіїєґ])/i, 'Meest'],
+  [/самовив|самовыв|pickup|самостійн/i, 'Самовивіз'],
+  [/justin|джастін/i, 'Justin'],
+  [/кур.?єр|курьер|courier|адресн/i, 'Кур’єр'],
+];
+export function delivGroup(name) {
+  if (name == null) return 'Ще завантажується';
+  if (!String(name).trim()) return 'Не вказано';
+  for (const [re, g] of DELIV_GROUPS) if (re.test(name)) return g;
+  return String(name).trim();
 }
 
 async function saveOrders(db, orders, maps) {
@@ -156,10 +185,11 @@ async function saveOrders(db, orders, maps) {
   const bounds = new Map();
   for (const o of orders) {
     st.push([
-      `INSERT INTO an_orders (id, code, day, status, office, user, ch, site, utm, total, dept, src) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO an_orders (id, code, day, status, office, user, ch, site, utm, total, dept, src, deliv) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET code = excluded.code, day = excluded.day, status = excluded.status, office = excluded.office,
-       user = excluded.user, ch = excluded.ch, site = excluded.site, utm = excluded.utm, total = excluded.total, dept = excluded.dept, src = excluded.src`,
-      [o.id, o.code, o.day, o.status, o.office, o.user, o.ch, o.site, o.utm, o.total, deptOf(o, maps, srcOf(o, maps)), srcOf(o, maps)],
+       user = excluded.user, ch = excluded.ch, site = excluded.site, utm = excluded.utm, total = excluded.total, dept = excluded.dept, src = excluded.src,
+       deliv = excluded.deliv`,
+      [o.id, o.code, o.day, o.status, o.office, o.user, o.ch, o.site, o.utm, o.total, deptOf(o, maps, srcOf(o, maps)), srcOf(o, maps), o.deliv ?? ''],
     ]);
     st.push([`DELETE FROM an_items WHERE id BETWEEN ? AND ?`, [o.id * 100, o.id * 100 + 99]]);
     o.lines.forEach((l, n) => {
@@ -589,6 +619,7 @@ export function mountAnalytics(app, { db, fetchFn, shared = {} }) {
     const text = s.phase === 'units' && u
       ? `${u.from.slice(0, 7)} · ${status}`
       : s.phase === 'units' && s.pending?.length ? `Дозавантаження ${s.pending.length} замовлень`
+      : s.phase === 'deliv' ? 'Служби доставки (дозаповнення історії)'
       : s.phase === 'products' ? 'Категорії товарів'
         : s.phase === 'categories' ? 'Довідник категорій'
           : s.phase === 'cleanup' ? 'Завершення' : 'Готово';
@@ -727,7 +758,36 @@ export function mountAnalytics(app, { db, fetchFn, shared = {} }) {
             state.pending = state.pending.slice(part.length);
             continue;
           }
-          if (!state.units.length) state.phase = 'products';
+          if (!state.units.length) state.phase = 'deliv';
+          continue;
+        }
+
+        // Дозаповнення служби доставки для замовлень, завантажених до її появи в аналітиці:
+        // від найновіших до старіших, по 100 за запит, не більше DELIV_PER_DAY на добу (ліміт записів D1).
+        if (state.phase === 'deliv') {
+          const fill = (await getJson('an_deliv_fill')) || {};
+          const today = kyivDay();
+          if (fill.day !== today) { fill.day = today; fill.n = 0; }
+          if (fill.done || fill.n >= DELIV_PER_DAY || (state.stats.deliv || 0) >= DELIV_PER_RUN) { state.phase = 'products'; continue; }
+          const rows = await db.all(
+            `SELECT id, code FROM an_orders WHERE id < ? AND deliv IS NULL ORDER BY id DESC LIMIT 100`,
+            [fill.cursor ?? Number.MAX_SAFE_INTEGER],
+          );
+          if (!rows.length) {
+            fill.done = true;
+            await putSetting('an_deliv_fill', JSON.stringify(fill));
+            state.phase = 'products';
+            continue;
+          }
+          const j = await lp(cr, 'getOrdersByID', { order_id: rows.map((r) => r.code).join(',') });
+          calls++;
+          if (j.status !== 'ok') { warn(`LP-CRM (служби доставки): ${j.message || 'помилка'}`); state.phase = 'products'; continue; }
+          const byCode = new Map(findOrders(j.data).map((o) => [String(o.order_id || ''), delivName(o)]));
+          await db.batch(rows.map((r) => [`UPDATE an_orders SET deliv = ? WHERE id = ?`, [byCode.get(r.code) ?? '', r.id]]));
+          fill.cursor = rows[rows.length - 1].id;
+          fill.n = (fill.n || 0) + rows.length;
+          await putSetting('an_deliv_fill', JSON.stringify(fill));
+          state.stats.deliv = (state.stats.deliv || 0) + rows.length;
           continue;
         }
 
@@ -835,7 +895,8 @@ export function mountAnalytics(app, { db, fetchFn, shared = {} }) {
     // Готова відповідь з кешу: дані змінюються лише після оновлення або зміни налаштувань.
     const ver = (await db.get(`SELECT value FROM settings WHERE key = 'an_ver'`))?.value || '0';
     // kpi: 2 — у відповіді з'явилися завершені замовлення і сума відмов (старі збережені відповіді не підходять).
-    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today, kpi: 2 }));
+    // kpi: 3 — додано розбивку за службами доставки.
+    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today, kpi: 3 }));
     const hit = await db.get(`SELECT value FROM an_cache WHERE key = ?`, [cacheKey]);
     if (hit) return c.body(hit.value, 200, { 'content-type': 'application/json; charset=UTF-8' });
 
@@ -867,7 +928,7 @@ export function mountAnalytics(app, { db, fetchFn, shared = {} }) {
       const qi = base(range, { items: true });
       const jobs = [
         db.all(`SELECT o.day AS day, ${orderMeasures(itemLevel)} ${q.from} GROUP BY o.day`, q.params),
-        db.all(`SELECT o.dept AS dept, o.src AS src, o.user AS user, o.status AS status, ${orderMeasures(itemLevel)} ${q.from} GROUP BY o.dept, o.src, o.user, o.status`, q.params),
+        db.all(`SELECT o.dept AS dept, o.src AS src, o.user AS user, o.status AS status, o.deliv AS deliv, ${orderMeasures(itemLevel)} ${q.from} GROUP BY o.dept, o.src, o.user, o.status, o.deliv`, q.params),
         db.all(`SELECT COALESCE(p.brand_id, 0) AS id, SUM(i.amount) AS rev, SUM(CASE WHEN ${rfExpr} = 0 THEN i.amount ELSE 0 END) AS net,
                 SUM(i.qty) AS qty, COUNT(DISTINCT o.id) AS cnt, COUNT(DISTINCT CASE WHEN ${rfExpr} = 1 THEN o.id END) AS rcnt
                 ${qi.from} GROUP BY COALESCE(p.brand_id, 0)`, qi.params),
@@ -1029,6 +1090,29 @@ export function mountAnalytics(app, { db, fetchFn, shared = {} }) {
       groupRow('refused', 'Повернуто на склад і відмови', rf),
     ];
 
+    // Служби доставки: усі статуси за період (з фільтрами), схожі назви — в одну групу.
+    const delivMap = (p) => {
+      const m = new Map();
+      for (const r of p?.groups || []) {
+        const k = delivGroup(r.deliv);
+        const cur = m.get(k) || { rev: 0, cnt: 0, rcnt: 0, names: new Set() };
+        cur.rev += r.rev || 0; cur.cnt += r.cnt || 0; cur.rcnt += r.rcnt || 0;
+        if (r.deliv) cur.names.add(r.deliv);
+        m.set(k, cur);
+      }
+      return m;
+    };
+    const dvCur = delivMap(cur);
+    const dvPrev = prev ? delivMap(prev) : null;
+    const byDelivery = [...new Set([...dvCur.keys(), ...(dvPrev ? dvPrev.keys() : [])])].map((name) => {
+      const a = dvCur.get(name) || { rev: 0, cnt: 0, rcnt: 0, names: new Set() };
+      const p = dvPrev?.get(name);
+      return {
+        id: name, name, rev: round2(a.rev), cnt: a.cnt, rcnt: a.rcnt, names: [...a.names].slice(0, 5),
+        pending: name === 'Ще завантажується', prevRev: dvPrev ? round2(p?.rev || 0) : null, prevCnt: dvPrev ? p?.cnt || 0 : null,
+      };
+    }).filter((r) => r.cnt || r.prevCnt).sort((a, b) => b.cnt - a.cnt);
+
     const bName = new Map(brands.map((x) => [x.id, x.name]));
     const prevBrands = new Map((prev?.brands || []).map((r) => [r.id, r]));
     const byBrand = cur.brands.map((r) => ({
@@ -1053,7 +1137,7 @@ export function mountAnalytics(app, { db, fetchFn, shared = {} }) {
       kpi: { cur: kpi(cur), prev: prev ? kpi(prev) : null, doneStatuses: doneIds },
       daily: { cur: curDaily, prev: cmp ? fillDays(prev, cmp.from, cmp.to) : null },
       target,
-      byDept, bySource, byManager, byStatus, byStatusGroup, byBrand, byCategory, top,
+      byDept, bySource, byManager, byStatus, byStatusGroup, byDelivery, byBrand, byCategory, top,
       options: {
         depts: [...depts.map((d) => ({ id: d.id, name: d.name })), { id: 0, name: 'Без відділу' }],
         sources: sources.map((s) => ({ id: s.id, name: s.name, dept_id: s.dept_id })),

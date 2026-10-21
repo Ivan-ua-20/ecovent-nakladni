@@ -3426,6 +3426,8 @@ function addMonths(day, n) {
 }
 var isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
 var low = (v) => String(v ?? "").trim().toLowerCase();
+var DELIV_PER_DAY = 15e3;
+var DELIV_PER_RUN = 3e3;
 var AN_DEFAULTS = {
   compare: true,
   deptPriority: "manager",
@@ -3527,18 +3529,41 @@ function normalizeAnOrder(raw2) {
     site: low(raw2.site),
     utm: low(raw2.utm_source),
     total: round2(total),
+    deliv: delivName(raw2),
     lines
   };
+}
+function delivName(raw2) {
+  const name = String(raw2.delivery_name ?? raw2.delivery ?? "").trim();
+  if (name && !/^\d+$/.test(name)) return name.slice(0, 80);
+  const id = String(raw2.delivery_id ?? (name || "")).trim();
+  return id && id !== "0" ? `\u0441\u043B\u0443\u0436\u0431\u0430 \u2116${id}` : "";
+}
+var DELIV_GROUPS = [
+  [/нов[аі]\s*(пошт|почт)|nova\s*po(st|sh)|^(нп|np)(?![a-zа-яіїєґ])/i, "\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430"],
+  [/укр\s*(пошт|почт)|ukr\s*posh/i, "\u0423\u043A\u0440\u043F\u043E\u0448\u0442\u0430"],
+  [/розетк|rozetka/i, "\u0420\u043E\u0437\u0435\u0442\u043A\u0430"],
+  [/meest|міст\s*експрес|мист\s*экспресс|^міст(?![a-zа-яіїєґ])/i, "Meest"],
+  [/самовив|самовыв|pickup|самостійн/i, "\u0421\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437"],
+  [/justin|джастін/i, "Justin"],
+  [/кур.?єр|курьер|courier|адресн/i, "\u041A\u0443\u0440\u2019\u0454\u0440"]
+];
+function delivGroup(name) {
+  if (name == null) return "\u0429\u0435 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0443\u0454\u0442\u044C\u0441\u044F";
+  if (!String(name).trim()) return "\u041D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E";
+  for (const [re, g] of DELIV_GROUPS) if (re.test(name)) return g;
+  return String(name).trim();
 }
 async function saveOrders(db, orders, maps) {
   const st = [];
   const bounds = /* @__PURE__ */ new Map();
   for (const o of orders) {
     st.push([
-      `INSERT INTO an_orders (id, code, day, status, office, user, ch, site, utm, total, dept, src) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO an_orders (id, code, day, status, office, user, ch, site, utm, total, dept, src, deliv) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET code = excluded.code, day = excluded.day, status = excluded.status, office = excluded.office,
-       user = excluded.user, ch = excluded.ch, site = excluded.site, utm = excluded.utm, total = excluded.total, dept = excluded.dept, src = excluded.src`,
-      [o.id, o.code, o.day, o.status, o.office, o.user, o.ch, o.site, o.utm, o.total, deptOf(o, maps, srcOf(o, maps)), srcOf(o, maps)]
+       user = excluded.user, ch = excluded.ch, site = excluded.site, utm = excluded.utm, total = excluded.total, dept = excluded.dept, src = excluded.src,
+       deliv = excluded.deliv`,
+      [o.id, o.code, o.day, o.status, o.office, o.user, o.ch, o.site, o.utm, o.total, deptOf(o, maps, srcOf(o, maps)), srcOf(o, maps), o.deliv ?? ""]
     ]);
     st.push([`DELETE FROM an_items WHERE id BETWEEN ? AND ?`, [o.id * 100, o.id * 100 + 99]]);
     o.lines.forEach((l, n) => {
@@ -3935,7 +3960,7 @@ function mountAnalytics(app, { db, fetchFn, shared: shared2 = {} }) {
     if (pct < 1) pct = 1;
     const u = s.units?.[0];
     const status = u ? s.statusNames?.[u.s] || `\u0441\u0442\u0430\u0442\u0443\u0441 ${u.s}` : "";
-    const text = s.phase === "units" && u ? `${u.from.slice(0, 7)} \xB7 ${status}` : s.phase === "units" && s.pending?.length ? `\u0414\u043E\u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043D\u044F ${s.pending.length} \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C` : s.phase === "products" ? "\u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457 \u0442\u043E\u0432\u0430\u0440\u0456\u0432" : s.phase === "categories" ? "\u0414\u043E\u0432\u0456\u0434\u043D\u0438\u043A \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0439" : s.phase === "cleanup" ? "\u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u043D\u044F" : "\u0413\u043E\u0442\u043E\u0432\u043E";
+    const text = s.phase === "units" && u ? `${u.from.slice(0, 7)} \xB7 ${status}` : s.phase === "units" && s.pending?.length ? `\u0414\u043E\u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043D\u044F ${s.pending.length} \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C` : s.phase === "deliv" ? "\u0421\u043B\u0443\u0436\u0431\u0438 \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0438 (\u0434\u043E\u0437\u0430\u043F\u043E\u0432\u043D\u0435\u043D\u043D\u044F \u0456\u0441\u0442\u043E\u0440\u0456\u0457)" : s.phase === "products" ? "\u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457 \u0442\u043E\u0432\u0430\u0440\u0456\u0432" : s.phase === "categories" ? "\u0414\u043E\u0432\u0456\u0434\u043D\u0438\u043A \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0439" : s.phase === "cleanup" ? "\u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u043D\u044F" : "\u0413\u043E\u0442\u043E\u0432\u043E";
     return {
       mode: s.mode,
       phase: s.phase,
@@ -4072,7 +4097,43 @@ function mountAnalytics(app, { db, fetchFn, shared: shared2 = {} }) {
             state.pending = state.pending.slice(part.length);
             continue;
           }
-          if (!state.units.length) state.phase = "products";
+          if (!state.units.length) state.phase = "deliv";
+          continue;
+        }
+        if (state.phase === "deliv") {
+          const fill = await getJson("an_deliv_fill") || {};
+          const today = kyivDay();
+          if (fill.day !== today) {
+            fill.day = today;
+            fill.n = 0;
+          }
+          if (fill.done || fill.n >= DELIV_PER_DAY || (state.stats.deliv || 0) >= DELIV_PER_RUN) {
+            state.phase = "products";
+            continue;
+          }
+          const rows = await db.all(
+            `SELECT id, code FROM an_orders WHERE id < ? AND deliv IS NULL ORDER BY id DESC LIMIT 100`,
+            [fill.cursor ?? Number.MAX_SAFE_INTEGER]
+          );
+          if (!rows.length) {
+            fill.done = true;
+            await putSetting2("an_deliv_fill", JSON.stringify(fill));
+            state.phase = "products";
+            continue;
+          }
+          const j = await lp(cr, "getOrdersByID", { order_id: rows.map((r) => r.code).join(",") });
+          calls++;
+          if (j.status !== "ok") {
+            warn(`LP-CRM (\u0441\u043B\u0443\u0436\u0431\u0438 \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0438): ${j.message || "\u043F\u043E\u043C\u0438\u043B\u043A\u0430"}`);
+            state.phase = "products";
+            continue;
+          }
+          const byCode = new Map(findOrders(j.data).map((o) => [String(o.order_id || ""), delivName(o)]));
+          await db.batch(rows.map((r) => [`UPDATE an_orders SET deliv = ? WHERE id = ?`, [byCode.get(r.code) ?? "", r.id]]));
+          fill.cursor = rows[rows.length - 1].id;
+          fill.n = (fill.n || 0) + rows.length;
+          await putSetting2("an_deliv_fill", JSON.stringify(fill));
+          state.stats.deliv = (state.stats.deliv || 0) + rows.length;
           continue;
         }
         if (state.phase === "products") {
@@ -4171,7 +4232,7 @@ function mountAnalytics(app, { db, fetchFn, shared: shared2 = {} }) {
     const ph = (a) => a.map(() => "?").join(",");
     const rfExpr = `(CASE WHEN o.status IN (${rf.join(",") || "-1"}) THEN 1 ELSE 0 END)`;
     const ver = (await db.get(`SELECT value FROM settings WHERE key = 'an_ver'`))?.value || "0";
-    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today, kpi: 2 }));
+    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today, kpi: 3 }));
     const hit = await db.get(`SELECT value FROM an_cache WHERE key = ?`, [cacheKey]);
     if (hit) return c.body(hit.value, 200, { "content-type": "application/json; charset=UTF-8" });
     function base(range, { items = itemLevel, skipCats = false } = {}) {
@@ -4214,7 +4275,7 @@ function mountAnalytics(app, { db, fetchFn, shared: shared2 = {} }) {
       const qi = base(range, { items: true });
       const jobs = [
         db.all(`SELECT o.day AS day, ${orderMeasures(itemLevel)} ${q.from} GROUP BY o.day`, q.params),
-        db.all(`SELECT o.dept AS dept, o.src AS src, o.user AS user, o.status AS status, ${orderMeasures(itemLevel)} ${q.from} GROUP BY o.dept, o.src, o.user, o.status`, q.params),
+        db.all(`SELECT o.dept AS dept, o.src AS src, o.user AS user, o.status AS status, o.deliv AS deliv, ${orderMeasures(itemLevel)} ${q.from} GROUP BY o.dept, o.src, o.user, o.status, o.deliv`, q.params),
         db.all(`SELECT COALESCE(p.brand_id, 0) AS id, SUM(i.amount) AS rev, SUM(CASE WHEN ${rfExpr} = 0 THEN i.amount ELSE 0 END) AS net,
                 SUM(i.qty) AS qty, COUNT(DISTINCT o.id) AS cnt, COUNT(DISTINCT CASE WHEN ${rfExpr} = 1 THEN o.id END) AS rcnt
                 ${qi.from} GROUP BY COALESCE(p.brand_id, 0)`, qi.params),
@@ -4383,6 +4444,36 @@ function mountAnalytics(app, { db, fetchFn, shared: shared2 = {} }) {
       groupRow("shipping", "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u0456 \u043E\u0447\u0456\u043A\u0443\u0454 \u0432\u0438\u043A\u0443\u043F\u0443", shipping),
       groupRow("refused", "\u041F\u043E\u0432\u0435\u0440\u043D\u0443\u0442\u043E \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u0456 \u0432\u0456\u0434\u043C\u043E\u0432\u0438", rf)
     ];
+    const delivMap = (p) => {
+      const m = /* @__PURE__ */ new Map();
+      for (const r of p?.groups || []) {
+        const k = delivGroup(r.deliv);
+        const cur2 = m.get(k) || { rev: 0, cnt: 0, rcnt: 0, names: /* @__PURE__ */ new Set() };
+        cur2.rev += r.rev || 0;
+        cur2.cnt += r.cnt || 0;
+        cur2.rcnt += r.rcnt || 0;
+        if (r.deliv) cur2.names.add(r.deliv);
+        m.set(k, cur2);
+      }
+      return m;
+    };
+    const dvCur = delivMap(cur);
+    const dvPrev = prev ? delivMap(prev) : null;
+    const byDelivery = [.../* @__PURE__ */ new Set([...dvCur.keys(), ...dvPrev ? dvPrev.keys() : []])].map((name) => {
+      const a = dvCur.get(name) || { rev: 0, cnt: 0, rcnt: 0, names: /* @__PURE__ */ new Set() };
+      const p = dvPrev?.get(name);
+      return {
+        id: name,
+        name,
+        rev: round2(a.rev),
+        cnt: a.cnt,
+        rcnt: a.rcnt,
+        names: [...a.names].slice(0, 5),
+        pending: name === "\u0429\u0435 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0443\u0454\u0442\u044C\u0441\u044F",
+        prevRev: dvPrev ? round2(p?.rev || 0) : null,
+        prevCnt: dvPrev ? p?.cnt || 0 : null
+      };
+    }).filter((r) => r.cnt || r.prevCnt).sort((a, b2) => b2.cnt - a.cnt);
     const bName = new Map(brands.map((x) => [x.id, x.name]));
     const prevBrands = new Map((prev?.brands || []).map((r) => [r.id, r]));
     const byBrand = cur.brands.map((r) => ({
@@ -4423,6 +4514,7 @@ function mountAnalytics(app, { db, fetchFn, shared: shared2 = {} }) {
       byManager,
       byStatus,
       byStatusGroup,
+      byDelivery,
       byBrand,
       byCategory,
       top,
@@ -5875,7 +5967,7 @@ async function upgradeV10(db) {
 }
 var schema8 = {
   name: "analytics",
-  version: 1,
+  version: 2,
   tables: [
     // ---------- Аналітика ----------
     // Замовлення: id = короткий номер LP-CRM (зростає з часом), code = довгий код для API.
@@ -5917,7 +6009,9 @@ var schema8 = {
     ["an_managers", "depts", "TEXT DEFAULT ''"],
     ["an_products", "brand_manual", "INTEGER"],
     ["an_products", "cat_manual", "INTEGER"],
-    ["an_products", "seen", "INTEGER NOT NULL DEFAULT 0"]
+    ["an_products", "seen", "INTEGER NOT NULL DEFAULT 0"],
+    // Служба доставки з LP-CRM (назва); NULL — ще не дозаповнено для старих замовлень.
+    ["an_orders", "deliv", "TEXT"]
   ],
   // Нова база: засіяти й позначити старі оновлення виконаними; стара — догнати оновлення v9–v12.
   async seed(db, { fresh }) {

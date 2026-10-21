@@ -396,6 +396,7 @@ export function createAnalyticsUI(ctx) {
         ${brandTable(d.byBrand, hasCmp)}
         ${breakdown('Категорії', d.byCategory, 'cats', { hasCmp, qty: true })}
         ${d.byStatusGroup ? statusGroupsCard(d.byStatusGroup, Boolean(d.cmp)) : ''}
+        ${d.byDelivery ? deliveryCard(d.byDelivery, Boolean(d.cmp)) : ''}
         ${statusCard(d.byStatus)}
       </div>
       ${topTable(d.top)}`;
@@ -460,6 +461,7 @@ export function createAnalyticsUI(ctx) {
     refuse: (r) => (r.cnt ? (r.rcnt || 0) / r.cnt : 0),
     dyn: (r) => { const v = change(r.rev, r.prevRev); return v == null ? (r.rev ? Infinity : -Infinity) : v; },
     plan: (r) => (r.plan ? (r.net / r.plan) : -1),
+    dyncnt: (r) => { const v = change(r.cnt, r.prevCnt); return v == null ? (r.cnt ? Infinity : -Infinity) : v; },
   };
   function sortRows(block, rows) {
     const st = ui.sort?.[block];
@@ -530,6 +532,26 @@ export function createAnalyticsUI(ctx) {
       <div class="bk-row bk-head"><span>${sortBtn('stgroups', 'name', 'Група')}</span><span></span><span class="bk-hv">${sortBtn('stgroups', 'rev', 'Сума')}${sortBtn('stgroups', 'cnt', 'Зам.')}</span><span class="bk-hd">${hasCmp ? sortBtn('stgroups', 'dyn', 'Динаміка') : ''}</span></div>
       ${sortRows('stgroups', rows).map((r) => line(esc(r.name), r.rev, r.cnt, r.prevRev, r.prevCnt, r.id === 'refused' ? 'refuse-row' : '')).join('')}
       ${line('<b>Усього</b>', totalRev, totalCnt, prevRev, prevCnt, 'bk-total')}
+    </div></div>`;
+  }
+
+  // Служби доставки: скільки замовлень і на яку суму якою службою (Нова пошта, Укрпошта, Розетка, самовивіз…).
+  function deliveryCard(rows, hasCmp) {
+    if (!rows.length) return `<div class="card"><h3>Служби доставки</h3><div class="muted small">Немає даних за період.</div></div>`;
+    const totalCnt = rows.reduce((a, r) => a + r.cnt, 0);
+    const totalRev = rows.reduce((a, r) => a + r.rev, 0);
+    const pend = rows.find((r) => r.pending);
+    return `<div class="card"><h3>Служби доставки</h3>
+      ${pend ? `<div class="small muted" style="margin-bottom:8px">«Ще завантажується» — старі замовлення, для яких служба доставки дозаповнюється поступово під час оновлень аналітики (кілька днів).</div>` : ''}
+      <div class="bk">
+      <div class="bk-row bk-head"><span>${sortBtn('deliv', 'name', 'Служба')}</span><span></span><span class="bk-hv">${sortBtn('deliv', 'cnt', 'Зам.')}${sortBtn('deliv', 'rev', 'Сума')}</span><span class="bk-hd">${hasCmp ? sortBtn('deliv', 'dyncnt', 'Динаміка') : ''}</span></div>
+      ${sortRows('deliv', rows).map((r) => `<div class="bk-row static ${r.pending ? 'muted' : ''}" title="${esc((r.names || []).join(', '))}">
+        <span class="bk-name">${esc(r.name)}</span>
+        <span class="bk-bar"><span style="width:${totalCnt ? ((r.cnt / totalCnt) * 100).toFixed(1) : 0}%"></span></span>
+        <span class="bk-val">${int(r.cnt)} зам.<small>${uah(r.rev)}${totalCnt ? ` · ${pct1((r.cnt / totalCnt) * 100)}` : ''}</small></span>
+        <span class="bk-d">${hasCmp ? `${delta(r.cnt, r.prevCnt)}<small class="muted">було ${int(r.prevCnt)} зам.</small>` : ''}</span>
+      </div>`).join('')}
+      <div class="bk-row static bk-total"><span class="bk-name"><b>Усього</b></span><span></span><span class="bk-val">${int(totalCnt)} зам.<small>${uah(totalRev)}</small></span><span class="bk-d"></span></div>
     </div></div>`;
   }
 
