@@ -7,7 +7,9 @@ import { kyivDay, addDays, monthStart } from '../src/modules/analytics/index.js'
 
 const raw = openDb(':memory:');
 let n = 0;
-const db = { all: (...a) => { n++; return raw.all(...a); }, get: (...a) => { n++; return raw.get(...a); }, run: (...a) => { n++; return raw.run(...a); }, batch: (l) => { if (l.length) n++; return raw.batch(l); } };
+let sqlLog = null; // [sql, params] — для перевірки, що пошук не переглядає весь індекс замовлень
+const logged = (sql, p) => { if (sqlLog) sqlLog.push([sql, p]); };
+const db = { all: (...a) => { n++; logged(...a); return raw.all(...a); }, get: (...a) => { n++; logged(...a); return raw.get(...a); }, run: (...a) => { n++; logged(...a); return raw.run(...a); }, batch: (l) => { if (l.length) n++; for (const [x, p] of l) logged(x, p); return raw.batch(l); } };
 n = 0; await migrate(db);
 const results = { 'міграція (нова база)': n };
 await raw.run(`UPDATE settings SET value = 'k' WHERE key = 'lpcrm_key'`);
@@ -59,6 +61,19 @@ const cfg = await (await app.request('/api/an/config', { headers: H })).json();
 await measure('збереження відділів і джерел', 'PUT', '/api/an/structure', { depts: cfg.depts });
 await measure('накладна demo', 'GET', '/api/invoice/demo');
 await measure('bootstrap', 'GET', '/api/bootstrap');
+// Пошук замовлення за номером (id), телефоном і ТТН — лише через ключі, без перегляду всіх замовлень
+// (повний перегляд з'їдав денний ліміт читань D1: тисячі замовлень × десятки полів на кожен пошук).
+const sample = orders.filter((o) => o.status === '11').at(-3); // у підробленій CRM є лише статус 11
+sqlLog = [];
+for (const q of [sample.id, `0${String(sample.order_id).slice(-9)}`, 'НЕМАЄ-ТАКОГО']) await measure('пошук замовлення', 'GET', `/api/invoice/${encodeURIComponent(q)}`);
+const scans = [];
+for (const [sql, p] of sqlLog) {
+  if (!/orders_index|order_keys/.test(sql) || /^\s*(INSERT|DELETE)/i.test(sql)) continue;
+  for (const r of await raw.all(`EXPLAIN QUERY PLAN ${sql}`, p || [])) if (/^SCAN (orders_index|order_keys|o|k)\b/.test(r.detail)) scans.push(`${r.detail} ← ${sql.replace(/\s+/g, ' ').slice(0, 120)}`);
+}
+sqlLog = null;
+assert.deepEqual(scans, [], 'пошук замовлення не переглядає весь індекс');
+assert.ok((await raw.get(`SELECT COUNT(*) AS n FROM order_keys WHERE k = ?`, [String(sample.id)])).n >= 1, 'ключ номера замовлення записано');
 globalThis.setTimeout = st;
 console.log(`  ${cnt} замовлень, ${steps} кроків синхронізації`);
 console.table(results);

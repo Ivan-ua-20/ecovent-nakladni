@@ -25,7 +25,11 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, shared = {} }) {
   // Індекс пошуку замовлень: тримаємо лише період пошуку з налаштувань (+7 днів запасу).
   onCleanup(async () => {
     const days = (Number((await settings()).lpcrm_search_days) || 30) + 7;
-    await db.run(`DELETE FROM orders_index WHERE datetime != '' AND datetime < ?`, [new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)]);
+    const border = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+    await db.batch([
+      [`DELETE FROM orders_index WHERE datetime != '' AND datetime < ?`, [border]],
+      [`DELETE FROM order_keys WHERE day != '' AND day < ?`, [border]],
+    ]);
   });
 
   // ---------- Діагностика LP-CRM ----------
@@ -66,15 +70,32 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, shared = {} }) {
     return list;
   }
 
+  // Ключі пошуку замовлення: номер (id), код (order_id), ТТН, телефон (останні 9 цифр).
+  const orderKeys = (o) => {
+    const ks = [o.id, o.order_id, o.ttn].map((x) => String(x ?? '').trim()).filter(Boolean);
+    const p = digits(o.phone);
+    if (p.length >= 9) ks.push(`p:${p.slice(-9)}`);
+    return [...new Set(ks)];
+  };
+  const queryKeys = (q) => {
+    const ks = [String(q).trim()];
+    const qd = digits(q);
+    if (qd.length >= 9) ks.push(`p:${qd.slice(-9)}`);
+    return ks;
+  };
+
   // Одним пакетом: 100 замовлень = один запит до D1, а не 100.
   async function saveOrders(orders) {
     const now = nowIso();
-    await db.batch(orders.map((o) => [
+    const keys = orders.flatMap((o) => orderKeys(o).map((k) => [
+      `INSERT OR IGNORE INTO order_keys (k, code, day) VALUES (?, ?, ?)`, [k, String(o.order_id), String(o.datetime || '').slice(0, 10)],
+    ]));
+    await db.batch([...keys, ...orders.map((o) => [
       `INSERT INTO orders_index (code, datetime, phone, ttn, bayer_name, data, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(code) DO UPDATE SET datetime = excluded.datetime, phone = excluded.phone, ttn = excluded.ttn,
        bayer_name = excluded.bayer_name, data = excluded.data, fetched_at = excluded.fetched_at`,
       [String(o.order_id), o.datetime || '', digits(o.phone), String(o.ttn || ''), o.bayer_name || '', JSON.stringify(o), now],
-    ]));
+    ])]);
   }
 
   // Завантажує в індекс замовлення за останні `days` днів, статус за статусом, і зупиняється, щойно `found()` дає збіг.
@@ -112,22 +133,14 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, shared = {} }) {
     return result;
   }
 
-  const SKIP_KEYS = new Set(['total', 'status', 'office', 'payment', 'delivery_id', 'attribute_status_id', 'localization']);
-  // Пошук у індексі робить база: точний збіг будь-якого простого поля замовлення або ТТН,
-  // інакше — телефон, що закінчується на введені цифри (від 9 цифр). Найновіші — першими.
+  // Пошук у індексі — за ключами (номер, код, ТТН, телефон від 9 цифр): база читає лише рядки збігів,
+  // а не всі замовлення за період (раніше це з'їдало денний ліміт читань D1). Найновіші — першими.
   async function matchIndex(q) {
-    const strong = await db.all(
-      `SELECT code, datetime, phone, ttn FROM orders_index o
-       WHERE o.ttn = ? OR EXISTS (SELECT 1 FROM json_each(o.data) j
-         WHERE j.type IN ('text', 'integer', 'real') AND j.key NOT IN (SELECT value FROM json_each(?))
-           AND TRIM(CAST(j.value AS TEXT)) = ?)
-       ORDER BY datetime DESC`,
-      [q, JSON.stringify([...SKIP_KEYS]), q],
+    return db.all(
+      `SELECT DISTINCT o.code, o.datetime, o.phone, o.ttn FROM order_keys k JOIN orders_index o ON o.code = k.code
+       WHERE k.k IN (SELECT value FROM json_each(?)) ORDER BY o.datetime DESC`,
+      [JSON.stringify(queryKeys(q))],
     );
-    if (strong.length) return strong;
-    const qd = digits(q);
-    if (qd.length < 9) return [];
-    return db.all(`SELECT code, datetime, phone, ttn FROM orders_index WHERE phone != '' AND phone LIKE ? ORDER BY datetime DESC`, [`%${qd}`]);
   }
 
 
