@@ -32,7 +32,7 @@ export async function api(method, url, body, attempt = 0) {
     return api(method, url, body, attempt + 1);
   }
   if (res.status === 401 && !url.startsWith('/api/auth/')) { onUnauthorized(); throw new Error(json.error || 'Потрібно увійти'); }
-  if (!res.ok) throw new Error(json.error || (res.status >= 500 ? 'Сервер не зміг виконати дію. Спробуйте ще раз за хвилину.' : 'Дію не виконано. Оновіть сторінку і спробуйте ще раз.'));
+  if (!res.ok) throw Object.assign(new Error(json.error || (res.status >= 500 ? 'Сервер не зміг виконати дію. Спробуйте ще раз за хвилину.' : 'Дію не виконано. Оновіть сторінку і спробуйте ще раз.')), { status: res.status, data: json });
   return json;
 }
 

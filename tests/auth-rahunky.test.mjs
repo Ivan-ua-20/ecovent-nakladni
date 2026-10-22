@@ -9,8 +9,10 @@ const db = openDb(':memory:');
 await migrate(db);
 const fetchFn = async (url, opts = {}) => {
   const json = (o) => new Response(JSON.stringify(o));
+  if (url.includes('getStatuses')) return json({ status: 'ok', data: { 11: 'Прийнято', 14: 'Відправлено' } });
+  if (url.includes('getOrdersIdByStatus')) return json({ status: 'ok', data: new URLSearchParams(opts.body).get('status') === '11' ? ['1791608184877250'] : [] });
   if (url.includes('getOrdersByID')) {
-    return json({ status: 'ok', data: { id: '106593', order_id: '1791608184877250', bayer_name: 'Тест', phone: '380750000000', datetime: '2026-10-10 07:56:24', office: '4',
+    return json({ status: 'ok', data: { id: '106593', order_id: '1791608184877250', status: '11', bayer_name: 'Тест', phone: '380750000000', datetime: '2026-10-10 07:56:24', office: '4',
       products: [{ product_id: '965', name: 'Смартфон iHunt Titan [04979]', price: '21900.00', quantity: '1' }] } });
   }
   return json({ status: 'ok', data: [] });
@@ -93,7 +95,8 @@ assert.equal(r1.json.data.items[0].unit, 'шт');
 const r2 = await req('POST', '/api/rahunky', { ...base, source: 'manual' }, M);
 assert.equal(r2.json.data.number, '10517', 'спільний лічильник');
 assert.equal((await req('POST', '/api/rahunky', { ...base, source: 'manual', client: { name: ' ' } }, M)).status, 400, 'назва клієнта обовʼязкова');
-const ord = await req('GET', '/api/rahunok-order/1791608184877250', null, M);
+assert.equal((await req('GET', '/api/rahunok-order/1791608184877250', null, M)).status, 400, 'рахунок з CRM — лише за ID замовлення');
+const ord = await req('GET', '/api/rahunok-order/106593', null, M);
 assert.equal(ord.json.number, '106593');
 assert.equal(ord.json.items[0].name, 'Смартфон iHunt Titan [04979]');
 const r3 = await req('POST', '/api/rahunky', { ...base, source: 'crm', number: ord.json.number, items: [...ord.json.items, { name: 'Доставка', qty: 1, price: 150 }] }, M);
