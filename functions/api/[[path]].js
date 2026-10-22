@@ -1554,10 +1554,10 @@ var RegExpRouter = class {
       const handlers = r[path];
       const pathData = trie.paths[path];
       if (!pathData) {
-        staticMap[path] = [handlers.map(([h2]) => [h2, createNullObject()]), emptyParam];
+        staticMap[path] = [handlers.map(([h3]) => [h3, createNullObject()]), emptyParam];
         continue;
       }
-      handlerData[pathData[0]] = handlers.map(([h2, handlerPath]) => [h2, trie.paths[handlerPath][1].reduceRight((map, [key], i) => {
+      handlerData[pathData[0]] = handlers.map(([h3, handlerPath]) => [h3, trie.paths[handlerPath][1].reduceRight((map, [key], i) => {
         map[key] = paramReplacementMap[pathData[1][i][1]];
         return map;
       }, createNullObject())]);
@@ -1789,7 +1789,7 @@ var permsOf = (role) => PERMS[role] || [];
 var can = (user, perm) => Boolean(user && permsOf(user.role).includes(perm));
 var enc = new TextEncoder();
 var toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-var fromHex = (hex) => new Uint8Array(hex.match(/.{2}/g).map((h2) => parseInt(h2, 16)));
+var fromHex = (hex) => new Uint8Array(hex.match(/.{2}/g).map((h3) => parseInt(h3, 16)));
 function randomToken(bytes = 32) {
   const a = new Uint8Array(bytes);
   crypto.getRandomValues(a);
@@ -1806,15 +1806,15 @@ async function derive(password, saltBytes, iterations) {
 }
 async function hashPassword(password) {
   const salt = fromHex(randomToken(16));
-  const h2 = await derive(password, salt, ITER);
-  return `pbkdf2$${ITER}$${toHex(salt)}$${h2}`;
+  const h3 = await derive(password, salt, ITER);
+  return `pbkdf2$${ITER}$${toHex(salt)}$${h3}`;
 }
 async function verifyPassword(password, stored) {
   const [scheme, iter, saltHex, hashHex] = String(stored || "").split("$");
   if (scheme !== "pbkdf2" || !saltHex || !hashHex) return false;
-  const h2 = await derive(password, fromHex(saltHex), Number(iter));
-  let diff = h2.length ^ hashHex.length;
-  for (let i = 0; i < Math.min(h2.length, hashHex.length); i++) diff |= h2.charCodeAt(i) ^ hashHex.charCodeAt(i);
+  const h3 = await derive(password, fromHex(saltHex), Number(iter));
+  let diff = h3.length ^ hashHex.length;
+  for (let i = 0; i < Math.min(h3.length, hashHex.length); i++) diff |= h3.charCodeAt(i) ^ hashHex.charCodeAt(i);
   return diff === 0;
 }
 var publicUser = (u) => u ? {
@@ -1858,12 +1858,12 @@ var num = (v) => {
 var kyivDay = (d = /* @__PURE__ */ new Date()) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv" }).format(d);
 var parseTpl = (t) => t ? { ...t, options: JSON.parse(t.options || "{}") } : null;
 var hash = (s) => {
-  let h2 = 2166136261;
+  let h3 = 2166136261;
   for (let i = 0; i < s.length; i++) {
-    h2 ^= s.charCodeAt(i);
-    h2 = Math.imul(h2, 16777619) >>> 0;
+    h3 ^= s.charCodeAt(i);
+    h3 = Math.imul(h3, 16777619) >>> 0;
   }
-  return h2.toString(16);
+  return h3.toString(16);
 };
 
 // node_modules/hono/dist/utils/cookie.js
@@ -2644,8 +2644,8 @@ async function getProducts(fetchFn, { subdomain, key }, ids) {
   const cached = {};
   const unique = [];
   for (const id of all) {
-    const h2 = productCache.get(`${subdomain}|${id}`);
-    if (h2 && Date.now() - h2.at < PRODUCT_TTL) cached[id] = h2.value;
+    const h3 = productCache.get(`${subdomain}|${id}`);
+    if (h3 && Date.now() - h3.at < PRODUCT_TTL) cached[id] = h3.value;
     else unique.push(id);
   }
   if (!unique.length) return cached;
@@ -3596,7 +3596,7 @@ function flattenCategories(node, parent = null, out = [], depth = 0) {
   }
   return out;
 }
-function mountAnalytics(app, { db, fetchFn, shared: shared2 = {} }) {
+function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} }) {
   const settings = () => loadSettings(db);
   const getSt = async () => {
     const r = await db.get(`SELECT value FROM settings WHERE key = 'an_settings'`);
@@ -4182,8 +4182,10 @@ function mountAnalytics(app, { db, fetchFn, shared: shared2 = {} }) {
       }
     } catch (e) {
       if (!e.pending) {
-        if (!/429/.test(e.message)) state.error = e.message;
-        else warn("LP-CRM \u043F\u043E\u043F\u0440\u043E\u0441\u0438\u043B\u0430 \u0437\u0430\u0447\u0435\u043A\u0430\u0442\u0438 (429) \u2014 \u043F\u0440\u043E\u0434\u043E\u0432\u0436\u0443 \u0430\u0432\u0442\u043E\u043C\u0430\u0442\u0438\u0447\u043D\u043E.");
+        if (!/429/.test(e.message)) {
+          state.error = e.message;
+          await services.errlog?.log(e, { path: "/api/an/sync", source: /D1_/.test(e.message) ? "" : "LP-CRM (\u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0430)" });
+        } else warn("LP-CRM \u043F\u043E\u043F\u0440\u043E\u0441\u0438\u043B\u0430 \u0437\u0430\u0447\u0435\u043A\u0430\u0442\u0438 (429) \u2014 \u043F\u0440\u043E\u0434\u043E\u0432\u0436\u0443 \u0430\u0432\u0442\u043E\u043C\u0430\u0442\u0438\u0447\u043D\u043E.");
       }
     }
     state.lockUntil = 0;
@@ -4666,9 +4668,109 @@ ${h(l.alias || "")}${l.created_by ? `
   return { notify };
 }
 
+// src/modules/errlog/index.js
+var KEEP_DAYS = 30;
+var TG_EVERY_MS = 60 * 60 * 1e3;
+function errSource(message, path = "") {
+  const m = String(message || "");
+  if (/D1_|SQLITE|database/i.test(m)) return "\u0411\u0430\u0437\u0430 \u0434\u0430\u043D\u0438\u0445 (D1)";
+  if (/LP-CRM|lp-crm/i.test(m)) return "LP-CRM";
+  if (/Opendatabot/i.test(m)) return "Opendatabot";
+  if (/Нова пошта|novaposhta/i.test(m)) return "\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430";
+  if (/Розетк|rozetka/i.test(m)) return "\u0420\u043E\u0437\u0435\u0442\u043A\u0430";
+  if (/Checkbox/i.test(m)) return "Checkbox";
+  if (/Telegram/i.test(m)) return "Telegram";
+  if (path.startsWith("/api/an")) return "\u0410\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0430";
+  if (path.startsWith("/api/odb")) return "Opendatabot";
+  if (path.startsWith("/api/invoice") || path.startsWith("/api/rahunok-order")) return "LP-CRM";
+  return "\u0421\u0435\u0440\u0432\u0435\u0440";
+}
+var kindOf = (source, message) => `${source}|${String(message || "").replace(/\d+/g, "#").slice(0, 120)}`;
+var h2 = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function mountErrLog(app, { db, fetchFn, onCleanup, shared: shared2 = {} }) {
+  shared2.errTg ||= { sentAt: /* @__PURE__ */ new Map(), token: "", chats: [], at: 0 };
+  const mem = shared2.errTg;
+  onCleanup(() => db.run(`DELETE FROM error_log WHERE at < ?`, [new Date(Date.now() - KEEP_DAYS * 864e5).toISOString()]));
+  async function recipients() {
+    if (Date.now() - mem.at < 10 * 6e4 && mem.token) return mem;
+    try {
+      const s = await loadSettings(db);
+      const rows = await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND role IN ('owner', 'admin') AND tg_chat_id != ''`);
+      Object.assign(mem, { token: s.tg_token || "", chats: rows.map((r) => r.tg_chat_id), at: Date.now() });
+    } catch {
+    }
+    return mem;
+  }
+  async function tgOnce(kind, text) {
+    const last = mem.sentAt.get(kind) || 0;
+    if (Date.now() - last < TG_EVERY_MS) return;
+    try {
+      const row = await db.get(`SELECT value FROM settings WHERE key = 'err_tg'`);
+      const map = row?.value ? JSON.parse(row.value) : {};
+      if (Date.now() - (map[kind] || 0) < TG_EVERY_MS) {
+        mem.sentAt.set(kind, map[kind]);
+        return;
+      }
+      for (const k of Object.keys(map)) if (Date.now() - map[k] > 24 * 36e5) delete map[k];
+      map[kind] = Date.now();
+      await db.run(`INSERT INTO settings (key, value) VALUES ('err_tg', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(map)]);
+    } catch {
+    }
+    mem.sentAt.set(kind, Date.now());
+    const { token, chats } = await recipients();
+    if (!token) return;
+    for (const chat of chats.slice(0, 10)) {
+      try {
+        await fetchFn(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: chat, text, parse_mode: "HTML", disable_web_page_preview: true })
+        });
+      } catch {
+      }
+    }
+  }
+  async function log(err, { path = "", user = "", source = "" } = {}) {
+    try {
+      const message = String(err?.message || err || "").slice(0, 1e3);
+      const src = source || errSource(message, path);
+      try {
+        await db.run(
+          `INSERT INTO error_log (at, source, message, path, user_name) VALUES (?, ?, ?, ?, ?)`,
+          [(/* @__PURE__ */ new Date()).toISOString(), src, message, String(path).slice(0, 200), String(user).slice(0, 80)]
+        );
+      } catch {
+      }
+      await tgOnce(kindOf(src, message), `\u26A0\uFE0F <b>\u041F\u043E\u043C\u0438\u043B\u043A\u0430: ${h2(src)}</b>
+${h2(message.slice(0, 500))}${path ? `
+<i>${h2(path)}</i>` : ""}${user ? `
+\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447: ${h2(user)}` : ""}
+
+\u041F\u043E\u0432\u0442\u043E\u0440\u043D\u0456 \u0442\u0430\u043A\u0456 \u0441\u0430\u043C\u0456 \u2014 \u043D\u0435 \u0447\u0430\u0441\u0442\u0456\u0448\u0435 \u0440\u0430\u0437\u0443 \u043D\u0430 \u0433\u043E\u0434\u0438\u043D\u0443. \u0414\u0435\u0442\u0430\u043B\u0456: \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0416\u0443\u0440\u043D\u0430\u043B \u043F\u043E\u043C\u0438\u043B\u043E\u043A\xBB.`);
+    } catch {
+    }
+  }
+  app.get("/api/errors", async (c) => {
+    need(c, "users");
+    const src = String(c.req.query("source") || "");
+    const rows = await db.all(
+      `SELECT id, at, source, message, path, user_name FROM error_log ${src ? "WHERE source = ?" : ""} ORDER BY id DESC LIMIT 300`,
+      src ? [src] : []
+    );
+    const sources = await db.all(`SELECT source, COUNT(*) AS n, MAX(at) AS last FROM error_log GROUP BY source ORDER BY last DESC`);
+    return c.json({ rows, sources, keepDays: KEEP_DAYS });
+  });
+  app.delete("/api/errors", async (c) => {
+    need(c, "users");
+    await db.run(`DELETE FROM error_log`);
+    return c.json({ ok: true });
+  });
+  return { log };
+}
+
 // src/modules/payments/index.js
 var ODB_BASE = "https://iban.opendatabot.ua";
-var kindOf = (code) => /^\d{10}$/.test(String(code || "").trim()) ? "fop" : "company";
+var kindOf2 = (code) => /^\d{10}$/.test(String(code || "").trim()) ? "fop" : "company";
 var kyivParts = (d) => {
   const f = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
   return f.format(d).replace(" ", "T");
@@ -4785,7 +4887,7 @@ function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 })
     for (const a of empty) {
       const f = known.find((k) => norm(k.iban) === a.iban) || (a.code ? known.find((k) => String(k.ipn || "").trim() === a.code) : null);
       let base2 = a.alias || (f ? (f.full_name || f.short_name || "").trim() : "");
-      if (f && !/^(ФОП|ТОВ|ПП)(\s|$)/i.test(base2) && kindOf(a.code) === "fop") base2 = `\u0424\u041E\u041F ${base2}`;
+      if (f && !/^(ФОП|ТОВ|ПП)(\s|$)/i.test(base2) && kindOf2(a.code) === "fop") base2 = `\u0424\u041E\u041F ${base2}`;
       if (!base2) continue;
       const bank = bankOf(a.iban);
       st.push([`UPDATE odb_accounts SET name = ? WHERE id = ?`, [bank && !base2.toLowerCase().includes(bank.toLowerCase()) ? `${base2} (${bank})` : base2, a.id]]);
@@ -4803,7 +4905,7 @@ function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 })
       const st = list.map((x, i) => [
         `INSERT INTO odb_accounts (id, iban, code, alias, kind, sort) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET iban = excluded.iban, code = excluded.code, alias = excluded.alias, kind = excluded.kind, sort = excluded.sort`,
-        [String(x.id), String(x.iban || "").replace(/\s/g, "").toUpperCase(), String(x.code || ""), pickName(x), kindOf(x.code), i]
+        [String(x.id), String(x.iban || "").replace(/\s/g, "").toUpperCase(), String(x.code || ""), pickName(x), kindOf2(x.code), i]
       ]);
       st.push([`UPDATE odb_accounts SET id = 'iban:' || iban, enabled = 0, seen = 1 WHERE id NOT LIKE 'iban:%' AND id NOT IN (SELECT value FROM json_each(?))
         AND NOT EXISTS (SELECT 1 FROM odb_accounts b WHERE b.id = 'iban:' || odb_accounts.iban)`, [JSON.stringify(ids)]]);
@@ -4867,7 +4969,7 @@ function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 })
       [`DELETE FROM odb_accounts WHERE id = ?`, [acc.id]],
       [
         `INSERT OR REPLACE INTO odb_accounts (id, iban, code, alias, kind, enabled, sort, seen, name) VALUES (?, ?, ?, ?, ?, 0, 500, 0, ?)`,
-        [String(r.id), acc.iban, code, String(r.alias || ""), kindOf(code), acc.name || ""]
+        [String(r.id), acc.iban, code, String(r.alias || ""), kindOf2(code), acc.name || ""]
       ]
     ]);
     return c.json({ ok: true, id: String(r.id) });
@@ -5325,9 +5427,13 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     }
     return rawFetch(...args);
   };
-  app.onError((err, c) => {
+  app.onError(async (err, c) => {
     if (err.pending) return c.json({ pending: true, message: err.message }, 202);
     if (!err.status) console.error(err);
+    if (!err.status || err.status >= 500) {
+      const u = c.get("user");
+      await services.errlog?.log(err, { path: c.req.path, user: u?.name || u?.login || "" });
+    }
     return c.json({ error: err.message || String(err), ...err.extra || {} }, err.status || 500);
   });
   const cleanupTasks = [];
@@ -5346,6 +5452,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   mountRefs(app, ctx);
   services.nakladni = mountNakladni(app, ctx);
   mountAdmin(app, ctx);
+  services.errlog = mountErrLog(app, ctx);
   mountRahunky(app, ctx);
   mountAnalytics(app, ctx);
   services.notify = mountTg(app, ctx);
@@ -6061,8 +6168,26 @@ var schema9 = {
   columns: []
 };
 
+// src/modules/errlog/schema.js
+var schema10 = {
+  name: "errlog",
+  version: 1,
+  tables: [
+    `CREATE TABLE IF NOT EXISTS error_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    path TEXT DEFAULT '',
+    user_name TEXT DEFAULT ''
+  )`,
+    `CREATE INDEX IF NOT EXISTS error_log_at ON error_log (at)`
+  ],
+  columns: []
+};
+
 // src/migrate.js
-var MODULE_SCHEMAS = [schema, schema2, schema3, schema4, schema5, schema6, schema7, schema8, schema9];
+var MODULE_SCHEMAS = [schema, schema2, schema3, schema4, schema5, schema6, schema7, schema8, schema9, schema10];
 var versionKey = (m) => `schema:${m.name}`;
 async function migrate(db, modules = MODULE_SCHEMAS) {
   let have = {};
@@ -6135,7 +6260,7 @@ async function onRequest(ctx) {
   await ready;
   if (env.OWNER_RESET_PASSWORD && env.OWNER_RESET_PASSWORD.length >= 6) {
     const mark = await db.get(`SELECT value FROM settings WHERE key = 'owner_reset_mark'`);
-    const tag = `${env.OWNER_RESET_PASSWORD.length}:${[...env.OWNER_RESET_PASSWORD].reduce((h2, ch) => Math.imul(h2, 31) + ch.charCodeAt(0) >>> 0, 7)}`;
+    const tag = `${env.OWNER_RESET_PASSWORD.length}:${[...env.OWNER_RESET_PASSWORD].reduce((h3, ch) => Math.imul(h3, 31) + ch.charCodeAt(0) >>> 0, 7)}`;
     if (mark?.value !== tag) {
       await resetOwnerPassword(db, env.OWNER_RESET_PASSWORD);
       await db.run(`INSERT INTO settings (key, value) VALUES ('owner_reset_mark', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [tag]);
