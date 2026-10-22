@@ -66,7 +66,9 @@ export function createB2bPages() {
                 <td class="r"><input data-bm="${b.id}" inputmode="decimal" value="${b.margin != null ? String(b.margin).replace('.', ',') : ''}" placeholder="напр. 20" style="width:90px;text-align:right" ${b.enabled ? '' : 'disabled'} aria-label="Маржа для ${esc(b.name)}"></td>
               </tr>`).join('')}
             </tbody></table>
-            <div class="btn-row"><button class="btn primary" id="mSave">Зберегти бренди й маржу</button></div>
+            ${brands.some((b) => b.enabled && !b.priced) ? `<div class="alert warn small">Для ввімкнених брендів ще немає цін — партнер бачить порожній каталог.
+              Натисніть «Оновити ціни з LP-CRM». Якщо й після цього 0 — товарів бренду немає в аналітиці: додайте їх у «Каталог і ціни» → «+ Товари за ID».</div>` : ''}
+            <div class="btn-row"><button class="btn primary" id="mSave">Зберегти бренди й маржу</button><button class="btn" id="mSync">Оновити ціни з LP-CRM</button></div>
           </div>
         </div>
         <div class="form-stack">
@@ -107,9 +109,16 @@ export function createB2bPages() {
         if (v === '' || !Number.isFinite(Number(v))) { toast('Вкажіть маржу для кожного ввімкненого бренду', true); return; }
         list.push({ brand_id: Number(cb.dataset.be), margin: Number(v) });
       }
-      try { const r = await api('PUT', `/api/b2b/partners/${p.id}/margins`, list); toast(r.changed ? 'Бренди й маржу збережено' : 'Змін немає'); viewPartner(p.id); }
-      catch (e) { toast(e.message, true); }
+      try {
+        const r = await api('PUT', `/api/b2b/partners/${p.id}/margins`, list);
+        toast(r.changed ? 'Бренди й маржу збережено' : 'Змін немає');
+        // Нові бренди без цін — одразу підтягуємо товари й РРЦ з LP-CRM, щоб партнер побачив каталог.
+        const enabled = new Set(list.map((x) => x.brand_id));
+        if (brands.some((b) => enabled.has(b.id) && !b.priced)) await syncCatalog($('#mSync'), () => viewPartner(p.id));
+        else viewPartner(p.id);
+      } catch (e) { toast(e.message, true); }
     };
+    $('#mSync').onclick = (e) => syncCatalog(e.currentTarget, () => viewPartner(p.id));
     const userForm = (u) => {
       const isNew = !u;
       const m = modal(isNew ? `Новий користувач — ${p.name}` : `Користувач ${u.login}`, `<form id="puF" class="form-stack">
@@ -136,7 +145,7 @@ export function createB2bPages() {
 
   // ---------------------------------------------------------------- каталог
   let catFilter = { brand: '', q: '' };
-  async function syncCatalog(btn) {
+  async function syncCatalog(btn, done = viewCatalog) {
     btn.disabled = true;
     try {
       for (let i = 0; i < 100; i++) {
@@ -146,7 +155,7 @@ export function createB2bPages() {
       }
     } catch (e) { toast(e.message, true); }
     btn.disabled = false;
-    viewCatalog();
+    done();
   }
 
   async function viewCatalog() {
