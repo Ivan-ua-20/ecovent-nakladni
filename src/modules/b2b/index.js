@@ -5,7 +5,7 @@
 //  замовлення для своїх клієнтів із залишку закупівлі (адмін передає їх у LP-CRM — clients.js).
 // Ціна партнера = РРЦ × (1 − маржа %), округлення до копійок (ціни з ПДВ).
 // Бренди й товари — з аналітики (an_brands, an_products; лише читання), РРЦ і фото — з LP-CRM (getProduct).
-import { hashPassword } from '../../core/auth.js';
+import { hashPassword, can, PARTNER_ROLES, partnerRole } from '../../core/auth.js';
 import { fail, need, nowIso, kyivDay, loadSettings, round2 } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
 import { call } from '../../integrations/lpcrm.js';
@@ -46,13 +46,21 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     return new Map([...rows.map((r) => [r.id, r.name]), [0, 'Інші']]);
   }
 
+  // Кабінет партнера: роль «Лише перегляд» нічого не змінює (усе, крім читання, — 403).
+  app.use('/api/b2b/p/*', async (c, next) => {
+    const u = c.get('user');
+    if (u?.role === 'partner' && c.req.method !== 'GET' && !can(u, 'b2b.order')) throw fail(403, 'У вас доступ лише на перегляд. Зверніться до керівника вашої команди.');
+    await next();
+  });
+
   // ================================================================ АДМІН: партнери
   app.get('/api/b2b/partners', async (c) => {
     need(c, 'b2b.admin');
     const rows = await db.all(`SELECT p.*,
         (SELECT COUNT(*) FROM users u WHERE u.partner_id = p.id AND u.role = 'partner') AS users,
+        (SELECT COUNT(*) FROM users u WHERE u.partner_id = p.id AND u.role = 'partner' AND u.added_by LIKE 'partner:%') AS users_by_partner,
         (SELECT COUNT(*) FROM b2b_margins m WHERE m.partner_id = p.id) AS brands
-      FROM b2b_partners p ORDER BY p.active DESC, p.name`);
+      FROM b2b_partners p WHERE COALESCE(p.deleted_at, '') = '' ORDER BY p.active DESC, p.name`);
     return c.json(rows);
   });
 
@@ -74,7 +82,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   });
 
   async function getPartner(id) {
-    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [id]);
+    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ? AND COALESCE(deleted_at, '') = ''`, [id]);
     if (!p) throw fail(404, 'Партнера не знайдено.');
     return p;
   }
@@ -83,7 +91,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     need(c, 'b2b.admin');
     const p = await getPartner(c.req.param('id'));
     const [users, margins, counts, names, entities] = await Promise.all([
-      db.all(`SELECT id, login, name, active, created_at FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY login`, [p.id]),
+      db.all(`SELECT id, login, name, active, created_at, partner_role, added_by FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY active DESC, login`, [p.id]),
       db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id]),
       db.all(`SELECT brand_id, COUNT(*) AS n, SUM(CASE WHEN rrp > 0 THEN 1 ELSE 0 END) AS priced FROM b2b_catalog WHERE hidden = 0 GROUP BY brand_id`),
       brandNames(),
@@ -94,7 +102,29 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     const brands = [...names].map(([id, name]) => ({
       id, name, enabled: m.has(id), margin: m.get(id) ?? null, products: cnt.get(id)?.n || 0, priced: cnt.get(id)?.priced || 0,
     }));
-    return c.json({ partner: p, users, brands, entities });
+    return c.json({ partner: p, users: users.map(teamRow), brands, entities, roles: PARTNER_ROLES });
+  });
+
+  // Видалення партнера. Без замовлень — повністю; із замовленнями — в архів (замовлення й документи лишаються,
+  // партнер зникає зі списку). Користувачі партнера видаляються в обох випадках (логіни звільняються).
+  app.delete('/api/b2b/partners/:id', async (c) => {
+    need(c, 'b2b.admin');
+    const p = await getPartner(c.req.param('id'));
+    const hasOrders = await db.get(`SELECT id FROM b2b_orders WHERE partner_id = ? LIMIT 1`, [p.id]);
+    const st = [
+      [`DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE partner_id = ? AND role = 'partner')`, [p.id]],
+      [`DELETE FROM users WHERE partner_id = ? AND role = 'partner'`, [p.id]],
+      [`DELETE FROM b2b_margins WHERE partner_id = ?`, [p.id]],
+    ];
+    if (hasOrders) st.push([`UPDATE b2b_partners SET active = 0, deleted_at = ? WHERE id = ?`, [nowIso(), p.id]]);
+    else {
+      st.push([`DELETE FROM b2b_margin_log WHERE partner_id = ?`, [p.id]]);
+      st.push([`DELETE FROM b2b_entities WHERE partner_id = ?`, [p.id]]);
+      st.push([`DELETE FROM b2b_partners WHERE id = ?`, [p.id]]);
+    }
+    await db.batch(st);
+    await audit(c, p.id, `${hasOrders ? 'партнера видалено (замовлення збережено в архіві)' : 'партнера видалено'}: «${p.name}»`);
+    return c.json({ ok: true, archived: !!hasOrders });
   });
 
   app.put('/api/b2b/partners/:id', async (c) => {
@@ -152,19 +182,66 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     return c.json({ ok: true, changed: changes.length });
   });
 
-  // ---------- користувачі партнера ----------
-  app.post('/api/b2b/partners/:id/users', async (c) => {
-    need(c, 'b2b.admin');
-    const p = await getPartner(c.req.param('id'));
-    const b = await c.req.json();
+  // ---------- користувачі партнера (команда) ----------
+  // Додає адмін (у картці партнера) або керівник партнера (вкладка «Команда» в кабінеті).
+  // added_by: «staff:Ім'я» — додав наш співробітник; «partner:Ім'я» — додав сам партнер.
+  const MAX_TEAM = 30;
+  const teamRow = (u) => {
+    const [by, ...who] = String(u.added_by || '').split(':');
+    return { id: u.id, login: u.login, name: u.name || '', active: u.active, created_at: u.created_at, partner_role: partnerRole(u),
+      partner_role_name: PARTNER_ROLES[partnerRole(u)], added_by_partner: by === 'partner', added_by_name: who.join(':') };
+  };
+  const roleOf = (v, fallback = 'head') => (PARTNER_ROLES[v] ? v : fallback);
+  const actorName = (c) => c.get('user')?.name || c.get('user')?.login || '';
+
+  async function addTeamUser(c, p, b, addedBy) {
     const login = String(b.login || '').trim().toLowerCase();
     if (!/^[a-z0-9._@-]{2,40}$/.test(login)) throw fail(400, 'Логін: латинські літери, цифри, крапка, дефіс (2–40 символів).');
     if (String(b.password || '').length < 6) throw fail(400, 'Пароль — не менше 6 символів.');
-    if (await db.get(`SELECT id FROM users WHERE login = ?`, [login])) throw fail(400, 'Такий логін уже є.');
-    const r = await db.run(`INSERT INTO users (login, name, password_hash, role, active, created_at, partner_id) VALUES (?, ?, ?, 'partner', 1, ?, ?)`,
-      [login, String(b.name || '').trim(), await hashPassword(b.password), nowIso(), p.id]);
-    await audit(c, p.id, `додано користувача партнера: ${login}`);
-    return c.json({ id: r.lastId });
+    if (await db.get(`SELECT id FROM users WHERE login = ?`, [login])) throw fail(400, 'Такий логін уже зайнятий — оберіть інший.');
+    if ((await db.get(`SELECT COUNT(*) AS n FROM users WHERE partner_id = ? AND role = 'partner'`, [p.id])).n >= MAX_TEAM) throw fail(400, `У команді не більше ${MAX_TEAM} користувачів.`);
+    const role = roleOf(b.partner_role, addedBy.startsWith('partner:') ? 'staff' : 'head');
+    const r = await db.run(`INSERT INTO users (login, name, password_hash, role, active, created_at, partner_id, partner_role, added_by) VALUES (?, ?, ?, 'partner', 1, ?, ?, ?, ?)`,
+      [login, String(b.name || '').trim().slice(0, 100), await hashPassword(b.password), nowIso(), p.id, role, addedBy]);
+    await audit(c, p.id, `додано користувача партнера «${p.name}»: ${login} (${PARTNER_ROLES[role]})${addedBy.startsWith('partner:') ? ' — додав партнер' : ''}`);
+    return { id: r.lastId, login, role };
+  }
+
+  // Зміна користувача; guard — перевірки керівника партнера (не себе, лишається хоча б один активний керівник).
+  async function updateTeamUser(c, p, u, b, { byPartner = false } = {}) {
+    const sets = [];
+    const vals = [];
+    const changes = [];
+    const me = c.get('user');
+    if (byPartner && u.id === me.id && ((b.partner_role !== undefined && roleOf(b.partner_role) !== partnerRole(u)) || b.active === false)) {
+      throw fail(400, 'Свою роль чи доступ змінити не можна — попросіть іншого керівника.');
+    }
+    if (b.name !== undefined) { sets.push('name = ?'); vals.push(String(b.name).trim().slice(0, 100)); }
+    if (b.partner_role !== undefined && roleOf(b.partner_role) !== partnerRole(u)) {
+      sets.push('partner_role = ?'); vals.push(roleOf(b.partner_role)); changes.push(`роль: ${PARTNER_ROLES[roleOf(b.partner_role)]}`);
+    }
+    if (b.active !== undefined && (b.active ? 1 : 0) !== u.active) { sets.push('active = ?'); vals.push(b.active ? 1 : 0); changes.push(b.active ? 'увімкнено' : 'вимкнено'); }
+    if (b.password) {
+      if (String(b.password).length < 6) throw fail(400, 'Пароль — не менше 6 символів.');
+      sets.push('password_hash = ?'); vals.push(await hashPassword(b.password)); changes.push('новий пароль');
+    }
+    // Хоча б один активний керівник має лишитися (інакше командою нікому керувати).
+    const willBeHead = (b.partner_role !== undefined ? roleOf(b.partner_role) : partnerRole(u)) === 'head' && (b.active !== undefined ? !!b.active : !!u.active);
+    if (!willBeHead && partnerRole(u) === 'head' && u.active) {
+      const heads = (await db.all(`SELECT id, partner_role FROM users WHERE partner_id = ? AND role = 'partner' AND active = 1 AND id != ?`, [p.id, u.id]))
+        .filter((x) => partnerRole(x) === 'head').length;
+      if (!heads) throw fail(400, 'У команді має лишитися хоча б один активний керівник.');
+    }
+    if (sets.length) await db.run(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, [...vals, u.id]);
+    if (b.password || b.active === false) await db.run(`DELETE FROM sessions WHERE user_id = ? AND user_id != ?`, [u.id, me.id]);
+    if (changes.length) await audit(c, p.id, `користувач партнера «${p.name}» ${u.login}: ${changes.join(', ')}${byPartner ? ' — змінив партнер' : ''}`);
+  }
+
+  app.post('/api/b2b/partners/:id/users', async (c) => {
+    need(c, 'b2b.admin');
+    const p = await getPartner(c.req.param('id'));
+    const r = await addTeamUser(c, p, await c.req.json(), `staff:${actorName(c)}`);
+    return c.json({ id: r.id });
   });
 
   app.put('/api/b2b/partners/:id/users/:uid', async (c) => {
@@ -172,18 +249,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     const p = await getPartner(c.req.param('id'));
     const u = await db.get(`SELECT * FROM users WHERE id = ? AND partner_id = ? AND role = 'partner'`, [c.req.param('uid'), p.id]);
     if (!u) throw fail(404, 'Користувача не знайдено.');
-    const b = await c.req.json();
-    const sets = [];
-    const vals = [];
-    if (b.name !== undefined) { sets.push('name = ?'); vals.push(String(b.name).trim()); }
-    if (b.active !== undefined) { sets.push('active = ?'); vals.push(b.active ? 1 : 0); }
-    if (b.password) {
-      if (String(b.password).length < 6) throw fail(400, 'Пароль — не менше 6 символів.');
-      sets.push('password_hash = ?'); vals.push(await hashPassword(b.password));
-    }
-    if (sets.length) await db.run(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, [...vals, u.id]);
-    if (b.password || b.active === false) await db.run(`DELETE FROM sessions WHERE user_id = ?`, [u.id]);
-    if (b.active !== undefined || b.password) await audit(c, p.id, `користувач партнера ${u.login}: ${b.password ? 'новий пароль' : ''}${b.active !== undefined ? (b.active ? ' увімкнено' : ' вимкнено') : ''}`.trim());
+    await updateTeamUser(c, p, u, await c.req.json());
     return c.json({ ok: true });
   });
 
@@ -289,6 +355,29 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     if (!p) throw fail(403, 'Кабінет партнера вимкнено. Зверніться до вашого менеджера.');
     return p;
   }
+
+  // ---------- команда партнера (керівник партнера) ----------
+  app.get('/api/b2b/p/team', async (c) => {
+    const p = await myPartner(c);
+    need(c, 'b2b.team');
+    const rows = await db.all(`SELECT * FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY active DESC, login`, [p.id]);
+    return c.json({ users: rows.map(teamRow), roles: PARTNER_ROLES, max: MAX_TEAM, me: c.get('user').id });
+  });
+  app.post('/api/b2b/p/team', async (c) => {
+    const p = await myPartner(c);
+    need(c, 'b2b.team');
+    const r = await addTeamUser(c, p, await c.req.json(), `partner:${actorName(c)}`);
+    await services.notify?.sendText({ admins: true }, `👥 Партнер «${p.name}» додав користувача <b>${r.login}</b> (${PARTNER_ROLES[r.role]}) — додав ${actorName(c)}.`).catch(() => 0);
+    return c.json({ id: r.id });
+  });
+  app.put('/api/b2b/p/team/:uid', async (c) => {
+    const p = await myPartner(c);
+    need(c, 'b2b.team');
+    const u = await db.get(`SELECT * FROM users WHERE id = ? AND partner_id = ? AND role = 'partner'`, [c.req.param('uid'), p.id]);
+    if (!u) throw fail(404, 'Користувача не знайдено.');
+    await updateTeamUser(c, p, u, await c.req.json(), { byPartner: true });
+    return c.json({ ok: true });
+  });
 
   app.get('/api/b2b/p/me', async (c) => {
     const p = await myPartner(c);

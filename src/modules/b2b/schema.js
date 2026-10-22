@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 3,
+  version: 4,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,6 +147,10 @@ export const schema = {
     ['b2b_orders', 'crm_checked_at', "TEXT DEFAULT ''"],
     ['b2b_orders', 'crm_sent_at', "TEXT DEFAULT ''"],
     ['b2b_orders', 'crm_ext', "TEXT DEFAULT ''"],
+    // етап 3а: команда партнера (роль у команді, хто додав) і видалені партнери (з замовленнями — в архіві)
+    ['users', 'partner_role', "TEXT DEFAULT ''"],
+    ['users', 'added_by', "TEXT DEFAULT ''"],
+    ['b2b_partners', 'deleted_at', "TEXT DEFAULT ''"],
   ],
   // Індекси на нові колонки — після ALTER TABLE (у старих базах колонок ще немає, коли створюються таблиці).
   async seed(db) {

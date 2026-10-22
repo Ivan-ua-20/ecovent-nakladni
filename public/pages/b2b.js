@@ -2,7 +2,7 @@
 // закупівлі (рахунок, накладна, файли), замовлення клієнтів партнерів (передача в LP-CRM).
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData } from './b2b-shared.js';
 
 const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
 
@@ -19,7 +19,7 @@ export function createB2bPages() {
         ${rows.map((p) => `<tr class="click" data-p="${p.id}">
           <td><b>${esc(p.name)}</b></td>
           <td class="small hide-m">${esc([p.phone, p.email].filter(Boolean).join(' · ') || '—')}</td>
-          <td class="r">${p.users}</td><td class="r">${p.brands}</td>
+          <td class="r">${p.users}${p.users_by_partner ? `<div class="small muted">з них додав партнер: ${p.users_by_partner}</div>` : ''}</td><td class="r">${p.brands}</td>
           <td>${p.active ? '<span class="badge ok">активний</span>' : '<span class="badge bad">вимкнений</span>'}</td>
         </tr>`).join('')}</tbody></table>`
         : '<div class="card empty"><div class="big">Партнерів ще немає</div>Створіть першого партнера, додайте йому користувача і ввімкніть бренди.</div>'}`;
@@ -48,10 +48,11 @@ export function createB2bPages() {
   }
 
   async function viewPartner(id) {
-    const { partner: p, users, brands, entities = [] } = await api('GET', `/api/b2b/partners/${id}`);
+    const { partner: p, users, brands, entities = [], roles = {} } = await api('GET', `/api/b2b/partners/${id}`);
+    const byPartner = users.filter((u) => u.added_by_partner).length;
     main.innerHTML = `
       <div class="head-row"><h2>${esc(p.name)} ${p.active ? '' : '<span class="badge bad">вимкнений</span>'}</h2>
-        <div class="btn-row"><a class="btn" href="#/b2bpartners">← До списку</a><button class="btn" id="pEdit">Змінити</button></div></div>
+        <div class="btn-row"><a class="btn" href="#/b2bpartners">← До списку</a><button class="btn" id="pEdit">Змінити</button><button class="btn danger" id="pDel">Видалити</button></div></div>
       <div class="form-page">
         <div class="form-stack">
           <div class="card form-stack">
@@ -79,11 +80,8 @@ export function createB2bPages() {
           </div>
           <div class="card form-stack">
             <div class="head-row" style="margin:0"><h3 style="margin:0">Користувачі партнера</h3><button class="btn sm primary" id="uNew">+ Користувач</button></div>
-            ${users.length ? `<table class="list"><tbody>${users.map((u) => `<tr>
-                <td><b>${esc(u.login)}</b><div class="small muted">${esc(u.name || '')}</div></td>
-                <td>${u.active ? '<span class="badge ok">активний</span>' : '<span class="badge bad">вимкнений</span>'}</td>
-                <td style="text-align:right"><button class="btn sm" data-ue="${u.id}">Змінити</button></td>
-              </tr>`).join('')}</tbody></table>`
+            <div class="small muted">Усього: ${users.length}${byPartner ? ` · додав сам партнер: <b>${byPartner}</b>` : ''}. Керівник партнера може сам додавати колег у вкладці «Команда» свого кабінету.</div>
+            ${users.length ? teamTable(users)
               : '<div class="small muted">Ще немає. Додайте логін і пароль — передайте їх партнеру; увійти він зможе на цьому ж сайті.</div>'}
           </div>
           <div class="card form-stack">
@@ -121,17 +119,10 @@ export function createB2bPages() {
     $('#mSync').onclick = (e) => syncCatalog(e.currentTarget, () => viewPartner(p.id));
     const userForm = (u) => {
       const isNew = !u;
-      const m = modal(isNew ? `Новий користувач — ${p.name}` : `Користувач ${u.login}`, `<form id="puF" class="form-stack">
-          ${isNew ? '<label class="f"><span>Логін (латиницею)</span><input name="login" required autocomplete="off"></label>' : ''}
-          <label class="f"><span>Ім’я</span><input name="name" value="${esc(u?.name || '')}"></label>
-          <label class="f"><span>${isNew ? 'Пароль (від 6 символів)' : 'Новий пароль (залиште порожнім, щоб не міняти)'}</span><input name="password" type="text" autocomplete="new-password" ${isNew ? 'required' : ''}></label>
-          ${isNew ? '' : `<label class="check"><input type="checkbox" name="active" ${u.active ? 'checked' : ''}> Активний (може входити)</label>`}
-        </form>`, { footer: `<button class="btn" data-close>Скасувати</button><button class="btn primary" id="puSave">Зберегти</button>` });
+      const m = modal(isNew ? `Новий користувач — ${p.name}` : `Користувач ${u.login}`, teamFormHtml(u, roles, { defaultRole: users.length ? 'staff' : 'head' }),
+        { footer: `<button class="btn" data-close>Скасувати</button><button class="btn primary" id="puSave">Зберегти</button>` });
       $('#puSave', m.el).onclick = async () => {
-        const f = $('#puF', m.el);
-        const d = Object.fromEntries(new FormData(f));
-        if (f.active) d.active = f.active.checked;
-        if (!d.password) delete d.password;
+        const d = teamFormData($('#puF', m.el));
         try {
           if (isNew) await api('POST', `/api/b2b/partners/${p.id}/users`, d);
           else await api('PUT', `/api/b2b/partners/${p.id}/users/${u.id}`, d);
@@ -140,6 +131,13 @@ export function createB2bPages() {
       };
     };
     $('#uNew').onclick = () => userForm(null);
+    $('#pDel').onclick = async () => {
+      if (!(await confirmDanger(`Видалити партнера «${p.name}»?`,
+        `Усі його користувачі (${users.length}) втратять доступ, бренди й маржа видаляться. Якщо в партнера є замовлення — вони залишаться в списках закупівель і замовлень клієнтів (архів).`,
+        'Видалити партнера'))) return;
+      try { const r = await api('DELETE', `/api/b2b/partners/${p.id}`); toast(r.archived ? 'Партнера видалено, замовлення збережено' : 'Партнера видалено'); location.hash = '#/b2bpartners'; }
+      catch (e) { toast(e.message, true); }
+    };
     $$('[data-ue]').forEach((b) => (b.onclick = () => userForm(users.find((x) => String(x.id) === b.dataset.ue))));
   }
 

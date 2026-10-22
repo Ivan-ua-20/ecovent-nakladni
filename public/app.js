@@ -52,6 +52,7 @@ const SECTIONS = [
     { id: 'porders', label: 'Закупівлі' },
     { id: 'pclients', label: 'Замовлення клієнтів' },
     { id: 'pentities', label: 'Мої юрособи' },
+    { id: 'pteam', label: 'Команда', perm: 'b2b.team' },
     { id: 'phelp', label: 'Інструкція' },
   ] },
   { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [{ id: 'settings', label: 'Загальні налаштування' }, { id: 'errors', label: 'Журнал помилок', perm: 'users' }] },
@@ -79,7 +80,7 @@ function renderNav(active = 'invoice') {
     </nav>
     <div class="top-user">
       ${can('api') && !s.lpcrm_key ? '<a href="#/settings" class="top-warn">LP-CRM не підключено</a>' : ''}
-      <span><b>${esc(u?.name || '')}</b> · ${esc(u?.role_name || '')}</span>
+      <span><b>${esc(u?.name || '')}</b> · ${esc(u?.partner_role_name ? `Партнер · ${u.partner_role_name}` : (u?.role_name || ''))}</span>
       <a href="#" id="navTg">Telegram</a><a href="#" id="navPwd">Пароль</a><a href="#" id="navOut">Вийти</a>
     </div>`;
   const tabs = visibleTabs(cur);
@@ -200,7 +201,7 @@ const { viewRahunky, viewRahunkyList } = createRahunkyPages(ctx);
 const { viewUsers } = createUsersPages(ctx);
 const { viewErrors } = createErrorsPages(ctx);
 const { viewPartners, viewCatalog, viewOrders: viewB2bOrders, viewClients: viewB2bClients } = createB2bPages(ctx);
-const { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients } = createPartnerPages(ctx);
+const { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients, viewTeam: viewPartnerTeam } = createPartnerPages(ctx);
 setUnauthorized(() => showAuth());
 
 const routes = {
@@ -226,6 +227,7 @@ const routes = {
   b2borders: viewB2bOrders,
   porders: viewPartnerOrders,
   pclients: viewPartnerClients,
+  pteam: viewPartnerTeam,
   b2bclients: viewB2bClients,
   pentities: viewEntities,
   b2bcatalog: viewCatalog,

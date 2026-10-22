@@ -38,3 +38,40 @@ export function itemsTable(items, { rrp = false } = {}) {
     <tr><td colspan="${rrp ? 4 : 3}" class="r"><b>Разом (з ПДВ)</b></td><td class="r"><b>${uah(total)}</b></td></tr>
   </tbody></table>`;
 }
+
+// Команда партнера: таблиця користувачів (роль, хто додав) і форма — спільні для адміна й керівника партнера.
+export const ROLE_HINT = {
+  head: 'усе: каталог, закупівлі, замовлення клієнтів, юрособи і команда',
+  staff: 'каталог, закупівлі, замовлення клієнтів, юрособи (без команди)',
+  viewer: 'лише перегляд, без змін',
+};
+export function teamTable(users, { me = 0, showAdded = true } = {}) {
+  return `<table class="list"><thead><tr><th>Користувач</th><th>Роль</th>${showAdded ? '<th class="hide-m">Хто додав</th>' : ''}<th>Стан</th><th></th></tr></thead><tbody>
+    ${users.map((u) => `<tr>
+      <td><b>${esc(u.login)}</b>${u.id === me ? ' <span class="small muted">(ви)</span>' : ''}<div class="small muted">${esc(u.name || '')}</div></td>
+      <td class="small">${esc(u.partner_role_name || '')}</td>
+      ${showAdded ? `<td class="small hide-m">${u.added_by_partner ? `<span class="badge info">партнер</span> ${esc(u.added_by_name)}` : esc(u.added_by_name || 'Ековент')}
+        <div class="muted">${esc(fmtDT(u.created_at))}</div></td>` : ''}
+      <td>${u.active ? '<span class="badge ok">активний</span>' : '<span class="badge bad">вимкнений</span>'}</td>
+      <td style="text-align:right"><button class="btn sm" data-ue="${u.id}">Змінити</button></td>
+    </tr>`).join('')}</tbody></table>`;
+}
+export function teamFormHtml(u, roles, { self = false, defaultRole = 'staff' } = {}) {
+  const isNew = !u;
+  const role = u?.partner_role || (isNew ? defaultRole : 'head');
+  return `<form id="puF" class="form-stack">
+    ${isNew ? '<label class="f"><span>Логін (латиницею) *</span><input name="login" required autocomplete="off" placeholder="напр. olena.shop"></label>' : ''}
+    <label class="f"><span>Ім’я</span><input name="name" value="${esc(u?.name || '')}"></label>
+    <label class="f"><span>Роль</span><select name="partner_role" ${self ? 'disabled' : ''}>${Object.entries(roles).map(([k, v]) => `<option value="${k}" ${k === role ? 'selected' : ''}>${esc(v)} — ${esc(ROLE_HINT[k] || '')}</option>`).join('')}</select></label>
+    <label class="f"><span>${isNew ? 'Пароль (від 6 символів) *' : 'Новий пароль (залиште порожнім, щоб не міняти)'}</span><input name="password" type="text" autocomplete="new-password" ${isNew ? 'required' : ''}></label>
+    ${isNew || self ? '' : `<label class="check"><input type="checkbox" name="active" ${u.active ? 'checked' : ''}> Активний (може входити)</label>`}
+    ${isNew ? '<div class="small muted">Передайте логін і пароль колезі — входити на цьому ж сайті.</div>' : ''}
+  </form>`;
+}
+export function teamFormData(form) {
+  const d = Object.fromEntries(new FormData(form));
+  if (form.active) d.active = form.active.checked;
+  if (form.partner_role?.disabled) delete d.partner_role;
+  if (!d.password) delete d.password;
+  return d;
+}

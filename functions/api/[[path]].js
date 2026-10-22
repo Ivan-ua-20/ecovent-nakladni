@@ -1789,8 +1789,14 @@ var PERMS = {
 };
 var AN_PERMS = ["analytics", "an.view"];
 var permsOf = (role) => PERMS[role] || [];
+var PARTNER_ROLES = { head: "\u041A\u0435\u0440\u0456\u0432\u043D\u0438\u043A", staff: "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440", viewer: "\u041B\u0438\u0448\u0435 \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u0434" };
+var partnerRole = (u) => PARTNER_ROLES[u?.partner_role] ? u.partner_role : "head";
 function permsOfUser(u) {
   if (!u) return [];
+  if (u.role === "partner") {
+    const r = partnerRole(u);
+    return ["b2b.partner", ...r !== "viewer" ? ["b2b.order"] : [], ...r === "head" ? ["b2b.team"] : []];
+  }
   const base = permsOf(u.role);
   if (u.role === "owner" || u.role === "partner" || u.an_access == null || u.an_access === "") return base;
   if (Number(u.an_access) === 0) return base.filter((p) => !AN_PERMS.includes(p));
@@ -1839,7 +1845,8 @@ var publicUser = (u) => u ? {
   perms: permsOfUser(u),
   crm_logins: crmLogins(u.crm_logins),
   analytics: hasAnalytics(u),
-  partner_id: u.partner_id || null
+  partner_id: u.partner_id || null,
+  ...u.role === "partner" ? { partner_role: partnerRole(u), partner_role_name: PARTNER_ROLES[partnerRole(u)] } : {}
 } : null;
 var crmLogins = (v) => [...new Set((Array.isArray(v) ? v : String(v || "").split(",")).map((x) => String(x).trim().toLowerCase()).filter(Boolean))].slice(0, 20);
 async function resetOwnerPassword(db, newPassword) {
@@ -5648,12 +5655,18 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const rows = await db.all(`SELECT id, name FROM an_brands ORDER BY sort, id`).catch(() => []);
     return new Map([...rows.map((r) => [r.id, r.name]), [0, "\u0406\u043D\u0448\u0456"]]);
   }
+  app.use("/api/b2b/p/*", async (c, next) => {
+    const u = c.get("user");
+    if (u?.role === "partner" && c.req.method !== "GET" && !can(u, "b2b.order")) throw fail(403, "\u0423 \u0432\u0430\u0441 \u0434\u043E\u0441\u0442\u0443\u043F \u043B\u0438\u0448\u0435 \u043D\u0430 \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u0434. \u0417\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043A\u0435\u0440\u0456\u0432\u043D\u0438\u043A\u0430 \u0432\u0430\u0448\u043E\u0457 \u043A\u043E\u043C\u0430\u043D\u0434\u0438.");
+    await next();
+  });
   app.get("/api/b2b/partners", async (c) => {
     need(c, "b2b.admin");
     const rows = await db.all(`SELECT p.*,
         (SELECT COUNT(*) FROM users u WHERE u.partner_id = p.id AND u.role = 'partner') AS users,
+        (SELECT COUNT(*) FROM users u WHERE u.partner_id = p.id AND u.role = 'partner' AND u.added_by LIKE 'partner:%') AS users_by_partner,
         (SELECT COUNT(*) FROM b2b_margins m WHERE m.partner_id = p.id) AS brands
-      FROM b2b_partners p ORDER BY p.active DESC, p.name`);
+      FROM b2b_partners p WHERE COALESCE(p.deleted_at, '') = '' ORDER BY p.active DESC, p.name`);
     return c.json(rows);
   });
   const partnerFields = (b) => ({
@@ -5674,7 +5687,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     return c.json({ id: r.lastId });
   });
   async function getPartner(id) {
-    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [id]);
+    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ? AND COALESCE(deleted_at, '') = ''`, [id]);
     if (!p) throw fail(404, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     return p;
   }
@@ -5682,7 +5695,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     need(c, "b2b.admin");
     const p = await getPartner(c.req.param("id"));
     const [users, margins, counts, names, entities] = await Promise.all([
-      db.all(`SELECT id, login, name, active, created_at FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY login`, [p.id]),
+      db.all(`SELECT id, login, name, active, created_at, partner_role, added_by FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY active DESC, login`, [p.id]),
       db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id]),
       db.all(`SELECT brand_id, COUNT(*) AS n, SUM(CASE WHEN rrp > 0 THEN 1 ELSE 0 END) AS priced FROM b2b_catalog WHERE hidden = 0 GROUP BY brand_id`),
       brandNames(),
@@ -5698,7 +5711,26 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       products: cnt.get(id)?.n || 0,
       priced: cnt.get(id)?.priced || 0
     }));
-    return c.json({ partner: p, users, brands, entities });
+    return c.json({ partner: p, users: users.map(teamRow), brands, entities, roles: PARTNER_ROLES });
+  });
+  app.delete("/api/b2b/partners/:id", async (c) => {
+    need(c, "b2b.admin");
+    const p = await getPartner(c.req.param("id"));
+    const hasOrders = await db.get(`SELECT id FROM b2b_orders WHERE partner_id = ? LIMIT 1`, [p.id]);
+    const st = [
+      [`DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE partner_id = ? AND role = 'partner')`, [p.id]],
+      [`DELETE FROM users WHERE partner_id = ? AND role = 'partner'`, [p.id]],
+      [`DELETE FROM b2b_margins WHERE partner_id = ?`, [p.id]]
+    ];
+    if (hasOrders) st.push([`UPDATE b2b_partners SET active = 0, deleted_at = ? WHERE id = ?`, [nowIso(), p.id]]);
+    else {
+      st.push([`DELETE FROM b2b_margin_log WHERE partner_id = ?`, [p.id]]);
+      st.push([`DELETE FROM b2b_entities WHERE partner_id = ?`, [p.id]]);
+      st.push([`DELETE FROM b2b_partners WHERE id = ?`, [p.id]]);
+    }
+    await db.batch(st);
+    await audit(c, p.id, `${hasOrders ? "\u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E (\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u043E \u0432 \u0430\u0440\u0445\u0456\u0432\u0456)" : "\u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E"}: \xAB${p.name}\xBB`);
+    return c.json({ ok: true, archived: !!hasOrders });
   });
   app.put("/api/b2b/partners/:id", async (c) => {
     need(c, "b2b.admin");
@@ -5751,45 +5783,86 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     if (changes.length) await audit(c, p.id, `\u0431\u0440\u0435\u043D\u0434\u0438 \u0439 \u043C\u0430\u0440\u0436\u0430 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \xAB${p.name}\xBB`, changes);
     return c.json({ ok: true, changed: changes.length });
   });
-  app.post("/api/b2b/partners/:id/users", async (c) => {
-    need(c, "b2b.admin");
-    const p = await getPartner(c.req.param("id"));
-    const b = await c.req.json();
+  const MAX_TEAM = 30;
+  const teamRow = (u) => {
+    const [by, ...who] = String(u.added_by || "").split(":");
+    return {
+      id: u.id,
+      login: u.login,
+      name: u.name || "",
+      active: u.active,
+      created_at: u.created_at,
+      partner_role: partnerRole(u),
+      partner_role_name: PARTNER_ROLES[partnerRole(u)],
+      added_by_partner: by === "partner",
+      added_by_name: who.join(":")
+    };
+  };
+  const roleOf = (v, fallback = "head") => PARTNER_ROLES[v] ? v : fallback;
+  const actorName = (c) => c.get("user")?.name || c.get("user")?.login || "";
+  async function addTeamUser(c, p, b, addedBy) {
     const login = String(b.login || "").trim().toLowerCase();
     if (!/^[a-z0-9._@-]{2,40}$/.test(login)) throw fail(400, "\u041B\u043E\u0433\u0456\u043D: \u043B\u0430\u0442\u0438\u043D\u0441\u044C\u043A\u0456 \u043B\u0456\u0442\u0435\u0440\u0438, \u0446\u0438\u0444\u0440\u0438, \u043A\u0440\u0430\u043F\u043A\u0430, \u0434\u0435\u0444\u0456\u0441 (2\u201340 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432).");
     if (String(b.password || "").length < 6) throw fail(400, "\u041F\u0430\u0440\u043E\u043B\u044C \u2014 \u043D\u0435 \u043C\u0435\u043D\u0448\u0435 6 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432.");
-    if (await db.get(`SELECT id FROM users WHERE login = ?`, [login])) throw fail(400, "\u0422\u0430\u043A\u0438\u0439 \u043B\u043E\u0433\u0456\u043D \u0443\u0436\u0435 \u0454.");
+    if (await db.get(`SELECT id FROM users WHERE login = ?`, [login])) throw fail(400, "\u0422\u0430\u043A\u0438\u0439 \u043B\u043E\u0433\u0456\u043D \u0443\u0436\u0435 \u0437\u0430\u0439\u043D\u044F\u0442\u0438\u0439 \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0456\u043D\u0448\u0438\u0439.");
+    if ((await db.get(`SELECT COUNT(*) AS n FROM users WHERE partner_id = ? AND role = 'partner'`, [p.id])).n >= MAX_TEAM) throw fail(400, `\u0423 \u043A\u043E\u043C\u0430\u043D\u0434\u0456 \u043D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 ${MAX_TEAM} \u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0456\u0432.`);
+    const role = roleOf(b.partner_role, addedBy.startsWith("partner:") ? "staff" : "head");
     const r = await db.run(
-      `INSERT INTO users (login, name, password_hash, role, active, created_at, partner_id) VALUES (?, ?, ?, 'partner', 1, ?, ?)`,
-      [login, String(b.name || "").trim(), await hashPassword(b.password), nowIso(), p.id]
+      `INSERT INTO users (login, name, password_hash, role, active, created_at, partner_id, partner_role, added_by) VALUES (?, ?, ?, 'partner', 1, ?, ?, ?, ?)`,
+      [login, String(b.name || "").trim().slice(0, 100), await hashPassword(b.password), nowIso(), p.id, role, addedBy]
     );
-    await audit(c, p.id, `\u0434\u043E\u0434\u0430\u043D\u043E \u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430: ${login}`);
-    return c.json({ id: r.lastId });
+    await audit(c, p.id, `\u0434\u043E\u0434\u0430\u043D\u043E \u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \xAB${p.name}\xBB: ${login} (${PARTNER_ROLES[role]})${addedBy.startsWith("partner:") ? " \u2014 \u0434\u043E\u0434\u0430\u0432 \u043F\u0430\u0440\u0442\u043D\u0435\u0440" : ""}`);
+    return { id: r.lastId, login, role };
+  }
+  async function updateTeamUser(c, p, u, b, { byPartner = false } = {}) {
+    const sets = [];
+    const vals = [];
+    const changes = [];
+    const me = c.get("user");
+    if (byPartner && u.id === me.id && (b.partner_role !== void 0 && roleOf(b.partner_role) !== partnerRole(u) || b.active === false)) {
+      throw fail(400, "\u0421\u0432\u043E\u044E \u0440\u043E\u043B\u044C \u0447\u0438 \u0434\u043E\u0441\u0442\u0443\u043F \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u043D\u0435 \u043C\u043E\u0436\u043D\u0430 \u2014 \u043F\u043E\u043F\u0440\u043E\u0441\u0456\u0442\u044C \u0456\u043D\u0448\u043E\u0433\u043E \u043A\u0435\u0440\u0456\u0432\u043D\u0438\u043A\u0430.");
+    }
+    if (b.name !== void 0) {
+      sets.push("name = ?");
+      vals.push(String(b.name).trim().slice(0, 100));
+    }
+    if (b.partner_role !== void 0 && roleOf(b.partner_role) !== partnerRole(u)) {
+      sets.push("partner_role = ?");
+      vals.push(roleOf(b.partner_role));
+      changes.push(`\u0440\u043E\u043B\u044C: ${PARTNER_ROLES[roleOf(b.partner_role)]}`);
+    }
+    if (b.active !== void 0 && (b.active ? 1 : 0) !== u.active) {
+      sets.push("active = ?");
+      vals.push(b.active ? 1 : 0);
+      changes.push(b.active ? "\u0443\u0432\u0456\u043C\u043A\u043D\u0435\u043D\u043E" : "\u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E");
+    }
+    if (b.password) {
+      if (String(b.password).length < 6) throw fail(400, "\u041F\u0430\u0440\u043E\u043B\u044C \u2014 \u043D\u0435 \u043C\u0435\u043D\u0448\u0435 6 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432.");
+      sets.push("password_hash = ?");
+      vals.push(await hashPassword(b.password));
+      changes.push("\u043D\u043E\u0432\u0438\u0439 \u043F\u0430\u0440\u043E\u043B\u044C");
+    }
+    const willBeHead = (b.partner_role !== void 0 ? roleOf(b.partner_role) : partnerRole(u)) === "head" && (b.active !== void 0 ? !!b.active : !!u.active);
+    if (!willBeHead && partnerRole(u) === "head" && u.active) {
+      const heads = (await db.all(`SELECT id, partner_role FROM users WHERE partner_id = ? AND role = 'partner' AND active = 1 AND id != ?`, [p.id, u.id])).filter((x) => partnerRole(x) === "head").length;
+      if (!heads) throw fail(400, "\u0423 \u043A\u043E\u043C\u0430\u043D\u0434\u0456 \u043C\u0430\u0454 \u043B\u0438\u0448\u0438\u0442\u0438\u0441\u044F \u0445\u043E\u0447\u0430 \u0431 \u043E\u0434\u0438\u043D \u0430\u043A\u0442\u0438\u0432\u043D\u0438\u0439 \u043A\u0435\u0440\u0456\u0432\u043D\u0438\u043A.");
+    }
+    if (sets.length) await db.run(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`, [...vals, u.id]);
+    if (b.password || b.active === false) await db.run(`DELETE FROM sessions WHERE user_id = ? AND user_id != ?`, [u.id, me.id]);
+    if (changes.length) await audit(c, p.id, `\u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \xAB${p.name}\xBB ${u.login}: ${changes.join(", ")}${byPartner ? " \u2014 \u0437\u043C\u0456\u043D\u0438\u0432 \u043F\u0430\u0440\u0442\u043D\u0435\u0440" : ""}`);
+  }
+  app.post("/api/b2b/partners/:id/users", async (c) => {
+    need(c, "b2b.admin");
+    const p = await getPartner(c.req.param("id"));
+    const r = await addTeamUser(c, p, await c.req.json(), `staff:${actorName(c)}`);
+    return c.json({ id: r.id });
   });
   app.put("/api/b2b/partners/:id/users/:uid", async (c) => {
     need(c, "b2b.admin");
     const p = await getPartner(c.req.param("id"));
     const u = await db.get(`SELECT * FROM users WHERE id = ? AND partner_id = ? AND role = 'partner'`, [c.req.param("uid"), p.id]);
     if (!u) throw fail(404, "\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
-    const b = await c.req.json();
-    const sets = [];
-    const vals = [];
-    if (b.name !== void 0) {
-      sets.push("name = ?");
-      vals.push(String(b.name).trim());
-    }
-    if (b.active !== void 0) {
-      sets.push("active = ?");
-      vals.push(b.active ? 1 : 0);
-    }
-    if (b.password) {
-      if (String(b.password).length < 6) throw fail(400, "\u041F\u0430\u0440\u043E\u043B\u044C \u2014 \u043D\u0435 \u043C\u0435\u043D\u0448\u0435 6 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432.");
-      sets.push("password_hash = ?");
-      vals.push(await hashPassword(b.password));
-    }
-    if (sets.length) await db.run(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`, [...vals, u.id]);
-    if (b.password || b.active === false) await db.run(`DELETE FROM sessions WHERE user_id = ?`, [u.id]);
-    if (b.active !== void 0 || b.password) await audit(c, p.id, `\u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 ${u.login}: ${b.password ? "\u043D\u043E\u0432\u0438\u0439 \u043F\u0430\u0440\u043E\u043B\u044C" : ""}${b.active !== void 0 ? b.active ? " \u0443\u0432\u0456\u043C\u043A\u043D\u0435\u043D\u043E" : " \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E" : ""}`.trim());
+    await updateTeamUser(c, p, u, await c.req.json());
     return c.json({ ok: true });
   });
   app.get("/api/b2b/catalog", async (c) => {
@@ -5895,6 +5968,27 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     if (!p) throw fail(403, "\u041A\u0430\u0431\u0456\u043D\u0435\u0442 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E. \u0417\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u0432\u0430\u0448\u043E\u0433\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.");
     return p;
   }
+  app.get("/api/b2b/p/team", async (c) => {
+    const p = await myPartner(c);
+    need(c, "b2b.team");
+    const rows = await db.all(`SELECT * FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY active DESC, login`, [p.id]);
+    return c.json({ users: rows.map(teamRow), roles: PARTNER_ROLES, max: MAX_TEAM, me: c.get("user").id });
+  });
+  app.post("/api/b2b/p/team", async (c) => {
+    const p = await myPartner(c);
+    need(c, "b2b.team");
+    const r = await addTeamUser(c, p, await c.req.json(), `partner:${actorName(c)}`);
+    await services.notify?.sendText({ admins: true }, `\u{1F465} \u041F\u0430\u0440\u0442\u043D\u0435\u0440 \xAB${p.name}\xBB \u0434\u043E\u0434\u0430\u0432 \u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 <b>${r.login}</b> (${PARTNER_ROLES[r.role]}) \u2014 \u0434\u043E\u0434\u0430\u0432 ${actorName(c)}.`).catch(() => 0);
+    return c.json({ id: r.id });
+  });
+  app.put("/api/b2b/p/team/:uid", async (c) => {
+    const p = await myPartner(c);
+    need(c, "b2b.team");
+    const u = await db.get(`SELECT * FROM users WHERE id = ? AND partner_id = ? AND role = 'partner'`, [c.req.param("uid"), p.id]);
+    if (!u) throw fail(404, "\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    await updateTeamUser(c, p, u, await c.req.json(), { byPartner: true });
+    return c.json({ ok: true });
+  });
   app.get("/api/b2b/p/me", async (c) => {
     const p = await myPartner(c);
     return c.json({ partner: { id: p.id, name: p.name } });
@@ -7354,7 +7448,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 3,
+  version: 4,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -7497,7 +7591,11 @@ var schema11 = {
     ["b2b_orders", "crm_status", "TEXT DEFAULT ''"],
     ["b2b_orders", "crm_checked_at", "TEXT DEFAULT ''"],
     ["b2b_orders", "crm_sent_at", "TEXT DEFAULT ''"],
-    ["b2b_orders", "crm_ext", "TEXT DEFAULT ''"]
+    ["b2b_orders", "crm_ext", "TEXT DEFAULT ''"],
+    // етап 3а: команда партнера (роль у команді, хто додав) і видалені партнери (з замовленнями — в архіві)
+    ["users", "partner_role", "TEXT DEFAULT ''"],
+    ["users", "added_by", "TEXT DEFAULT ''"],
+    ["b2b_partners", "deleted_at", "TEXT DEFAULT ''"]
   ],
   // Індекси на нові колонки — після ALTER TABLE (у старих базах колонок ще немає, коли створюються таблиці).
   async seed(db) {
