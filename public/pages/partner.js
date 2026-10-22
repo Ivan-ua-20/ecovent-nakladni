@@ -318,9 +318,24 @@ export function createPartnerPages() {
       <div class="head-row"><h2>${id ? `Зміна замовлення ${esc(o.number)}` : 'Нове замовлення клієнта'}</h2><a class="btn" href="#/pclients${id ? `/${id}` : ''}">← Назад</a></div>
       <div class="form-page">
         <div class="form-stack">
-          <label class="f"><span>Товари з</span><select id="cfSrc">
-            ${supplies.map((s) => `<option value="${s.id}" ${String(s.id) === source ? 'selected' : ''}>Закупівля ${esc(s.number)}${s.pay ? ` (${payTxt[s.pay] || ''})` : ''}</option>`).join('')}
-            <option value="" ${source === '' ? 'selected' : ''}>Без закупівлі (з каталогу)</option></select></label>
+          <div class="card form-stack">
+            <h3>1. З якої закупівлі відправляємо</h3>
+            <div class="src-cards" role="radiogroup" aria-label="Закупівля">
+              ${supplies.map((s) => `<label class="src-card ${String(s.id) === source ? 'on' : ''}">
+                <input type="radio" name="cfSrc" value="${s.id}" ${String(s.id) === source ? 'checked' : ''}>
+                <span class="src-head"><b>${esc(s.number)}</b>${s.pay ? `<span class="badge ${s.pay === 'paid' ? 'ok' : 'warn'}">${esc(payTxt[s.pay] || '')}</span>` : ''}</span>
+                <span class="small muted">${s.invoice_no ? `Рахунок № ${esc(s.invoice_no)} · ` : 'Рахунок ще готується · '}${esc(fmtDay(s.created_at))}${s.total ? ` · ${uah(s.total)}` : ''}</span>
+                <span class="small">Залишок: ${s.items.filter((i) => i.left > 0).map((i) => `${esc(i.name)} — ${i.left}`).join('; ')}</span>
+              </label>`).join('')}
+              <label class="src-card bad ${source === '' ? 'on' : ''}">
+                <input type="radio" name="cfSrc" value="" ${source === '' ? 'checked' : ''}>
+                <span class="src-head"><b>Без закупівлі</b><span class="badge bad">червоним</span></span>
+                <span class="small muted">Товари з каталогу за вашою ціною — менеджер виставить на них рахунок окремо.</span>
+              </label>
+            </div>
+            ${supplies.length ? '' : '<div class="small muted">Закупівель із залишком немає — можна оформити без закупівлі або спершу оформити закупівлю.</div>'}
+          </div>
+          <h3 style="margin:4px 0 0">2. Товари й кількість</h3>
           <div id="cfWarn"></div>
           <div class="card" id="cfList"></div>
         </div>
@@ -331,9 +346,11 @@ export function createPartnerPages() {
             <label class="f"><span>Телефон *</span><input name="client_phone" value="${esc(o.client_phone || '')}" inputmode="tel" placeholder="0XXXXXXXXX" required></label>
             <label class="f"><span>ТТН (ваша)</span><input name="ttn" value="${esc(o.ttn || '')}" inputmode="numeric" placeholder="20450000000000"></label>
             <label class="f"><span>Коментар</span><textarea name="comment" rows="2">${esc(o.comment || '')}</textarea></label>
+            <label class="f"><span>Маркування (етикетка ТТН)${cur?.files?.length ? ` — вже додано: ${cur.files.length}` : ''}</span>
+              <input type="file" id="cfFiles" accept=".pdf,image/*" multiple></label>
+            <div class="small muted">PDF або фото до 5 МБ; можна кілька. Менеджер завантажить його зі свого боку.</div>
             <div id="cfSum"></div>
             <button class="btn primary" id="cfSave">${id ? 'Зберегти зміни' : 'Оформити замовлення'}</button>
-            <div class="small muted">Файл маркування (етикетку ТТН) додасте на сторінці замовлення одразу після оформлення.</div>
           </form>
         </div>
       </div>`;
@@ -364,18 +381,31 @@ export function createPartnerPages() {
       }));
       sum();
     };
-    $('#cfSrc').onchange = (e) => { source = e.target.value; qty.clear(); draw(); };
+    $$('input[name="cfSrc"]').forEach((r) => (r.onchange = () => {
+      source = r.value; qty.clear();
+      $$('.src-card').forEach((c) => c.classList.toggle('on', c.contains(r)));
+      draw();
+    }));
     $('#cfForm').onsubmit = async (e) => {
       e.preventDefault();
       const allowed = new Set(lines().map((l) => l.product_id));
       const items = [...qty].filter(([pid, q]) => q > 0 && allowed.has(pid)).map(([product_id, q]) => ({ product_id, qty: q }));
       if (!items.length) { toast('Вкажіть кількість хоча б одного товару', true); return; }
       const body = { ...Object.fromEntries(new FormData(e.target)), supply_id: source ? Number(source) : null, items };
+      const files = [...$('#cfFiles').files];
+      const big = files.find((f) => f.size > 5 * 1024 * 1024);
+      if (big) { toast(`Файл «${big.name}» завеликий (до 5 МБ)`, true); return; }
       $('#cfSave').disabled = true;
+      let orderId = id;
       try {
-        if (id) { await api('PUT', `/api/b2b/p/clients/${id}`, body); toast('Зміни збережено'); location.hash = `#/pclients/${id}`; }
-        else { const r = await api('POST', '/api/b2b/p/clients', body); toast(`Замовлення ${r.number} оформлено`); location.hash = `#/pclients/${r.id}`; }
-      } catch (er) { toast(er.message, true); $('#cfSave').disabled = false; }
+        if (id) await api('PUT', `/api/b2b/p/clients/${id}`, body);
+        else orderId = (await api('POST', '/api/b2b/p/clients', body)).id;
+      } catch (er) { toast(er.message, true); $('#cfSave').disabled = false; return; }
+      // Маркування — після збереження замовлення; якщо файл не пройшов, замовлення вже є — його можна додати на сторінці замовлення.
+      let failed = 0;
+      for (const f of files) { try { await uploadFile(`/api/b2b/p/clients/${orderId}/files`, f); } catch (er) { failed++; toast(`${f.name}: ${er.message}`, true); } }
+      toast(id ? 'Зміни збережено' : 'Замовлення оформлено' + (files.length && !failed ? ' разом із маркуванням' : ''));
+      location.hash = `#/pclients/${orderId}`;
     };
     draw();
   }

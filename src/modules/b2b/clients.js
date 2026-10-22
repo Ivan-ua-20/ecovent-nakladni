@@ -7,7 +7,7 @@
 // Передачу в CRM вмикає адмін у «Налаштуваннях CRM» (ID відділу + перемикач) — коли ключ LP-CRM отримає дозвіл на addNewOrder.
 import { fail, need, nowIso, loadSettings } from '../../core/common.js';
 import { addNewOrder, getOrdersBatch, getStatuses } from '../../integrations/lpcrm.js';
-import { CLIENT_STATUS, payState, orderNo } from './orders.js';
+import { CLIENT_STATUS, ORDER_STATUS, payState, orderNo } from './orders.js';
 
 const CRM_REFRESH_MIN = 10;
 const CRM_TRACK_DAYS = 60;
@@ -133,7 +133,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     const p = await myPartner(c);
     const since = new Date(Date.now() - 180 * 86400000).toISOString();
     const rows = await db.all(
-      `SELECT s.id, s.status, s.created_at, i.product_id, i.name, i.article, i.price, i.qty,
+      `SELECT s.id, s.status, s.created_at, s.total, s.invoice_no, i.product_id, i.name, i.article, i.price, i.qty,
          COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci JOIN b2b_orders co ON co.id = ci.order_id
            WHERE co.supply_id = s.id AND co.kind = 'client' AND co.status != 'cancelled' AND ci.product_id = i.product_id), 0) AS used
        FROM b2b_orders s JOIN b2b_order_items i ON i.order_id = s.id
@@ -141,7 +141,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     );
     const map = new Map();
     for (const r of rows) {
-      if (!map.has(r.id)) map.set(r.id, { id: r.id, number: orderNo(r.id), status: r.status, created_at: r.created_at, pay: payState({ kind: 'client', supply_id: r.id, supply_status: r.status }), items: [] });
+      if (!map.has(r.id)) map.set(r.id, { id: r.id, number: orderNo(r.id), status: r.status, status_name: ORDER_STATUS[r.status] || r.status, created_at: r.created_at, total: r.total, invoice_no: r.invoice_no, pay: payState({ kind: 'client', supply_id: r.id, supply_status: r.status }), items: [] });
       map.get(r.id).items.push({ product_id: r.product_id, name: r.name, article: r.article, price: r.price, qty: r.qty, left: r.qty - r.used });
     }
     return c.json([...map.values()].filter((s) => s.items.some((i) => i.left > 0)));
