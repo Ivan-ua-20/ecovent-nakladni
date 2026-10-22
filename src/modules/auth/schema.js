@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'auth',
-  version: 1,
+  version: 2,
   tables: [
   `CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,6 +23,10 @@ export const schema = {
   columns: [
     ['users', 'crm_logins', "TEXT DEFAULT ''"],
     ['users', 'failed_logins', "INTEGER DEFAULT 0"],
-    ['users', 'locked_until', "TEXT DEFAULT ''"]
+    ['users', 'locked_until', "TEXT DEFAULT ''"],
+    // Перемикач аналітики (керує власник): NULL — як у ролі, 0 — вимкнено, 1 — увімкнено.
+    ['users', 'an_access', "INTEGER"],
+    // Користувач-партнер (роль partner) — до якої компанії-партнера належить.
+    ['users', 'partner_id', "INTEGER"]
   ],
 };

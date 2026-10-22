@@ -14,7 +14,7 @@ globalThis.FormData = class { constructor() {} entries() { return [][Symbol.iter
 globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
 globalThis.sessionStorage = globalThis.localStorage;
-const perms = ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'analytics', 'an.view'];
+const perms = ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'analytics', 'an.view', 'b2b.admin', 'b2b.partner'];
 const user = { id: 1, login: 'o', name: 'O', role: 'owner', role_name: 'Власник', perms, crm_logins: [] };
 const BOOT = { fops: [{ id: 1, short_name: 'ФОП', active: 1, template_id: 1 }], templates: [{ id: 1, name: 'T', layout: 'classic', options: {} }], offices: [], channels: [], invFops: [{ id: 1, short_name: 'ФОП Р', active: 1 }], settings: {}, user, defaultWarning: '' };
 const errors = [];
@@ -22,13 +22,13 @@ globalThis.fetch = async (url) => {
   const u = String(url);
   const body = u.startsWith('/api/auth/state') ? { needsSetup: false, user } : u.startsWith('/api/bootstrap') ? BOOT
     : u.startsWith('/api/users') ? { users: [user], roles: {} } : u.startsWith('/api/rahunky') ? { rows: [], nextNumber: '1', retentionDays: 7 }
-      : u.startsWith('/api/errors') ? { rows: [], sources: [], keepDays: 30 } : u.startsWith('/api/history') || u.includes('/versions') || u.startsWith('/api/audit') ? [] : {};
+      : u.startsWith('/api/errors') ? { rows: [], sources: [], keepDays: 30 } : u === '/api/b2b/partners' ? [] : u.startsWith('/api/b2b/partners/') ? { partner: { id: 1, name: 'P', active: 1 }, users: [], brands: [{ id: 1, name: 'B', enabled: true, margin: 20, products: 2, priced: 1 }] } : u.startsWith('/api/b2b/catalog') ? { rows: [], state: { lastSync: '', stale: 0 } } : u.startsWith('/api/b2b/brands') ? [] : u.startsWith('/api/b2b/p/catalog') ? { partner: { id: 1, name: 'P' }, brands: [{ id: 1, name: 'B' }], products: [{ id: 1, name: 'T', article: '', image: '', brand_id: 1, brand: 'B', rrp: 100, price: 80 }] } : u.startsWith('/api/history') || u.includes('/versions') || u.startsWith('/api/audit') ? [] : {};
   return { status: 200, ok: true, json: async () => body };
 };
 process.on('unhandledRejection', (e) => errors.push(e));
 await import(new URL('../public/app.js', import.meta.url));
 await new Promise((r) => setTimeout(r, 30));
-const routes = ['invoice', 'history', 'fops', 'fops/1', 'fops/new', 'offices', 'templates', 'templates/1', 'nsettings', 'rahunky', 'rlist', 'invfops', 'invfops/1', 'invfops/new', 'rsettings', 'settings', 'errors', 'users'];
+const routes = ['invoice', 'history', 'fops', 'fops/1', 'fops/new', 'offices', 'templates', 'templates/1', 'nsettings', 'rahunky', 'rlist', 'invfops', 'invfops/1', 'invfops/new', 'rsettings', 'settings', 'errors', 'users', 'b2bpartners', 'b2bpartners/1', 'b2bcatalog', 'pcatalog', 'phelp'];
 for (const r of routes) {
   location.hash = `#/${r}`;
   mainHtml = '';

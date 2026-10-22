@@ -10,6 +10,8 @@ import { createSettingsPages } from './pages/settings.js';
 import { createRahunkyPages } from './pages/rahunky.js';
 import { createUsersPages } from './pages/users.js';
 import { createErrorsPages } from './pages/errors.js';
+import { createB2bPages } from './pages/b2b.js';
+import { createPartnerPages } from './pages/partner.js';
 
 // ---------- стан ----------
 let boot = { fops: [], templates: [], offices: [], channels: [], invFops: [], settings: {}, user: null };
@@ -17,7 +19,7 @@ const can = (perm) => Boolean(boot.user?.perms?.includes(perm));
 
 // Розділи (вкладки зверху) і підвкладки кожного розділу.
 const SECTIONS = [
-  { id: 'nakladni', label: 'Накладні ФОП', home: 'invoice', tabs: [
+  { id: 'nakladni', label: 'Накладні ФОП', perm: 'docs.view', home: 'invoice', tabs: [
     { id: 'invoice', label: 'Формування' },
     { id: 'history', label: 'Історія' },
     { id: 'fops', label: 'ФОПи накладних', perm: 'refs.edit' },
@@ -25,7 +27,7 @@ const SECTIONS = [
     { id: 'templates', label: 'Шаблони', perm: 'refs.edit' },
     { id: 'nsettings', label: 'Налаштування накладних', perm: 'refs.edit' },
   ] },
-  { id: 'rahunky', label: 'Рахунки Word', home: 'rahunky', tabs: [
+  { id: 'rahunky', label: 'Рахунки Word', perm: 'docs.view', home: 'rahunky', tabs: [
     { id: 'rahunky', label: 'Формування', perm: 'docs.edit' },
     { id: 'rlist', label: 'Сформовані рахунки' },
     { id: 'paylinks', label: 'Посилання на оплату', perm: 'docs.edit' },
@@ -38,11 +40,26 @@ const SECTIONS = [
     { id: 'anpay', label: 'Оплати', perm: 'analytics' },
     { id: 'ansettings', label: 'Налаштування аналітики', perm: 'analytics' },
   ] },
+  { id: 'b2b', label: 'B2B партнери', perm: 'b2b.admin', home: 'b2bpartners', tabs: [
+    { id: 'b2bpartners', label: 'Партнери' },
+    { id: 'b2bcatalog', label: 'Каталог і ціни' },
+  ] },
+  // Кабінет партнера — єдиний розділ, який бачить партнер.
+  { id: 'partner', label: 'Кабінет партнера', perm: 'b2b.partner', home: 'pcatalog', tabs: [
+    { id: 'pcatalog', label: 'Каталог' },
+    { id: 'phelp', label: 'Інструкція' },
+  ] },
   { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [{ id: 'settings', label: 'Загальні налаштування' }, { id: 'errors', label: 'Журнал помилок', perm: 'users' }] },
   { id: 'users', label: 'Користувачі', perm: 'users', home: 'users', tabs: [{ id: 'users', label: 'Користувачі' }] },
 ];
 const visibleTabs = (sec) => sec.tabs.filter((t) => !t.perm || can(t.perm));
 const sectionOf = (routeId) => SECTIONS.find((sec) => sec.tabs.some((t) => t.id === routeId)) || SECTIONS[0];
+// Перша доступна вкладка (партнер — «Каталог», решта — «Формування»).
+const homeRoute = () => {
+  const sec = SECTIONS.find((s) => (!s.perm || can(s.perm)) && visibleTabs(s).length);
+  if (!sec) return 'invoice';
+  return visibleTabs(sec).some((t) => t.id === sec.home) ? sec.home : visibleTabs(sec)[0].id;
+};
 
 function renderNav(active = 'invoice') {
   const u = boot.user;
@@ -51,7 +68,7 @@ function renderNav(active = 'invoice') {
   const secs = SECTIONS.filter((sec) => (!sec.perm || can(sec.perm)) && visibleTabs(sec).length);
   const homeOf = (sec) => (visibleTabs(sec).some((t) => t.id === sec.home) ? sec.home : visibleTabs(sec)[0].id);
   $('.topbar').innerHTML = `
-    <div class="brand"><span class="brand-mark"></span>Накладні</div>
+    <div class="brand"><span class="brand-mark"></span>${u?.role === 'partner' ? 'Ековент B2B' : 'Накладні'}</div>
     <nav class="main-tabs" aria-label="Розділи">
       ${secs.map((sec) => `<a href="#/${homeOf(sec)}" class="${sec.id === cur.id ? 'active' : ''}">${esc(sec.label)}</a>`).join('')}
     </nav>
@@ -177,6 +194,8 @@ const { viewSettings, viewNakladniSettings, viewRahunkySettings } = createSettin
 const { viewRahunky, viewRahunkyList } = createRahunkyPages(ctx);
 const { viewUsers } = createUsersPages(ctx);
 const { viewErrors } = createErrorsPages(ctx);
+const { viewPartners, viewCatalog } = createB2bPages(ctx);
+const { viewPartnerCatalog, viewPartnerHelp } = createPartnerPages(ctx);
 setUnauthorized(() => showAuth());
 
 const routes = {
@@ -198,12 +217,16 @@ const routes = {
   settings: viewSettings,
   users: viewUsers,
   errors: viewErrors,
+  b2bpartners: viewPartners,
+  b2bcatalog: viewCatalog,
+  pcatalog: viewPartnerCatalog,
+  phelp: viewPartnerHelp,
 };
 
 async function route() {
   if (!boot.user) return;
-  let [, name = 'invoice', ...args] = location.hash.replace(/^#/, '').split('/');
-  if (!routes[name]) name = 'invoice';
+  let [, name = homeRoute(), ...args] = location.hash.replace(/^#/, '').split('/');
+  if (!routes[name]) name = homeRoute();
   const sec = sectionOf(name);
   const tab = sec.tabs.find((t) => t.id === name);
   // Розділ «Рахунки» для перегляду відкриває список, а не формування
@@ -231,7 +254,7 @@ const AN = createAnalyticsUI({ api, $, $$, esc, toast, modal, can, get main() { 
 // ---------- старт ----------
 async function start() {
   try { await loadBoot(); } catch (e) { if (!/увійти/i.test(e.message)) main.innerHTML = `<div class="alert bad">Сервер недоступний: ${esc(e.message)}</div>`; return; }
-  if (!location.hash) location.hash = '#/invoice';
+  if (!location.hash || location.hash === '#/') location.hash = `#/${homeRoute()}`;
   else route();
 }
 showAuth();

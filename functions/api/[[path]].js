@@ -1777,16 +1777,27 @@ var ROLES = {
   owner: "\u0412\u043B\u0430\u0441\u043D\u0438\u043A",
   admin: "\u0410\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440",
   manager: "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440",
-  viewer: "\u041F\u0435\u0440\u0435\u0433\u043B\u044F\u0434"
+  viewer: "\u041F\u0435\u0440\u0435\u0433\u043B\u044F\u0434",
+  partner: "\u041F\u0430\u0440\u0442\u043D\u0435\u0440 (B2B)"
 };
 var PERMS = {
-  owner: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "analytics", "an.view"],
-  admin: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "analytics", "an.view"],
+  owner: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "analytics", "an.view", "b2b.admin"],
+  admin: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "analytics", "an.view", "b2b.admin"],
   manager: ["docs.view", "docs.edit", "refs.edit", "an.view"],
-  viewer: ["docs.view"]
+  viewer: ["docs.view"],
+  partner: ["b2b.partner"]
 };
+var AN_PERMS = ["analytics", "an.view"];
 var permsOf = (role) => PERMS[role] || [];
-var can = (user, perm) => Boolean(user && permsOf(user.role).includes(perm));
+function permsOfUser(u) {
+  if (!u) return [];
+  const base = permsOf(u.role);
+  if (u.role === "owner" || u.role === "partner" || u.an_access == null || u.an_access === "") return base;
+  if (Number(u.an_access) === 0) return base.filter((p) => !AN_PERMS.includes(p));
+  return base.includes("an.view") ? base : [...base, "an.view"];
+}
+var hasAnalytics = (u) => permsOfUser(u).includes("an.view");
+var can = (user, perm) => Boolean(user && permsOfUser(user).includes(perm));
 var enc = new TextEncoder();
 var toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 var fromHex = (hex) => new Uint8Array(hex.match(/.{2}/g).map((h3) => parseInt(h3, 16)));
@@ -1825,8 +1836,10 @@ var publicUser = (u) => u ? {
   role_name: ROLES[u.role] || u.role,
   active: u.active,
   created_at: u.created_at,
-  perms: permsOf(u.role),
-  crm_logins: crmLogins(u.crm_logins)
+  perms: permsOfUser(u),
+  crm_logins: crmLogins(u.crm_logins),
+  analytics: hasAnalytics(u),
+  partner_id: u.partner_id || null
 } : null;
 var crmLogins = (v) => [...new Set((Array.isArray(v) ? v : String(v || "").split(",")).map((x) => String(x).trim().toLowerCase()).filter(Boolean))].slice(0, 20);
 async function resetOwnerPassword(db, newPassword) {
@@ -2052,11 +2065,15 @@ function mountAuth(app, { db, runCleanup, onCleanup }) {
     deleteCookie(c, COOKIE, { path: "/" });
     return c.json({ ok: true });
   });
+  const PARTNER_PATHS = ["/api/b2b/p", "/api/me/password", "/api/tg/me", "/api/tg/link", "/api/bootstrap"];
   app.use("/api/*", async (c, next) => {
     if (c.req.path.startsWith("/api/auth/") || c.req.path === "/api/odb/hook" || c.req.path === "/api/tg/hook") return next();
     const user = await sessionUser(c);
     if (!user) throw fail(401, "\u041F\u043E\u0442\u0440\u0456\u0431\u043D\u043E \u0443\u0432\u0456\u0439\u0442\u0438.");
     c.set("user", user);
+    if (user.role === "partner" && !PARTNER_PATHS.some((p) => c.req.path === p || c.req.path.startsWith(`${p}/`))) {
+      throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432 \u0434\u043B\u044F \u0446\u0456\u0454\u0457 \u0434\u0456\u0457.");
+    }
     await runCleanup();
     return next();
   });
@@ -2071,7 +2088,7 @@ function mountAuth(app, { db, runCleanup, onCleanup }) {
   const ASSIGNABLE = ["admin", "manager", "viewer"];
   app.get("/api/users", async (c) => {
     need(c, "users");
-    const rows = await db.all(`SELECT * FROM users ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'manager' THEN 2 ELSE 3 END, login`);
+    const rows = await db.all(`SELECT * FROM users WHERE role != 'partner' ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'manager' THEN 2 ELSE 3 END, login`);
     return c.json({ users: rows.map(publicUser), roles: ROLES });
   });
   app.post("/api/users", async (c) => {
@@ -2098,7 +2115,18 @@ function mountAuth(app, { db, runCleanup, onCleanup }) {
     const target = await db.get(`SELECT * FROM users WHERE id = ?`, [c.req.param("id")]);
     if (!target) throw fail(404, "\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     if (target.role === "owner" && me.role !== "owner") throw fail(403, "\u0410\u043A\u0430\u0443\u043D\u0442 \u0432\u043B\u0430\u0441\u043D\u0438\u043A\u0430 \u043C\u043E\u0436\u0435 \u0437\u043C\u0456\u043D\u044E\u0432\u0430\u0442\u0438 \u043B\u0438\u0448\u0435 \u0432\u043B\u0430\u0441\u043D\u0438\u043A.");
+    if (target.role === "partner") throw fail(400, "\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432 \u0437\u043C\u0456\u043D\u044E\u044E\u0442\u044C\u0441\u044F \u0432 \u0440\u043E\u0437\u0434\u0456\u043B\u0456 \xABB2B \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0438\xBB.");
     const b = await c.req.json();
+    if (b.analytics !== void 0) {
+      if (me.role !== "owner") throw fail(403, "\u0414\u043E\u0441\u0442\u0443\u043F \u0434\u043E \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438 \u0437\u043C\u0456\u043D\u044E\u0454 \u043B\u0438\u0448\u0435 \u0432\u043B\u0430\u0441\u043D\u0438\u043A.");
+      if (target.role !== "owner") {
+        await db.run(`UPDATE users SET an_access = ? WHERE id = ?`, [b.analytics ? 1 : 0, target.id]);
+        await db.run(
+          `INSERT INTO audit_log (at, user_id, user_name, kind, ref_id, action, changes) VALUES (?, ?, ?, 'user', ?, ?, '[]')`,
+          [nowIso(), me.id, me.name || me.login, String(target.id), `\u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0430 ${b.analytics ? "\u0443\u0432\u0456\u043C\u043A\u043D\u0435\u043D\u0430" : "\u0432\u0438\u043C\u043A\u043D\u0435\u043D\u0430"} \u0434\u043B\u044F ${target.login}`]
+        );
+      }
+    }
     const sets = [];
     const vals = [];
     if (b.name !== void 0) {
@@ -2397,8 +2425,11 @@ var publicFop = (f) => {
 function mountRefs(app, { db, fetchFn }) {
   const settings = () => loadSettings(db);
   app.get("/api/bootstrap", async (c) => {
-    const s = await settings();
     const user = c.get("user");
+    if (user.role === "partner") {
+      return c.json({ fops: [], templates: [], offices: [], channels: [], invFops: [], settings: {}, user: publicUser(user) });
+    }
+    const s = await settings();
     const apiOk = can(user, "api");
     const fops = (await db.all(`SELECT * FROM fops ORDER BY active DESC, short_name`)).map(publicFop).map((f) => {
       if (apiOk) return f;
@@ -4768,6 +4799,312 @@ ${h2(message.slice(0, 500))}${path ? `
   return { log };
 }
 
+// src/modules/b2b/index.js
+var partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
+var BATCH = 50;
+var BATCHES_PER_CALL = 8;
+var IMG_RE = /^https?:\/\/\S+\.(jpe?g|png|webp|gif)(\?\S*)?$/i;
+function collectProducts(node, depth = 0) {
+  if (!node || typeof node !== "object" || depth > 4) return [];
+  if (!Array.isArray(node) && ("id" in node || "product_id" in node) && ("name" in node || "price" in node)) return [node];
+  return Object.values(node).flatMap((v) => collectProducts(v, depth + 1));
+}
+function findImage(node, depth = 0) {
+  if (typeof node === "string") return IMG_RE.test(node.trim()) ? node.trim() : "";
+  if (!node || typeof node !== "object" || depth > 3) return "";
+  for (const v of Object.values(node)) {
+    const found = findImage(v, depth + 1);
+    if (found) return found;
+  }
+  return "";
+}
+var num3 = (v) => {
+  const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+};
+function mountB2b(app, { db, fetchFn }) {
+  const audit = (c, refId, action, changes = []) => logAudit(db, { user: c.get("user"), kind: "b2b", refId, action, changes });
+  async function brandNames() {
+    const rows = await db.all(`SELECT id, name FROM an_brands ORDER BY sort, id`).catch(() => []);
+    return new Map([...rows.map((r) => [r.id, r.name]), [0, "\u0406\u043D\u0448\u0456"]]);
+  }
+  app.get("/api/b2b/partners", async (c) => {
+    need(c, "b2b.admin");
+    const rows = await db.all(`SELECT p.*,
+        (SELECT COUNT(*) FROM users u WHERE u.partner_id = p.id AND u.role = 'partner') AS users,
+        (SELECT COUNT(*) FROM b2b_margins m WHERE m.partner_id = p.id) AS brands
+      FROM b2b_partners p ORDER BY p.active DESC, p.name`);
+    return c.json(rows);
+  });
+  const partnerFields = (b) => ({
+    name: String(b.name ?? "").trim().slice(0, 120),
+    phone: String(b.phone ?? "").trim().slice(0, 40),
+    email: String(b.email ?? "").trim().slice(0, 120),
+    note: String(b.note ?? "").trim().slice(0, 1e3)
+  });
+  app.post("/api/b2b/partners", async (c) => {
+    need(c, "b2b.admin");
+    const f = partnerFields(await c.req.json());
+    if (!f.name) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043D\u0430\u0437\u0432\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430.");
+    const r = await db.run(
+      `INSERT INTO b2b_partners (name, phone, email, note, active, created_at) VALUES (?, ?, ?, ?, 1, ?)`,
+      [f.name, f.phone, f.email, f.note, nowIso()]
+    );
+    await audit(c, r.lastId, `\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \xAB${f.name}\xBB`);
+    return c.json({ id: r.lastId });
+  });
+  async function getPartner(id) {
+    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [id]);
+    if (!p) throw fail(404, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return p;
+  }
+  app.get("/api/b2b/partners/:id", async (c) => {
+    need(c, "b2b.admin");
+    const p = await getPartner(c.req.param("id"));
+    const [users, margins, counts, names] = await Promise.all([
+      db.all(`SELECT id, login, name, active, created_at FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY login`, [p.id]),
+      db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id]),
+      db.all(`SELECT brand_id, COUNT(*) AS n, SUM(CASE WHEN rrp > 0 THEN 1 ELSE 0 END) AS priced FROM b2b_catalog WHERE hidden = 0 GROUP BY brand_id`),
+      brandNames()
+    ]);
+    const m = new Map(margins.map((x) => [x.brand_id, x.margin]));
+    const cnt = new Map(counts.map((x) => [x.brand_id, x]));
+    const brands = [...names].map(([id, name]) => ({
+      id,
+      name,
+      enabled: m.has(id),
+      margin: m.get(id) ?? null,
+      products: cnt.get(id)?.n || 0,
+      priced: cnt.get(id)?.priced || 0
+    }));
+    return c.json({ partner: p, users, brands });
+  });
+  app.put("/api/b2b/partners/:id", async (c) => {
+    need(c, "b2b.admin");
+    const p = await getPartner(c.req.param("id"));
+    const b = await c.req.json();
+    const f = { ...partnerFields({ ...p, ...b }) };
+    if (!f.name) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043D\u0430\u0437\u0432\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430.");
+    const active = b.active === void 0 ? p.active : b.active ? 1 : 0;
+    await db.run(`UPDATE b2b_partners SET name = ?, phone = ?, email = ?, note = ?, active = ? WHERE id = ?`, [f.name, f.phone, f.email, f.note, active, p.id]);
+    if (!active && p.active) {
+      await db.batch([
+        [`UPDATE users SET active = 0 WHERE partner_id = ? AND role = 'partner'`, [p.id]],
+        [`DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE partner_id = ? AND role = 'partner')`, [p.id]]
+      ]);
+    }
+    if (active !== p.active) await audit(c, p.id, active ? "\u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0443\u0432\u0456\u043C\u043A\u043D\u0435\u043D\u043E" : "\u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E");
+    return c.json({ ok: true });
+  });
+  app.put("/api/b2b/partners/:id/margins", async (c) => {
+    need(c, "b2b.admin");
+    const p = await getPartner(c.req.param("id"));
+    const list = await c.req.json();
+    if (!Array.isArray(list)) throw fail(400, "\u041D\u0435\u0432\u0456\u0440\u043D\u0456 \u0434\u0430\u043D\u0456.");
+    const next = /* @__PURE__ */ new Map();
+    for (const r of list) {
+      const brand = parseInt(r.brand_id, 10);
+      const margin = round2(num3(r.margin));
+      if (!Number.isFinite(brand) || brand < 0) continue;
+      if (margin < 0 || margin >= 100) throw fail(400, "\u041C\u0430\u0440\u0436\u0430 \u2014 \u0432\u0456\u0434 0 \u0434\u043E 99,99 %.");
+      next.set(brand, margin);
+    }
+    const cur = new Map((await db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id])).map((x) => [x.brand_id, x.margin]));
+    const names = await brandNames();
+    const at = nowIso();
+    const st = [];
+    const changes = [];
+    for (const [brand, margin] of next) {
+      if (cur.get(brand) === margin) continue;
+      st.push([`INSERT INTO b2b_margins (partner_id, brand_id, margin) VALUES (?, ?, ?) ON CONFLICT(partner_id, brand_id) DO UPDATE SET margin = excluded.margin`, [p.id, brand, margin]]);
+      st.push([`INSERT INTO b2b_margin_log (at, partner_id, brand_id, old_margin, new_margin) VALUES (?, ?, ?, ?, ?)`, [at, p.id, brand, cur.has(brand) ? cur.get(brand) : null, margin]]);
+      changes.push({ field: names.get(brand) || `\u0431\u0440\u0435\u043D\u0434 ${brand}`, from: cur.has(brand) ? `${cur.get(brand)}%` : "\u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E", to: `${margin}%` });
+    }
+    for (const [brand, margin] of cur) {
+      if (next.has(brand)) continue;
+      st.push([`DELETE FROM b2b_margins WHERE partner_id = ? AND brand_id = ?`, [p.id, brand]]);
+      st.push([`INSERT INTO b2b_margin_log (at, partner_id, brand_id, old_margin, new_margin) VALUES (?, ?, ?, ?, NULL)`, [at, p.id, brand, margin]]);
+      changes.push({ field: names.get(brand) || `\u0431\u0440\u0435\u043D\u0434 ${brand}`, from: `${margin}%`, to: "\u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E" });
+    }
+    await db.batch(st);
+    if (changes.length) await audit(c, p.id, `\u0431\u0440\u0435\u043D\u0434\u0438 \u0439 \u043C\u0430\u0440\u0436\u0430 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \xAB${p.name}\xBB`, changes);
+    return c.json({ ok: true, changed: changes.length });
+  });
+  app.post("/api/b2b/partners/:id/users", async (c) => {
+    need(c, "b2b.admin");
+    const p = await getPartner(c.req.param("id"));
+    const b = await c.req.json();
+    const login = String(b.login || "").trim().toLowerCase();
+    if (!/^[a-z0-9._@-]{2,40}$/.test(login)) throw fail(400, "\u041B\u043E\u0433\u0456\u043D: \u043B\u0430\u0442\u0438\u043D\u0441\u044C\u043A\u0456 \u043B\u0456\u0442\u0435\u0440\u0438, \u0446\u0438\u0444\u0440\u0438, \u043A\u0440\u0430\u043F\u043A\u0430, \u0434\u0435\u0444\u0456\u0441 (2\u201340 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432).");
+    if (String(b.password || "").length < 6) throw fail(400, "\u041F\u0430\u0440\u043E\u043B\u044C \u2014 \u043D\u0435 \u043C\u0435\u043D\u0448\u0435 6 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432.");
+    if (await db.get(`SELECT id FROM users WHERE login = ?`, [login])) throw fail(400, "\u0422\u0430\u043A\u0438\u0439 \u043B\u043E\u0433\u0456\u043D \u0443\u0436\u0435 \u0454.");
+    const r = await db.run(
+      `INSERT INTO users (login, name, password_hash, role, active, created_at, partner_id) VALUES (?, ?, ?, 'partner', 1, ?, ?)`,
+      [login, String(b.name || "").trim(), await hashPassword(b.password), nowIso(), p.id]
+    );
+    await audit(c, p.id, `\u0434\u043E\u0434\u0430\u043D\u043E \u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430: ${login}`);
+    return c.json({ id: r.lastId });
+  });
+  app.put("/api/b2b/partners/:id/users/:uid", async (c) => {
+    need(c, "b2b.admin");
+    const p = await getPartner(c.req.param("id"));
+    const u = await db.get(`SELECT * FROM users WHERE id = ? AND partner_id = ? AND role = 'partner'`, [c.req.param("uid"), p.id]);
+    if (!u) throw fail(404, "\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const b = await c.req.json();
+    const sets = [];
+    const vals = [];
+    if (b.name !== void 0) {
+      sets.push("name = ?");
+      vals.push(String(b.name).trim());
+    }
+    if (b.active !== void 0) {
+      sets.push("active = ?");
+      vals.push(b.active ? 1 : 0);
+    }
+    if (b.password) {
+      if (String(b.password).length < 6) throw fail(400, "\u041F\u0430\u0440\u043E\u043B\u044C \u2014 \u043D\u0435 \u043C\u0435\u043D\u0448\u0435 6 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432.");
+      sets.push("password_hash = ?");
+      vals.push(await hashPassword(b.password));
+    }
+    if (sets.length) await db.run(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`, [...vals, u.id]);
+    if (b.password || b.active === false) await db.run(`DELETE FROM sessions WHERE user_id = ?`, [u.id]);
+    if (b.active !== void 0 || b.password) await audit(c, p.id, `\u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 ${u.login}: ${b.password ? "\u043D\u043E\u0432\u0438\u0439 \u043F\u0430\u0440\u043E\u043B\u044C" : ""}${b.active !== void 0 ? b.active ? " \u0443\u0432\u0456\u043C\u043A\u043D\u0435\u043D\u043E" : " \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E" : ""}`.trim());
+    return c.json({ ok: true });
+  });
+  app.get("/api/b2b/catalog", async (c) => {
+    need(c, "b2b.admin");
+    const brand = c.req.query("brand");
+    const q = String(c.req.query("q") || "").trim().toLowerCase();
+    const where = [];
+    const params = [];
+    if (brand !== void 0 && brand !== "") {
+      where.push("brand_id = ?");
+      params.push(parseInt(brand, 10) || 0);
+    }
+    if (q) {
+      where.push("(LOWER(name) LIKE ? OR CAST(product_id AS TEXT) = ?)");
+      params.push(`%${q}%`, q);
+    }
+    const [rows, names, state] = await Promise.all([
+      db.all(`SELECT * FROM b2b_catalog ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY brand_id, name LIMIT 500`, params),
+      brandNames(),
+      catalogState()
+    ]);
+    return c.json({ rows: rows.map((r) => ({ ...r, brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456" })), state });
+  });
+  async function catalogState() {
+    const today = kyivDay();
+    const [last, left] = await Promise.all([
+      db.get(`SELECT value FROM settings WHERE key = 'b2b_catalog_sync'`),
+      db.get(`SELECT COUNT(*) AS n FROM b2b_catalog WHERE hidden = 0 AND checked_at < ? AND (manual = 1 OR brand_id IN (SELECT brand_id FROM b2b_margins))`, [today])
+    ]);
+    return { lastSync: last?.value || "", stale: left?.n || 0 };
+  }
+  app.put("/api/b2b/catalog/:pid", async (c) => {
+    need(c, "b2b.admin");
+    const b = await c.req.json();
+    await db.run(`UPDATE b2b_catalog SET hidden = ? WHERE product_id = ?`, [b.hidden ? 1 : 0, parseInt(c.req.param("pid"), 10) || 0]);
+    return c.json({ ok: true });
+  });
+  app.post("/api/b2b/catalog/add", async (c) => {
+    need(c, "b2b.admin");
+    const b = await c.req.json();
+    const ids = [...new Set(String(b.ids || "").split(/[\s,;]+/).map((x) => parseInt(x, 10)).filter((x) => x > 0))].slice(0, 200);
+    if (!ids.length) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C ID \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0437 LP-CRM \u0447\u0435\u0440\u0435\u0437 \u043A\u043E\u043C\u0443.");
+    await db.batch(ids.map((id) => [
+      `INSERT INTO b2b_catalog (product_id, manual, checked_at) VALUES (?, 1, '') ON CONFLICT(product_id) DO UPDATE SET manual = 1, hidden = 0, checked_at = ''`,
+      [id]
+    ]));
+    return c.json({ ok: true, added: ids.length });
+  });
+  app.post("/api/b2b/catalog/sync", async (c) => {
+    need(c, "b2b.admin");
+    const s = await loadSettings(db);
+    if (!s.lpcrm_subdomain || !s.lpcrm_key) throw fail(400, "\u041D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E LP-CRM: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u043F\u0456\u0434\u0434\u043E\u043C\u0435\u043D \u0456 API-\u043A\u043B\u044E\u0447 \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445\xBB.");
+    const today = kyivDay();
+    await db.batch([
+      [`INSERT OR IGNORE INTO b2b_catalog (product_id, name, brand_id) SELECT product_id, COALESCE(name, ''), brand_id FROM an_products WHERE product_id > 0`, []],
+      [`UPDATE b2b_catalog SET brand_id = (SELECT a.brand_id FROM an_products a WHERE a.product_id = b2b_catalog.product_id)
+        WHERE EXISTS (SELECT 1 FROM an_products a WHERE a.product_id = b2b_catalog.product_id AND a.brand_id IS NOT b2b_catalog.brand_id)`, []]
+    ]);
+    const todo = await db.all(
+      `SELECT product_id, rrp FROM b2b_catalog WHERE hidden = 0 AND checked_at < ? AND (manual = 1 OR brand_id IN (SELECT brand_id FROM b2b_margins))
+       ORDER BY checked_at LIMIT ?`,
+      [today, BATCH * BATCHES_PER_CALL]
+    );
+    const at = nowIso();
+    let changed = 0;
+    for (let i = 0; i < todo.length; i += BATCH) {
+      const part = todo.slice(i, i + BATCH);
+      const j = await call(fetchFn, s.lpcrm_subdomain, s.lpcrm_key, "getProduct", { product_id: part.map((x) => x.product_id).join(","), status_ignore: "1" });
+      if (j.status !== "ok" && !j.data) throw fail(502, `LP-CRM (\u043A\u0430\u0442\u0430\u043B\u043E\u0433): ${j.message || "\u043D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u043E\u0442\u0440\u0438\u043C\u0430\u0442\u0438 \u0442\u043E\u0432\u0430\u0440\u0438"}`);
+      const got = new Map(collectProducts(j.data).map((p) => [parseInt(p.id ?? p.product_id, 10), p]));
+      const st = [];
+      for (const r of part) {
+        const p = got.get(r.product_id);
+        if (!p) {
+          st.push([`UPDATE b2b_catalog SET checked_at = ? WHERE product_id = ?`, [today, r.product_id]]);
+          continue;
+        }
+        const rrp = round2(num3(p.price));
+        const vendor = p.vendor && p.vendor !== "\u0410\u0440\u0442\u0438\u043A\u0443\u043B" ? p.vendor : "";
+        st.push([
+          `UPDATE b2b_catalog SET name = ?, article = ?, rrp = ?, image = ?, checked_at = ? WHERE product_id = ?`,
+          [String(p.name || p.title || "").trim().slice(0, 300), String(p.article || vendor || p.model || "").slice(0, 60), rrp, findImage(p), today, r.product_id]
+        ]);
+        if (r.rrp > 0 && rrp > 0 && Math.abs(rrp - r.rrp) >= 5e-3) {
+          st.push([`INSERT INTO b2b_price_log (at, product_id, old_rrp, new_rrp) VALUES (?, ?, ?, ?)`, [at, r.product_id, r.rrp, rrp]]);
+          changed++;
+        }
+      }
+      await db.batch(st);
+    }
+    await db.run(`INSERT INTO settings (key, value) VALUES ('b2b_catalog_sync', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [at]);
+    const state = await catalogState();
+    return c.json({ ok: true, checked: todo.length, changed, left: state.stale, lastSync: at });
+  });
+  app.get("/api/b2b/brands", async (c) => {
+    need(c, "b2b.admin");
+    return c.json([...await brandNames()].map(([id, name]) => ({ id, name })));
+  });
+  async function myPartner(c) {
+    need(c, "b2b.partner");
+    const u = c.get("user");
+    const p = u.partner_id ? await db.get(`SELECT * FROM b2b_partners WHERE id = ? AND active = 1`, [u.partner_id]) : null;
+    if (!p) throw fail(403, "\u041A\u0430\u0431\u0456\u043D\u0435\u0442 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E. \u0417\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u0432\u0430\u0448\u043E\u0433\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.");
+    return p;
+  }
+  app.get("/api/b2b/p/me", async (c) => {
+    const p = await myPartner(c);
+    return c.json({ partner: { id: p.id, name: p.name } });
+  });
+  app.get("/api/b2b/p/catalog", async (c) => {
+    const p = await myPartner(c);
+    const [rows, names] = await Promise.all([
+      db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.image, c.brand_id, m.margin
+        FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id
+        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [p.id]),
+      brandNames()
+    ]);
+    const brands = [...new Set(rows.map((r) => r.brand_id))].map((id) => ({ id, name: names.get(id) || "\u0406\u043D\u0448\u0456" })).sort((a, b) => a.name.localeCompare(b.name, "uk"));
+    return c.json({
+      partner: { id: p.id, name: p.name },
+      brands,
+      products: rows.map((r) => ({
+        id: r.product_id,
+        name: r.name,
+        article: r.article,
+        image: r.image,
+        brand_id: r.brand_id,
+        brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456",
+        rrp: r.rrp,
+        price: partnerPrice(r.rrp, r.margin)
+      }))
+    });
+  });
+  return { partnerPrice };
+}
+
 // src/modules/payments/index.js
 var ODB_BASE = "https://iban.opendatabot.ua";
 var kindOf2 = (code) => /^\d{10}$/.test(String(code || "").trim()) ? "fop" : "company";
@@ -5453,6 +5790,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   services.nakladni = mountNakladni(app, ctx);
   mountAdmin(app, ctx);
   services.errlog = mountErrLog(app, ctx);
+  services.b2b = mountB2b(app, ctx);
   mountRahunky(app, ctx);
   mountAnalytics(app, ctx);
   services.notify = mountTg(app, ctx);
@@ -5463,7 +5801,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
 // src/modules/auth/schema.js
 var schema2 = {
   name: "auth",
-  version: 1,
+  version: 2,
   tables: [
     `CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -5483,7 +5821,11 @@ var schema2 = {
   columns: [
     ["users", "crm_logins", "TEXT DEFAULT ''"],
     ["users", "failed_logins", "INTEGER DEFAULT 0"],
-    ["users", "locked_until", "TEXT DEFAULT ''"]
+    ["users", "locked_until", "TEXT DEFAULT ''"],
+    // Перемикач аналітики (керує власник): NULL — як у ролі, 0 — вимкнено, 1 — увімкнено.
+    ["users", "an_access", "INTEGER"],
+    // Користувач-партнер (роль partner) — до якої компанії-партнера належить.
+    ["users", "partner_id", "INTEGER"]
   ]
 };
 
@@ -6186,8 +6528,65 @@ var schema10 = {
   columns: []
 };
 
+// src/modules/b2b/schema.js
+var schema11 = {
+  name: "b2b",
+  version: 1,
+  tables: [
+    `CREATE TABLE IF NOT EXISTS b2b_partners (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    phone TEXT DEFAULT '',
+    email TEXT DEFAULT '',
+    note TEXT DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT
+  )`,
+    // Увімкнений партнеру бренд і його маржа (%). Немає рядка — бренд партнер не бачить.
+    `CREATE TABLE IF NOT EXISTS b2b_margins (
+    partner_id INTEGER NOT NULL,
+    brand_id INTEGER NOT NULL,
+    margin REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (partner_id, brand_id)
+  )`,
+    // Каталог: товари LP-CRM з РРЦ і фото (оновлюється з CRM; бренд — як в аналітиці).
+    `CREATE TABLE IF NOT EXISTS b2b_catalog (
+    product_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    article TEXT DEFAULT '',
+    rrp REAL NOT NULL DEFAULT 0,
+    image TEXT DEFAULT '',
+    brand_id INTEGER NOT NULL DEFAULT 0,
+    manual INTEGER NOT NULL DEFAULT 0,
+    hidden INTEGER NOT NULL DEFAULT 0,
+    checked_at TEXT DEFAULT ''
+  )`,
+    `CREATE INDEX IF NOT EXISTS b2b_catalog_brand ON b2b_catalog (brand_id)`,
+    `CREATE INDEX IF NOT EXISTS b2b_catalog_checked ON b2b_catalog (checked_at)`,
+    // Зміни РРЦ і маржі — для сповіщень партнерам «змінилися ціни».
+    `CREATE TABLE IF NOT EXISTS b2b_price_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    product_id INTEGER NOT NULL,
+    old_rrp REAL,
+    new_rrp REAL
+  )`,
+    `CREATE TABLE IF NOT EXISTS b2b_margin_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    partner_id INTEGER NOT NULL,
+    brand_id INTEGER NOT NULL,
+    old_margin REAL,
+    new_margin REAL
+  )`,
+    `CREATE INDEX IF NOT EXISTS b2b_price_log_at ON b2b_price_log (at)`,
+    `CREATE INDEX IF NOT EXISTS b2b_margin_log_p ON b2b_margin_log (partner_id, at)`
+  ],
+  columns: []
+};
+
 // src/migrate.js
-var MODULE_SCHEMAS = [schema, schema2, schema3, schema4, schema5, schema6, schema7, schema8, schema9, schema10];
+var MODULE_SCHEMAS = [schema, schema2, schema3, schema4, schema5, schema6, schema7, schema8, schema9, schema10, schema11];
 var versionKey = (m) => `schema:${m.name}`;
 async function migrate(db, modules = MODULE_SCHEMAS) {
   let have = {};
