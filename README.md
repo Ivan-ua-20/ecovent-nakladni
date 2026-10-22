@@ -36,6 +36,7 @@ src/
     nakladni/      пошук замовлення, накладна, версії, історія (віддає loadOrder, normalizeOrder)
     rahunky/       рахунки на оплату (Word), ФОПи рахунків
     admin/         експорт / імпорт налаштувань, журнал змін
+    errlog/        журнал помилок (вкладка для адмінів) і сповіщення адмінам у Telegram
     payments/      Opendatabot: посилання на оплату, надходження (віддає linkForRahunok)
     notify/        Telegram-сповіщення (віддає notify)
     analytics/     аналітика продажів

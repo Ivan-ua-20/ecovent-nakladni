@@ -22,13 +22,13 @@ globalThis.fetch = async (url) => {
   const u = String(url);
   const body = u.startsWith('/api/auth/state') ? { needsSetup: false, user } : u.startsWith('/api/bootstrap') ? BOOT
     : u.startsWith('/api/users') ? { users: [user], roles: {} } : u.startsWith('/api/rahunky') ? { rows: [], nextNumber: '1', retentionDays: 7 }
-      : u.startsWith('/api/history') || u.includes('/versions') || u.startsWith('/api/audit') ? [] : {};
+      : u.startsWith('/api/errors') ? { rows: [], sources: [], keepDays: 30 } : u.startsWith('/api/history') || u.includes('/versions') || u.startsWith('/api/audit') ? [] : {};
   return { status: 200, ok: true, json: async () => body };
 };
 process.on('unhandledRejection', (e) => errors.push(e));
 await import(new URL('../public/app.js', import.meta.url));
 await new Promise((r) => setTimeout(r, 30));
-const routes = ['invoice', 'history', 'fops', 'fops/1', 'fops/new', 'offices', 'templates', 'templates/1', 'nsettings', 'rahunky', 'rlist', 'invfops', 'invfops/1', 'invfops/new', 'rsettings', 'settings', 'users'];
+const routes = ['invoice', 'history', 'fops', 'fops/1', 'fops/new', 'offices', 'templates', 'templates/1', 'nsettings', 'rahunky', 'rlist', 'invfops', 'invfops/1', 'invfops/new', 'rsettings', 'settings', 'errors', 'users'];
 for (const r of routes) {
   location.hash = `#/${r}`;
   mainHtml = '';

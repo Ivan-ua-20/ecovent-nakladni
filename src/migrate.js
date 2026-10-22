@@ -12,9 +12,10 @@ import { schema as rahunky } from './modules/rahunky/schema.js';
 import { schema as payments } from './modules/payments/schema.js';
 import { schema as analytics } from './modules/analytics/schema.js';
 import { schema as admin } from './modules/admin/schema.js';
+import { schema as errlog } from './modules/errlog/schema.js';
 
 // Порядок важливий: колонки notify додаються в users (auth), payments — в inv_fops (rahunky).
-export const MODULE_SCHEMAS = [core, auth, notify, refs, nakladni, rahunky, payments, analytics, admin];
+export const MODULE_SCHEMAS = [core, auth, notify, refs, nakladni, rahunky, payments, analytics, admin, errlog];
 
 const versionKey = (m) => `schema:${m.name}`;
 

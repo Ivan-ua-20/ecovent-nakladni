@@ -9,6 +9,7 @@ import { createRefsPages } from './pages/refs.js';
 import { createSettingsPages } from './pages/settings.js';
 import { createRahunkyPages } from './pages/rahunky.js';
 import { createUsersPages } from './pages/users.js';
+import { createErrorsPages } from './pages/errors.js';
 
 // ---------- стан ----------
 let boot = { fops: [], templates: [], offices: [], channels: [], invFops: [], settings: {}, user: null };
@@ -37,7 +38,7 @@ const SECTIONS = [
     { id: 'anpay', label: 'Оплати', perm: 'analytics' },
     { id: 'ansettings', label: 'Налаштування аналітики', perm: 'analytics' },
   ] },
-  { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [{ id: 'settings', label: 'Загальні налаштування' }] },
+  { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [{ id: 'settings', label: 'Загальні налаштування' }, { id: 'errors', label: 'Журнал помилок', perm: 'users' }] },
   { id: 'users', label: 'Користувачі', perm: 'users', home: 'users', tabs: [{ id: 'users', label: 'Користувачі' }] },
 ];
 const visibleTabs = (sec) => sec.tabs.filter((t) => !t.perm || can(t.perm));
@@ -175,6 +176,7 @@ const { viewFops, viewOffices, viewTemplates, viewInvFops } = createRefsPages(ct
 const { viewSettings, viewNakladniSettings, viewRahunkySettings } = createSettingsPages(ctx);
 const { viewRahunky, viewRahunkyList } = createRahunkyPages(ctx);
 const { viewUsers } = createUsersPages(ctx);
+const { viewErrors } = createErrorsPages(ctx);
 setUnauthorized(() => showAuth());
 
 const routes = {
@@ -195,6 +197,7 @@ const routes = {
   ansettings: (...a) => AN.viewSettings(...a),
   settings: viewSettings,
   users: viewUsers,
+  errors: viewErrors,
 };
 
 async function route() {
