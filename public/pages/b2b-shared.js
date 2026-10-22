@@ -1,9 +1,18 @@
 // Спільне для сторінок B2B (адмін і партнер): статуси, суми, завантаження файлів.
 import { esc, money } from '../invoice.js';
+import { fmtDateTime as fmtDT } from '../core/ui.js';
 
 export const uah = (n) => `${money(n)} грн`;
-const ST_CLS = { invoice_wait: 'warn', pay_wait: 'warn', partial: 'info', paid: 'ok', done: 'ok', cancelled: 'bad' };
+const ST_CLS = { invoice_wait: 'warn', pay_wait: 'warn', partial: 'info', paid: 'ok', done: 'ok', cancelled: 'bad', new: 'warn', crm: 'info' };
 export const statusBadge = (o) => `<span class="badge ${ST_CLS[o.status] || ''}">${esc(o.status_name || o.status)}</span>`;
+// Замовлення клієнта: оплата (за закупівлею) і «без закупівлі».
+const PAY_CLS = { paid: 'ok', partial: 'info', unpaid: 'warn' };
+export const payBadge = (o) => (o.pay ? `<span class="badge ${PAY_CLS[o.pay] || ''}">${esc(o.pay_name || o.pay)}</span>` : '');
+export const supplyMark = (o) => (o.no_supply ? '<span class="badge bad">Без закупівлі</span>' : `<span class="small muted">із ${esc(o.supply_number)}</span>`);
+export const crmCell = (o) => (o.crm_id ? `<b>№ ${esc(o.crm_id)}</b>${o.crm_status ? `<div class="small">${esc(o.crm_status)}</div>` : ''}`
+  : (o.status === 'crm' ? `<span class="small">${esc(o.crm_status || 'Передано')}</span>` : '<span class="small muted">—</span>'));
+export const phoneFmt = (p) => (/^380\d{9}$/.test(p || '') ? `+${p.slice(0, 2)} ${p.slice(2, 5)} ${p.slice(5, 8)} ${p.slice(8, 10)} ${p.slice(10)}` : (p || ''));
+export const historyCard = (history) => `<div class="card"><h3>Історія</h3>${history.map((h) => `<div class="small"><span class="muted">${esc(fmtDT(h.at))}</span> · ${esc(h.action)}${h.user_name ? ` <span class="muted">(${esc(h.user_name)})</span>` : ''}</div>`).join('')}</div>`;
 export const fmtDay = (d) => (d ? d.slice(0, 10).split('-').reverse().join('.') : '');
 export const fileSize = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : `${Math.max(1, Math.round(n / 1024))} КБ`);
 

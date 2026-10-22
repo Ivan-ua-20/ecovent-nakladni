@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 2,
+  version: 3,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,5 +134,25 @@ export const schema = {
     PRIMARY KEY (file_id, n)
   )`,
   ],
-  columns: [],
+  // ---------- етап 3: замовлення для клієнтів партнера ----------
+  // supply_id — закупівля, з якої взято товари (порожньо — «без закупівлі»); дані клієнта й ТТН партнера;
+  // crm_* — передача в LP-CRM: номер замовлення в CRM (автоматично або вручну), його статус, код, з яким відправили.
+  columns: [
+    ['b2b_orders', 'supply_id', 'INTEGER'],
+    ['b2b_orders', 'client_name', "TEXT DEFAULT ''"],
+    ['b2b_orders', 'client_phone', "TEXT DEFAULT ''"],
+    ['b2b_orders', 'ttn', "TEXT DEFAULT ''"],
+    ['b2b_orders', 'crm_id', "TEXT DEFAULT ''"],
+    ['b2b_orders', 'crm_status', "TEXT DEFAULT ''"],
+    ['b2b_orders', 'crm_checked_at', "TEXT DEFAULT ''"],
+    ['b2b_orders', 'crm_sent_at', "TEXT DEFAULT ''"],
+    ['b2b_orders', 'crm_ext', "TEXT DEFAULT ''"],
+  ],
+  // Індекси на нові колонки — після ALTER TABLE (у старих базах колонок ще немає, коли створюються таблиці).
+  async seed(db) {
+    await db.batch([
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_supply ON b2b_orders (supply_id)`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_kind ON b2b_orders (kind, partner_id, id)`, []],
+    ]);
+  },
 };

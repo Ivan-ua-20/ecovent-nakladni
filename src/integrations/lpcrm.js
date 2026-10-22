@@ -1,4 +1,4 @@
-// Клієнт LP-CRM. Лише читання: getOrdersByID і getProductsByID.
+// Клієнт LP-CRM: читання (getOrdersByID, getProduct, getStatuses…) і створення замовлення addNewOrder (B2B).
 // Формат запиту LP-CRM: POST https://<піддомен>.lp-crm.biz/api/<метод>.html, поля key + параметри.
 
 // LP-CRM обмежує частоту запитів (відповідає 429 Too Many Requests).
@@ -181,4 +181,57 @@ export async function diagnose(fetchFn, creds, orderId) {
     log('ПОМИЛКА', e.message);
   }
   return lines.join('\n\n');
+}
+
+// ---------- Створення замовлення (addNewOrder) ----------
+// Товари LP-CRM приймає як PHP serialize() масиву, закодований PHP urlencode() — так у прикладі з документації:
+//   'products' => urlencode(serialize([['product_id' => …, 'price' => …, 'count' => …]]))
+const utf8Len = (s) => new TextEncoder().encode(s).length;
+export function phpSerialize(v) {
+  if (v === null || v === undefined) return 'N;';
+  if (typeof v === 'boolean') return `b:${v ? 1 : 0};`;
+  if (typeof v === 'number' && Number.isInteger(v)) return `i:${v};`;
+  if (typeof v === 'number') return `d:${v};`;
+  if (typeof v === 'string') return `s:${utf8Len(v)}:"${v}";`;
+  const entries = Array.isArray(v) ? v.map((x, i) => [i, x]) : Object.entries(v);
+  return `a:${entries.length}:{${entries.map(([k, x]) => (typeof k === 'number' ? `i:${k};` : phpSerialize(String(k))) + phpSerialize(x)).join('')}}`;
+}
+// Як PHP urlencode(): усе, крім літер, цифр і -_. ; пробіл — «+».
+export const phpUrlencode = (s) => encodeURIComponent(s).replace(/[!'()*~]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`).replace(/%20/g, '+');
+
+// Номер створеного замовлення в CRM шукаємо у відповіді на будь-якій глибині (формат відповіді різниться).
+const CRM_ID_KEYS = ['crm_id', 'order_crm_id', 'lp_order_id', 'id'];
+export function findNewOrderId(node, sentCode, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 4) return '';
+  for (const k of CRM_ID_KEYS) {
+    const v = node[k];
+    if ((typeof v === 'number' || typeof v === 'string') && /^[1-9]\d{0,9}$/.test(String(v)) && String(v) !== String(sentCode)) return String(v);
+  }
+  const oid = node.order_id;
+  if ((typeof oid === 'number' || typeof oid === 'string') && /^[1-9]\d{0,9}$/.test(String(oid)) && String(oid) !== String(sentCode)) return String(oid);
+  for (const x of Object.values(node)) {
+    const r = findNewOrderId(x, sentCode, depth + 1);
+    if (r) return r;
+  }
+  return '';
+}
+
+// order: { code, office, products: [{product_id, price, count}], bayer_name, phone, comment, ...додаткові поля }
+export async function addNewOrder(fetchFn, { subdomain, key }, order) {
+  const { products, ...rest } = order;
+  const params = {
+    order_id: String(order.code),
+    country: 'UA',
+    ...Object.fromEntries(Object.entries(rest).filter(([k, v]) => k !== 'code' && v !== undefined && v !== null && v !== '').map(([k, v]) => [k, String(v)])),
+    products: phpUrlencode(phpSerialize(products.map((p) => ({ product_id: String(p.product_id), price: String(p.price), count: String(p.count) })))),
+  };
+  const json = await call(fetchFn, subdomain, key, 'addNewOrder', params);
+  const failed = json.status && json.status !== 'ok';
+  const inner = Array.isArray(json.data) ? json.data[0] : json.data;
+  const innerFailed = inner && typeof inner === 'object' && inner.status && inner.status !== 'ok';
+  if (failed || innerFailed) {
+    const why = [json.message, typeof json.data === 'string' ? json.data : '', inner?.message, inner?.error].filter(Boolean).join(' · ');
+    return { ok: false, error: why || JSON.stringify(json).slice(0, 300), raw: json };
+  }
+  return { ok: true, crmId: findNewOrderId(json.data ?? json, order.code), raw: json };
 }

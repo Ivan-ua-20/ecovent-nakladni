@@ -1,7 +1,7 @@
-// Кабінет партнера (B2B): каталог, юрособи, закупівлі (оформлення, зміна до рахунку, файли), інструкція.
+// Кабінет партнера (B2B): каталог, юрособи, закупівлі (оформлення, зміна до рахунку, файли), замовлення клієнтів, інструкція.
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
@@ -108,8 +108,9 @@ export function createPartnerPages() {
   }
 
   async function viewOrder(id) {
-    const { order: o, items, files, history } = await api('GET', `/api/b2b/p/orders/${id}`);
+    const { order: o, items, files, history, clients = [], left = [] } = await api('GET', `/api/b2b/p/orders/${id}`);
     const editable = o.status === 'invoice_wait';
+    const hasLeft = o.status !== 'cancelled' && left.some((r) => r.left > 0);
     main.innerHTML = `
       <div class="head-row"><h2>Закупівля ${esc(o.number)} ${statusBadge(o)}</h2>
         <div class="btn-row"><a class="btn" href="#/porders">← До списку</a>
@@ -118,6 +119,12 @@ export function createPartnerPages() {
         <div class="form-stack">
           <div class="card">${itemsTable(items)}</div>
           ${o.comment ? `<div class="card small"><b>Коментар:</b> ${esc(o.comment)}</div>` : ''}
+          ${o.status !== 'cancelled' ? `<div class="card form-stack">
+            <div class="head-row"><h3>Замовлення клієнтів із цієї закупівлі</h3>${hasLeft ? `<a class="btn sm primary" href="#/pclients/new/${o.id}">+ Замовлення клієнта</a>` : ''}</div>
+            <table class="list"><thead><tr><th>Товар</th><th class="r">Закуплено</th><th class="r">Розписано</th><th class="r">Залишок</th></tr></thead><tbody>
+              ${left.map((r) => `<tr><td>${esc(r.name)}</td><td class="r">${r.qty}</td><td class="r">${r.used}</td><td class="r"><b>${r.left}</b></td></tr>`).join('')}</tbody></table>
+            ${clients.length ? clients.map((x) => `<a class="small" href="#/pclients/${x.id}">${esc(x.number)} · ${esc(x.client_name)} · ${uah(x.total)} · ${esc(x.status_name)}</a>`).join('') : '<div class="small muted">Ще немає.</div>'}
+          </div>` : ''}
         </div>
         <div class="form-stack">
           <div class="card form-stack">
@@ -129,7 +136,7 @@ export function createPartnerPages() {
             ${files.length ? `<div class="form-stack">${files.map((f) => `<a class="btn sm" href="/api/b2b/p/files/${f.id}" target="_blank" rel="noopener">📎 ${esc(f.kind_name)}: ${esc(f.name)} <span class="muted">${fileSize(f.size)}</span></a>`).join('')}</div>
               <div class="small muted">Файли зберігаються 30 днів — завантажте їх собі.</div>` : ''}
           </div>
-          <div class="card"><h3>Історія</h3>${history.map((h) => `<div class="small"><span class="muted">${esc(fmtDateTime(h.at))}</span> · ${esc(h.action)}${h.user_name ? ` <span class="muted">(${esc(h.user_name)})</span>` : ''}</div>`).join('')}</div>
+          ${historyCard(history)}
         </div>
       </div>`;
     $('#oCancel') && ($('#oCancel').onclick = async () => {
@@ -211,6 +218,168 @@ export function createPartnerPages() {
     sum();
   }
 
+
+  // ---------------------------------------------------------------- замовлення клієнтів
+  async function viewClients(id, mode) {
+    if (id === 'new') return clientForm(null, mode);
+    if (id && mode === 'edit') return clientForm(id);
+    if (id) return viewClient(id);
+    const { rows } = await api('GET', '/api/b2b/p/clients');
+    main.innerHTML = `
+      <div class="head-row"><h2>Замовлення клієнтів</h2><a class="btn primary" href="#/pclients/new">+ Замовлення клієнта</a></div>
+      <div class="small muted" style="margin-bottom:10px">Замовлення, яке ви оформлюєте для свого клієнта: товари з вашої закупівлі, ваша ТТН і маркування.
+        <span class="badge bad">Без закупівлі</span> — товари не з закупівлі, менеджер виставить рахунок окремо.</div>
+      ${rows.length ? `<table class="list"><thead><tr><th>№</th><th>Клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th class="hide-m">CRM</th></tr></thead><tbody>
+        ${rows.map((o) => `<tr class="click ${o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''}" data-o="${o.id}">
+          <td><b>${esc(o.number)}</b><div>${supplyMark(o)}</div><div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
+          <td>${esc(o.client_name)}<div class="small muted">${esc(phoneFmt(o.client_phone))}${o.ttn ? ` · ТТН ${esc(o.ttn)}` : ''}</div></td>
+          <td class="r"><b>${uah(o.total)}</b></td>
+          <td>${statusBadge(o)}</td>
+          <td class="hide-m">${payBadge(o)}</td>
+          <td class="hide-m">${crmCell(o)}</td>
+        </tr>`).join('')}</tbody></table>`
+        : '<div class="card empty"><div class="big">Замовлень клієнтів ще немає</div>Відкрийте закупівлю і натисніть «+ Замовлення клієнта» або створіть замовлення тут.</div>'}`;
+    $$('[data-o]').forEach((tr) => (tr.onclick = () => { location.hash = `#/pclients/${tr.dataset.o}`; }));
+  }
+
+  async function viewClient(id) {
+    const { order: o, items, files, history } = await api('GET', `/api/b2b/p/clients/${id}`);
+    const editable = o.status === 'new';
+    main.innerHTML = `
+      <div class="head-row"><h2>Замовлення ${esc(o.number)} ${statusBadge(o)} ${payBadge(o)}</h2>
+        <div class="btn-row"><a class="btn" href="#/pclients">← До списку</a>
+          ${editable ? `<a class="btn" href="#/pclients/${o.id}/edit">Змінити</a><button class="btn danger" id="cCancel">Скасувати</button>` : ''}</div></div>
+      ${o.no_supply && o.status !== 'cancelled' ? '<div class="alert bad" style="margin-bottom:12px"><b>Без закупівлі.</b> Товари не з вашої закупівлі — менеджер виставить на них рахунок окремо.</div>' : ''}
+      ${!o.no_supply && o.pay !== 'paid' && o.status !== 'cancelled' ? `<div class="alert warn" style="margin-bottom:12px">Закупівля <a href="#/porders/${o.supply_id}">${esc(o.supply_number)}</a> ще не оплачена — замовлення позначене як неоплачене.</div>` : ''}
+      <div class="form-page">
+        <div class="form-stack">
+          <div class="card">${itemsTable(items)}</div>
+          ${o.comment ? `<div class="card small"><b>Коментар:</b> ${esc(o.comment)}</div>` : ''}
+        </div>
+        <div class="form-stack">
+          <div class="card form-stack">
+            <h3>Клієнт і доставка</h3>
+            <div><b>${esc(o.client_name)}</b><div>${esc(phoneFmt(o.client_phone))}</div></div>
+            <div>ТТН: ${o.ttn ? `<b>${esc(o.ttn)}</b>` : '<span class="muted">не вказано</span>'}</div>
+            <div>${o.no_supply ? supplyMark(o) : `Із закупівлі <a href="#/porders/${o.supply_id}">${esc(o.supply_number)}</a>`}</div>
+          </div>
+          <div class="card form-stack">
+            <h3>Статус у CRM</h3>
+            ${o.crm_id ? `<div>Замовлення № <b>${esc(o.crm_id)}</b></div><div>${o.crm_status ? `<span class="badge info">${esc(o.crm_status)}</span>` : '<span class="small muted">статус оновиться за кілька хвилин</span>'}</div>`
+              : (o.status === 'crm' ? '<div>Передано в роботу.</div>' : '<div class="small muted">Ще не передано — менеджер перевірить замовлення й передасть його в роботу.</div>')}
+          </div>
+          <div class="card form-stack">
+            <h3>Файли</h3>
+            ${files.length ? files.map((f) => `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <a class="btn sm" href="/api/b2b/p/files/${f.id}" target="_blank" rel="noopener">📎 ${esc(f.kind_name)}: ${esc(f.name)}</a><span class="small muted">${fileSize(f.size)}</span>
+              ${editable && f.kind === 'label' ? `<button class="btn sm danger" data-fdel="${f.id}" aria-label="Видалити файл">✕</button>` : ''}</div>`).join('') : '<div class="small muted">Файлів ще немає.</div>'}
+            ${editable ? `<label class="btn sm">+ Файл маркування (етикетка ТТН)<input type="file" id="cUp" accept=".pdf,image/*" hidden></label>
+              <div class="small muted">PDF або фото до 5 МБ. Файли зберігаються 30 днів.</div>` : ''}
+          </div>
+          ${historyCard(history)}
+        </div>
+      </div>`;
+    $('#cCancel') && ($('#cCancel').onclick = async () => {
+      if (!(await confirmDanger(`Скасувати замовлення ${o.number}?`, 'Товари повернуться в залишок закупівлі.', 'Скасувати замовлення'))) return;
+      try { await api('POST', `/api/b2b/p/clients/${o.id}/cancel`); toast('Скасовано'); viewClient(o.id); } catch (e) { toast(e.message, true); }
+    });
+    $('#cUp') && ($('#cUp').onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try { await uploadFile(`/api/b2b/p/clients/${o.id}/files`, file); toast('Маркування додано'); viewClient(o.id); } catch (er) { toast(er.message, true); }
+    });
+    $$('[data-fdel]').forEach((b) => (b.onclick = async () => {
+      if (!(await confirmDanger('Видалити файл?', '', 'Видалити'))) return;
+      try { await api('DELETE', `/api/b2b/p/clients/${o.id}/files/${b.dataset.fdel}`); toast('Видалено'); viewClient(o.id); } catch (er) { toast(er.message, true); }
+    }));
+  }
+
+  // Оформлення / зміна: джерело товарів (закупівля із залишком або «без закупівлі» — каталог), клієнт, ТТН.
+  async function clientForm(id, presetSupply) {
+    const [supplies, catalog, cur] = await Promise.all([
+      api('GET', '/api/b2b/p/supplies'), api('GET', '/api/b2b/p/catalog'), id ? api('GET', `/api/b2b/p/clients/${id}`) : null,
+    ]);
+    if (cur && cur.order.status !== 'new') { location.hash = `#/pclients/${id}`; return; }
+    // Закупівля поточного замовлення — із залишком з урахуванням його власних позицій.
+    if (cur?.order.supply_id) {
+      const own = new Map(cur.items.map((i) => [i.product_id, i.qty]));
+      const s = supplies.find((x) => x.id === cur.order.supply_id);
+      if (s) s.items.forEach((i) => { i.left += own.get(i.product_id) || 0; });
+      else {
+        const d = await api('GET', `/api/b2b/p/orders/${cur.order.supply_id}`).catch(() => null);
+        if (d) supplies.unshift({ id: d.order.id, number: d.order.number, pay: '', items: d.left.map((r) => ({ ...r, left: r.left + (own.get(r.product_id) || 0) })) });
+      }
+    }
+    let source = cur ? String(cur.order.supply_id || '') : (presetSupply || (supplies[0] ? String(supplies[0].id) : ''));
+    const qty = new Map((cur?.items || []).map((i) => [i.product_id, i.qty]));
+    const o = cur?.order || {};
+    const payTxt = { paid: 'оплачено', partial: 'частково оплачено', unpaid: 'не оплачено' };
+    main.innerHTML = `
+      <div class="head-row"><h2>${id ? `Зміна замовлення ${esc(o.number)}` : 'Нове замовлення клієнта'}</h2><a class="btn" href="#/pclients${id ? `/${id}` : ''}">← Назад</a></div>
+      <div class="form-page">
+        <div class="form-stack">
+          <label class="f"><span>Товари з</span><select id="cfSrc">
+            ${supplies.map((s) => `<option value="${s.id}" ${String(s.id) === source ? 'selected' : ''}>Закупівля ${esc(s.number)}${s.pay ? ` (${payTxt[s.pay] || ''})` : ''}</option>`).join('')}
+            <option value="" ${source === '' ? 'selected' : ''}>Без закупівлі (з каталогу)</option></select></label>
+          <div id="cfWarn"></div>
+          <div class="card" id="cfList"></div>
+        </div>
+        <div class="form-stack">
+          <form class="card form-stack" id="cfForm" style="position:sticky;top:12px">
+            <h3>Клієнт</h3>
+            <label class="f"><span>ПІБ клієнта *</span><input name="client_name" value="${esc(o.client_name || '')}" required autocomplete="off"></label>
+            <label class="f"><span>Телефон *</span><input name="client_phone" value="${esc(o.client_phone || '')}" inputmode="tel" placeholder="0XXXXXXXXX" required></label>
+            <label class="f"><span>ТТН (ваша)</span><input name="ttn" value="${esc(o.ttn || '')}" inputmode="numeric" placeholder="20450000000000"></label>
+            <label class="f"><span>Коментар</span><textarea name="comment" rows="2">${esc(o.comment || '')}</textarea></label>
+            <div id="cfSum"></div>
+            <button class="btn primary" id="cfSave">${id ? 'Зберегти зміни' : 'Оформити замовлення'}</button>
+            <div class="small muted">Файл маркування (етикетку ТТН) додасте на сторінці замовлення одразу після оформлення.</div>
+          </form>
+        </div>
+      </div>`;
+    const lines = () => {
+      if (!source) return catalog.products.map((p) => ({ product_id: p.id, name: p.name, article: p.article, price: p.price, left: null }));
+      return (supplies.find((s) => String(s.id) === source)?.items || []);
+    };
+    const sum = () => {
+      const ls = lines().filter((l) => qty.get(l.product_id) > 0);
+      const total = ls.reduce((t, l) => t + Math.round(l.price * qty.get(l.product_id) * 100) / 100, 0);
+      $('#cfSum').innerHTML = ls.length ? `<div style="display:flex;justify-content:space-between"><b>Разом з ПДВ</b><b>${uah(total)}</b></div>` : '<div class="small muted">Вкажіть кількість товарів.</div>';
+    };
+    const draw = () => {
+      const s = supplies.find((x) => String(x.id) === source);
+      $('#cfWarn').innerHTML = !source ? '<div class="alert bad"><b>Без закупівлі.</b> Замовлення буде підсвічене червоним; менеджер виставить рахунок на ці товари окремо.</div>'
+        : (s && s.pay && s.pay !== 'paid' ? `<div class="alert warn">Закупівля ${esc(s.number)} ще не оплачена — замовлення буде позначене як неоплачене.</div>` : '');
+      const ls = lines();
+      $('#cfList').innerHTML = ls.length ? `<table class="list"><thead><tr><th>Товар</th><th class="r">Ціна</th>${source ? '<th class="r">Залишок</th>' : ''}<th class="r">К-сть</th></tr></thead><tbody>
+        ${ls.map((l) => `<tr><td>${esc(l.name)}${l.article ? `<div class="small muted">${esc(l.article)}</div>` : ''}</td><td class="r">${money(l.price)}</td>
+          ${source ? `<td class="r">${l.left}</td>` : ''}
+          <td class="r"><input type="number" min="0" step="1" ${source ? `max="${l.left}"` : ''} inputmode="numeric" data-q="${l.product_id}" value="${qty.get(l.product_id) || ''}" style="width:80px;text-align:right" aria-label="Кількість: ${esc(l.name)}"></td></tr>`).join('')}</tbody></table>`
+        : '<div class="small muted">Немає доступних товарів.</div>';
+      $$('[data-q]').forEach((inp) => (inp.oninput = () => {
+        let v = Math.max(0, Math.floor(Number(inp.value) || 0));
+        if (inp.max && v > Number(inp.max)) { v = Number(inp.max); inp.value = v; }
+        if (v) qty.set(Number(inp.dataset.q), v); else qty.delete(Number(inp.dataset.q));
+        sum();
+      }));
+      sum();
+    };
+    $('#cfSrc').onchange = (e) => { source = e.target.value; qty.clear(); draw(); };
+    $('#cfForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const allowed = new Set(lines().map((l) => l.product_id));
+      const items = [...qty].filter(([pid, q]) => q > 0 && allowed.has(pid)).map(([product_id, q]) => ({ product_id, qty: q }));
+      if (!items.length) { toast('Вкажіть кількість хоча б одного товару', true); return; }
+      const body = { ...Object.fromEntries(new FormData(e.target)), supply_id: source ? Number(source) : null, items };
+      $('#cfSave').disabled = true;
+      try {
+        if (id) { await api('PUT', `/api/b2b/p/clients/${id}`, body); toast('Зміни збережено'); location.hash = `#/pclients/${id}`; }
+        else { const r = await api('POST', '/api/b2b/p/clients', body); toast(`Замовлення ${r.number} оформлено`); location.hash = `#/pclients/${r.id}`; }
+      } catch (er) { toast(er.message, true); $('#cfSave').disabled = false; }
+    };
+    draw();
+  }
+
   // ---------------------------------------------------------------- інструкція
   function viewPartnerHelp() {
     main.innerHTML = `
@@ -226,14 +395,21 @@ export function createPartnerPages() {
         <p>«Закупівлі» → «Нова закупівля»: вкажіть кількість біля потрібних товарів, оберіть юрособу і натисніть «Оформити закупівлю».
           Статуси: <b>Очікує рахунок</b> → <b>Очікує оплату</b> (рахунок готовий — файл у закупівлі) → <b>Оплачено</b> → <b>Завершено</b>.
           Доки рахунку немає, закупівлю можна змінити або скасувати. Файли рахунку й накладної зберігаються 30 днів — завантажте їх собі.</p>
-        <h3>4. Сповіщення в Telegram</h3>
+        <h3>4. Замовлення клієнтів</h3>
+        <p>«Замовлення клієнтів» → «+ Замовлення клієнта» (або кнопка в самій закупівлі): оберіть закупівлю, з якої відправляємо товар, вкажіть кількість
+          (не більше залишку), ПІБ і телефон клієнта та вашу ТТН. Після оформлення додайте <b>файл маркування</b> (етикетку ТТН, PDF або фото).
+          Якщо закупівля ще не оплачена, замовлення можна оформити — воно буде позначене «Не оплачено».
+          Можна оформити і <b>без закупівлі</b> (товари з каталогу) — таке замовлення підсвічується червоним, рахунок на нього менеджер виставить окремо.</p>
+        <p>Менеджер перевіряє замовлення й передає його в роботу (у нашу CRM) — після цього у замовленні видно номер і статус у CRM.
+          Доки замовлення не передане, його можна змінити або скасувати.</p>
+        <h3>5. Сповіщення в Telegram</h3>
         <p>Натисніть «Telegram» угорі сторінки, потім «Підключити Telegram» і «Start» у боті. Приходитимуть повідомлення про рахунки, оплату й зміну цін.</p>
-        <h3>5. Пароль і безпека</h3>
+        <h3>6. Пароль і безпека</h3>
         <p>Змінити пароль — кнопка «Пароль» угорі. Не передавайте логін іншим: для кожного співробітника менеджер може створити окремий вхід.</p>
         <h3>Питання</h3>
         <p>Звертайтеся до вашого менеджера в ТОВ «Ековент Дистриб’юшн».</p>
       </div>`;
   }
 
-  return { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders };
+  return { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders, viewClients };
 }

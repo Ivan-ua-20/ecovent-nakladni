@@ -1,7 +1,8 @@
 // Модуль «B2B партнери».
 //  Адмін (право b2b.admin): партнери, їхні користувачі, увімкнені бренди й маржа, каталог з цінами з LP-CRM.
 //  Партнер (право b2b.partner): свій кабінет — каталог увімкнених брендів з РРЦ і своєю ціною, свої юрособи,
-//  закупівлі (рахунок і накладну вносить бухгалтер — власник або адмін — номерами й файлами).
+//  закупівлі (рахунок і накладну вносить бухгалтер — власник або адмін — номерами й файлами),
+//  замовлення для своїх клієнтів із залишку закупівлі (адмін передає їх у LP-CRM — clients.js).
 // Ціна партнера = РРЦ × (1 − маржа %), округлення до копійок (ціни з ПДВ).
 // Бренди й товари — з аналітики (an_brands, an_products; лише читання), РРЦ і фото — з LP-CRM (getProduct).
 import { hashPassword } from '../../core/auth.js';
@@ -9,6 +10,7 @@ import { fail, need, nowIso, kyivDay, loadSettings, round2 } from '../../core/co
 import { logAudit } from '../../core/requisites.js';
 import { call } from '../../integrations/lpcrm.js';
 import { mountB2bOrders } from './orders.js';
+import { mountB2bClients } from './clients.js';
 
 export const partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 
@@ -314,7 +316,8 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     });
   });
 
-  mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup });
+  const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup });
+  mountB2bClients(app, { db, fetchFn, myPartner, orders });
 
   return { partnerPrice };
 }
