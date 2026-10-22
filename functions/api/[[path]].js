@@ -2846,7 +2846,11 @@ function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {} }) {
   onCleanup((border) => db.run(`DELETE FROM versions WHERE created_at < ?`, [border]));
   onCleanup(async () => {
     const days = (Number((await settings()).lpcrm_search_days) || 30) + 7;
-    await db.run(`DELETE FROM orders_index WHERE datetime != '' AND datetime < ?`, [new Date(Date.now() - days * 864e5).toISOString().slice(0, 10)]);
+    const border = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+    await db.batch([
+      [`DELETE FROM orders_index WHERE datetime != '' AND datetime < ?`, [border]],
+      [`DELETE FROM order_keys WHERE day != '' AND day < ?`, [border]]
+    ]);
   });
   app.get("/api/lpcrm/diagnose/:orderId", async (c) => {
     need(c, "api");
@@ -2860,99 +2864,83 @@ function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {} }) {
     const { raw: raw2 } = await getOrder(fetchFn, { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key }, c.req.param("orderId"), { fresh: true });
     return c.json(raw2);
   });
-  let syncing = null;
   const ymd2 = (d) => d.toISOString().slice(0, 10);
   const digits = (v) => String(v || "").replace(/\D/g, "");
-  const STATUS_PRIORITY = ["11", "3", "56", "14", "18", "66", "60", "53"];
-  async function cachedStatuses(creds) {
-    const row = await db.get(`SELECT value FROM settings WHERE key = 'statuses_cache'`);
-    const cache = row?.value ? JSON.parse(row.value) : null;
-    if (cache && cache.sub === creds.subdomain && Date.now() - cache.at < 864e5) return cache.list;
-    const list = Object.keys(await getStatuses(fetchFn, creds));
-    await db.run(`INSERT INTO settings (key, value) VALUES ('statuses_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [
-      JSON.stringify({ at: Date.now(), sub: creds.subdomain, list })
-    ]);
-    return list;
-  }
+  const ACCEPTED_RE = /^(принят|прийнят)/i;
+  const ID_RE = /^[1-9]\d{0,8}$/;
+  shared2.acceptedCodes ||= /* @__PURE__ */ new Map();
+  const orderKeys = (o) => {
+    const ks = [o.id, o.order_id, o.ttn].map((x) => String(x ?? "").trim()).filter(Boolean);
+    const p = digits(o.phone);
+    if (p.length >= 9) ks.push(`p:${p.slice(-9)}`);
+    return [...new Set(ks)];
+  };
   async function saveOrders2(orders) {
     const now = nowIso();
-    await db.batch(orders.map((o) => [
+    const keys = orders.flatMap((o) => orderKeys(o).map((k) => [
+      `INSERT OR IGNORE INTO order_keys (k, code, day) VALUES (?, ?, ?)`,
+      [k, String(o.order_id), String(o.datetime || "").slice(0, 10)]
+    ]));
+    await db.batch([...keys, ...orders.map((o) => [
       `INSERT INTO orders_index (code, datetime, phone, ttn, bayer_name, data, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(code) DO UPDATE SET datetime = excluded.datetime, phone = excluded.phone, ttn = excluded.ttn,
        bayer_name = excluded.bayer_name, data = excluded.data, fetched_at = excluded.fetched_at`,
       [String(o.order_id), o.datetime || "", digits(o.phone), String(o.ttn || ""), o.bayer_name || "", JSON.stringify(o), now]
-    ]));
+    ])]);
   }
-  async function syncIndex(creds, days, found = async () => []) {
-    if (syncing) {
-      await syncing;
-      return found();
-    }
-    let result = [];
-    syncing = (async () => {
-      const all = await cachedStatuses(creds);
-      const statuses = [...STATUS_PRIORITY.filter((x) => all.includes(x)), ...all.filter((x) => !STATUS_PRIORITY.includes(x))];
-      const start = ymd2(new Date(Date.now() - days * 864e5));
-      const end = ymd2(new Date(Date.now() + 864e5));
-      const key = `${creds.subdomain}|${days}|${start}`;
-      const pr = await db.get(`SELECT value FROM settings WHERE key = 'sync_progress'`);
-      const prog = pr?.value ? JSON.parse(pr.value) : null;
-      let i = prog && prog.key === key && Date.now() - prog.at < 30 * 6e4 ? prog.i : 0;
-      const saveProgress = (idx) => db.run(
-        `INSERT INTO settings (key, value) VALUES ('sync_progress', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-        [JSON.stringify({ key, i: idx, at: Date.now() })]
-      );
-      for (; i < statuses.length; i++) {
-        const codes = await getOrderCodesByStatus(fetchFn, creds, statuses[i], start, end);
-        const known = new Set((await db.all(`SELECT code FROM orders_index WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => r.code));
-        const fresh = codes.filter((c) => !known.has(c));
-        for (let k = 0; k < fresh.length; k += 100) {
-          await saveOrders2(await getOrdersBatch(fetchFn, creds, fresh.slice(k, k + 100)));
-        }
-        await saveProgress(i + 1);
-        result = await found();
-        if (result.length) break;
-      }
-      await db.run(`DELETE FROM settings WHERE key = 'sync_progress'`);
-    })();
-    try {
-      await syncing;
-    } finally {
-      syncing = null;
-    }
-    return result;
+  async function crmStatuses(creds) {
+    const row = await db.get(`SELECT value FROM settings WHERE key = 'statuses_cache'`);
+    const cache = row?.value ? JSON.parse(row.value) : null;
+    if (cache?.map && cache.sub === creds.subdomain && Date.now() - cache.at < 864e5) return cache.map;
+    const map = await getStatuses(fetchFn, creds);
+    await db.run(`INSERT INTO settings (key, value) VALUES ('statuses_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [
+      JSON.stringify({ at: Date.now(), sub: creds.subdomain, map })
+    ]);
+    return map;
   }
-  const SKIP_KEYS = /* @__PURE__ */ new Set(["total", "status", "office", "payment", "delivery_id", "attribute_status_id", "localization"]);
-  async function matchIndex(q) {
-    const strong = await db.all(
-      `SELECT code, datetime, phone, ttn FROM orders_index o
-       WHERE o.ttn = ? OR EXISTS (SELECT 1 FROM json_each(o.data) j
-         WHERE j.type IN ('text', 'integer', 'real') AND j.key NOT IN (SELECT value FROM json_each(?))
-           AND TRIM(CAST(j.value AS TEXT)) = ?)
-       ORDER BY datetime DESC`,
-      [q, JSON.stringify([...SKIP_KEYS]), q]
-    );
-    if (strong.length) return strong;
-    const qd = digits(q);
-    if (qd.length < 9) return [];
-    return db.all(`SELECT code, datetime, phone, ttn FROM orders_index WHERE phone != '' AND phone LIKE ? ORDER BY datetime DESC`, [`%${qd}`]);
+  const statusName = (map, id) => String((map[id]?.name ?? map[id]) || id || "").trim();
+  async function acceptedIds(creds) {
+    const map = await crmStatuses(creds);
+    const ids = Object.keys(map).filter((id) => ACCEPTED_RE.test(statusName(map, id)));
+    return { ids: ids.length ? ids : ["11"], map };
   }
+  async function acceptedCodes(creds, days) {
+    const key = `${creds.subdomain}|${days}`;
+    const hit = shared2.acceptedCodes.get(key);
+    if (hit && Date.now() - hit.at < 3 * 6e4) return hit.codes;
+    const { ids } = await acceptedIds(creds);
+    const start = ymd2(new Date(Date.now() - days * 864e5));
+    const end = ymd2(new Date(Date.now() + 864e5));
+    const codes = [...new Set((await Promise.all(ids.map((id) => getOrderCodesByStatus(fetchFn, creds, id, start, end)))).flat())];
+    shared2.acceptedCodes.set(key, { at: Date.now(), codes });
+    return codes;
+  }
+  async function loadAccepted(creds, days) {
+    const codes = await acceptedCodes(creds, days);
+    const known = new Set((await db.all(`SELECT code FROM orders_index WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => r.code));
+    const fresh = codes.filter((c) => !known.has(c));
+    for (let k = 0; k < fresh.length; k += 100) await saveOrders2(await getOrdersBatch(fetchFn, creds, fresh.slice(k, k + 100)));
+    return codes;
+  }
+  const findById = (q, codes = null) => db.get(
+    `SELECT o.code FROM order_keys k JOIN orders_index o ON o.code = k.code
+     WHERE k.k = ? ${codes ? "AND o.code IN (SELECT value FROM json_each(?))" : ""} ORDER BY o.datetime DESC LIMIT 1`,
+    codes ? [q, JSON.stringify(codes)] : [q]
+  );
+  const notAccepted = (q, days, maxDays, now = "") => Object.assign(
+    new Error(`\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2116 ${q} \u043D\u0435\u043C\u0430\u0454 \u0432 CRM \u0443 \u0441\u0442\u0430\u0442\u0443\u0441\u0456 \xAB\u041F\u0440\u0438\u0439\u043D\u044F\u0442\u043E\xBB${days ? ` \u0437\u0430 \u043E\u0441\u0442\u0430\u043D\u043D\u0456 ${days} \u0434\u043D\u0456\u0432` : ""}${now ? ` (\u0437\u0430\u0440\u0430\u0437: \xAB${now}\xBB)` : ""}.`),
+    { status: 404, extra: { canExtend: Boolean(days) && days < maxDays, extendDays: maxDays } }
+  );
   async function resolveCode(q, s, creds) {
-    if (/^\d{11,}$/.test(q) && !q.startsWith("380")) return { code: q };
-    const alias = await db.get(`SELECT code FROM order_alias WHERE alias = ?`, [q]);
-    if (alias) return { code: alias.code };
-    let hits = await matchIndex(q);
-    const maxDays = Number(s.lpcrm_search_days) || 30;
-    if (!hits.length) hits = await syncIndex(creds, Math.min(7, maxDays), () => matchIndex(q));
-    if (!hits.length && maxDays > 7) hits = await syncIndex(creds, maxDays, () => matchIndex(q));
-    if (!hits.length) {
-      throw new Error(`\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \xAB${q}\xBB \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0441\u0435\u0440\u0435\u0434 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u0437\u0430 \u043E\u0441\u0442\u0430\u043D\u043D\u0456 ${Number(s.lpcrm_search_days) || 30} \u0434\u043D\u0456\u0432. \u0412\u0432\u0435\u0434\u0456\u0442\u044C \u043A\u043E\u0434 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F (ID-o \u0443 \u0448\u0430\u043F\u0446\u0456 \u043A\u0430\u0440\u0442\u043A\u0438 LP-CRM), \u0442\u0435\u043B\u0435\u0444\u043E\u043D \u043F\u043E\u043A\u0443\u043F\u0446\u044F \u0430\u0431\u043E \u0422\u0422\u041D.`);
+    if (!ID_RE.test(q)) {
+      throw fail(400, "\u041D\u0435\u043F\u0440\u0430\u0432\u0438\u043B\u044C\u043D\u0438\u0439 \u0444\u043E\u0440\u043C\u0430\u0442 \u043D\u043E\u043C\u0435\u0440\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F: \u0432\u0432\u0435\u0434\u0456\u0442\u044C ID \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0437 LP-CRM \u2014 \u043B\u0438\u0448\u0435 \u0446\u0438\u0444\u0440\u0438, \u043D\u0430\u043F\u0440. 108008 (\u043D\u0435 \u043A\u043E\u0434 ID-o, \u043D\u0435 \u0442\u0435\u043B\u0435\u0444\u043E\u043D \u0456 \u043D\u0435 \u0422\u0422\u041D).");
     }
-    const note = hits.length > 1 ? `\u0417\u043D\u0430\u0439\u0434\u0435\u043D\u043E ${hits.length} \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F(\u043D\u044C) \u0437\u0430 \xAB${q}\xBB \u2014 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u043D\u0430\u0439\u043D\u043E\u0432\u0456\u0448\u0435.` : "";
-    if (hits.length === 1 && !/^\d{9,}$/.test(digits(q))) {
-      await db.run(`INSERT INTO order_alias (alias, code) VALUES (?, ?) ON CONFLICT(alias) DO UPDATE SET code = excluded.code`, [q, hits[0].code]);
-    }
-    return { code: hits[0].code, note };
+    const days = Math.max(1, Number(s.lpcrm_search_days) || 30);
+    const maxDays = days;
+    let row = await findById(q);
+    if (!row) row = await findById(q, await loadAccepted(creds, days));
+    if (!row) throw notAccepted(q, days, maxDays);
+    return { code: row.code, days, maxDays };
   }
   async function loadOrder(orderId, s, fresh = false) {
     if (orderId === "demo" || orderId === "0") {
@@ -2960,8 +2948,12 @@ function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {} }) {
     }
     const creds = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
     if (!creds.subdomain || !creds.key) throw new Error("\u041D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E LP-CRM: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u043F\u0456\u0434\u0434\u043E\u043C\u0435\u043D \u0456 API-\u043A\u043B\u044E\u0447 \u0443 \u0440\u043E\u0437\u0434\u0456\u043B\u0456 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\xBB.");
-    const { code, note } = await resolveCode(orderId, s, creds);
+    const { code, maxDays } = await resolveCode(orderId, s, creds);
     const { order: order2, raw: raw2 } = await getOrder(fetchFn, creds, code, { fresh });
+    const { ids, map } = await acceptedIds(creds);
+    const st = String(order2.status ?? order2.status_id ?? "");
+    if (!ids.includes(st)) throw notAccepted(orderId, 0, maxDays, statusName(map, st));
+    const note = "";
     const prods = order2.products || order2.goods || [];
     const list = Array.isArray(prods) ? prods : Object.values(prods);
     const missing = list.filter((p) => !(p.name || p.title || p.product_name)).map((p) => String(p.product_id ?? p.id ?? ""));
@@ -5336,7 +5328,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   app.onError((err, c) => {
     if (err.pending) return c.json({ pending: true, message: err.message }, 202);
     if (!err.status) console.error(err);
-    return c.json({ error: err.message || String(err) }, err.status || 500);
+    return c.json({ error: err.message || String(err), ...err.extra || {} }, err.status || 500);
   });
   const cleanupTasks = [];
   const onCleanup = (fn) => cleanupTasks.push(fn);
@@ -5590,7 +5582,7 @@ var schema4 = {
 // src/modules/nakladni/schema.js
 var schema5 = {
   name: "nakladni",
-  version: 1,
+  version: 2,
   tables: [
     `CREATE TABLE IF NOT EXISTS order_prefs (
     order_id TEXT PRIMARY KEY,
@@ -5622,6 +5614,17 @@ var schema5 = {
     data TEXT,
     fetched_at TEXT
   )`,
+    // Ключі пошуку замовлення (номер, код, ТТН, телефон «p:» + 9 цифр) — пошук читає кілька рядків, а не весь індекс.
+    `CREATE TABLE IF NOT EXISTS order_keys (
+    k TEXT NOT NULL,
+    code TEXT NOT NULL,
+    day TEXT DEFAULT '',
+    PRIMARY KEY (k, code)
+  )`,
+    `CREATE INDEX IF NOT EXISTS order_keys_day ON order_keys (day)`,
+    // Для щогодинної чистки за датою — без перегляду всієї таблиці.
+    `CREATE INDEX IF NOT EXISTS orders_index_dt ON orders_index (datetime)`,
+    `CREATE INDEX IF NOT EXISTS versions_created ON versions (created_at)`,
     `CREATE TABLE IF NOT EXISTS order_alias (
     alias TEXT PRIMARY KEY,
     code TEXT NOT NULL
@@ -5629,7 +5632,17 @@ var schema5 = {
   ],
   columns: [
     ["versions", "user_name", "TEXT DEFAULT ''"]
-  ]
+  ],
+  // Один раз: ключі пошуку для вже завантажених замовлень.
+  async seed(db) {
+    await db.batch([
+      [`INSERT OR IGNORE INTO order_keys (k, code, day)
+        SELECT TRIM(CAST(json_extract(data, '$.id') AS TEXT)), code, substr(datetime, 1, 10) FROM orders_index WHERE json_extract(data, '$.id') IS NOT NULL
+        UNION ALL SELECT code, code, substr(datetime, 1, 10) FROM orders_index
+        UNION ALL SELECT TRIM(ttn), code, substr(datetime, 1, 10) FROM orders_index WHERE TRIM(ttn) != ''
+        UNION ALL SELECT 'p:' || substr(phone, -9), code, substr(datetime, 1, 10) FROM orders_index WHERE length(phone) >= 9`, []]
+    ]);
+  }
 };
 
 // src/modules/rahunky/schema.js
