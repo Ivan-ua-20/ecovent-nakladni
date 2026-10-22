@@ -71,12 +71,19 @@ export function mountAuth(app, { db, runCleanup, onCleanup }) {
     return c.json({ ok: true });
   });
 
+  // Що доступно партнерам (решта /api — ні).
+  const PARTNER_PATHS = ['/api/b2b/p', '/api/me/password', '/api/tg/me', '/api/tg/link', '/api/bootstrap'];
+
   // Усе інше в /api — лише після входу.
   app.use('/api/*', async (c, next) => {
     if (c.req.path.startsWith('/api/auth/') || c.req.path === '/api/odb/hook' || c.req.path === '/api/tg/hook') return next();
     const user = await sessionUser(c);
     if (!user) throw fail(401, 'Потрібно увійти.');
     c.set('user', user);
+    // Партнер (B2B) бачить лише свій кабінет: усе інше на сайті для нього закрите.
+    if (user.role === 'partner' && !PARTNER_PATHS.some((p) => c.req.path === p || c.req.path.startsWith(`${p}/`))) {
+      throw fail(403, 'Недостатньо прав для цієї дії.');
+    }
     await runCleanup();
     return next();
   });
@@ -94,7 +101,8 @@ export function mountAuth(app, { db, runCleanup, onCleanup }) {
   const ASSIGNABLE = ['admin', 'manager', 'viewer'];
   app.get('/api/users', async (c) => {
     need(c, 'users');
-    const rows = await db.all(`SELECT * FROM users ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'manager' THEN 2 ELSE 3 END, login`);
+    // Користувачі партнерів керуються в розділі B2B.
+    const rows = await db.all(`SELECT * FROM users WHERE role != 'partner' ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'manager' THEN 2 ELSE 3 END, login`);
     return c.json({ users: rows.map(publicUser), roles: ROLES });
   });
 
@@ -118,7 +126,17 @@ export function mountAuth(app, { db, runCleanup, onCleanup }) {
     const target = await db.get(`SELECT * FROM users WHERE id = ?`, [c.req.param('id')]);
     if (!target) throw fail(404, 'Користувача не знайдено.');
     if (target.role === 'owner' && me.role !== 'owner') throw fail(403, 'Акаунт власника може змінювати лише власник.');
+    if (target.role === 'partner') throw fail(400, 'Користувачі партнерів змінюються в розділі «B2B партнери».');
     const b = await c.req.json();
+    // Доступ до аналітики вмикає/вимикає лише власник (не собі: власник завжди з аналітикою).
+    if (b.analytics !== undefined) {
+      if (me.role !== 'owner') throw fail(403, 'Доступ до аналітики змінює лише власник.');
+      if (target.role !== 'owner') {
+        await db.run(`UPDATE users SET an_access = ? WHERE id = ?`, [b.analytics ? 1 : 0, target.id]);
+        await db.run(`INSERT INTO audit_log (at, user_id, user_name, kind, ref_id, action, changes) VALUES (?, ?, ?, 'user', ?, ?, '[]')`,
+          [nowIso(), me.id, me.name || me.login, String(target.id), `аналітика ${b.analytics ? 'увімкнена' : 'вимкнена'} для ${target.login}`]);
+      }
+    }
     const sets = [];
     const vals = [];
     if (b.name !== undefined) { sets.push('name = ?'); vals.push(String(b.name).trim()); }

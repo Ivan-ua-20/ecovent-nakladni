@@ -16,16 +16,23 @@ async function viewUsers() {
     <div class="alert info" style="margin-bottom:14px">
       <b>Адміністратор</b> — усе, включно з API, користувачами й аналітикою. <b>Менеджер</b> — накладні, рахунки, довідники і власна аналітика (лише замовлення його логінів LP-CRM, без таргетів).
       <b>Перегляд</b> — лише дивитися, друкувати й завантажувати.</div>
-    <table class="list"><thead><tr><th>Логін</th><th>Ім’я</th><th>Роль</th><th>Логіни LP-CRM</th><th>Стан</th><th></th></tr></thead><tbody>
+    <table class="list"><thead><tr><th>Логін</th><th>Ім’я</th><th>Роль</th><th>Логіни LP-CRM</th><th>Аналітика</th><th>Стан</th><th></th></tr></thead><tbody>
       ${users.map((u) => `<tr>
         <td><b>${esc(u.login)}</b>${String(u.id) === String(me.id) ? ' <span class="badge info">це ви</span>' : ''}</td>
         <td>${esc(u.name)}</td>
         <td>${u.role === 'owner' ? `<span class="badge ok">${esc(u.role_name)}</span>` : esc(u.role_name)}</td>
         <td class="small">${u.crm_logins.length ? u.crm_logins.map(esc).join(', ') : (u.role === 'manager' ? '<span class="muted">не прив’язано</span>' : '')}</td>
+        <td>${me.role === 'owner' && u.role !== 'owner'
+          ? `<label class="check" title="Доступ до розділу «Аналітика» (змінює лише власник)"><input type="checkbox" data-an="${u.id}" ${u.analytics ? 'checked' : ''}> ${u.analytics ? 'так' : 'ні'}</label>`
+          : (u.analytics ? '<span class="badge ok">так</span>' : '<span class="badge">ні</span>')}</td>
         <td>${u.active ? '<span class="badge ok">активний</span>' : '<span class="badge bad">вимкнений</span>'}</td>
         <td style="text-align:right">${u.role === 'owner' && me.role !== 'owner' ? '' : `<button class="btn sm" data-uedit="${u.id}">Змінити</button>`}</td>
       </tr>`).join('')}
     </tbody></table>`;
+  $$('[data-an]').forEach((cb) => (cb.onchange = async () => {
+    try { await api('PUT', `/api/users/${cb.dataset.an}`, { analytics: cb.checked }); toast(cb.checked ? 'Аналітику увімкнено' : 'Аналітику вимкнено'); viewUsers(); }
+    catch (e) { toast(e.message, true); cb.checked = !cb.checked; }
+  }));
   const form = (u) => {
     const isNew = !u;
     const owner = u?.role === 'owner';

@@ -27,8 +27,12 @@ export function mountRefs(app, { db, fetchFn }) {
 
   // ---------- Довідники ----------
   app.get('/api/bootstrap', async (c) => {
-    const s = await settings();
     const user = c.get('user');
+    // Партнерові — лише він сам (довідники, ФОПи й налаштування сайту йому не потрібні й не показуються).
+    if (user.role === 'partner') {
+      return c.json({ fops: [], templates: [], offices: [], channels: [], invFops: [], settings: {}, user: publicUser(user) });
+    }
+    const s = await settings();
     const apiOk = can(user, 'api');
     const fops = (await db.all(`SELECT * FROM fops ORDER BY active DESC, short_name`)).map(publicFop).map((f) => {
       if (apiOk) return f;

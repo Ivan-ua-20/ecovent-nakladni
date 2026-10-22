@@ -5,6 +5,7 @@ export const ROLES = {
   admin: 'Адміністратор',
   manager: 'Менеджер',
   viewer: 'Перегляд',
+  partner: 'Партнер (B2B)',
 };
 
 // Права:
@@ -16,15 +17,29 @@ export const ROLES = {
 //  requisites — реквізити ФОП (IBAN, ІПН, ПІБ, адреса, підпис, печатка); зміни пишуться в журнал
 //  analytics  — розділ «Аналітика» повністю (усі дані, таргети, налаштування)
 //  an.view    — дашборд аналітики (менеджер бачить лише свої замовлення, без таргетів)
+//  b2b.admin  — B2B: партнери, бренди й маржа, замовлення партнерів, рахунки й накладні до них
+//  b2b.partner — кабінет партнера (лише свої дані; решта сайту недоступна)
 const PERMS = {
-  owner: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'analytics', 'an.view'],
-  admin: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'analytics', 'an.view'],
+  owner: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'analytics', 'an.view', 'b2b.admin'],
+  admin: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'analytics', 'an.view', 'b2b.admin'],
   manager: ['docs.view', 'docs.edit', 'refs.edit', 'an.view'],
   viewer: ['docs.view'],
+  partner: ['b2b.partner'],
 };
+const AN_PERMS = ['analytics', 'an.view'];
 
 export const permsOf = (role) => PERMS[role] || [];
-export const can = (user, perm) => Boolean(user && permsOf(user.role).includes(perm));
+// Права конкретного користувача: роль + перемикач аналітики (an_access: 0 — вимкнено, 1 — увімкнено,
+// порожньо — як у ролі). Власник завжди з аналітикою; партнерам аналітика не вмикається.
+export function permsOfUser(u) {
+  if (!u) return [];
+  const base = permsOf(u.role);
+  if (u.role === 'owner' || u.role === 'partner' || u.an_access == null || u.an_access === '') return base;
+  if (Number(u.an_access) === 0) return base.filter((p) => !AN_PERMS.includes(p));
+  return base.includes('an.view') ? base : [...base, 'an.view'];
+}
+export const hasAnalytics = (u) => permsOfUser(u).includes('an.view');
+export const can = (user, perm) => Boolean(user && permsOfUser(user).includes(perm));
 
 const enc = new TextEncoder();
 const toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -65,7 +80,8 @@ export async function verifyPassword(password, stored) {
 
 export const publicUser = (u) => (u ? {
   id: u.id, login: u.login, name: u.name || u.login, role: u.role, role_name: ROLES[u.role] || u.role,
-  active: u.active, created_at: u.created_at, perms: permsOf(u.role), crm_logins: crmLogins(u.crm_logins),
+  active: u.active, created_at: u.created_at, perms: permsOfUser(u), crm_logins: crmLogins(u.crm_logins),
+  analytics: hasAnalytics(u), partner_id: u.partner_id || null,
 } : null);
 
 // Логіни LP-CRM, прив'язані до акаунта (через кому).
