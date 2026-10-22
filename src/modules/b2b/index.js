@@ -1,12 +1,14 @@
 // Модуль «B2B партнери».
 //  Адмін (право b2b.admin): партнери, їхні користувачі, увімкнені бренди й маржа, каталог з цінами з LP-CRM.
-//  Партнер (право b2b.partner): свій кабінет — каталог увімкнених брендів з РРЦ і своєю ціною.
+//  Партнер (право b2b.partner): свій кабінет — каталог увімкнених брендів з РРЦ і своєю ціною, свої юрособи,
+//  закупівлі (рахунок і накладну вносить бухгалтер — власник або адмін — номерами й файлами).
 // Ціна партнера = РРЦ × (1 − маржа %), округлення до копійок (ціни з ПДВ).
 // Бренди й товари — з аналітики (an_brands, an_products; лише читання), РРЦ і фото — з LP-CRM (getProduct).
 import { hashPassword } from '../../core/auth.js';
 import { fail, need, nowIso, kyivDay, loadSettings, round2 } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
 import { call } from '../../integrations/lpcrm.js';
+import { mountB2bOrders } from './orders.js';
 
 export const partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 
@@ -35,7 +37,7 @@ const num = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 
-export function mountB2b(app, { db, fetchFn }) {
+export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {} }) {
   const audit = (c, refId, action, changes = []) => logAudit(db, { user: c.get('user'), kind: 'b2b', refId, action, changes });
   async function brandNames() {
     const rows = await db.all(`SELECT id, name FROM an_brands ORDER BY sort, id`).catch(() => []);
@@ -78,18 +80,19 @@ export function mountB2b(app, { db, fetchFn }) {
   app.get('/api/b2b/partners/:id', async (c) => {
     need(c, 'b2b.admin');
     const p = await getPartner(c.req.param('id'));
-    const [users, margins, counts, names] = await Promise.all([
+    const [users, margins, counts, names, entities] = await Promise.all([
       db.all(`SELECT id, login, name, active, created_at FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY login`, [p.id]),
       db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id]),
       db.all(`SELECT brand_id, COUNT(*) AS n, SUM(CASE WHEN rrp > 0 THEN 1 ELSE 0 END) AS priced FROM b2b_catalog WHERE hidden = 0 GROUP BY brand_id`),
       brandNames(),
+      db.all(`SELECT * FROM b2b_entities WHERE partner_id = ? ORDER BY active DESC, name`, [p.id]),
     ]);
     const m = new Map(margins.map((x) => [x.brand_id, x.margin]));
     const cnt = new Map(counts.map((x) => [x.brand_id, x]));
     const brands = [...names].map(([id, name]) => ({
       id, name, enabled: m.has(id), margin: m.get(id) ?? null, products: cnt.get(id)?.n || 0, priced: cnt.get(id)?.priced || 0,
     }));
-    return c.json({ partner: p, users, brands });
+    return c.json({ partner: p, users, brands, entities });
   });
 
   app.put('/api/b2b/partners/:id', async (c) => {
@@ -310,6 +313,8 @@ export function mountB2b(app, { db, fetchFn }) {
       })),
     });
   });
+
+  mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup });
 
   return { partnerPrice };
 }

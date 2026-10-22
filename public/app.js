@@ -40,13 +40,16 @@ const SECTIONS = [
     { id: 'anpay', label: 'Оплати', perm: 'analytics' },
     { id: 'ansettings', label: 'Налаштування аналітики', perm: 'analytics' },
   ] },
-  { id: 'b2b', label: 'B2B партнери', perm: 'b2b.admin', home: 'b2bpartners', tabs: [
+  { id: 'b2b', label: 'B2B партнери', perm: 'b2b.admin', home: 'b2borders', tabs: [
+    { id: 'b2borders', label: 'Замовлення' },
     { id: 'b2bpartners', label: 'Партнери' },
     { id: 'b2bcatalog', label: 'Каталог і ціни' },
   ] },
   // Кабінет партнера — єдиний розділ, який бачить партнер.
   { id: 'partner', label: 'Кабінет партнера', perm: 'b2b.partner', home: 'pcatalog', tabs: [
     { id: 'pcatalog', label: 'Каталог' },
+    { id: 'porders', label: 'Закупівлі' },
+    { id: 'pentities', label: 'Мої юрособи' },
     { id: 'phelp', label: 'Інструкція' },
   ] },
   { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [{ id: 'settings', label: 'Загальні налаштування' }, { id: 'errors', label: 'Журнал помилок', perm: 'users' }] },
@@ -194,8 +197,8 @@ const { viewSettings, viewNakladniSettings, viewRahunkySettings } = createSettin
 const { viewRahunky, viewRahunkyList } = createRahunkyPages(ctx);
 const { viewUsers } = createUsersPages(ctx);
 const { viewErrors } = createErrorsPages(ctx);
-const { viewPartners, viewCatalog } = createB2bPages(ctx);
-const { viewPartnerCatalog, viewPartnerHelp } = createPartnerPages(ctx);
+const { viewPartners, viewCatalog, viewOrders: viewB2bOrders } = createB2bPages(ctx);
+const { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders } = createPartnerPages(ctx);
 setUnauthorized(() => showAuth());
 
 const routes = {
@@ -218,6 +221,9 @@ const routes = {
   users: viewUsers,
   errors: viewErrors,
   b2bpartners: viewPartners,
+  b2borders: viewB2bOrders,
+  porders: viewPartnerOrders,
+  pentities: viewEntities,
   b2bcatalog: viewCatalog,
   pcatalog: viewPartnerCatalog,
   phelp: viewPartnerHelp,

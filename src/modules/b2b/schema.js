@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 1,
+  version: 2,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,6 +53,86 @@ export const schema = {
   )`,
   `CREATE INDEX IF NOT EXISTS b2b_price_log_at ON b2b_price_log (at)`,
   `CREATE INDEX IF NOT EXISTS b2b_margin_log_p ON b2b_margin_log (partner_id, at)`,
+  // ---------- етап 2: юрособи партнера, закупівлі, файли ----------
+  // Юрособи партнера (на кого виставляти рахунок). Використана в замовленнях — лише приховується.
+  `CREATE TABLE IF NOT EXISTS b2b_entities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'fop',
+    name TEXT NOT NULL,
+    code TEXT NOT NULL DEFAULT '',
+    address TEXT DEFAULT '',
+    iban TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    email TEXT DEFAULT '',
+    vat INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_entities_p ON b2b_entities (partner_id)`,
+  `CREATE INDEX IF NOT EXISTS b2b_entities_code ON b2b_entities (code)`,
+  // Замовлення партнерів. kind: supply — закупівля в нас; client — замовлення для клієнта партнера (етап 3).
+  `CREATE TABLE IF NOT EXISTS b2b_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'supply',
+    status TEXT NOT NULL,
+    entity_id INTEGER,
+    entity TEXT DEFAULT '',
+    total REAL NOT NULL DEFAULT 0,
+    comment TEXT DEFAULT '',
+    invoice_no TEXT DEFAULT '',
+    invoice_date TEXT DEFAULT '',
+    waybill_no TEXT DEFAULT '',
+    paid_amount REAL NOT NULL DEFAULT 0,
+    paid_at TEXT DEFAULT '',
+    paid_by TEXT DEFAULT '',
+    created_by TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_orders_p ON b2b_orders (partner_id, id)`,
+  `CREATE INDEX IF NOT EXISTS b2b_orders_status ON b2b_orders (status)`,
+  `CREATE TABLE IF NOT EXISTS b2b_order_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    article TEXT DEFAULT '',
+    qty REAL NOT NULL,
+    price REAL NOT NULL,
+    rrp REAL NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_order_items_o ON b2b_order_items (order_id)`,
+  // Історія замовлення: хто, коли, що змінив.
+  `CREATE TABLE IF NOT EXISTS b2b_order_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    at TEXT NOT NULL,
+    user_name TEXT DEFAULT '',
+    action TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_order_log_o ON b2b_order_log (order_id)`,
+  // Файли (рахунок, накладна, маркування): зберігаються 30 днів; вміст — base64 частинами до 900 КБ (обмеження рядка D1).
+  `CREATE TABLE IF NOT EXISTS b2b_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    mime TEXT DEFAULT '',
+    size INTEGER NOT NULL DEFAULT 0,
+    parts INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_files_o ON b2b_files (order_id)`,
+  `CREATE INDEX IF NOT EXISTS b2b_files_at ON b2b_files (created_at)`,
+  `CREATE TABLE IF NOT EXISTS b2b_file_parts (
+    file_id INTEGER NOT NULL,
+    n INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (file_id, n)
+  )`,
   ],
   columns: [],
 };
