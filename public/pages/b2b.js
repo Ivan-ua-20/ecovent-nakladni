@@ -322,7 +322,7 @@ export function createB2bPages() {
       ${rows.length ? `<table class="list"><thead><tr><th>№</th><th>Партнер / клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th class="hide-m">CRM</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click ${o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''}" data-o="${o.id}">
           <td><b>${esc(o.number)}</b><div>${supplyMark(o)}</div><div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
-          <td>${esc(o.partner)}<div class="small">${esc(o.client_name)} · ${esc(phoneFmt(o.client_phone))}</div>${o.ttn ? `<div class="small muted">ТТН ${esc(o.ttn)}${o.files ? ` · 📎 ${o.files}` : ''}</div>` : ''}</td>
+          <td>${esc(o.partner)}<div class="small">${esc(o.client_name)} · ${esc(phoneFmt(o.client_phone))}</div>${o.ttn || o.files ? `<div class="small muted">${o.ttn ? `ТТН ${esc(o.ttn)}` : ''}${o.ttn && o.files ? ' · ' : ''}${o.files ? `📎 маркування: ${o.files}` : ''}</div>` : ''}</td>
           <td class="r"><b>${uah(o.total)}</b></td>
           <td>${statusBadge(o)}</td>
           <td class="hide-m">${payBadge(o)}</td>

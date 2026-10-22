@@ -524,3 +524,13 @@ table.list tr.click:focus-visible td { background: #f6f8f7; }
 tr.row-bad td { background: var(--bad-soft); }
 tr.row-bad td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
 .card.card-bad { border-color: var(--bad); box-shadow: inset 3px 0 0 var(--bad); }
+
+/* B2B: вибір закупівлі для замовлення клієнта */
+.src-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
+.src-card { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; background: var(--surface); }
+.src-card input { position: absolute; opacity: 0; pointer-events: none; }
+.src-card .src-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.src-card.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.src-card.bad.on { border-color: var(--bad); box-shadow: 0 0 0 2px var(--bad-soft); }
+.src-card:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.src-card { position: relative; }
