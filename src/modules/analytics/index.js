@@ -234,7 +234,7 @@ function flattenCategories(node, parent = null, out = [], depth = 0) {
 }
 
 // =====================================================================
-export function mountAnalytics(app, { db, fetchFn, shared = {} }) {
+export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {} }) {
   const settings = () => loadSettings(db);
   const getSt = async () => {
     const r = await db.get(`SELECT value FROM settings WHERE key = 'an_settings'`);
@@ -850,7 +850,10 @@ export function mountAnalytics(app, { db, fetchFn, shared = {} }) {
     } catch (e) {
       if (!e.pending) {
         // 429 від LP-CRM — не помилка процесу, просто пауза; інше — зупиняємо з повідомленням.
-        if (!/429/.test(e.message)) state.error = e.message;
+        if (!/429/.test(e.message)) {
+          state.error = e.message;
+          await services.errlog?.log(e, { path: '/api/an/sync', source: /D1_/.test(e.message) ? '' : 'LP-CRM (аналітика)' });
+        }
         else warn('LP-CRM попросила зачекати (429) — продовжу автоматично.');
       }
     }

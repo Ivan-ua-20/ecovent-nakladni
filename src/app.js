@@ -12,6 +12,7 @@ import { mountAdmin } from './modules/admin/index.js';
 import { mountRahunky } from './modules/rahunky/index.js';
 import { mountAnalytics } from './modules/analytics/index.js';
 import { mountTg } from './modules/notify/index.js';
+import { mountErrLog } from './modules/errlog/index.js';
 import { mountOdb, ODB_BASE } from './modules/payments/index.js';
 
 // shared — стан, що живе довше за одне звернення (на Cloudflare застосунок створюється на кожен запит,
@@ -28,9 +29,14 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     return rawFetch(...args);
   };
 
-  app.onError((err, c) => {
+  app.onError(async (err, c) => {
     if (err.pending) return c.json({ pending: true, message: err.message }, 202);
     if (!err.status) console.error(err);
+    // Збої сервера й зовнішніх сервісів (не помилки введення) — у журнал і адміністраторам у Telegram.
+    if (!err.status || err.status >= 500) {
+      const u = c.get('user');
+      await services.errlog?.log(err, { path: c.req.path, user: u?.name || u?.login || '' });
+    }
     return c.json({ error: err.message || String(err), ...(err.extra || {}) }, err.status || 500);
   });
 
@@ -55,6 +61,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   mountRefs(app, ctx);
   services.nakladni = mountNakladni(app, ctx);
   mountAdmin(app, ctx);
+  services.errlog = mountErrLog(app, ctx);
   mountRahunky(app, ctx);
   mountAnalytics(app, ctx);
   services.notify = mountTg(app, ctx);
