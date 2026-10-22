@@ -1,11 +1,13 @@
 // Кабінет партнера (B2B): каталог, юрособи, закупівлі (оформлення, зміна до рахунку, файли), замовлення клієнтів, інструкція.
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
-export function createPartnerPages() {
+export function createPartnerPages(ctx = {}) {
+  // «Лише перегляд» — без кнопок створення й зміни (сервер теж не дасть).
+  const canEdit = () => !ctx.can || ctx.can('b2b.order');
   let filter = { brand: '', q: '' };
 
   // ---------------------------------------------------------------- каталог
@@ -26,7 +28,7 @@ export function createPartnerPages() {
         : '<div class="card empty"><div class="big">Нічого не знайдено</div>Спробуйте інший пошук або бренд.</div>';
     };
     main.innerHTML = `
-      <div class="head-row"><h2>Каталог — ${esc(partner.name)}</h2>${products.length ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div>
+      <div class="head-row"><h2>Каталог — ${esc(partner.name)}</h2>${products.length && canEdit() ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div>
       ${products.length ? `
         <div class="btn-row" style="margin-bottom:12px;flex-wrap:wrap">
           <button class="chip ${filter.brand ? '' : 'on'}" data-br="">Усі бренди</button>
@@ -46,14 +48,14 @@ export function createPartnerPages() {
   async function viewEntities() {
     const rows = await api('GET', '/api/b2b/p/entities');
     main.innerHTML = `
-      <div class="head-row"><h2>Мої юрособи</h2><button class="btn primary" id="eNew">+ Додати юрособу</button></div>
+      <div class="head-row"><h2>Мої юрособи</h2>${canEdit() ? '<button class="btn primary" id="eNew">+ Додати юрособу</button>' : ''}</div>
       <div class="alert info" style="margin-bottom:14px">На ці юрособи виставляються рахунки за закупівлі. Оплату ми бачимо за кодом (ЄДРПОУ / ІПН) —
         платіть, будь ласка, з рахунку тієї юрособи, на яку виставлено рахунок.</div>
       ${rows.length ? `<div class="fop-cards">${rows.map((e) => `<div class="card fop-card">
           <div class="name">${esc(e.name)}</div>
           <div class="muted small">${esc(KINDS[e.kind] || '')} · ${e.code.length === 8 ? 'ЄДРПОУ' : 'ІПН'} ${esc(e.code)}${e.vat ? ' · платник ПДВ' : ''}</div>
           ${e.iban ? `<div class="small">${esc(e.iban)}</div>` : ''}${e.address ? `<div class="small muted">${esc(e.address)}</div>` : ''}
-          <div class="btn-row" style="margin-top:8px"><button class="btn sm" data-ee="${e.id}">Змінити</button><button class="btn sm danger" data-ed="${e.id}">Видалити</button></div>
+          ${canEdit() ? `<div class="btn-row" style="margin-top:8px"><button class="btn sm" data-ee="${e.id}">Змінити</button><button class="btn sm danger" data-ed="${e.id}">Видалити</button></div>` : ''}
         </div>`).join('')}</div>`
         : '<div class="card empty"><div class="big">Юросіб ще немає</div>Додайте ФОП або ТОВ, на який виставляти рахунки.</div>'}`;
     const form = (e) => {
@@ -78,7 +80,7 @@ export function createPartnerPages() {
         } catch (er) { toast(er.message, true); }
       };
     };
-    $('#eNew').onclick = () => form(null);
+    $('#eNew') && ($('#eNew').onclick = () => form(null));
     $$('[data-ee]').forEach((b) => (b.onclick = () => form(rows.find((x) => String(x.id) === b.dataset.ee))));
     $$('[data-ed]').forEach((b) => (b.onclick = async () => {
       const e = rows.find((x) => String(x.id) === b.dataset.ed);
@@ -94,7 +96,7 @@ export function createPartnerPages() {
     if (id) return viewOrder(id);
     const { rows } = await api('GET', '/api/b2b/p/orders');
     main.innerHTML = `
-      <div class="head-row"><h2>Закупівлі</h2><a class="btn primary" href="#/porders/new">+ Нова закупівля</a></div>
+      <div class="head-row"><h2>Закупівлі</h2>${canEdit() ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div>
       ${rows.length ? `<table class="list"><thead><tr><th>№</th><th class="hide-m">Дата</th><th>Сума</th><th>Статус</th><th class="hide-m">Рахунок</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click" data-o="${o.id}">
           <td><b>${esc(o.number)}</b><div class="small muted">${esc(o.entity.split('\n')[0].split(',')[0])}</div></td>
@@ -109,7 +111,7 @@ export function createPartnerPages() {
 
   async function viewOrder(id) {
     const { order: o, items, files, history, clients = [], left = [] } = await api('GET', `/api/b2b/p/orders/${id}`);
-    const editable = o.status === 'invoice_wait';
+    const editable = o.status === 'invoice_wait' && canEdit();
     const hasLeft = o.status !== 'cancelled' && left.some((r) => r.left > 0);
     main.innerHTML = `
       <div class="head-row"><h2>Закупівля ${esc(o.number)} ${statusBadge(o)}</h2>
@@ -120,7 +122,7 @@ export function createPartnerPages() {
           <div class="card">${itemsTable(items)}</div>
           ${o.comment ? `<div class="card small"><b>Коментар:</b> ${esc(o.comment)}</div>` : ''}
           ${o.status !== 'cancelled' ? `<div class="card form-stack">
-            <div class="head-row"><h3>Замовлення клієнтів із цієї закупівлі</h3>${hasLeft ? `<a class="btn sm primary" href="#/pclients/new/${o.id}">+ Замовлення клієнта</a>` : ''}</div>
+            <div class="head-row"><h3>Замовлення клієнтів із цієї закупівлі</h3>${hasLeft && canEdit() ? `<a class="btn sm primary" href="#/pclients/new/${o.id}">+ Замовлення клієнта</a>` : ''}</div>
             <table class="list"><thead><tr><th>Товар</th><th class="r">Закуплено</th><th class="r">Розписано</th><th class="r">Залишок</th></tr></thead><tbody>
               ${left.map((r) => `<tr><td>${esc(r.name)}</td><td class="r">${r.qty}</td><td class="r">${r.used}</td><td class="r"><b>${r.left}</b></td></tr>`).join('')}</tbody></table>
             ${clients.length ? clients.map((x) => `<a class="small" href="#/pclients/${x.id}">${esc(x.number)} · ${esc(x.client_name)} · ${uah(x.total)} · ${esc(x.status_name)}</a>`).join('') : '<div class="small muted">Ще немає.</div>'}
@@ -226,7 +228,7 @@ export function createPartnerPages() {
     if (id) return viewClient(id);
     const { rows } = await api('GET', '/api/b2b/p/clients');
     main.innerHTML = `
-      <div class="head-row"><h2>Замовлення клієнтів</h2><a class="btn primary" href="#/pclients/new">+ Замовлення клієнта</a></div>
+      <div class="head-row"><h2>Замовлення клієнтів</h2>${canEdit() ? '<a class="btn primary" href="#/pclients/new">+ Замовлення клієнта</a>' : ''}</div>
       <div class="small muted" style="margin-bottom:10px">Замовлення, яке ви оформлюєте для свого клієнта: товари з вашої закупівлі, ваша ТТН і маркування.
         <span class="badge bad">Без закупівлі</span> — товари не з закупівлі, менеджер виставить рахунок окремо.</div>
       ${rows.length ? `<table class="list"><thead><tr><th>№</th><th>Клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th class="hide-m">CRM</th></tr></thead><tbody>
@@ -244,7 +246,7 @@ export function createPartnerPages() {
 
   async function viewClient(id) {
     const { order: o, items, files, history } = await api('GET', `/api/b2b/p/clients/${id}`);
-    const editable = o.status === 'new';
+    const editable = o.status === 'new' && canEdit();
     main.innerHTML = `
       <div class="head-row"><h2>Замовлення ${esc(o.number)} ${statusBadge(o)} ${payBadge(o)}</h2>
         <div class="btn-row"><a class="btn" href="#/pclients">← До списку</a>
@@ -410,6 +412,32 @@ export function createPartnerPages() {
     draw();
   }
 
+
+  // ---------------------------------------------------------------- команда (керівник партнера)
+  async function viewTeam() {
+    const { users, roles, max, me } = await api('GET', '/api/b2b/p/team');
+    main.innerHTML = `
+      <div class="head-row"><h2>Команда</h2>${users.length < max ? '<button class="btn primary" id="uNew">+ Додати колегу</button>' : ''}</div>
+      <div class="alert info" style="margin-bottom:14px">Додавайте колег, щоб кожен входив під своїм логіном. Ролі:
+        <b>Керівник</b> — усе, включно з командою; <b>Менеджер</b> — каталог, закупівлі, замовлення клієнтів, юрособи;
+        <b>Лише перегляд</b> — бачить усе, але нічого не змінює. Ваш менеджер у Ековент бачить склад команди. До ${max} користувачів.</div>
+      ${teamTable(users, { me, showAdded: false })}`;
+    const form = (u) => {
+      const self = u && u.id === me;
+      const m = modal(u ? `Користувач ${u.login}` : 'Новий колега', teamFormHtml(u, roles, { self }),
+        { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="puSave">Зберегти</button>' });
+      $('#puSave', m.el).onclick = async () => {
+        try {
+          const d = teamFormData($('#puF', m.el));
+          if (u) await api('PUT', `/api/b2b/p/team/${u.id}`, d); else await api('POST', '/api/b2b/p/team', d);
+          m.close(); toast(u ? 'Збережено' : 'Колегу додано — передайте йому логін і пароль'); viewTeam();
+        } catch (e) { toast(e.message, true); }
+      };
+    };
+    $('#uNew') && ($('#uNew').onclick = () => form(null));
+    $$('[data-ue]').forEach((b) => (b.onclick = () => form(users.find((x) => String(x.id) === b.dataset.ue))));
+  }
+
   // ---------------------------------------------------------------- інструкція
   function viewPartnerHelp() {
     main.innerHTML = `
@@ -432,14 +460,17 @@ export function createPartnerPages() {
           Можна оформити і <b>без закупівлі</b> (товари з каталогу) — таке замовлення підсвічується червоним, рахунок на нього менеджер виставить окремо.</p>
         <p>Менеджер перевіряє замовлення й передає його в роботу (у нашу CRM) — після цього у замовленні видно номер і статус у CRM.
           Доки замовлення не передане, його можна змінити або скасувати.</p>
-        <h3>5. Сповіщення в Telegram</h3>
+        <h3>5. Команда</h3>
+        <p>Керівник у вкладці «Команда» додає колег із власним логіном і паролем і обирає роль: <b>Керівник</b> (усе, включно з командою),
+          <b>Менеджер</b> (каталог, закупівлі, замовлення клієнтів, юрособи) або <b>Лише перегляд</b>. Вимкнений користувач більше не зможе увійти.</p>
+        <h3>6. Сповіщення в Telegram</h3>
         <p>Натисніть «Telegram» угорі сторінки, потім «Підключити Telegram» і «Start» у боті. Приходитимуть повідомлення про рахунки, оплату й зміну цін.</p>
-        <h3>6. Пароль і безпека</h3>
+        <h3>7. Пароль і безпека</h3>
         <p>Змінити пароль — кнопка «Пароль» угорі. Не передавайте логін іншим: для кожного співробітника менеджер може створити окремий вхід.</p>
         <h3>Питання</h3>
         <p>Звертайтеся до вашого менеджера в ТОВ «Ековент Дистриб’юшн».</p>
       </div>`;
   }
 
-  return { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders, viewClients };
+  return { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders, viewClients, viewTeam };
 }

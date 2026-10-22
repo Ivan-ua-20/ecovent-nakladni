@@ -19,6 +19,8 @@ export const ROLES = {
 //  an.view    — дашборд аналітики (менеджер бачить лише свої замовлення, без таргетів)
 //  b2b.admin  — B2B: партнери, бренди й маржа, замовлення партнерів, рахунки й накладні до них
 //  b2b.partner — кабінет партнера (лише свої дані; решта сайту недоступна)
+//  b2b.order  — партнер може оформлювати й змінювати (керівник і менеджер партнера; «перегляд» — ні)
+//  b2b.team   — партнер керує своєю командою (лише керівник партнера)
 const PERMS = {
   owner: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'analytics', 'an.view', 'b2b.admin'],
   admin: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'analytics', 'an.view', 'b2b.admin'],
@@ -31,8 +33,15 @@ const AN_PERMS = ['analytics', 'an.view'];
 export const permsOf = (role) => PERMS[role] || [];
 // Права конкретного користувача: роль + перемикач аналітики (an_access: 0 — вимкнено, 1 — увімкнено,
 // порожньо — як у ролі). Власник завжди з аналітикою; партнерам аналітика не вмикається.
+// Ролі всередині команди партнера (users.partner_role; порожньо — керівник, як у старих акаунтах).
+export const PARTNER_ROLES = { head: 'Керівник', staff: 'Менеджер', viewer: 'Лише перегляд' };
+export const partnerRole = (u) => (PARTNER_ROLES[u?.partner_role] ? u.partner_role : 'head');
 export function permsOfUser(u) {
   if (!u) return [];
+  if (u.role === 'partner') {
+    const r = partnerRole(u);
+    return ['b2b.partner', ...(r !== 'viewer' ? ['b2b.order'] : []), ...(r === 'head' ? ['b2b.team'] : [])];
+  }
   const base = permsOf(u.role);
   if (u.role === 'owner' || u.role === 'partner' || u.an_access == null || u.an_access === '') return base;
   if (Number(u.an_access) === 0) return base.filter((p) => !AN_PERMS.includes(p));
@@ -82,6 +91,7 @@ export const publicUser = (u) => (u ? {
   id: u.id, login: u.login, name: u.name || u.login, role: u.role, role_name: ROLES[u.role] || u.role,
   active: u.active, created_at: u.created_at, perms: permsOfUser(u), crm_logins: crmLogins(u.crm_logins),
   analytics: hasAnalytics(u), partner_id: u.partner_id || null,
+  ...(u.role === 'partner' ? { partner_role: partnerRole(u), partner_role_name: PARTNER_ROLES[partnerRole(u)] } : {}),
 } : null);
 
 // Логіни LP-CRM, прив'язані до акаунта (через кому).
