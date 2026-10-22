@@ -13,7 +13,7 @@ let receiptOwner = 'lupu'; // який акаунт Checkbox «має» чек
 const fetchFn = async (url, opts = {}) => {
   calls.push(url);
   const json = (o, status = 200) => new Response(JSON.stringify(o), { status });
-  const ORDER = (code) => ({ id: '777', order_id: code, office: '25', datetime: '2026-10-10 12:00:00', bayer_name: 'Іван Тест', phone: '380501112233',
+  const ORDER = (code) => ({ id: '777', order_id: code, status: globalThis.ST || '11', office: '25', datetime: '2026-10-10 12:00:00', bayer_name: 'Іван Тест', phone: '380501112233',
     payment: '0', delivery_id: '3', additional_1: globalThis.CH || '', total: '2000.00', products: [{ product_id: '7', price: '1000.00', quantity: '2' }] });
   if (url.includes('getOrdersByID')) {
     const ids = new URLSearchParams(opts.body).get('order_id').split(',');
@@ -49,7 +49,7 @@ const get = async (p) => (await app.request(p, { headers: H })).json();
 const put = async (p, b) => (await app.request(p, { method: 'PUT', body: JSON.stringify(b), headers: H })).json();
 
 // 1. Без Checkbox: ФОП за відділом 25 → Агафіца Д.М.
-let inv = await get('/api/invoice/14491491451');
+let inv = await get('/api/invoice/777');
 assert.equal(inv.order.items[0].qty, 2);
 assert.equal(inv.order.payment, '', 'числовий код оплати не показується');
 inv = await get('/api/invoice/777');
@@ -65,8 +65,10 @@ assert.equal(inv.order.total, 2000);
 assert.equal(inv.fopSource, 'office');
 assert.equal(inv.fop.short_name, 'ФОП Агафіца Д.М.');
 assert.equal(inv.versionsCount, 1);
-const byPhone = await get('/api/invoice/0501112233');
-assert.equal(byPhone.crmCode, '14491491451', 'пошук за телефоном');
+for (const bad of ['0501112233', '14491491451', 'abc']) {
+  const rb = await app.request(`/api/invoice/${bad}`, { headers: H });
+  assert.equal(rb.status, 400, `лише ID замовлення: ${bad}`);
+}
 
 // 2. Додаємо доступи Checkbox двом ФОПам, вмикаємо автопошук; чек належить Лупу В.Ф.
 const fops = (await get('/api/bootstrap')).fops;
@@ -100,8 +102,16 @@ assert.equal(inv.crmOrder.total, 2000);
 
 // 5. Помилка LP-CRM повертається зрозуміло
 const r = await app.request('/api/invoice/99999', { headers: H });
-assert.equal(r.status, 500);
-assert.match((await r.json()).error, /не знайдено серед замовлень/);
+assert.equal(r.status, 404);
+const rj = await r.json();
+assert.match(rj.error, /№ 99999 немає в CRM у статусі «Прийнято» за останні 30 днів/);
+assert.equal(rj.canExtend, false, 'один пошук — без розширення');
+// замовлення вже в індексі, але в CRM його перевели з «Прийнято»
+globalThis.ST = '3';
+const moved = await (await app.request('/api/invoice/777?fresh=1', { headers: H })).json();
+assert.match(moved.error, /немає в CRM у статусі «Прийнято» \(зараз: «Новий»\)/);
+globalThis.ST = '';
+await get('/api/invoice/777?fresh=1'); // повернули статус — оновили кеш замовлення
 
 // 6. Історія
 const hist = await get('/api/history');

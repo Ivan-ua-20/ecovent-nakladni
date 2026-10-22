@@ -22,7 +22,7 @@ async function viewInvoice(orderId) {
     <div class="order-bar">
       <form id="orderForm">
         <label for="orderInput" class="sr-only">Номер замовлення</label>
-        <input id="orderInput" placeholder="Номер, код, телефон або ТТН" value="${esc(orderId || '')}" autocomplete="off" autofocus>
+        <input id="orderInput" placeholder="ID замовлення з LP-CRM, напр. 108008" inputmode="numeric" value="${esc(orderId || '')}" autocomplete="off" autofocus>
         <button class="btn primary">Сформувати</button>
       </form>
       <div class="bar-actions" id="invActions"><span class="muted small">Для перевірки без CRM введіть <a href="#/invoice/demo">demo</a></span></div>
@@ -42,18 +42,22 @@ async function viewInvoice(orderId) {
   }
 }
 
-async function loadInvoice(orderId, fresh = false) {
+async function loadInvoice(orderId, fresh = false, wide = false) {
   const area = $('#invArea');
-  area.innerHTML = `<div class="card empty"><span class="spinner"></span> Завантажую замовлення №${esc(orderId)}… <div class="small" style="margin-top:6px">Перший пошук за номером може тривати до хвилини: програма завантажує список замовлень із LP-CRM. Далі — кілька секунд.</div></div>`;
+  area.innerHTML = `<div class="card empty"><span class="spinner"></span> Шукаю замовлення №${esc(orderId)} серед «Прийнято»… <div class="small" style="margin-top:6px">Перший пошук може тривати до хвилини: програма завантажує прийняті замовлення з LP-CRM. Далі — кілька секунд.</div></div>`;
   setPending((n) => { const el = $('#invArea .empty'); if (el) el.innerHTML = `<span class="spinner"></span> Шукаю замовлення №${esc(orderId)} у LP-CRM… (крок ${n + 1})`; });
   try {
-    current = await api('GET', `/api/invoice/${encodeURIComponent(orderId)}${fresh ? '?fresh=1' : ''}`);
+    const qs = [fresh ? 'fresh=1' : '', wide ? 'wide=1' : ''].filter(Boolean).join('&');
+    current = await api('GET', `/api/invoice/${encodeURIComponent(orderId)}${qs ? `?${qs}` : ''}`);
     current.requestedId = orderId;
     renderInvoiceView();
   } catch (e) {
     current = null;
     if ($('#invActions')) $('#invActions').innerHTML = '';
-    area.innerHTML = `<div class="alert bad"><b>Не вдалося отримати замовлення.</b><br>${esc(e.message)}</div>`;
+    const ext = e.data?.canExtend;
+    area.innerHTML = `<div class="alert bad"><b>Не вдалося отримати замовлення.</b><br>${esc(e.message)}
+      ${ext ? `<div class="btn-row" style="margin-top:10px"><button class="btn primary" id="invWide">Перевірити за ${esc(e.data.extendDays)} днів</button></div>` : ''}</div>`;
+    if (ext) $('#invWide').onclick = () => loadInvoice(orderId, false, true);
   }
 }
 
@@ -281,7 +285,7 @@ async function viewHistory() {
   main.innerHTML = `
     <div class="head-row"><h2>Історія накладних</h2>
       <div class="btn-row">
-        <input id="hQ" placeholder="Номер, код, телефон або ТТН" style="width:200px">
+        <input id="hQ" placeholder="Номер замовлення" style="width:200px">
         <select id="hFop" style="width:220px"><option value="">Усі ФОПи</option>${ctx.boot.fops.map((f) => `<option value="${f.id}">${esc(f.short_name)}</option>`).join('')}</select>
       </div>
     </div>

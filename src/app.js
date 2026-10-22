@@ -31,7 +31,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   app.onError((err, c) => {
     if (err.pending) return c.json({ pending: true, message: err.message }, 202);
     if (!err.status) console.error(err);
-    return c.json({ error: err.message || String(err) }, err.status || 500);
+    return c.json({ error: err.message || String(err), ...(err.extra || {}) }, err.status || 500);
   });
 
   // ---------- Строк зберігання: модулі реєструють свою чистку, вона йде не частіше разу на годину ----------

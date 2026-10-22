@@ -18,7 +18,7 @@ async function viewSettings() {
           <h3>LP-CRM і Checkbox (API)</h3>
           <label class="f"><span>Піддомен</span><div style="display:flex;align-items:center;gap:6px"><input name="lpcrm_subdomain" value="${esc(s.lpcrm_subdomain || '')}" style="max-width:200px"><span class="muted">.lp-crm.biz</span></div></label>
           <label class="f"><span>API-ключ</span><input name="lpcrm_key" type="password" value="${esc(s.lpcrm_key || '')}" placeholder="Вставте ключ з розділу API в LP-CRM"></label>
-          <label class="f" style="max-width:300px"><span>Шукати замовлення за номером серед останніх (днів)</span><input name="lpcrm_search_days" type="number" min="1" max="365" value="${esc(s.lpcrm_search_days || '30')}"></label>
+          <label class="f" style="max-width:300px"><span>Шукати замовлення «Прийнято» за ID серед останніх (днів)</span><input name="lpcrm_search_days" type="number" min="1" max="365" value="${esc(s.lpcrm_search_days || '30')}"></label>
           <label class="check"><input type="checkbox" name="checkbox_enabled" ${s.checkbox_enabled === '1' ? 'checked' : ''}> Автоматично шукати чек у Checkbox</label>
           <label class="f" style="max-width:260px"><span>Шукати чеки протягом (днів від дати замовлення)</span><input name="checkbox_search_days" type="number" min="1" max="60" value="${esc(s.checkbox_search_days || '7')}"></label>
           <div class="btn-row"><button class="btn primary">Зберегти</button></div>

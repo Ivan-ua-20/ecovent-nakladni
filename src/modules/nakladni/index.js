@@ -1,4 +1,4 @@
-// Модуль «Накладні»: пошук замовлення LP-CRM (за кодом, номером, телефоном або ТТН), формування накладної
+// Модуль «Накладні»: пошук замовлення LP-CRM (лише за ID, лише «Прийнято»), формування накладної
 // (ФОП з чека Checkbox, поля 1, відділу або вручну), версії та історія, діагностика LP-CRM.
 // Для інших модулів віддає loadOrder (замовлення з CRM) — ним користуються рахунки.
 import { fail, need, nowIso, userName, parseTpl, hash, kyivDay, loadSettings } from '../../core/common.js';
@@ -25,7 +25,11 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, shared = {} }) {
   // Індекс пошуку замовлень: тримаємо лише період пошуку з налаштувань (+7 днів запасу).
   onCleanup(async () => {
     const days = (Number((await settings()).lpcrm_search_days) || 30) + 7;
-    await db.run(`DELETE FROM orders_index WHERE datetime != '' AND datetime < ?`, [new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)]);
+    const border = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+    await db.batch([
+      [`DELETE FROM orders_index WHERE datetime != '' AND datetime < ?`, [border]],
+      [`DELETE FROM order_keys WHERE day != '' AND day < ?`, [border]],
+    ]);
   });
 
   // ---------- Діагностика LP-CRM ----------
@@ -44,111 +48,103 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, shared = {} }) {
   });
 
   // ---------- Накладна ----------
-  // ---------- Пошук замовлення за коротким номером, телефоном або ТТН ----------
-  // API LP-CRM шукає замовлення лише за 11-значним кодом. Щоб працював звичний номер,
-  // тримаємо локальний індекс замовлень за останні N днів і шукаємо в ньому.
-  let syncing = null;
+  // ---------- Пошук замовлення: лише за ID (номер з картки LP-CRM) і лише серед замовлень у статусі «Прийнято» ----------
+  // API LP-CRM віддає замовлення лише за довгим кодом (ID-o). Щоб працював звичний номер (ID), тримаємо локальний
+  // індекс прийнятих замовлень за період з налаштувань (30 днів). Один пошук — без розширення і повторів.
+  // Замовлень інших статусів у базу не завантажуємо (менше запитів до LP-CRM і рядків у D1).
   const ymd = (d) => d.toISOString().slice(0, 10);
   const digits = (v) => String(v || '').replace(/\D/g, '');
+  const ACCEPTED_RE = /^(принят|прийнят)/i;
+  const ID_RE = /^[1-9]\d{0,8}$/; // ID: до 9 цифр без нуля на початку (телефон 0… і 16-значний ID-o — ні)
+  shared.acceptedCodes ||= new Map();
 
-  // Завантажує в індекс замовлення за останні `days` днів. Зупиняється, щойно `found()` повертає збіги.
-  // Спершу найчастіші статуси, щоб звичайне замовлення знаходилось за кілька запитів.
-  const STATUS_PRIORITY = ['11', '3', '56', '14', '18', '66', '60', '53'];
-  // Статуси LP-CRM кешуємо на добу (один зовнішній запит менше на кожен пошук).
-  async function cachedStatuses(creds) {
-    const row = await db.get(`SELECT value FROM settings WHERE key = 'statuses_cache'`);
-    const cache = row?.value ? JSON.parse(row.value) : null;
-    if (cache && cache.sub === creds.subdomain && Date.now() - cache.at < 86400000) return cache.list;
-    const list = Object.keys(await getStatuses(fetchFn, creds));
-    await db.run(`INSERT INTO settings (key, value) VALUES ('statuses_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [
-      JSON.stringify({ at: Date.now(), sub: creds.subdomain, list }),
-    ]);
-    return list;
-  }
+  // Ключі пошуку замовлення: номер (id), код (order_id), ТТН, телефон (останні 9 цифр).
+  const orderKeys = (o) => {
+    const ks = [o.id, o.order_id, o.ttn].map((x) => String(x ?? '').trim()).filter(Boolean);
+    const p = digits(o.phone);
+    if (p.length >= 9) ks.push(`p:${p.slice(-9)}`);
+    return [...new Set(ks)];
+  };
 
   // Одним пакетом: 100 замовлень = один запит до D1, а не 100.
   async function saveOrders(orders) {
     const now = nowIso();
-    await db.batch(orders.map((o) => [
+    const keys = orders.flatMap((o) => orderKeys(o).map((k) => [
+      `INSERT OR IGNORE INTO order_keys (k, code, day) VALUES (?, ?, ?)`, [k, String(o.order_id), String(o.datetime || '').slice(0, 10)],
+    ]));
+    await db.batch([...keys, ...orders.map((o) => [
       `INSERT INTO orders_index (code, datetime, phone, ttn, bayer_name, data, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(code) DO UPDATE SET datetime = excluded.datetime, phone = excluded.phone, ttn = excluded.ttn,
        bayer_name = excluded.bayer_name, data = excluded.data, fetched_at = excluded.fetched_at`,
       [String(o.order_id), o.datetime || '', digits(o.phone), String(o.ttn || ''), o.bayer_name || '', JSON.stringify(o), now],
-    ]));
+    ])]);
   }
 
-  // Завантажує в індекс замовлення за останні `days` днів, статус за статусом, і зупиняється, щойно `found()` дає збіг.
-  // Прогрес зберігається в базі: якщо ліміт запитів вичерпано, наступне звернення продовжить з того ж статусу.
-  async function syncIndex(creds, days, found = async () => []) {
-    if (syncing) { await syncing; return found(); }
-    let result = [];
-    syncing = (async () => {
-      const all = await cachedStatuses(creds);
-      const statuses = [...STATUS_PRIORITY.filter((x) => all.includes(x)), ...all.filter((x) => !STATUS_PRIORITY.includes(x))];
-      const start = ymd(new Date(Date.now() - days * 86400000));
-      const end = ymd(new Date(Date.now() + 86400000));
-      const key = `${creds.subdomain}|${days}|${start}`;
-      const pr = await db.get(`SELECT value FROM settings WHERE key = 'sync_progress'`);
-      const prog = pr?.value ? JSON.parse(pr.value) : null;
-      let i = prog && prog.key === key && Date.now() - prog.at < 30 * 60000 ? prog.i : 0;
-      const saveProgress = (idx) => db.run(
-        `INSERT INTO settings (key, value) VALUES ('sync_progress', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-        [JSON.stringify({ key, i: idx, at: Date.now() })],
-      );
-      for (; i < statuses.length; i++) {
-        const codes = await getOrderCodesByStatus(fetchFn, creds, statuses[i], start, end);
-        const known = new Set((await db.all(`SELECT code FROM orders_index WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => r.code));
-        const fresh = codes.filter((c) => !known.has(c));
-        for (let k = 0; k < fresh.length; k += 100) {
-          await saveOrders(await getOrdersBatch(fetchFn, creds, fresh.slice(k, k + 100)));
-        }
-        await saveProgress(i + 1);
-        result = await found();
-        if (result.length) break;
-      }
-      await db.run(`DELETE FROM settings WHERE key = 'sync_progress'`);
-    })();
-    try { await syncing; } finally { syncing = null; }
-    return result;
+
+  // Статуси LP-CRM (id → назва) кешуємо на добу.
+  async function crmStatuses(creds) {
+    const row = await db.get(`SELECT value FROM settings WHERE key = 'statuses_cache'`);
+    const cache = row?.value ? JSON.parse(row.value) : null;
+    if (cache?.map && cache.sub === creds.subdomain && Date.now() - cache.at < 86400000) return cache.map;
+    const map = await getStatuses(fetchFn, creds);
+    await db.run(`INSERT INTO settings (key, value) VALUES ('statuses_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [
+      JSON.stringify({ at: Date.now(), sub: creds.subdomain, map }),
+    ]);
+    return map;
+  }
+  const statusName = (map, id) => String((map[id]?.name ?? map[id]) || id || '').trim();
+  async function acceptedIds(creds) {
+    const map = await crmStatuses(creds);
+    const ids = Object.keys(map).filter((id) => ACCEPTED_RE.test(statusName(map, id)));
+    return { ids: ids.length ? ids : ['11'], map };
   }
 
-  const SKIP_KEYS = new Set(['total', 'status', 'office', 'payment', 'delivery_id', 'attribute_status_id', 'localization']);
-  // Пошук у індексі робить база: точний збіг будь-якого простого поля замовлення або ТТН,
-  // інакше — телефон, що закінчується на введені цифри (від 9 цифр). Найновіші — першими.
-  async function matchIndex(q) {
-    const strong = await db.all(
-      `SELECT code, datetime, phone, ttn FROM orders_index o
-       WHERE o.ttn = ? OR EXISTS (SELECT 1 FROM json_each(o.data) j
-         WHERE j.type IN ('text', 'integer', 'real') AND j.key NOT IN (SELECT value FROM json_each(?))
-           AND TRIM(CAST(j.value AS TEXT)) = ?)
-       ORDER BY datetime DESC`,
-      [q, JSON.stringify([...SKIP_KEYS]), q],
-    );
-    if (strong.length) return strong;
-    const qd = digits(q);
-    if (qd.length < 9) return [];
-    return db.all(`SELECT code, datetime, phone, ttn FROM orders_index WHERE phone != '' AND phone LIKE ? ORDER BY datetime DESC`, [`%${qd}`]);
+  // Коди прийнятих замовлень за `days` днів (кеш на 3 хв: кілька накладних поспіль — один запит до LP-CRM).
+  async function acceptedCodes(creds, days) {
+    const key = `${creds.subdomain}|${days}`;
+    const hit = shared.acceptedCodes.get(key);
+    if (hit && Date.now() - hit.at < 3 * 60000) return hit.codes;
+    const { ids } = await acceptedIds(creds);
+    const start = ymd(new Date(Date.now() - days * 86400000));
+    const end = ymd(new Date(Date.now() + 86400000));
+    const codes = [...new Set((await Promise.all(ids.map((id) => getOrderCodesByStatus(fetchFn, creds, id, start, end)))).flat())];
+    shared.acceptedCodes.set(key, { at: Date.now(), codes });
+    return codes;
   }
 
+  // Довантажує в індекс прийняті замовлення, яких там ще немає (по 100 за запит). Якщо вичерпано ліміт
+  // зовнішніх запитів — сервер відповідає «триває», браузер повторює, і вже збережені пачки не перечитуються.
+  async function loadAccepted(creds, days) {
+    const codes = await acceptedCodes(creds, days);
+    const known = new Set((await db.all(`SELECT code FROM orders_index WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => r.code));
+    const fresh = codes.filter((c) => !known.has(c));
+    for (let k = 0; k < fresh.length; k += 100) await saveOrders(await getOrdersBatch(fetchFn, creds, fresh.slice(k, k + 100)));
+    return codes;
+  }
+
+  // Номер (ID) → код замовлення через ключі індексу; codes — обмежити списком прийнятих.
+  const findById = (q, codes = null) => db.get(
+    `SELECT o.code FROM order_keys k JOIN orders_index o ON o.code = k.code
+     WHERE k.k = ? ${codes ? 'AND o.code IN (SELECT value FROM json_each(?))' : ''} ORDER BY o.datetime DESC LIMIT 1`,
+    codes ? [q, JSON.stringify(codes)] : [q],
+  );
+
+  const notAccepted = (q, days, maxDays, now = '') => Object.assign(
+    new Error(`Замовлення № ${q} немає в CRM у статусі «Прийнято»${days ? ` за останні ${days} днів` : ''}${now ? ` (зараз: «${now}»)` : ''}.`),
+    { status: 404, extra: { canExtend: Boolean(days) && days < maxDays, extendDays: maxDays } },
+  );
 
   async function resolveCode(q, s, creds) {
-    if (/^\d{11,}$/.test(q) && !q.startsWith('380')) return { code: q };
-    const alias = await db.get(`SELECT code FROM order_alias WHERE alias = ?`, [q]);
-    if (alias) return { code: alias.code };
-    let hits = await matchIndex(q);
-    const maxDays = Number(s.lpcrm_search_days) || 30;
-    // Спочатку останній тиждень (швидко), потім увесь період із налаштувань.
-    if (!hits.length) hits = await syncIndex(creds, Math.min(7, maxDays), () => matchIndex(q));
-    if (!hits.length && maxDays > 7) hits = await syncIndex(creds, maxDays, () => matchIndex(q));
-    if (!hits.length) {
-      throw new Error(`Замовлення «${q}» не знайдено серед замовлень за останні ${Number(s.lpcrm_search_days) || 30} днів. ` +
-        'Введіть код замовлення (ID-o у шапці картки LP-CRM), телефон покупця або ТТН.');
+    if (!ID_RE.test(q)) {
+      throw fail(400, 'Неправильний формат номера замовлення: введіть ID замовлення з LP-CRM — лише цифри, напр. 108008 (не код ID-o, не телефон і не ТТН).');
     }
-    const note = hits.length > 1 ? `Знайдено ${hits.length} замовлення(нь) за «${q}» — показано найновіше.` : '';
-    if (hits.length === 1 && !/^\d{9,}$/.test(digits(q)) ) {
-      await db.run(`INSERT INTO order_alias (alias, code) VALUES (?, ?) ON CONFLICT(alias) DO UPDATE SET code = excluded.code`, [q, hits[0].code]);
-    }
-    return { code: hits[0].code, note };
+    const days = Math.max(1, Number(s.lpcrm_search_days) || 30);
+    const maxDays = days;
+    // Уже в індексі (прийняте раніше) — без списку з CRM; актуальний статус перевіряє loadOrder.
+    let row = await findById(q);
+    if (!row) row = await findById(q, await loadAccepted(creds, days));
+    if (!row) throw notAccepted(q, days, maxDays);
+    return { code: row.code, days, maxDays };
   }
 
   async function loadOrder(orderId, s, fresh = false) {
@@ -157,8 +153,13 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, shared = {} }) {
     }
     const creds = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
     if (!creds.subdomain || !creds.key) throw new Error('Не налаштовано LP-CRM: вкажіть піддомен і API-ключ у розділі «Налаштування».');
-    const { code, note } = await resolveCode(orderId, s, creds);
+    const { code, maxDays } = await resolveCode(orderId, s, creds);
     const { order, raw } = await getOrder(fetchFn, creds, code, { fresh });
+    // Актуальний статус у CRM: замовлення могли вже перевести з «Прийнято» в інший статус.
+    const { ids, map } = await acceptedIds(creds);
+    const st = String(order.status ?? order.status_id ?? '');
+    if (!ids.includes(st)) throw notAccepted(orderId, 0, maxDays, statusName(map, st));
+    const note = '';
     const prods = order.products || order.goods || [];
     const list = Array.isArray(prods) ? prods : Object.values(prods);
     const missing = list.filter((p) => !(p.name || p.title || p.product_name)).map((p) => String(p.product_id ?? p.id ?? ''));

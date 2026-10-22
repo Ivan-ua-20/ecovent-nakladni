@@ -85,7 +85,7 @@ async function rahunokForm({ mode, id }) {
   main.innerHTML = `
     <div class="order-bar">
       <a class="btn" href="${saved ? '#/rlist' : '#/rahunky'}">← Назад</a>
-      ${isCrm && !saved ? `<form id="rOrderF"><label for="rOrder" class="sr-only">Замовлення CRM</label><input id="rOrder" placeholder="Номер, код, телефон або ТТН" autofocus><button class="btn primary">Підтягнути</button></form>`
+      ${isCrm && !saved ? `<form id="rOrderF"><label for="rOrder" class="sr-only">Замовлення CRM</label><input id="rOrder" placeholder="ID замовлення з LP-CRM (статус «Прийнято»)" inputmode="numeric" autofocus><button class="btn primary">Підтягнути</button></form>`
         : `<h2 class="bar-title">${saved ? `Рахунок № ${esc(state.number)}` : 'Рахунок вручну'}</h2>`}
       <div class="bar-actions">
         <button class="btn primary" id="rSend">Надіслати</button>
