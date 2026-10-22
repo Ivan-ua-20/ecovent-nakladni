@@ -41,7 +41,8 @@ const SECTIONS = [
     { id: 'ansettings', label: 'Налаштування аналітики', perm: 'analytics' },
   ] },
   { id: 'b2b', label: 'B2B партнери', perm: 'b2b.admin', home: 'b2borders', tabs: [
-    { id: 'b2borders', label: 'Замовлення' },
+    { id: 'b2borders', label: 'Закупівлі' },
+    { id: 'b2bclients', label: 'Замовлення клієнтів' },
     { id: 'b2bpartners', label: 'Партнери' },
     { id: 'b2bcatalog', label: 'Каталог і ціни' },
   ] },
@@ -49,6 +50,7 @@ const SECTIONS = [
   { id: 'partner', label: 'Кабінет партнера', perm: 'b2b.partner', home: 'pcatalog', tabs: [
     { id: 'pcatalog', label: 'Каталог' },
     { id: 'porders', label: 'Закупівлі' },
+    { id: 'pclients', label: 'Замовлення клієнтів' },
     { id: 'pentities', label: 'Мої юрособи' },
     { id: 'phelp', label: 'Інструкція' },
   ] },
@@ -197,8 +199,8 @@ const { viewSettings, viewNakladniSettings, viewRahunkySettings } = createSettin
 const { viewRahunky, viewRahunkyList } = createRahunkyPages(ctx);
 const { viewUsers } = createUsersPages(ctx);
 const { viewErrors } = createErrorsPages(ctx);
-const { viewPartners, viewCatalog, viewOrders: viewB2bOrders } = createB2bPages(ctx);
-const { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders } = createPartnerPages(ctx);
+const { viewPartners, viewCatalog, viewOrders: viewB2bOrders, viewClients: viewB2bClients } = createB2bPages(ctx);
+const { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients } = createPartnerPages(ctx);
 setUnauthorized(() => showAuth());
 
 const routes = {
@@ -223,6 +225,8 @@ const routes = {
   b2bpartners: viewPartners,
   b2borders: viewB2bOrders,
   porders: viewPartnerOrders,
+  pclients: viewPartnerClients,
+  b2bclients: viewB2bClients,
   pentities: viewEntities,
   b2bcatalog: viewCatalog,
   pcatalog: viewPartnerCatalog,

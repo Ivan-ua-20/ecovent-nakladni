@@ -12,6 +12,22 @@ export const ORDER_STATUS = {
   done: 'Завершено',
   cancelled: 'Скасовано',
 };
+// Замовлення для клієнта партнера (етап 3): нове → передано в CRM (або скасовано).
+export const CLIENT_STATUS = {
+  new: 'Нове',
+  crm: 'Передано в CRM',
+  cancelled: 'Скасовано',
+};
+const ANY_STATUS = { ...ORDER_STATUS, ...CLIENT_STATUS };
+// Стан оплати замовлення клієнта: за закупівлею, з якої воно зібране; «без закупівлі» — оплачено вручну адміністратором.
+export function payState(o) {
+  if (o.kind !== 'client') return '';
+  if (!o.supply_id) return o.paid_at ? 'paid' : 'unpaid';
+  if (['paid', 'done'].includes(o.supply_status)) return 'paid';
+  if (o.supply_status === 'partial') return 'partial';
+  return 'unpaid';
+}
+export const PAY_NAME = { paid: 'Оплачено', partial: 'Частково оплачено', unpaid: 'Не оплачено' };
 const ENTITY_KIND = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 const FILE_KIND = { invoice: 'Рахунок', waybill: 'Накладна', label: 'Маркування', other: 'Файл' };
 const MAX_FILE = 5 * 1024 * 1024;
@@ -157,14 +173,36 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (!o) throw fail(404, 'Замовлення не знайдено.');
     return o;
   }
-  const publicOrder = (o) => ({ ...o, number: orderNo(o.id), status_name: ORDER_STATUS[o.status] || o.status });
+  const publicOrder = (o) => {
+    const out = { ...o, number: orderNo(o.id), status_name: ANY_STATUS[o.status] || o.status };
+    if (o.kind === 'client') Object.assign(out, { no_supply: !o.supply_id, pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : '' });
+    return out;
+  };
+  // Залишок товарів закупівлі для замовлень клієнтів (без скасованих; exceptId — замовлення, що зараз змінюється).
+  async function supplyLeft(supplyId, exceptId = 0) {
+    return db.all(
+      `SELECT i.product_id, i.name, i.article, i.price, i.rrp, i.qty,
+        COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci JOIN b2b_orders co ON co.id = ci.order_id
+          WHERE co.supply_id = i.order_id AND co.kind = 'client' AND co.status != 'cancelled' AND co.id != ? AND ci.product_id = i.product_id), 0) AS used
+       FROM b2b_order_items i WHERE i.order_id = ? ORDER BY i.id`, [exceptId, supplyId],
+    ).then((rows) => rows.map((r) => ({ ...r, left: r.qty - r.used })));
+  }
   async function orderDetail(o) {
-    const [items, files, history] = await Promise.all([
+    if (o.kind === 'client' && o.supply_id && o.supply_status === undefined) {
+      o = { ...o, supply_status: (await db.get(`SELECT status FROM b2b_orders WHERE id = ?`, [o.supply_id]))?.status || '' };
+    }
+    const [items, files, history, clients] = await Promise.all([
       db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]),
       db.all(`SELECT id, kind, name, mime, size, created_by, created_at FROM b2b_files WHERE order_id = ? ORDER BY id`, [o.id]),
       db.all(`SELECT at, user_name, action FROM b2b_order_log WHERE order_id = ? ORDER BY id DESC LIMIT 100`, [o.id]),
+      o.kind === 'supply' ? db.all(`SELECT id, status, client_name, total, created_at FROM b2b_orders WHERE supply_id = ? AND kind = 'client' ORDER BY id DESC`, [o.id]) : [],
     ]);
-    return { order: publicOrder(o), items, files: files.map((f) => ({ ...f, kind_name: FILE_KIND[f.kind] || f.kind })), history };
+    const out = { order: publicOrder(o), items, files: files.map((f) => ({ ...f, kind_name: FILE_KIND[f.kind] || f.kind })), history };
+    if (o.kind === 'supply') {
+      out.clients = clients.map((x) => ({ ...x, number: orderNo(x.id), status_name: CLIENT_STATUS[x.status] || x.status }));
+      out.left = clients.length ? await supplyLeft(o.id) : items.map((i) => ({ ...i, used: 0, left: i.qty }));
+    }
+    return out;
   }
 
   app.get('/api/b2b/p/orders', async (c) => {
@@ -178,18 +216,26 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
 
   app.get('/api/b2b/p/orders/:id', async (c) => {
     const p = await myPartner(c);
-    return c.json(await orderDetail(await orderOf(c.req.param('id'), p.id)));
+    const o = await orderOf(c.req.param('id'), p.id);
+    if (o.kind !== 'supply') throw fail(404, 'Замовлення не знайдено.');
+    return c.json(await orderDetail(o));
   });
 
   // Зміна закупівлі партнером — доки бухгалтер не вніс рахунок. Ціни перераховуються за поточними.
   app.put('/api/b2b/p/orders/:id', async (c) => {
     const p = await myPartner(c);
     const o = await orderOf(c.req.param('id'), p.id);
+    if (o.kind !== 'supply') throw fail(404, 'Замовлення не знайдено.');
     if (o.status !== 'invoice_wait') throw fail(400, 'Рахунок уже виставлено — змінити замовлення може лише менеджер.');
     const b = await c.req.json();
     const e = await myEntity(p, b.entity_id ?? o.entity_id);
     const items = await priceItems(p, b.items);
     const total = totalOf(items);
+    // Не менше, ніж уже розписано на замовлення клієнтів.
+    const want = new Map(items.map((i) => [i.product_id, i.qty]));
+    for (const r of await supplyLeft(o.id)) {
+      if (r.used > (want.get(r.product_id) || 0)) throw fail(400, `«${r.name}»: на замовлення клієнтів уже розписано ${r.used} шт. — менше зменшити не можна.`);
+    }
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, items),
@@ -204,7 +250,11 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   app.post('/api/b2b/p/orders/:id/cancel', async (c) => {
     const p = await myPartner(c);
     const o = await orderOf(c.req.param('id'), p.id);
+    if (o.kind !== 'supply') throw fail(404, 'Замовлення не знайдено.');
     if (o.status !== 'invoice_wait') throw fail(400, 'Рахунок уже виставлено — скасувати замовлення може лише менеджер.');
+    if (await db.get(`SELECT id FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled' LIMIT 1`, [o.id])) {
+      throw fail(400, 'З цієї закупівлі вже є замовлення клієнтів — спершу скасуйте їх.');
+    }
     await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
     await log(o.id, c.get('user'), 'партнер скасував замовлення');
     await tgAdmins(`❌ <b>Скасовано закупівлю ${orderNo(o.id)}</b> («${h(p.name)}»)\n${link(c, `b2borders/${o.id}`)}`);
@@ -248,8 +298,8 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     };
     if (next.invoice_date && !/^\d{4}-\d{2}-\d{2}$/.test(next.invoice_date)) throw fail(400, 'Дата рахунку — у форматі РРРР-ММ-ДД.');
     let status = o.status;
-    if (next.invoice_no && status === 'invoice_wait') status = 'pay_wait';
-    if (!next.invoice_no && status === 'pay_wait') status = 'invoice_wait';
+    if (o.kind === 'supply' && next.invoice_no && status === 'invoice_wait') status = 'pay_wait';
+    if (o.kind === 'supply' && !next.invoice_no && status === 'pay_wait') status = 'invoice_wait';
     await db.run(`UPDATE b2b_orders SET invoice_no = ?, invoice_date = ?, waybill_no = ?, status = ?, updated_at = ? WHERE id = ?`,
       [next.invoice_no, next.invoice_date, next.waybill_no, status, nowIso(), o.id]);
     const changes = [];
@@ -257,7 +307,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (next.waybill_no !== o.waybill_no) changes.push(`накладна № ${next.waybill_no || '—'}`);
     if (changes.length) await log(o.id, c.get('user'), changes.join('; '));
     if (next.invoice_no && next.invoice_no !== o.invoice_no) {
-      await tgPartner(o.partner_id, `🧾 <b>Рахунок № ${h(next.invoice_no)}</b> на закупівлю ${orderNo(o.id)} — <b>${uah(o.total)}</b>\nОчікує оплату. Файл рахунку — у кабінеті партнера.\n${link(c, `porders/${o.id}`)}`);
+      await tgPartner(o.partner_id, `🧾 <b>Рахунок № ${h(next.invoice_no)}</b> на ${o.kind === 'client' ? 'замовлення' : 'закупівлю'} ${orderNo(o.id)} — <b>${uah(o.total)}</b>\nОчікує оплату. Файл рахунку — у кабінеті партнера.\n${link(c, `${o.kind === 'client' ? 'pclients' : 'porders'}/${o.id}`)}`);
     }
     return c.json({ ok: true, status });
   });
@@ -266,6 +316,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   app.post('/api/b2b/orders/:id/status', async (c) => {
     need(c, 'b2b.admin');
     const o = await orderOf(c.req.param('id'));
+    if (o.kind !== 'supply') throw fail(400, 'Статус замовлення клієнта змінюється на його сторінці.');
     const { status } = await c.req.json();
     if (!['paid', 'done', 'cancelled', 'pay_wait'].includes(status)) throw fail(400, 'Невідомий статус.');
     if (status === 'pay_wait' && !o.invoice_no) throw fail(400, 'Спершу внесіть номер рахунку.');
@@ -290,6 +341,10 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     need(c, 'b2b.admin');
     const o = await orderOf(c.req.param('id'));
     const kind = FILE_KIND[c.req.query('kind')] ? c.req.query('kind') : 'other';
+    return c.json({ id: await saveFile(c, o, kind) });
+  });
+
+  async function saveFile(c, o, kind) {
     const bytes = new Uint8Array(await c.req.arrayBuffer());
     if (!bytes.length) throw fail(400, 'Порожній файл.');
     if (bytes.length > MAX_FILE) throw fail(400, 'Файл завеликий (до 5 МБ).');
@@ -305,8 +360,8 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     for (let n = 0; n < parts; n++) st.push([`INSERT INTO b2b_file_parts (file_id, n, data) VALUES (?, ?, ?)`, [r.lastId, n, toB64(bytes.subarray(n * PART, (n + 1) * PART))]]);
     await db.batch(st);
     await log(o.id, u, `додано файл: ${FILE_KIND[kind]} «${name}»`);
-    return c.json({ id: r.lastId });
-  });
+    return r.lastId;
+  }
 
   async function sendFile(f) {
     const parts = await db.all(`SELECT data FROM b2b_file_parts WHERE file_id = ? ORDER BY n`, [f.id]);
@@ -348,5 +403,5 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return sendFile(f);
   });
 
-  return { ORDER_STATUS };
+  return { ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, link, uah, h };
 }
