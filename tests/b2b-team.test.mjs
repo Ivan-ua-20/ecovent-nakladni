@@ -94,8 +94,8 @@ assert.equal(await status(() => req('PUT', `/api/b2b/p/team/${st.id}`, { active:
 // ---------- 4. Видалення партнера ----------
 // без замовлень — повністю
 await req('DELETE', `/api/b2b/partners/${pb.id}`);
-assert.equal(await db.get(`SELECT id FROM b2b_partners WHERE id = ?`, [pb.id]), undefined);
-assert.equal(await db.get(`SELECT id FROM users WHERE login = 'bboss'`), undefined, 'користувачі видалені, логін вільний');
+assert.ok(!(await db.get(`SELECT id FROM b2b_partners WHERE id = ?`, [pb.id])));
+assert.ok(!(await db.get(`SELECT id FROM users WHERE login = 'bboss'`)), 'користувачі видалені, логін вільний');
 assert.equal(await status(() => req('GET', '/api/b2b/p/team', null, BB)), 401);
 // із замовленнями — в архів
 await db.run(`INSERT INTO b2b_orders (partner_id, kind, status, total, created_at) VALUES (?, 'supply', 'invoice_wait', 100, '2026-10-22T10:00:00Z')`, [pa.id]);
