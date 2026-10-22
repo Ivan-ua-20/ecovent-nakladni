@@ -1,6 +1,7 @@
 // B2B (власник і адміністратори): партнери, їхні користувачі, бренди й маржа, каталог з цінами з LP-CRM.
 import { esc, money } from '../invoice.js';
-import { $, $$, main, api, toast, modal, fmtDateTime } from '../core/ui.js';
+import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile } from './b2b-shared.js';
 
 const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
 
@@ -46,7 +47,7 @@ export function createB2bPages() {
   }
 
   async function viewPartner(id) {
-    const { partner: p, users, brands } = await api('GET', `/api/b2b/partners/${id}`);
+    const { partner: p, users, brands, entities = [] } = await api('GET', `/api/b2b/partners/${id}`);
     main.innerHTML = `
       <div class="head-row"><h2>${esc(p.name)} ${p.active ? '' : '<span class="badge bad">вимкнений</span>'}</h2>
         <div class="btn-row"><a class="btn" href="#/b2bpartners">← До списку</a><button class="btn" id="pEdit">Змінити</button></div></div>
@@ -82,9 +83,16 @@ export function createB2bPages() {
               </tr>`).join('')}</tbody></table>`
               : '<div class="small muted">Ще немає. Додайте логін і пароль — передайте їх партнеру; увійти він зможе на цьому ж сайті.</div>'}
           </div>
+          <div class="card form-stack">
+            <h3>Юрособи партнера</h3>
+            ${entities.length ? entities.map((e) => `<div class="small"><b>${esc(e.name)}</b> · ${e.code.length === 8 ? 'ЄДРПОУ' : 'ІПН'} ${esc(e.code)}${e.vat ? ' · ПДВ' : ''}${e.active ? '' : ' <span class="badge">прихована</span>'}</div>`).join('')
+              : '<div class="small muted">Партнер ще не додав юросіб (додає сам у своєму кабінеті).</div>'}
+            <a class="small" href="#/b2borders" data-pord="${p.id}">Замовлення партнера →</a>
+          </div>
         </div>
       </div>`;
     $('#pEdit').onclick = () => partnerForm(p);
+    $('[data-pord]').onclick = () => { ordFilter = { status: '', partner: String(p.id) }; };
     $$('[data-be]').forEach((cb) => (cb.onchange = () => {
       const inp = $(`[data-bm="${cb.dataset.be}"]`);
       inp.disabled = !cb.checked;
@@ -180,5 +188,101 @@ export function createB2bPages() {
     };
   }
 
-  return { viewPartners, viewCatalog, pct };
+  // ---------------------------------------------------------------- замовлення партнерів (бухгалтер)
+  let ordFilter = { status: '', partner: '' };
+  async function viewOrders(id) {
+    if (id) return viewOrder(id);
+    const qs = new URLSearchParams(Object.entries(ordFilter).filter(([, v]) => v)).toString();
+    const [{ rows, statuses, counts }, partners] = await Promise.all([api('GET', `/api/b2b/orders${qs ? `?${qs}` : ''}`), api('GET', '/api/b2b/partners')]);
+    main.innerHTML = `
+      <div class="head-row"><h2>Замовлення партнерів</h2></div>
+      <div class="btn-row" style="margin-bottom:12px;flex-wrap:wrap">
+        <button class="chip ${ordFilter.status ? '' : 'on'}" data-st="">Усі</button>
+        ${Object.entries(statuses).map(([k, v]) => `<button class="chip ${ordFilter.status === k ? 'on' : ''}" data-st="${k}">${esc(v)}${counts[k] ? ` · ${counts[k]}` : ''}</button>`).join('')}
+        <select id="oPartner" aria-label="Партнер"><option value="">Усі партнери</option>${partners.map((p) => `<option value="${p.id}" ${String(ordFilter.partner) === String(p.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+      </div>
+      ${rows.length ? `<table class="list"><thead><tr><th>№</th><th>Партнер</th><th class="hide-m">Дата</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Рахунок</th></tr></thead><tbody>
+        ${rows.map((o) => `<tr class="click" data-o="${o.id}">
+          <td><b>${esc(o.number)}</b></td>
+          <td>${esc(o.partner)}<div class="small muted">${esc(o.entity.split('\n')[0].split(',')[0])}</div></td>
+          <td class="small hide-m">${esc(fmtDateTime(o.created_at))}</td>
+          <td class="r"><b>${uah(o.total)}</b></td>
+          <td>${statusBadge(o)}</td>
+          <td class="small hide-m">${o.invoice_no ? `№ ${esc(o.invoice_no)}` : '—'}${o.files ? ` · 📎 ${o.files}` : ''}</td>
+        </tr>`).join('')}</tbody></table>`
+        : '<div class="card empty"><div class="big">Замовлень немає</div>Тут з’являться закупівлі, які оформлюють партнери.</div>'}`;
+    $$('[data-st]').forEach((b) => (b.onclick = () => { ordFilter.status = b.dataset.st; viewOrders(); }));
+    $('#oPartner').onchange = (e) => { ordFilter.partner = e.target.value; viewOrders(); };
+    $$('[data-o]').forEach((tr) => (tr.onclick = () => { location.hash = `#/b2borders/${tr.dataset.o}`; }));
+  }
+
+  async function viewOrder(id) {
+    const { order: o, items, files, history, partner } = await api('GET', `/api/b2b/orders/${id}`);
+    const closed = o.status === 'cancelled';
+    main.innerHTML = `
+      <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)}</h2><a class="btn" href="#/b2borders">← До списку</a></div>
+      <div class="form-page">
+        <div class="form-stack">
+          <div class="card">${itemsTable(items, { rrp: true })}</div>
+          ${o.comment ? `<div class="card small"><b>Коментар партнера:</b> ${esc(o.comment)}</div>` : ''}
+          <div class="card form-stack">
+            <h3>Платник (юрособа партнера)</h3>
+            <div class="small" style="white-space:pre-line" id="oEnt">${esc(o.entity)}</div>
+            <div class="btn-row"><button class="btn sm" id="oCopy">Скопіювати реквізити</button></div>
+          </div>
+        </div>
+        <div class="form-stack">
+          <form class="card form-stack" id="oAcc">
+            <h3>Рахунок і накладна</h3>
+            <div class="grid2"><label class="f"><span>№ рахунку</span><input name="invoice_no" value="${esc(o.invoice_no)}" ${closed ? 'disabled' : ''}></label>
+              <label class="f"><span>Дата рахунку</span><input name="invoice_date" type="date" value="${esc(o.invoice_date)}" ${closed ? 'disabled' : ''}></label></div>
+            <label class="f"><span>№ накладної</span><input name="waybill_no" value="${esc(o.waybill_no)}" ${closed ? 'disabled' : ''}></label>
+            ${closed ? '' : '<div class="btn-row"><button class="btn primary">Зберегти</button></div><div class="small muted">Після збереження номера рахунку статус стає «Очікує оплату», а партнер отримує сповіщення.</div>'}
+          </form>
+          <div class="card form-stack">
+            <h3>Файли</h3>
+            ${files.length ? files.map((f) => `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <a class="btn sm" href="/api/b2b/files/${f.id}" target="_blank" rel="noopener">📎 ${esc(f.kind_name)}: ${esc(f.name)}</a>
+              <span class="small muted">${fileSize(f.size)} · ${esc(fmtDateTime(f.created_at))}</span>
+              <button class="btn sm danger" data-fdel="${f.id}" aria-label="Видалити файл">✕</button></div>`).join('') : '<div class="small muted">Файлів ще немає.</div>'}
+            ${closed ? '' : `<div class="btn-row">
+              <label class="btn sm">+ Рахунок (файл)<input type="file" data-up="invoice" hidden></label>
+              <label class="btn sm">+ Накладна (файл)<input type="file" data-up="waybill" hidden></label></div>
+              <div class="small muted">PDF, Word, Excel або фото до 5 МБ. Файли зберігаються 30 днів; партнер бачить і може завантажити їх.</div>`}
+          </div>
+          <div class="card form-stack">
+            <h3>Статус</h3>
+            <div class="btn-row" style="flex-wrap:wrap">
+              ${['pay_wait', 'partial'].includes(o.status) ? '<button class="btn primary" data-set="paid">Оплачено (вручну)</button>' : ''}
+              ${['paid'].includes(o.status) ? '<button class="btn primary" data-set="done">Завершено</button><button class="btn" data-set="pay_wait">Повернути «Очікує оплату»</button>' : ''}
+              ${o.status === 'done' ? '<button class="btn" data-set="paid">Повернути «Оплачено»</button>' : ''}
+              ${closed ? '' : '<button class="btn danger" data-set="cancelled">Скасувати замовлення</button>'}
+            </div>
+            ${o.paid_at ? `<div class="small">Оплачено: ${esc(fmtDateTime(o.paid_at))}${o.paid_by ? ` · позначив(ла) ${esc(o.paid_by)}` : ' · Opendatabot'}</div>` : ''}
+          </div>
+          <div class="card"><h3>Історія</h3>${history.map((h) => `<div class="small"><span class="muted">${esc(fmtDateTime(h.at))}</span> · ${esc(h.action)}${h.user_name ? ` <span class="muted">(${esc(h.user_name)})</span>` : ''}</div>`).join('')}</div>
+        </div>
+      </div>`;
+    $('#oCopy').onclick = async () => { try { await navigator.clipboard.writeText(o.entity); toast('Реквізити скопійовано'); } catch { toast('Не вдалося скопіювати', true); } };
+    $('#oAcc').onsubmit = async (e) => {
+      e.preventDefault();
+      try { await api('PUT', `/api/b2b/orders/${o.id}`, Object.fromEntries(new FormData(e.target))); toast('Збережено'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
+    };
+    $$('[data-up]').forEach((inp) => (inp.onchange = async () => {
+      const file = inp.files[0];
+      if (!file) return;
+      try { await uploadFile(`/api/b2b/orders/${o.id}/files?kind=${inp.dataset.up}`, file); toast('Файл додано'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
+    }));
+    $$('[data-fdel]').forEach((b) => (b.onclick = async () => {
+      if (!(await confirmDanger('Видалити файл?', 'Партнер більше не зможе його завантажити.', 'Видалити'))) return;
+      try { await api('DELETE', `/api/b2b/files/${b.dataset.fdel}`); toast('Видалено'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
+    }));
+    $$('[data-set]').forEach((b) => (b.onclick = async () => {
+      const st = b.dataset.set;
+      if (st === 'cancelled' && !(await confirmDanger(`Скасувати ${o.number}?`, 'Партнер отримає сповіщення.', 'Скасувати замовлення'))) return;
+      try { await api('POST', `/api/b2b/orders/${o.id}/status`, { status: st }); toast('Статус змінено'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
+    }));
+  }
+
+  return { viewPartners, viewCatalog, viewOrders, pct, fmtDay };
 }

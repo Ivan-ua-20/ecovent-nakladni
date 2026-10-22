@@ -77,13 +77,13 @@ export function mountTg(app, { db, fetchFn }) {
     const chat = msg?.chat?.id;
     if (!chat) return c.json({ ok: true });
     const m = /^\/start(?:@\w+)?\s+([0-9a-f]{24})\b/.exec(String(msg.text || ''));
-    let reply = 'Щоб отримувати сповіщення про оплати, відкрийте сайт, натисніть «Telegram» угорі і потім «Підключити Telegram».';
+    let reply = 'Щоб отримувати сповіщення, відкрийте сайт, натисніть «Telegram» угорі і потім «Підключити Telegram».';
     if (m) {
       const u = await db.get(`SELECT id, name, login, tg_code FROM users WHERE tg_code LIKE ? AND active = 1`, [`${m[1]}|%`]);
       const exp = Number(String(u?.tg_code || '').split('|')[1]) || 0;
       if (u && exp > Date.now()) {
         await db.run(`UPDATE users SET tg_chat_id = ?, tg_code = '' WHERE id = ?`, [String(chat), u.id]);
-        reply = `✅ Готово, ${h(u.name || u.login)}! Сюди надходитимуть сповіщення про оплату ваших рахунків.`;
+        reply = `✅ Готово, ${h(u.name || u.login)}! Сюди надходитимуть ваші сповіщення.`;
       } else {
         reply = 'Посилання для підключення застаріло. Натисніть «Підключити Telegram» на сайті ще раз.';
       }
@@ -131,5 +131,20 @@ export function mountTg(app, { db, fetchFn }) {
     return sent;
   }
 
-  return { notify };
+  // Довільне повідомлення: адміністраторам (власник і адміни з підключеним Telegram) або вказаним користувачам.
+  async function sendText({ admins = false, userIds = [], partnerId = null }, text) {
+    const s = await settings();
+    if (!s.tg_token) return 0;
+    const chats = new Set();
+    if (admins) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin')`)) chats.add(r.tg_chat_id);
+    if (userIds.length) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND id IN (SELECT value FROM json_each(?))`, [JSON.stringify(userIds)])) chats.add(r.tg_chat_id);
+    if (partnerId) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'partner' AND partner_id = ?`, [partnerId])) chats.add(r.tg_chat_id);
+    let sent = 0;
+    for (const chat of [...chats].slice(0, 30)) {
+      try { await tg(s.tg_token, 'sendMessage', { chat_id: chat, text, parse_mode: 'HTML', disable_web_page_preview: true }); sent++; } catch { /* заблокував бота */ }
+    }
+    return sent;
+  }
+
+  return { notify, sendText };
 }
