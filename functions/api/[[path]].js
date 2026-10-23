@@ -6563,7 +6563,7 @@ function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 })
       added += fresh;
       newRows.push(...freshRows);
       changedIds.push(...ch);
-      if (items.length < PAGE || rows.length && fresh === 0) break;
+      if (items.length < PAGE || fresh === 0) break;
     }
     let hist = {};
     try {
@@ -6656,7 +6656,7 @@ function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 })
       hist = JSON.parse(s.odb_hist || "{}");
     } catch {
     }
-    return c.json({ rows, count: tot?.n || 0, sum: round2(tot?.sum || 0), accounts, lastSync: s.odb_sync_at || "", hist, connected: Boolean(s.odb_key && s.odb_name) });
+    return c.json({ rows, count: tot?.n || 0, sum: round2(tot?.sum || 0), accounts, lastSync: s.odb_sync_at || "", hookAt: s.odb_hook_at || "", hist, connected: Boolean(s.odb_key && s.odb_name) });
   });
   app.put("/api/odb/payments/:id", async (c) => {
     need(c, "docs.edit");
@@ -6791,6 +6791,12 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   async function runCleanup() {
     if (Date.now() - (shared2.lastCleanup || 0) < 60 * 60 * 1e3) return;
     shared2.lastCleanup = Date.now();
+    const hourAgo = new Date(Date.now() - 60 * 60 * 1e3).toISOString();
+    const claim = await db.run(
+      `INSERT INTO settings (key, value) VALUES ('cleanup_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
+      [(/* @__PURE__ */ new Date()).toISOString(), hourAgo]
+    );
+    if (!claim.changes) return;
     const s = await loadSettings(db);
     const days = Math.max(1, Number(s.retention_days) || 7);
     const border = new Date(Date.now() - days * 864e5).toISOString();
@@ -6814,7 +6820,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
 // src/modules/auth/schema.js
 var schema2 = {
   name: "auth",
-  version: 2,
+  version: 3,
   tables: [
     `CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -6829,7 +6835,10 @@ var schema2 = {
     token TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL,
     created_at TEXT NOT NULL
-  )`
+  )`,
+    // Вихід користувача / чистка старих сесій — без перегляду всієї таблиці.
+    `CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id)`,
+    `CREATE INDEX IF NOT EXISTS sessions_created ON sessions (created_at)`
   ],
   columns: [
     ["users", "crm_logins", "TEXT DEFAULT ''"],
@@ -6839,7 +6848,11 @@ var schema2 = {
     ["users", "an_access", "INTEGER"],
     // Користувач-партнер (роль partner) — до якої компанії-партнера належить.
     ["users", "partner_id", "INTEGER"]
-  ]
+  ],
+  // Індекс на колонку, додану ALTER TABLE, — після неї.
+  async seed(db) {
+    await db.run(`CREATE INDEX IF NOT EXISTS users_partner ON users (partner_id)`);
+  }
 };
 
 // src/modules/notify/schema.js
