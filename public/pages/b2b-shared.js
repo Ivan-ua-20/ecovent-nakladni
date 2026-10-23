@@ -45,7 +45,7 @@ export const ROLE_HINT = {
   staff: 'каталог, закупівлі, замовлення клієнтів, юрособи (без команди)',
   viewer: 'лише перегляд, без змін',
 };
-export function teamTable(users, { me = 0, showAdded = true } = {}) {
+export function teamTable(users, { me = 0, showAdded = true, editable = true } = {}) {
   return `<table class="list"><thead><tr><th>Користувач</th><th>Роль</th>${showAdded ? '<th class="hide-m">Хто додав</th>' : ''}<th>Стан</th><th></th></tr></thead><tbody>
     ${users.map((u) => `<tr>
       <td><b>${esc(u.login)}</b>${u.id === me ? ' <span class="small muted">(ви)</span>' : ''}<div class="small muted">${esc(u.name || '')}</div></td>
@@ -53,7 +53,7 @@ export function teamTable(users, { me = 0, showAdded = true } = {}) {
       ${showAdded ? `<td class="small hide-m">${u.added_by_partner ? `<span class="badge info">партнер</span> ${esc(u.added_by_name)}` : esc(u.added_by_name || 'Ековент')}
         <div class="muted">${esc(fmtDT(u.created_at))}</div></td>` : ''}
       <td>${u.active ? '<span class="badge ok">активний</span>' : '<span class="badge bad">вимкнений</span>'}</td>
-      <td style="text-align:right"><button class="btn sm" data-ue="${u.id}">Змінити</button></td>
+      <td style="text-align:right">${editable ? `<button class="btn sm" data-ue="${u.id}">Змінити</button>` : ''}</td>
     </tr>`).join('')}</tbody></table>`;
 }
 export function teamFormHtml(u, roles, { self = false, defaultRole = 'staff' } = {}) {

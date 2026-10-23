@@ -98,7 +98,7 @@ export function mountTg(app, { db, fetchFn }) {
     const s = await settings();
     if (!s.tg_token) return 0;
     const out = []; // [chatId, text]
-    const admins = await db.all(`SELECT id, tg_chat_id, tg_all_links, tg_all_tx FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin') AND (tg_all_links = 1 OR tg_all_tx = 1)`);
+    const admins = await db.all(`SELECT id, tg_chat_id, tg_all_links, tg_all_tx FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin', 'admin_lite') AND (tg_all_links = 1 OR tg_all_tx = 1)`);
     if (linkIds.length) {
       const links = await db.all(
         `SELECT l.id, l.number, l.amount, l.paid_amount, l.status, l.client, l.created_by_id, l.created_by, COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, ''), a.iban) AS alias, u.tg_chat_id AS chat
@@ -136,7 +136,7 @@ export function mountTg(app, { db, fetchFn }) {
     const s = await settings();
     if (!s.tg_token) return 0;
     const chats = new Set();
-    if (admins) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin')`)) chats.add(r.tg_chat_id);
+    if (admins) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin', 'admin_lite')`)) chats.add(r.tg_chat_id);
     if (userIds.length) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND id IN (SELECT value FROM json_each(?))`, [JSON.stringify(userIds)])) chats.add(r.tg_chat_id);
     if (partnerId) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'partner' AND partner_id = ?`, [partnerId])) chats.add(r.tg_chat_id);
     let sent = 0;

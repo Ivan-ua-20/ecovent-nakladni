@@ -56,7 +56,7 @@ const SECTIONS = [
     { id: 'phelp', label: 'Інструкція' },
   ] },
   { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [{ id: 'settings', label: 'Загальні налаштування' }, { id: 'errors', label: 'Журнал помилок', perm: 'users' }] },
-  { id: 'users', label: 'Користувачі', perm: 'users', home: 'users', tabs: [{ id: 'users', label: 'Користувачі' }] },
+  { id: 'users', label: 'Користувачі', perm: 'people', home: 'users', tabs: [{ id: 'users', label: 'Користувачі' }] },
 ];
 const visibleTabs = (sec) => sec.tabs.filter((t) => !t.perm || can(t.perm));
 const sectionOf = (routeId) => SECTIONS.find((sec) => sec.tabs.some((t) => t.id === routeId)) || SECTIONS[0];

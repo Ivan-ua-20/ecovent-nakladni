@@ -35,7 +35,7 @@ export function mountErrLog(app, { db, fetchFn, onCleanup, shared = {} }) {
     if (Date.now() - mem.at < 10 * 60000 && mem.token) return mem;
     try {
       const s = await loadSettings(db);
-      const rows = await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND role IN ('owner', 'admin') AND tg_chat_id != ''`);
+      const rows = await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND role IN ('owner', 'admin', 'admin_lite') AND tg_chat_id != ''`);
       Object.assign(mem, { token: s.tg_token || '', chats: rows.map((r) => r.tg_chat_id), at: Date.now() });
     } catch { /* база недоступна — лишаємо, що було в пам'яті */ }
     return mem;

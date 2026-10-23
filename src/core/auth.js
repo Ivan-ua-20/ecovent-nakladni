@@ -3,6 +3,7 @@
 export const ROLES = {
   owner: 'Власник',
   admin: 'Адміністратор',
+  admin_lite: 'Адміністратор (без керування людьми)',
   manager: 'Менеджер',
   viewer: 'Перегляд',
   partner: 'Партнер (B2B)',
@@ -13,7 +14,8 @@ export const ROLES = {
 //  docs.edit  — формувати й змінювати накладні та рахунки
 //  refs.edit  — довідники (ФОПи, відділи, шаблони, ФОПи рахунків) і загальні налаштування
 //  api        — ключі LP-CRM / Checkbox, діагностика API
-//  users      — керування користувачами
+//  users      — адміністративні дії (журнал змін, журнал помилок, ФОПи рахунків, експорт/імпорт…)
+//  people     — керування людьми: користувачі сайту й користувачі партнерів (додати, змінити, видалити), видалення партнерів
 //  requisites — реквізити ФОП (IBAN, ІПН, ПІБ, адреса, підпис, печатка); зміни пишуться в журнал
 //  analytics  — розділ «Аналітика» повністю (усі дані, таргети, налаштування)
 //  an.view    — дашборд аналітики (менеджер бачить лише свої замовлення, без таргетів)
@@ -22,8 +24,10 @@ export const ROLES = {
 //  b2b.order  — партнер може оформлювати й змінювати (керівник і менеджер партнера; «перегляд» — ні)
 //  b2b.team   — партнер керує своєю командою (лише керівник партнера)
 const PERMS = {
-  owner: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'analytics', 'an.view', 'b2b.admin'],
-  admin: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'analytics', 'an.view', 'b2b.admin'],
+  owner: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'people', 'analytics', 'an.view', 'b2b.admin'],
+  admin: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'people', 'analytics', 'an.view', 'b2b.admin'],
+  // Як адміністратор, але без керування людьми (аналітику вмикає/вимикає лише власник).
+  admin_lite: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'analytics', 'an.view', 'b2b.admin'],
   manager: ['docs.view', 'docs.edit', 'refs.edit', 'an.view'],
   viewer: ['docs.view'],
   partner: ['b2b.partner'],

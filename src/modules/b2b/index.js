@@ -109,6 +109,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   // партнер зникає зі списку). Користувачі партнера видаляються в обох випадках (логіни звільняються).
   app.delete('/api/b2b/partners/:id', async (c) => {
     need(c, 'b2b.admin');
+    need(c, 'people');
     const p = await getPartner(c.req.param('id'));
     const hasOrders = await db.get(`SELECT id FROM b2b_orders WHERE partner_id = ? LIMIT 1`, [p.id]);
     const st = [
@@ -239,6 +240,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
 
   app.post('/api/b2b/partners/:id/users', async (c) => {
     need(c, 'b2b.admin');
+    need(c, 'people');
     const p = await getPartner(c.req.param('id'));
     const r = await addTeamUser(c, p, await c.req.json(), `staff:${actorName(c)}`);
     return c.json({ id: r.id });
@@ -246,6 +248,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
 
   app.put('/api/b2b/partners/:id/users/:uid', async (c) => {
     need(c, 'b2b.admin');
+    need(c, 'people');
     const p = await getPartner(c.req.param('id'));
     const u = await db.get(`SELECT * FROM users WHERE id = ? AND partner_id = ? AND role = 'partner'`, [c.req.param('uid'), p.id]);
     if (!u) throw fail(404, 'Користувача не знайдено.');
