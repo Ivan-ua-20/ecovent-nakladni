@@ -5,7 +5,7 @@
 // Адмін або власник натискає «Додати в CRM» (LP-CRM addNewOrder, відділ B2B, ціни партнера, «Поле 1» порожнє) або вписує
 // номер замовлення з CRM вручну. Статус замовлення в CRM партнер бачить у кабінеті (оновлюється не частіше ніж раз на 10 хв).
 // Передачу в CRM вмикає адмін у «Налаштуваннях CRM» (ID відділу + перемикач) — коли ключ LP-CRM отримає дозвіл на addNewOrder.
-import { fail, need, nowIso, loadSettings } from '../../core/common.js';
+import { fail, need, nowIso, loadSettings, MASK } from '../../core/common.js';
 import { addNewOrder, getOrdersBatch, getStatuses } from '../../integrations/lpcrm.js';
 import { CLIENT_STATUS, ORDER_STATUS, payState, orderNo } from './orders.js';
 
@@ -13,6 +13,12 @@ const CRM_REFRESH_MIN = 10;
 const CRM_TRACK_DAYS = 60;
 const SENDING_TTL_MS = 2 * 60 * 1000;
 const ID_RE = /^[1-9]\d{0,9}$/;
+const CODE_RE = /^\d{11,20}$/; // код (ідентифікатор) замовлення LP-CRM — order_id у getOrdersByID / addNewOrder
+const DEFAULT_OFFICE = '27'; // відділ B2B у LP-CRM
+const OPT_ID_RE = /^\d{0,10}$/;
+const TTN_FIELDS = ['', 'additional_2', 'additional_3', 'additional_4', 'delivery_adress'];
+// Код нового замовлення — як у прикладі LP-CRM: microtime×10 (11 цифр) + 5 випадкових.
+const newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(10000 + Math.random() * 90000))}`;
 
 export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
   const { priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, link, uah, h } = orders;
@@ -21,18 +27,29 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id`;
 
   // ---------------------------------------------------------------- налаштування передачі в CRM
+  // Для addNewOrder LP-CRM дає окремий «Вхідний ключ API» (lpcrm_in_key); читання статусів — основним ключем (lpcrm_key).
   async function crmConfig() {
     const s = await loadSettings(db);
+    const creds = { subdomain: s.lpcrm_subdomain || '', key: s.lpcrm_key || '' };
     return {
       on: s.b2b_crm_on === '1',
-      office: s.b2b_crm_office || '',
-      creds: { subdomain: s.lpcrm_subdomain || '', key: s.lpcrm_key || '' },
+      office: s.b2b_crm_office ?? DEFAULT_OFFICE,
+      delivery: s.b2b_crm_delivery || '',
+      payment: s.b2b_crm_payment || '',
+      notification: s.b2b_crm_notification || '',
+      ttnField: TTN_FIELDS.includes(s.b2b_crm_ttn_field) ? s.b2b_crm_ttn_field : '',
+      hasInKey: !!s.lpcrm_in_key,
+      creds,
+      addCreds: { subdomain: creds.subdomain, key: s.lpcrm_in_key || creds.key },
     };
   }
   app.get('/api/b2b/crm-settings', async (c) => {
     need(c, 'b2b.admin');
     const k = await crmConfig();
-    return c.json({ on: k.on, office: k.office, ready: !!(k.creds.subdomain && k.creds.key) });
+    return c.json({
+      on: k.on, office: k.office, delivery: k.delivery, payment: k.payment, notification: k.notification, ttn_field: k.ttnField,
+      in_key: k.hasInKey ? MASK : '', ready: !!(k.creds.subdomain && k.creds.key),
+    });
   });
   app.put('/api/b2b/crm-settings', async (c) => {
     need(c, 'b2b.admin');
@@ -40,10 +57,21 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     const office = String(b.office ?? '').trim();
     if (office && !ID_RE.test(office)) throw fail(400, 'ID відділу — число з LP-CRM (Налаштування → Відділи).');
     if (b.on && !office) throw fail(400, 'Спершу вкажіть ID відділу B2B.');
-    await db.batch([
-      [`INSERT INTO settings (key, value) VALUES ('b2b_crm_office', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [office]],
-      [`INSERT INTO settings (key, value) VALUES ('b2b_crm_on', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [b.on ? '1' : '0']],
-    ]);
+    const opt = {};
+    for (const [f, name] of [['delivery', 'виду доставки'], ['payment', 'виду оплати'], ['notification', 'позначки']]) {
+      opt[f] = String(b[f] ?? '').trim();
+      if (!OPT_ID_RE.test(opt[f])) throw fail(400, `ID ${name} — число з LP-CRM або порожньо.`);
+    }
+    const ttnField = TTN_FIELDS.includes(b.ttn_field) ? b.ttn_field : '';
+    const set = (key, value) => [`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]];
+    const st = [set('b2b_crm_office', office), set('b2b_crm_on', b.on ? '1' : '0'), set('b2b_crm_delivery', opt.delivery),
+      set('b2b_crm_payment', opt.payment), set('b2b_crm_notification', opt.notification), set('b2b_crm_ttn_field', ttnField)];
+    if (b.in_key !== undefined && b.in_key !== MASK) {
+      const key = String(b.in_key).trim();
+      if (key && !/^[A-Za-z0-9]{16,64}$/.test(key)) throw fail(400, 'Вхідний ключ API — латинські літери й цифри (як у LP-CRM → Інтеграції → Landing page).');
+      st.push(set('lpcrm_in_key', key));
+    }
+    await db.batch(st);
     return c.json({ ok: true });
   });
 
@@ -58,30 +86,46 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     return map;
   }
   // Оновлює статуси прив'язаних замовлень, які давно не перевіряли (до 100 — один запит getOrdersByID). Збій CRM — не помилка.
+  // Кодом замовлення (order_id) LP-CRM шукає замовлення; номер (id) — для людей. Номер, вписаний вручну,
+  // переводимо в код через індекси пошуку накладних і аналітики (там є пари номер → код).
+  async function codeOfId(id) {
+    const r = await db.get(`SELECT code FROM an_orders WHERE id = ?`, [parseInt(id, 10) || 0]).catch(() => null)
+      || await db.get(`SELECT code FROM order_keys WHERE k = ? LIMIT 1`, [String(id)]).catch(() => null);
+    return r?.code ? String(r.code) : '';
+  }
   async function refreshCrm({ partnerId = null, ids = null } = {}) {
     const border = new Date(Date.now() - CRM_REFRESH_MIN * 60000).toISOString();
     const since = new Date(Date.now() - CRM_TRACK_DAYS * 86400000).toISOString();
-    const where = [`kind = 'client'`, `crm_id != ''`, `status != 'cancelled'`];
+    const where = [`kind = 'client'`, `status = 'crm'`, `(crm_id != '' OR crm_ext != '')`];
     const params = [];
     if (ids) { where.push(`id IN (SELECT value FROM json_each(?))`); params.push(JSON.stringify(ids)); }
     else { where.push('crm_checked_at < ?', 'created_at > ?'); params.push(border, since); }
     if (partnerId) { where.push('partner_id = ?'); params.push(partnerId); }
-    const rows = await db.all(`SELECT id, crm_id FROM b2b_orders WHERE ${where.join(' AND ')} ORDER BY crm_checked_at LIMIT 100`, params);
+    const rows = await db.all(`SELECT id, crm_id, crm_ext FROM b2b_orders WHERE ${where.join(' AND ')} ORDER BY crm_checked_at LIMIT 100`, params);
     if (!rows.length) return;
     const { creds } = await crmConfig();
     if (!creds.subdomain || !creds.key) return;
+    const now = nowIso();
+    for (const r of rows) if (!r.crm_ext && r.crm_id) r.crm_ext = await codeOfId(r.crm_id);
+    const known = rows.filter((r) => r.crm_ext);
+    const unknown = rows.filter((r) => !r.crm_ext);
+    const st = unknown.map((r) => [`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ? WHERE id = ?`,
+      ['Статус з’явиться після оновлення аналітики', now, r.id]]);
     try {
-      const found = await getOrdersBatch(fetchFn, creds, [...new Set(rows.map((r) => r.crm_id))]);
-      const names = await statusNames(creds).catch(() => ({}));
-      const byId = new Map(found.map((o) => [String(o.order_id ?? o.id), o]));
-      const now = nowIso();
-      await db.batch(rows.map((r) => {
-        const o = byId.get(r.crm_id);
-        const st = o ? String(o.status ?? o.status_id ?? '') : '';
-        const name = o ? String((names[st]?.name ?? names[st]) || st || '—').trim() : 'Не знайдено в CRM';
-        return [`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ? WHERE id = ?`, [name, now, r.id]];
-      }));
+      if (known.length) {
+        const found = await getOrdersBatch(fetchFn, creds, [...new Set(known.map((r) => r.crm_ext))]);
+        const names = await statusNames(creds).catch(() => ({}));
+        const byCode = new Map(found.map((o) => [String(o.order_id ?? ''), o]));
+        for (const r of known) {
+          const o = byCode.get(r.crm_ext);
+          const s = o ? String(o.status ?? o.status_id ?? '') : '';
+          const name = o ? String((names[s]?.name ?? names[s]) || s || '—').trim() : 'Не знайдено в CRM';
+          const num = o && /^\d+$/.test(String(o.id ?? '')) ? String(o.id) : r.crm_id;
+          st.push([`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ?, crm_ext = ?, crm_id = ? WHERE id = ?`, [name, now, r.crm_ext, num || '', r.id]]);
+        }
+      }
     } catch { /* CRM недоступна — покажемо останній відомий статус */ }
+    if (st.length) await db.batch(st);
   }
 
   // ---------------------------------------------------------------- дані клієнта й позиції
@@ -269,13 +313,13 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
   app.post('/api/b2b/clients/:id/crm', async (c) => {
     need(c, 'b2b.admin');
     const o = await clientOrder(c);
-    if (o.status !== 'new' || o.crm_id) throw fail(400, o.crm_id ? `Уже в CRM: № ${o.crm_id}.` : 'Замовлення скасовано.');
+    if (o.status !== 'new' || o.crm_id) throw fail(400, o.status === 'crm' || o.crm_id ? `Уже в CRM${o.crm_id ? `: № ${o.crm_id}` : ''}.` : 'Замовлення скасовано.');
     const k = await crmConfig();
     if (!k.on) throw fail(400, 'Передачу в LP-CRM ще не ввімкнено. Коли ключ LP-CRM отримає дозвіл на addNewOrder — увімкніть її в «Налаштуваннях CRM» (вкладка «Замовлення клієнтів»). Поки що створіть замовлення в CRM вручну і впишіть його номер.');
     if (!k.office) throw fail(400, 'Не вказано ID відділу B2B у «Налаштуваннях CRM».');
     if (!k.creds.subdomain || !k.creds.key) throw fail(400, 'Не налаштовано LP-CRM: піддомен і API-ключ у «Налаштуваннях».');
     // Захист від подвійного натискання: «бронюємо» відправку.
-    const code = String(Date.now() * 10 + (o.id % 10));
+    const code = newCode();
     const now = nowIso();
     const stale = new Date(Date.now() - SENDING_TTL_MS).toISOString();
     const claim = await db.run(
@@ -297,8 +341,10 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     ].filter(Boolean).join('\n');
     let res;
     try {
-      res = await addNewOrder(fetchFn, k.creds, {
+      res = await addNewOrder(fetchFn, k.addCreds, {
         code, office: k.office, bayer_name: o.client_name, phone: o.client_phone, comment,
+        delivery: k.delivery, payment: k.payment, notification: k.notification,
+        ...(k.ttnField && o.ttn ? { [k.ttnField]: o.ttn } : {}),
         products: items.map((i) => ({ product_id: i.product_id, price: i.price, count: i.qty })),
       });
     } catch (e) {
@@ -311,12 +357,14 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
       await log(o.id, c.get('user'), `LP-CRM не прийняла замовлення: ${res.error.slice(0, 200)}`);
       throw fail(400, `LP-CRM не прийняла замовлення: ${res.error}`);
     }
-    await db.run(`UPDATE b2b_orders SET status = 'crm', crm_id = ?, crm_sent_at = ?, crm_status = ?, crm_checked_at = '', updated_at = ? WHERE id = ?`,
-      [res.crmId, nowIso(), res.crmId ? '' : 'Передано (номер не отримано)', nowIso(), o.id]);
-    await log(o.id, c.get('user'), `додано в LP-CRM${res.crmId ? `: № ${res.crmId}` : ' (номер CRM не повернула — впишіть вручну)'}`);
-    await tgPartner(o.partner_id, `🚚 Замовлення ${orderNo(o.id)} (${h(o.client_name)}) передано в роботу${res.crmId ? `, № у CRM ${res.crmId}` : ''}.\n${link(c, `pclients/${o.id}`)}`);
-    if (res.crmId) await refreshCrm({ ids: [o.id] });
-    return c.json({ ok: true, crm_id: res.crmId });
+    // LP-CRM повертає наш код; номер замовлення (id) і статус дізнаємося одразу запитом getOrdersByID за кодом.
+    await db.run(`UPDATE b2b_orders SET status = 'crm', crm_id = '', crm_sent_at = ?, crm_status = 'Передано', crm_checked_at = '', updated_at = ? WHERE id = ?`,
+      [nowIso(), nowIso(), o.id]);
+    await refreshCrm({ ids: [o.id] });
+    const crmId = (await db.get(`SELECT crm_id FROM b2b_orders WHERE id = ?`, [o.id]))?.crm_id || '';
+    await log(o.id, c.get('user'), `додано в LP-CRM${crmId ? `: № ${crmId}` : ` (код ${code}; номер з’явиться після оновлення статусу)`}`);
+    await tgPartner(o.partner_id, `🚚 Замовлення ${orderNo(o.id)} (${h(o.client_name)}) передано в роботу${crmId ? `, № у CRM ${crmId}` : ''}.\n${link(c, `pclients/${o.id}`)}`);
+    return c.json({ ok: true, crm_id: crmId, code });
   });
 
   // Ручне прив'язування номера замовлення з LP-CRM (якщо створили в CRM самі або номер не повернувся).
@@ -325,14 +373,20 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     const o = await clientOrder(c);
     if (o.status === 'cancelled') throw fail(400, 'Замовлення скасовано.');
     const b = await c.req.json();
-    const crmId = String(b.crm_id ?? '').trim();
-    if (crmId && !ID_RE.test(crmId)) throw fail(400, 'Номер замовлення LP-CRM — лише цифри.');
-    const status = crmId ? 'crm' : (o.crm_sent_at && !o.crm_sent_at.startsWith('sending') ? 'crm' : 'new');
-    await db.run(`UPDATE b2b_orders SET crm_id = ?, status = ?, crm_status = '', crm_checked_at = '', updated_at = ? WHERE id = ?`, [crmId, status, nowIso(), o.id]);
-    await log(o.id, c.get('user'), crmId ? `прив'язано замовлення LP-CRM № ${crmId}` : 'відв’язано номер LP-CRM');
-    if (crmId && crmId !== o.crm_id) {
-      await tgPartner(o.partner_id, `🚚 Замовлення ${orderNo(o.id)} (${h(o.client_name)}) передано в роботу, № у CRM ${crmId}.\n${link(c, `pclients/${o.id}`)}`);
+    // Вписати можна номер замовлення (до 10 цифр) або його код (ідентифікатор, 11+ цифр).
+    const val = String(b.crm_id ?? '').replace(/\s/g, '');
+    const isCode = CODE_RE.test(val);
+    if (val && !isCode && !ID_RE.test(val)) throw fail(400, 'Номер замовлення LP-CRM — лише цифри.');
+    const crmId = isCode ? '' : val;
+    const crmExt = isCode ? val : '';
+    const status = val ? 'crm' : 'new';
+    await db.run(`UPDATE b2b_orders SET crm_id = ?, crm_ext = ?, crm_sent_at = CASE WHEN ? = '' THEN '' ELSE crm_sent_at END, status = ?, crm_status = '', crm_checked_at = '', updated_at = ? WHERE id = ?`,
+      [crmId, crmExt, val, status, nowIso(), o.id]);
+    await log(o.id, c.get('user'), val ? `прив'язано замовлення LP-CRM ${isCode ? `код ${val}` : `№ ${val}`}` : 'відв’язано номер LP-CRM');
+    if (val && val !== o.crm_id && val !== o.crm_ext) {
       await refreshCrm({ ids: [o.id] });
+      const num = (await db.get(`SELECT crm_id FROM b2b_orders WHERE id = ?`, [o.id]))?.crm_id || '';
+      await tgPartner(o.partner_id, `🚚 Замовлення ${orderNo(o.id)} (${h(o.client_name)}) передано в роботу${num ? `, № у CRM ${num}` : ''}.\n${link(c, `pclients/${o.id}`)}`);
     }
     return c.json({ ok: true });
   });
@@ -340,7 +394,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
   app.post('/api/b2b/clients/:id/refresh', async (c) => {
     need(c, 'b2b.admin');
     const o = await clientOrder(c);
-    if (!o.crm_id) throw fail(400, 'Замовлення ще не прив’язане до LP-CRM.');
+    if (!o.crm_id && !o.crm_ext) throw fail(400, 'Замовлення ще не прив’язане до LP-CRM.');
     await refreshCrm({ ids: [o.id] });
     return c.json({ ok: true });
   });

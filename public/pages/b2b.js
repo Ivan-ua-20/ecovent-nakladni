@@ -331,17 +331,25 @@ export function createB2bPages() {
     $('#clPartner').onchange = (e) => { clFilter.partner = e.target.value; viewClients(); };
     $$('[data-o]').forEach((tr) => (tr.onclick = () => { location.hash = `#/b2bclients/${tr.dataset.o}`; }));
     $('#clCfg').onclick = () => {
+      const TTN_F = { '': 'лише в коментарі', additional_2: 'Додаткове поле 2', additional_3: 'Додаткове поле 3', additional_4: 'Додаткове поле 4', delivery_adress: 'Адреса доставки' };
       const m = modal('Передача замовлень у LP-CRM', `<form id="crmF" class="form-stack">
-          <label class="f"><span>ID відділу B2B у LP-CRM</span><input name="office" value="${esc(cfg.office)}" inputmode="numeric" placeholder="напр. 12"></label>
+          <label class="f"><span>Вхідний ключ API (LP-CRM → Інтеграції → Landing page, рядок 'key')</span>
+            <input name="in_key" value="${esc(cfg.in_key)}" autocomplete="off" placeholder="${cfg.in_key ? '' : 'порожньо — використовується основний ключ'}"></label>
+          <div class="grid2"><label class="f"><span>ID відділу B2B *</span><input name="office" value="${esc(cfg.office)}" inputmode="numeric"></label>
+            <label class="f"><span>ID позначки (необов’язково)</span><input name="notification" value="${esc(cfg.notification)}" inputmode="numeric"></label></div>
+          <div class="grid2"><label class="f"><span>ID виду доставки (необов’язково)</span><input name="delivery" value="${esc(cfg.delivery)}" inputmode="numeric"></label>
+            <label class="f"><span>ID виду оплати (необов’язково)</span><input name="payment" value="${esc(cfg.payment)}" inputmode="numeric"></label></div>
+          <label class="f"><span>ТТН партнера також записувати в</span><select name="ttn_field">${Object.entries(TTN_F).map(([k, v]) => `<option value="${k}" ${cfg.ttn_field === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
           <label class="check"><input type="checkbox" name="on" ${cfg.on ? 'checked' : ''}> Увімкнути кнопку «Додати в CRM»</label>
-          <div class="small muted">Вмикайте, коли API-ключ LP-CRM отримає дозвіл на метод <b>addNewOrder</b> (LP-CRM → Налаштування → API).
-            ID відділу — у LP-CRM: Налаштування → Відділи. Замовлення потрапляє у вкладку «Нові», ціни — партнерські, «Поле 1» лишається порожнім;
-            ТТН партнера, № закупівлі й позначка «не оплачено» — у коментарі.</div>
-          ${cfg.ready ? '' : '<div class="alert bad">Не вказано піддомен або API-ключ LP-CRM у «Налаштуваннях».</div>'}
+          <div class="small muted">Замовлення потрапляє у вкладку «Нові» вибраного відділу, ціни — партнерські, «Поле 1» лишається порожнім.
+            У коментарі — № замовлення B2B, партнер, ТТН, № закупівлі і позначка «НЕ ОПЛАЧЕНА». Номер замовлення в CRM і статус підтягуються автоматично.</div>
+          ${cfg.ready ? '' : '<div class="alert bad">Не вказано піддомен або основний API-ключ LP-CRM у «Налаштуваннях» — без нього не оновлюються статуси.</div>'}
         </form>`, { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="crmSave">Зберегти</button>' });
       $('#crmSave', m.el).onclick = async () => {
         const f = $('#crmF', m.el);
-        try { await api('PUT', '/api/b2b/crm-settings', { office: f.office.value, on: f.on.checked }); m.close(); toast('Збережено'); viewClients(); }
+        const d = Object.fromEntries(new FormData(f));
+        d.on = f.on.checked;
+        try { await api('PUT', '/api/b2b/crm-settings', d); m.close(); toast('Збережено'); viewClients(); }
         catch (e) { toast(e.message, true); }
       };
     };
@@ -372,7 +380,7 @@ export function createB2bPages() {
             ${o.crm_id ? `<div>Замовлення № <b>${esc(o.crm_id)}</b>${o.crm_status ? ` · <span class="badge info">${esc(o.crm_status)}</span>` : ''}</div>` : ''}
             ${!closed && o.status === 'new' ? `<button class="btn primary" id="clCrm" ${cfg.on ? '' : 'disabled'}>Додати в CRM</button>
               ${cfg.on ? '' : '<div class="small muted">Передача в LP-CRM ще вимкнена (вкладка «Замовлення клієнтів» → «Налаштування CRM»). Поки що створіть замовлення в CRM вручну і впишіть номер нижче.</div>'}` : ''}
-            ${!closed ? `<form id="clLink" class="btn-row"><input name="crm_id" value="${esc(o.crm_id)}" inputmode="numeric" placeholder="№ замовлення в LP-CRM" style="max-width:200px" aria-label="Номер замовлення LP-CRM">
+            ${!closed ? `<form id="clLink" class="btn-row"><input name="crm_id" value="${esc(o.crm_id)}" inputmode="numeric" placeholder="№ або код замовлення LP-CRM" style="max-width:220px" aria-label="Номер замовлення LP-CRM">
               <button class="btn">${o.crm_id ? 'Змінити номер' : 'Прив’язати номер'}</button>${o.crm_id ? '<button type="button" class="btn" id="clRefresh">Оновити статус</button>' : ''}</form>` : ''}
           </div>
           ${o.no_supply ? `<form class="card form-stack" id="oAcc">
