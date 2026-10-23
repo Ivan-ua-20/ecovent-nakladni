@@ -110,6 +110,7 @@ assert.equal((await req('GET', '/api/rahunky', null, V)).json.rows.length, 3, '�
 // строк зберігання
 await db.run(`UPDATE invoices SET created_at = '2020-01-01T00:00:00Z', updated_at = NULL WHERE id = ?`, [r2.json.id]);
 await db.run(`UPDATE versions SET created_at = '2020-01-01T00:00:00Z'`);
+await db.run(`DELETE FROM settings WHERE key = 'cleanup_at'`); // минула година — чистка знову дозволена
 const app2 = createApp({ db, fetchFn });
 await app2.request('/api/rahunky', { headers: { Cookie: M } });
 assert.equal((await db.all(`SELECT id FROM invoices`)).length, 2, 'старий рахунок видалено');
