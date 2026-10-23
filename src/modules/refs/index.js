@@ -52,7 +52,7 @@ export function mountRefs(app, { db, fetchFn }) {
       defaultWarning: DEFAULT_WARNING,
       user: publicUser(user),
       settings: apiOk
-        ? { ...s, lpcrm_key: s.lpcrm_key ? MASK : '', odb_key: s.odb_key ? MASK : '', tg_token: s.tg_token ? MASK : '', tg_secret: '' }
+        ? { ...s, lpcrm_key: s.lpcrm_key ? MASK : '', lpcrm_in_key: s.lpcrm_in_key ? MASK : '', odb_key: s.odb_key ? MASK : '', tg_token: s.tg_token ? MASK : '', tg_secret: '' }
         : Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith('lpcrm_') && !k.startsWith('checkbox_') && !k.startsWith('odb_') && !k.startsWith('tg_')).concat([['lpcrm_key', s.lpcrm_key ? MASK : ''], ['lpcrm_subdomain', s.lpcrm_subdomain || '']])),
     });
   });

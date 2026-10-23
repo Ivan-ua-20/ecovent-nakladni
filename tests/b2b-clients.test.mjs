@@ -23,7 +23,10 @@ await db.batch([
 ]);
 const tg = [];
 const crm = []; // запити до LP-CRM: { method, params }
-let addReply = { status: 'ok', data: [{ id: '55501' }] };
+// LP-CRM: addNewOrder повертає наш код; getOrdersByID шукає за кодом (order_id) і віддає номер (id).
+let addReply = null; // null — успіх як у документації
+let nextCrmId = 55501;
+const crmOrders = new Map([['17614000000012345', 77001]]); // код → номер (замовлення, створене вручну)
 let crmStatus = '4';
 const fetchFn = async (url, opts = {}) => {
   if (url.startsWith('https://api.telegram.org/')) { tg.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ ok: true, result: {} })); }
@@ -32,8 +35,12 @@ const fetchFn = async (url, opts = {}) => {
   crm.push({ method, p });
   const json = (o) => new Response(JSON.stringify(o));
   if (method === 'getProduct') return json({ status: 'ok', data: p.product_id.split(',').map((id) => ({ id, name: `Товар ${id}`, price: { 11: '1000.00', 12: '500.00' }[id] })) });
-  if (method === 'addNewOrder') return json(addReply);
-  if (method === 'getOrdersByID') return json({ status: 'ok', data: p.order_id.split(',').map((id) => ({ order_id: id, status: crmStatus, products: [], bayer_name: 'x' })) });
+  if (method === 'addNewOrder') {
+    if (addReply) return json(addReply);
+    crmOrders.set(p.order_id, nextCrmId++);
+    return json({ status: 'ok', data: { order_id: p.order_id, country: 'UA', site: '', ip: '' }, message: 'Замовлення успішно додане' });
+  }
+  if (method === 'getOrdersByID') return json({ status: 'ok', data: p.order_id.split(',').filter((c) => crmOrders.has(c)).map((c) => ({ order_id: c, id: String(crmOrders.get(c)), status: crmStatus, products: [], bayer_name: 'x' })) });
   if (method === 'getStatuses') return json({ status: 'ok', data: { 1: { name: 'Новий' }, 4: { name: 'Відправлено' } } });
   return json({ status: 'ok', data: [] });
 };
@@ -53,6 +60,8 @@ const req = async (method, path, body, headers = H) => {
 const status = async (fn) => { try { await fn(); return 200; } catch (e) { return e.status; } };
 const errOf = async (fn) => { try { await fn(); return ''; } catch (e) { return e.message; } };
 
+// номер → код для ручного прив'язування — з аналітики
+await db.run(`INSERT INTO an_orders (id, code, day, status) VALUES (77001, '17614000000012345', '2026-10-22', 4)`);
 const pa = await req('POST', '/api/b2b/partners', { name: 'Партнер А' });
 const pb = await req('POST', '/api/b2b/partners', { name: 'Партнер Б' });
 await req('POST', `/api/b2b/partners/${pa.id}/users`, { login: 'pa', password: 'pass1234' });
@@ -134,7 +143,8 @@ await req('PUT', `/api/b2b/clients/${c2.id}`, { crm_id: '77001' });
 d = await req('GET', `/api/b2b/p/clients/${c2.id}`, null, A);
 assert.equal(d.order.status, 'crm');
 assert.equal(d.order.crm_id, '77001');
-assert.equal(d.order.crm_status, 'Відправлено', 'статус підтягнуто з CRM');
+assert.equal(d.order.crm_status, 'Відправлено', 'статус підтягнуто з CRM (номер → код через аналітику)');
+assert.equal(d.order.crm_ext, '17614000000012345');
 assert.ok(tg.some((m) => m.chat_id === '200' && /77001/.test(m.text)), 'партнеру — що замовлення в роботі');
 assert.equal(await status(() => req('PUT', `/api/b2b/p/clients/${c2.id}`, { ...client, items: [{ product_id: 12, qty: 2 }] }, A)), 400, 'після передачі партнер не змінює');
 assert.equal(await status(() => req('POST', `/api/b2b/p/clients/${c2.id}/cancel`, {}, A)), 400);
@@ -162,15 +172,20 @@ assert.equal((await req('GET', `/api/b2b/p/clients/${c1.id}`, null, A)).order.pa
 
 // ---------- 6. Передача в LP-CRM (коли буде дозвіл) ----------
 assert.equal(await status(() => req('PUT', '/api/b2b/crm-settings', { on: true, office: '' })), 400, 'без ID відділу не вмикається');
-await req('PUT', '/api/b2b/crm-settings', { on: true, office: '7' });
-assert.deepEqual(await req('GET', '/api/b2b/crm-settings'), { on: true, office: '7', ready: true });
+assert.equal((await req('GET', '/api/b2b/crm-settings')).office, '27', 'відділ B2B за замовчуванням');
+await req('PUT', '/api/b2b/crm-settings', { on: true, office: '7', in_key: 'abcdef0123456789abcdef0123456789', delivery: '3', ttn_field: 'additional_2' });
+const cfg = await req('GET', '/api/b2b/crm-settings');
+assert.equal(cfg.in_key, '••••••', 'вхідний ключ не показується');
+assert.equal((await req('GET', '/api/bootstrap')).settings.lpcrm_in_key, '••••••', 'і в загальних налаштуваннях — маска');
+await req('PUT', '/api/b2b/crm-settings', { ...cfg, on: true, office: '7' }); // маска не перезаписує ключ
+assert.equal((await db.get(`SELECT value FROM settings WHERE key = 'lpcrm_in_key'`)).value, 'abcdef0123456789abcdef0123456789');
 // відмова CRM (немає дозволу) → замовлення лишається «Нове», можна повторити
 addReply = { status: 'error', message: 'Access denied for method addNewOrder' };
 assert.match(await errOf(() => req('POST', `/api/b2b/clients/${c1.id}/crm`)), /Access denied/);
 d = await req('GET', `/api/b2b/orders/${c1.id}`);
 assert.equal(d.order.status, 'new');
 assert.equal(d.order.crm_sent_at, '');
-addReply = { status: 'ok', data: [{ id: '55501' }] };
+addReply = null;
 crmStatus = '4';
 crm.length = 0;
 tg.length = 0;
@@ -178,10 +193,14 @@ const sent = await req('POST', `/api/b2b/clients/${c1.id}/crm`);
 assert.equal(sent.crm_id, '55501');
 const add = crm.find((x) => x.method === 'addNewOrder').p;
 assert.equal(add.office, '7', 'відділ B2B');
+assert.equal(add.key, 'abcdef0123456789abcdef0123456789', 'вхідний ключ для addNewOrder');
+assert.equal(crm.find((x) => x.method === 'getOrdersByID').p.key, 'k', 'статуси — основним ключем');
+assert.equal(add.delivery, '3');
+assert.equal(add.additional_2, '20450000000001', 'ТТН у вибране поле');
 assert.equal(add.country, 'UA');
 assert.equal(add.bayer_name, 'Петренко Олена');
 assert.equal(add.phone, '380501112233');
-assert.ok(/^\d{14}$/.test(add.order_id), 'код замовлення — число');
+assert.ok(/^\d{16}$/.test(add.order_id), 'код замовлення — як у прикладі LP-CRM');
 assert.equal(decodeURIComponent(add.products.replace(/\+/g, ' ')), 'a:1:{i:0;a:3:{s:10:"product_id";s:2:"11";s:5:"price";s:3:"900";s:5:"count";s:1:"3";}}', 'ціни партнера');
 assert.match(add.comment, new RegExp(`B2B-${c1.id}.*Партнер А.*ТТН партнера: 20450000000001.*Закупівля B2B-${sup.id}`, 's'));
 assert.doesNotMatch(add.comment, /НЕ ОПЛАЧЕНА/, 'закупівля вже оплачена');
@@ -196,15 +215,21 @@ assert.match(await errOf(() => req('POST', `/api/b2b/clients/${c1.id}/crm`)), /�
 // неоплачена закупівля → позначка в коментарі CRM; CRM не повернула номер → вписують вручну
 const sup2 = await req('POST', '/api/b2b/p/orders', { entity_id: ea.id, items: [{ product_id: 12, qty: 4 }] }, A);
 const c3 = await req('POST', '/api/b2b/p/clients', { ...client, supply_id: sup2.id, items: [{ product_id: 12, qty: 1 }] }, A);
-addReply = { status: 'ok', data: [{ status: 'ok' }] };
+// CRM прийняла, але замовлення ще не знаходиться за кодом → номер підтягнеться пізніше
+addReply = { status: 'ok', data: { order_id: 'x' } };
 crm.length = 0;
-assert.equal((await req('POST', `/api/b2b/clients/${c3.id}/crm`)).crm_id, '');
+const s3 = await req('POST', `/api/b2b/clients/${c3.id}/crm`);
+assert.equal(s3.crm_id, '');
 assert.match(crm.find((x) => x.method === 'addNewOrder').p.comment, /НЕ ОПЛАЧЕНА/);
 d = await req('GET', `/api/b2b/orders/${c3.id}`);
 assert.equal(d.order.status, 'crm');
-assert.equal(d.order.crm_id, '');
-await req('PUT', `/api/b2b/clients/${c3.id}`, { crm_id: '55600' });
-assert.equal((await req('GET', `/api/b2b/orders/${c3.id}`)).order.crm_id, '55600');
+assert.equal(d.order.crm_ext, s3.code);
+crmOrders.set(s3.code, 55600);
+await db.run(`UPDATE b2b_orders SET crm_checked_at = '' WHERE id = ?`, [c3.id]);
+assert.equal((await req('GET', `/api/b2b/p/clients`, null, A)).rows.find((r) => r.id === c3.id).crm_id, '55600', 'номер з’явився при оновленні статусу');
+// ручне прив'язування кодом
+await req('PUT', `/api/b2b/clients/${c3.id}`, { crm_id: '17614000000012345' });
+assert.equal((await req('GET', `/api/b2b/orders/${c3.id}`)).order.crm_id, '77001', 'код → номер');
 
 // ---------- 7. Скасування повертає залишок ----------
 await req('POST', `/api/b2b/clients/${c1.id}/cancel`);
