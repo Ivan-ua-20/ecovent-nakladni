@@ -2455,7 +2455,7 @@ function mountRefs(app, { db, fetchFn }) {
       invFops,
       defaultWarning: DEFAULT_WARNING,
       user: publicUser(user),
-      settings: apiOk ? { ...s, lpcrm_key: s.lpcrm_key ? MASK : "", odb_key: s.odb_key ? MASK : "", tg_token: s.tg_token ? MASK : "", tg_secret: "" } : Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith("lpcrm_") && !k.startsWith("checkbox_") && !k.startsWith("odb_") && !k.startsWith("tg_")).concat([["lpcrm_key", s.lpcrm_key ? MASK : ""], ["lpcrm_subdomain", s.lpcrm_subdomain || ""]]))
+      settings: apiOk ? { ...s, lpcrm_key: s.lpcrm_key ? MASK : "", lpcrm_in_key: s.lpcrm_in_key ? MASK : "", odb_key: s.odb_key ? MASK : "", tg_token: s.tg_token ? MASK : "", tg_secret: "" } : Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith("lpcrm_") && !k.startsWith("checkbox_") && !k.startsWith("odb_") && !k.startsWith("tg_")).concat([["lpcrm_key", s.lpcrm_key ? MASK : ""], ["lpcrm_subdomain", s.lpcrm_subdomain || ""]]))
     });
   });
   app.put("/api/settings", async (c) => {
@@ -5269,6 +5269,11 @@ var CRM_REFRESH_MIN = 10;
 var CRM_TRACK_DAYS = 60;
 var SENDING_TTL_MS = 2 * 60 * 1e3;
 var ID_RE = /^[1-9]\d{0,9}$/;
+var CODE_RE = /^\d{11,20}$/;
+var DEFAULT_OFFICE = "27";
+var OPT_ID_RE = /^\d{0,10}$/;
+var TTN_FIELDS = ["", "additional_2", "additional_3", "additional_4", "delivery_adress"];
+var newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Math.random() * 9e4))}`;
 function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
   const { priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, link, uah: uah3, h: h4 } = orders;
   const userName3 = (u) => u?.name || u?.login || "";
@@ -5276,16 +5281,32 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id`;
   async function crmConfig() {
     const s = await loadSettings(db);
+    const creds = { subdomain: s.lpcrm_subdomain || "", key: s.lpcrm_key || "" };
     return {
       on: s.b2b_crm_on === "1",
-      office: s.b2b_crm_office || "",
-      creds: { subdomain: s.lpcrm_subdomain || "", key: s.lpcrm_key || "" }
+      office: s.b2b_crm_office ?? DEFAULT_OFFICE,
+      delivery: s.b2b_crm_delivery || "",
+      payment: s.b2b_crm_payment || "",
+      notification: s.b2b_crm_notification || "",
+      ttnField: TTN_FIELDS.includes(s.b2b_crm_ttn_field) ? s.b2b_crm_ttn_field : "",
+      hasInKey: !!s.lpcrm_in_key,
+      creds,
+      addCreds: { subdomain: creds.subdomain, key: s.lpcrm_in_key || creds.key }
     };
   }
   app.get("/api/b2b/crm-settings", async (c) => {
     need(c, "b2b.admin");
     const k = await crmConfig();
-    return c.json({ on: k.on, office: k.office, ready: !!(k.creds.subdomain && k.creds.key) });
+    return c.json({
+      on: k.on,
+      office: k.office,
+      delivery: k.delivery,
+      payment: k.payment,
+      notification: k.notification,
+      ttn_field: k.ttnField,
+      in_key: k.hasInKey ? MASK : "",
+      ready: !!(k.creds.subdomain && k.creds.key)
+    });
   });
   app.put("/api/b2b/crm-settings", async (c) => {
     need(c, "b2b.admin");
@@ -5293,10 +5314,27 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     const office = String(b.office ?? "").trim();
     if (office && !ID_RE.test(office)) throw fail(400, "ID \u0432\u0456\u0434\u0434\u0456\u043B\u0443 \u2014 \u0447\u0438\u0441\u043B\u043E \u0437 LP-CRM (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0412\u0456\u0434\u0434\u0456\u043B\u0438).");
     if (b.on && !office) throw fail(400, "\u0421\u043F\u0435\u0440\u0448\u0443 \u0432\u043A\u0430\u0436\u0456\u0442\u044C ID \u0432\u0456\u0434\u0434\u0456\u043B\u0443 B2B.");
-    await db.batch([
-      [`INSERT INTO settings (key, value) VALUES ('b2b_crm_office', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [office]],
-      [`INSERT INTO settings (key, value) VALUES ('b2b_crm_on', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [b.on ? "1" : "0"]]
-    ]);
+    const opt = {};
+    for (const [f, name] of [["delivery", "\u0432\u0438\u0434\u0443 \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0438"], ["payment", "\u0432\u0438\u0434\u0443 \u043E\u043F\u043B\u0430\u0442\u0438"], ["notification", "\u043F\u043E\u0437\u043D\u0430\u0447\u043A\u0438"]]) {
+      opt[f] = String(b[f] ?? "").trim();
+      if (!OPT_ID_RE.test(opt[f])) throw fail(400, `ID ${name} \u2014 \u0447\u0438\u0441\u043B\u043E \u0437 LP-CRM \u0430\u0431\u043E \u043F\u043E\u0440\u043E\u0436\u043D\u044C\u043E.`);
+    }
+    const ttnField = TTN_FIELDS.includes(b.ttn_field) ? b.ttn_field : "";
+    const set = (key, value) => [`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]];
+    const st = [
+      set("b2b_crm_office", office),
+      set("b2b_crm_on", b.on ? "1" : "0"),
+      set("b2b_crm_delivery", opt.delivery),
+      set("b2b_crm_payment", opt.payment),
+      set("b2b_crm_notification", opt.notification),
+      set("b2b_crm_ttn_field", ttnField)
+    ];
+    if (b.in_key !== void 0 && b.in_key !== MASK) {
+      const key = String(b.in_key).trim();
+      if (key && !/^[A-Za-z0-9]{16,64}$/.test(key)) throw fail(400, "\u0412\u0445\u0456\u0434\u043D\u0438\u0439 \u043A\u043B\u044E\u0447 API \u2014 \u043B\u0430\u0442\u0438\u043D\u0441\u044C\u043A\u0456 \u043B\u0456\u0442\u0435\u0440\u0438 \u0439 \u0446\u0438\u0444\u0440\u0438 (\u044F\u043A \u0443 LP-CRM \u2192 \u0406\u043D\u0442\u0435\u0433\u0440\u0430\u0446\u0456\u0457 \u2192 Landing page).");
+      st.push(set("lpcrm_in_key", key));
+    }
+    await db.batch(st);
     return c.json({ ok: true });
   });
   async function statusNames(creds) {
@@ -5310,10 +5348,14 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     );
     return map;
   }
+  async function codeOfId(id) {
+    const r = await db.get(`SELECT code FROM an_orders WHERE id = ?`, [parseInt(id, 10) || 0]).catch(() => null) || await db.get(`SELECT code FROM order_keys WHERE k = ? LIMIT 1`, [String(id)]).catch(() => null);
+    return r?.code ? String(r.code) : "";
+  }
   async function refreshCrm({ partnerId = null, ids = null } = {}) {
     const border = new Date(Date.now() - CRM_REFRESH_MIN * 6e4).toISOString();
     const since = new Date(Date.now() - CRM_TRACK_DAYS * 864e5).toISOString();
-    const where = [`kind = 'client'`, `crm_id != ''`, `status != 'cancelled'`];
+    const where = [`kind = 'client'`, `status = 'crm'`, `(crm_id != '' OR crm_ext != '')`];
     const params = [];
     if (ids) {
       where.push(`id IN (SELECT value FROM json_each(?))`);
@@ -5326,23 +5368,34 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
       where.push("partner_id = ?");
       params.push(partnerId);
     }
-    const rows = await db.all(`SELECT id, crm_id FROM b2b_orders WHERE ${where.join(" AND ")} ORDER BY crm_checked_at LIMIT 100`, params);
+    const rows = await db.all(`SELECT id, crm_id, crm_ext FROM b2b_orders WHERE ${where.join(" AND ")} ORDER BY crm_checked_at LIMIT 100`, params);
     if (!rows.length) return;
     const { creds } = await crmConfig();
     if (!creds.subdomain || !creds.key) return;
+    const now = nowIso();
+    for (const r of rows) if (!r.crm_ext && r.crm_id) r.crm_ext = await codeOfId(r.crm_id);
+    const known = rows.filter((r) => r.crm_ext);
+    const unknown = rows.filter((r) => !r.crm_ext);
+    const st = unknown.map((r) => [
+      `UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ? WHERE id = ?`,
+      ["\u0421\u0442\u0430\u0442\u0443\u0441 \u0437\u2019\u044F\u0432\u0438\u0442\u044C\u0441\u044F \u043F\u0456\u0441\u043B\u044F \u043E\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438", now, r.id]
+    ]);
     try {
-      const found = await getOrdersBatch(fetchFn, creds, [...new Set(rows.map((r) => r.crm_id))]);
-      const names = await statusNames(creds).catch(() => ({}));
-      const byId = new Map(found.map((o) => [String(o.order_id ?? o.id), o]));
-      const now = nowIso();
-      await db.batch(rows.map((r) => {
-        const o = byId.get(r.crm_id);
-        const st = o ? String(o.status ?? o.status_id ?? "") : "";
-        const name = o ? String((names[st]?.name ?? names[st]) || st || "\u2014").trim() : "\u041D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 CRM";
-        return [`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ? WHERE id = ?`, [name, now, r.id]];
-      }));
+      if (known.length) {
+        const found = await getOrdersBatch(fetchFn, creds, [...new Set(known.map((r) => r.crm_ext))]);
+        const names = await statusNames(creds).catch(() => ({}));
+        const byCode = new Map(found.map((o) => [String(o.order_id ?? ""), o]));
+        for (const r of known) {
+          const o = byCode.get(r.crm_ext);
+          const s = o ? String(o.status ?? o.status_id ?? "") : "";
+          const name = o ? String((names[s]?.name ?? names[s]) || s || "\u2014").trim() : "\u041D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 CRM";
+          const num4 = o && /^\d+$/.test(String(o.id ?? "")) ? String(o.id) : r.crm_id;
+          st.push([`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ?, crm_ext = ?, crm_id = ? WHERE id = ?`, [name, now, r.crm_ext, num4 || "", r.id]]);
+        }
+      }
     } catch {
     }
+    if (st.length) await db.batch(st);
   }
   function clientFields(b) {
     const name = String(b.client_name ?? "").trim().replace(/\s+/g, " ").slice(0, 150);
@@ -5521,12 +5574,12 @@ ${link(c, `b2bclients/${o.id}`)}`);
   app.post("/api/b2b/clients/:id/crm", async (c) => {
     need(c, "b2b.admin");
     const o = await clientOrder(c);
-    if (o.status !== "new" || o.crm_id) throw fail(400, o.crm_id ? `\u0423\u0436\u0435 \u0432 CRM: \u2116 ${o.crm_id}.` : "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.");
+    if (o.status !== "new" || o.crm_id) throw fail(400, o.status === "crm" || o.crm_id ? `\u0423\u0436\u0435 \u0432 CRM${o.crm_id ? `: \u2116 ${o.crm_id}` : ""}.` : "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.");
     const k = await crmConfig();
     if (!k.on) throw fail(400, "\u041F\u0435\u0440\u0435\u0434\u0430\u0447\u0443 \u0432 LP-CRM \u0449\u0435 \u043D\u0435 \u0432\u0432\u0456\u043C\u043A\u043D\u0435\u043D\u043E. \u041A\u043E\u043B\u0438 \u043A\u043B\u044E\u0447 LP-CRM \u043E\u0442\u0440\u0438\u043C\u0430\u0454 \u0434\u043E\u0437\u0432\u0456\u043B \u043D\u0430 addNewOrder \u2014 \u0443\u0432\u0456\u043C\u043A\u043D\u0456\u0442\u044C \u0457\u0457 \u0432 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 CRM\xBB (\u0432\u043A\u043B\u0430\u0434\u043A\u0430 \xAB\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432\xBB). \u041F\u043E\u043A\u0438 \u0449\u043E \u0441\u0442\u0432\u043E\u0440\u0456\u0442\u044C \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 CRM \u0432\u0440\u0443\u0447\u043D\u0443 \u0456 \u0432\u043F\u0438\u0448\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u043D\u043E\u043C\u0435\u0440.");
     if (!k.office) throw fail(400, "\u041D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E ID \u0432\u0456\u0434\u0434\u0456\u043B\u0443 B2B \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 CRM\xBB.");
     if (!k.creds.subdomain || !k.creds.key) throw fail(400, "\u041D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E LP-CRM: \u043F\u0456\u0434\u0434\u043E\u043C\u0435\u043D \u0456 API-\u043A\u043B\u044E\u0447 \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445\xBB.");
-    const code = String(Date.now() * 10 + o.id % 10);
+    const code = newCode();
     const now = nowIso();
     const stale = new Date(Date.now() - SENDING_TTL_MS).toISOString();
     const claim = await db.run(
@@ -5548,12 +5601,16 @@ ${link(c, `b2bclients/${o.id}`)}`);
     ].filter(Boolean).join("\n");
     let res;
     try {
-      res = await addNewOrder(fetchFn, k.creds, {
+      res = await addNewOrder(fetchFn, k.addCreds, {
         code,
         office: k.office,
         bayer_name: o.client_name,
         phone: o.client_phone,
         comment,
+        delivery: k.delivery,
+        payment: k.payment,
+        notification: k.notification,
+        ...k.ttnField && o.ttn ? { [k.ttnField]: o.ttn } : {},
         products: items.map((i) => ({ product_id: i.product_id, price: i.price, count: i.qty }))
       });
     } catch (e) {
@@ -5567,36 +5624,44 @@ ${link(c, `b2bclients/${o.id}`)}`);
       throw fail(400, `LP-CRM \u043D\u0435 \u043F\u0440\u0438\u0439\u043D\u044F\u043B\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F: ${res.error}`);
     }
     await db.run(
-      `UPDATE b2b_orders SET status = 'crm', crm_id = ?, crm_sent_at = ?, crm_status = ?, crm_checked_at = '', updated_at = ? WHERE id = ?`,
-      [res.crmId, nowIso(), res.crmId ? "" : "\u041F\u0435\u0440\u0435\u0434\u0430\u043D\u043E (\u043D\u043E\u043C\u0435\u0440 \u043D\u0435 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E)", nowIso(), o.id]
+      `UPDATE b2b_orders SET status = 'crm', crm_id = '', crm_sent_at = ?, crm_status = '\u041F\u0435\u0440\u0435\u0434\u0430\u043D\u043E', crm_checked_at = '', updated_at = ? WHERE id = ?`,
+      [nowIso(), nowIso(), o.id]
     );
-    await log(o.id, c.get("user"), `\u0434\u043E\u0434\u0430\u043D\u043E \u0432 LP-CRM${res.crmId ? `: \u2116 ${res.crmId}` : " (\u043D\u043E\u043C\u0435\u0440 CRM \u043D\u0435 \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u043B\u0430 \u2014 \u0432\u043F\u0438\u0448\u0456\u0442\u044C \u0432\u0440\u0443\u0447\u043D\u0443)"}`);
-    await tgPartner(o.partner_id, `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h4(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${res.crmId ? `, \u2116 \u0443 CRM ${res.crmId}` : ""}.
+    await refreshCrm({ ids: [o.id] });
+    const crmId = (await db.get(`SELECT crm_id FROM b2b_orders WHERE id = ?`, [o.id]))?.crm_id || "";
+    await log(o.id, c.get("user"), `\u0434\u043E\u0434\u0430\u043D\u043E \u0432 LP-CRM${crmId ? `: \u2116 ${crmId}` : ` (\u043A\u043E\u0434 ${code}; \u043D\u043E\u043C\u0435\u0440 \u0437\u2019\u044F\u0432\u0438\u0442\u044C\u0441\u044F \u043F\u0456\u0441\u043B\u044F \u043E\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0441\u0442\u0430\u0442\u0443\u0441\u0443)`}`);
+    await tgPartner(o.partner_id, `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h4(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${crmId ? `, \u2116 \u0443 CRM ${crmId}` : ""}.
 ${link(c, `pclients/${o.id}`)}`);
-    if (res.crmId) await refreshCrm({ ids: [o.id] });
-    return c.json({ ok: true, crm_id: res.crmId });
+    return c.json({ ok: true, crm_id: crmId, code });
   });
   app.put("/api/b2b/clients/:id", async (c) => {
     need(c, "b2b.admin");
     const o = await clientOrder(c);
     if (o.status === "cancelled") throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.");
     const b = await c.req.json();
-    const crmId = String(b.crm_id ?? "").trim();
-    if (crmId && !ID_RE.test(crmId)) throw fail(400, "\u041D\u043E\u043C\u0435\u0440 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM \u2014 \u043B\u0438\u0448\u0435 \u0446\u0438\u0444\u0440\u0438.");
-    const status = crmId ? "crm" : o.crm_sent_at && !o.crm_sent_at.startsWith("sending") ? "crm" : "new";
-    await db.run(`UPDATE b2b_orders SET crm_id = ?, status = ?, crm_status = '', crm_checked_at = '', updated_at = ? WHERE id = ?`, [crmId, status, nowIso(), o.id]);
-    await log(o.id, c.get("user"), crmId ? `\u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM \u2116 ${crmId}` : "\u0432\u0456\u0434\u0432\u2019\u044F\u0437\u0430\u043D\u043E \u043D\u043E\u043C\u0435\u0440 LP-CRM");
-    if (crmId && crmId !== o.crm_id) {
-      await tgPartner(o.partner_id, `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h4(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443, \u2116 \u0443 CRM ${crmId}.
-${link(c, `pclients/${o.id}`)}`);
+    const val = String(b.crm_id ?? "").replace(/\s/g, "");
+    const isCode = CODE_RE.test(val);
+    if (val && !isCode && !ID_RE.test(val)) throw fail(400, "\u041D\u043E\u043C\u0435\u0440 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM \u2014 \u043B\u0438\u0448\u0435 \u0446\u0438\u0444\u0440\u0438.");
+    const crmId = isCode ? "" : val;
+    const crmExt = isCode ? val : "";
+    const status = val ? "crm" : "new";
+    await db.run(
+      `UPDATE b2b_orders SET crm_id = ?, crm_ext = ?, crm_sent_at = CASE WHEN ? = '' THEN '' ELSE crm_sent_at END, status = ?, crm_status = '', crm_checked_at = '', updated_at = ? WHERE id = ?`,
+      [crmId, crmExt, val, status, nowIso(), o.id]
+    );
+    await log(o.id, c.get("user"), val ? `\u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM ${isCode ? `\u043A\u043E\u0434 ${val}` : `\u2116 ${val}`}` : "\u0432\u0456\u0434\u0432\u2019\u044F\u0437\u0430\u043D\u043E \u043D\u043E\u043C\u0435\u0440 LP-CRM");
+    if (val && val !== o.crm_id && val !== o.crm_ext) {
       await refreshCrm({ ids: [o.id] });
+      const num4 = (await db.get(`SELECT crm_id FROM b2b_orders WHERE id = ?`, [o.id]))?.crm_id || "";
+      await tgPartner(o.partner_id, `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h4(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${num4 ? `, \u2116 \u0443 CRM ${num4}` : ""}.
+${link(c, `pclients/${o.id}`)}`);
     }
     return c.json({ ok: true });
   });
   app.post("/api/b2b/clients/:id/refresh", async (c) => {
     need(c, "b2b.admin");
     const o = await clientOrder(c);
-    if (!o.crm_id) throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0449\u0435 \u043D\u0435 \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u0435 \u0434\u043E LP-CRM.");
+    if (!o.crm_id && !o.crm_ext) throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0449\u0435 \u043D\u0435 \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u0435 \u0434\u043E LP-CRM.");
     await refreshCrm({ ids: [o.id] });
     return c.json({ ok: true });
   });
