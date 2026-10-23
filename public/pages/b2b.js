@@ -341,6 +341,7 @@ export function createB2bPages(ctx = {}) {
             <label class="f"><span>ID позначки (необов’язково)</span><input name="notification" value="${esc(cfg.notification)}" inputmode="numeric"></label></div>
           <div class="grid2"><label class="f"><span>ID виду доставки (необов’язково)</span><input name="delivery" value="${esc(cfg.delivery)}" inputmode="numeric"></label>
             <label class="f"><span>ID виду оплати (необов’язково)</span><input name="payment" value="${esc(cfg.payment)}" inputmode="numeric"></label></div>
+          <label class="f"><span>Сайт-джерело замовлень (як буде видно в LP-CRM)</span><input name="site" value="${esc(cfg.site || '')}" placeholder="${esc(location.host)}"></label>
           <label class="f"><span>ТТН партнера також записувати в</span><select name="ttn_field">${Object.entries(TTN_F).map(([k, v]) => `<option value="${k}" ${cfg.ttn_field === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
           <label class="check"><input type="checkbox" name="on" ${cfg.on ? 'checked' : ''}> Увімкнути кнопку «Додати в CRM»</label>
           <div class="small muted">Замовлення потрапляє у вкладку «Нові» вибраного відділу, ціни — партнерські, «Поле 1» лишається порожнім.

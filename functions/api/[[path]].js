@@ -5292,6 +5292,7 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
       payment: s.b2b_crm_payment || "",
       notification: s.b2b_crm_notification || "",
       ttnField: TTN_FIELDS.includes(s.b2b_crm_ttn_field) ? s.b2b_crm_ttn_field : "",
+      site: s.b2b_crm_site || "",
       hasInKey: !!s.lpcrm_in_key,
       creds,
       addCreds: { subdomain: creds.subdomain, key: s.lpcrm_in_key || creds.key }
@@ -5307,6 +5308,7 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
       payment: k.payment,
       notification: k.notification,
       ttn_field: k.ttnField,
+      site: k.site,
       in_key: k.hasInKey ? MASK : "",
       ready: !!(k.creds.subdomain && k.creds.key)
     });
@@ -5332,6 +5334,11 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
       set("b2b_crm_notification", opt.notification),
       set("b2b_crm_ttn_field", ttnField)
     ];
+    if (b.site !== void 0) {
+      const site = String(b.site).trim().replace(/^https?:\/\//i, "").replace(/\/.*$/, "").toLowerCase();
+      if (site && !/^[a-z0-9.-]{3,100}$/.test(site)) throw fail(400, "\u0421\u0430\u0439\u0442 \u2014 \u0434\u043E\u043C\u0435\u043D \u0431\u0435\u0437 https://, \u043D\u0430\u043F\u0440. b2b.ecovent.ua");
+      st.push(set("b2b_crm_site", site));
+    }
     if (b.in_key !== void 0 && b.in_key !== MASK) {
       const key = String(b.in_key).trim();
       if (key && !/^[A-Za-z0-9]{16,64}$/.test(key)) throw fail(400, "\u0412\u0445\u0456\u0434\u043D\u0438\u0439 \u043A\u043B\u044E\u0447 API \u2014 \u043B\u0430\u0442\u0438\u043D\u0441\u044C\u043A\u0456 \u043B\u0456\u0442\u0435\u0440\u0438 \u0439 \u0446\u0438\u0444\u0440\u0438 (\u044F\u043A \u0443 LP-CRM \u2192 \u0406\u043D\u0442\u0435\u0433\u0440\u0430\u0446\u0456\u0457 \u2192 Landing page).");
@@ -5434,6 +5441,21 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     const supplyId = parseInt(b.supply_id, 10) || null;
     const items = supplyId ? await supplyItems(p, supplyId, b.items, exceptId) : await priceItems(p, b.items);
     return { supplyId, items, total: totalOf(items) };
+  }
+  function senderOf(c, siteSetting) {
+    const url = new URL(c.req.url);
+    const host = siteSetting || url.host;
+    const ip = c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for")?.split(",")[0].trim() || "127.0.0.1";
+    return phpUrlencode(phpSerialize({
+      HTTP_HOST: host,
+      SERVER_NAME: host,
+      REQUEST_URI: "/b2b",
+      HTTP_REFERER: `https://${host}/b2b`,
+      REMOTE_ADDR: ip,
+      HTTP_USER_AGENT: "Ecovent B2B",
+      REQUEST_SCHEME: "https",
+      HTTPS: "on"
+    }));
   }
   const tgNew = (c, p, id, f, it, verb = "\u041D\u043E\u0432\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430") => tgAdmins(
     `\u{1F4E6} <b>${verb} ${orderNo(id)}</b> \u0432\u0456\u0434 \xAB${h4(p.name)}\xBB
@@ -5614,6 +5636,9 @@ ${link(c, `b2bclients/${o.id}`)}`);
         payment: k.payment,
         notification: k.notification,
         ...k.ttnField && o.ttn ? { [k.ttnField]: o.ttn } : {},
+        // Сайт-джерело: LP-CRM бере його з sender (serialize($_SERVER) у прикладі) — без нього «Не указан сайт-лендинг».
+        sender: senderOf(c, k.site),
+        site: k.site || new URL(c.req.url).host,
         products: items.map((i) => ({ product_id: i.product_id, price: i.price, count: i.qty }))
       });
     } catch (e) {

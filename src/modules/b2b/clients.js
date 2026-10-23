@@ -6,7 +6,7 @@
 // номер замовлення з CRM вручну. Статус замовлення в CRM партнер бачить у кабінеті (оновлюється не частіше ніж раз на 10 хв).
 // Передачу в CRM вмикає адмін у «Налаштуваннях CRM» (ID відділу + перемикач) — коли ключ LP-CRM отримає дозвіл на addNewOrder.
 import { fail, need, nowIso, loadSettings, MASK } from '../../core/common.js';
-import { addNewOrder, getOrdersBatch, getStatuses } from '../../integrations/lpcrm.js';
+import { addNewOrder, getOrdersBatch, getStatuses, phpSerialize, phpUrlencode } from '../../integrations/lpcrm.js';
 import { CLIENT_STATUS, ORDER_STATUS, payState, orderNo } from './orders.js';
 
 const CRM_REFRESH_MIN = 10;
@@ -38,6 +38,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
       payment: s.b2b_crm_payment || '',
       notification: s.b2b_crm_notification || '',
       ttnField: TTN_FIELDS.includes(s.b2b_crm_ttn_field) ? s.b2b_crm_ttn_field : '',
+      site: s.b2b_crm_site || '',
       hasInKey: !!s.lpcrm_in_key,
       creds,
       addCreds: { subdomain: creds.subdomain, key: s.lpcrm_in_key || creds.key },
@@ -47,7 +48,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     need(c, 'b2b.admin');
     const k = await crmConfig();
     return c.json({
-      on: k.on, office: k.office, delivery: k.delivery, payment: k.payment, notification: k.notification, ttn_field: k.ttnField,
+      on: k.on, office: k.office, delivery: k.delivery, payment: k.payment, notification: k.notification, ttn_field: k.ttnField, site: k.site,
       in_key: k.hasInKey ? MASK : '', ready: !!(k.creds.subdomain && k.creds.key),
     });
   });
@@ -66,6 +67,11 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     const set = (key, value) => [`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]];
     const st = [set('b2b_crm_office', office), set('b2b_crm_on', b.on ? '1' : '0'), set('b2b_crm_delivery', opt.delivery),
       set('b2b_crm_payment', opt.payment), set('b2b_crm_notification', opt.notification), set('b2b_crm_ttn_field', ttnField)];
+    if (b.site !== undefined) {
+      const site = String(b.site).trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
+      if (site && !/^[a-z0-9.-]{3,100}$/.test(site)) throw fail(400, 'Сайт — домен без https://, напр. b2b.ecovent.ua');
+      st.push(set('b2b_crm_site', site));
+    }
     if (b.in_key !== undefined && b.in_key !== MASK) {
       const key = String(b.in_key).trim();
       if (key && !/^[A-Za-z0-9]{16,64}$/.test(key)) throw fail(400, 'Вхідний ключ API — латинські літери й цифри (як у LP-CRM → Інтеграції → Landing page).');
@@ -165,6 +171,15 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     const supplyId = parseInt(b.supply_id, 10) || null;
     const items = supplyId ? await supplyItems(p, supplyId, b.items, exceptId) : await priceItems(p, b.items);
     return { supplyId, items, total: totalOf(items) };
+  }
+  function senderOf(c, siteSetting) {
+    const url = new URL(c.req.url);
+    const host = siteSetting || url.host;
+    const ip = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for')?.split(',')[0].trim() || '127.0.0.1';
+    return phpUrlencode(phpSerialize({
+      HTTP_HOST: host, SERVER_NAME: host, REQUEST_URI: '/b2b', HTTP_REFERER: `https://${host}/b2b`,
+      REMOTE_ADDR: ip, HTTP_USER_AGENT: 'Ecovent B2B', REQUEST_SCHEME: 'https', HTTPS: 'on',
+    }));
   }
   const tgNew = (c, p, id, f, it, verb = 'Нове замовлення клієнта') => tgAdmins(
     `📦 <b>${verb} ${orderNo(id)}</b> від «${h(p.name)}»\n${h(f.client_name)} · ${it.items.length} поз. · <b>${uah(it.total)}</b>\n`
@@ -345,6 +360,9 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
         code, office: k.office, bayer_name: o.client_name, phone: o.client_phone, comment,
         delivery: k.delivery, payment: k.payment, notification: k.notification,
         ...(k.ttnField && o.ttn ? { [k.ttnField]: o.ttn } : {}),
+        // Сайт-джерело: LP-CRM бере його з sender (serialize($_SERVER) у прикладі) — без нього «Не указан сайт-лендинг».
+        sender: senderOf(c, k.site),
+        site: k.site || new URL(c.req.url).host,
         products: items.map((i) => ({ product_id: i.product_id, price: i.price, count: i.qty })),
       });
     } catch (e) {
