@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'auth',
-  version: 2,
+  version: 3,
   tables: [
   `CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -19,6 +19,9 @@ export const schema = {
     user_id INTEGER NOT NULL,
     created_at TEXT NOT NULL
   )`,
+  // Вихід користувача / чистка старих сесій — без перегляду всієї таблиці.
+  `CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id)`,
+  `CREATE INDEX IF NOT EXISTS sessions_created ON sessions (created_at)`,
   ],
   columns: [
     ['users', 'crm_logins', "TEXT DEFAULT ''"],
@@ -29,4 +32,8 @@ export const schema = {
     // Користувач-партнер (роль partner) — до якої компанії-партнера належить.
     ['users', 'partner_id', "INTEGER"]
   ],
+  // Індекс на колонку, додану ALTER TABLE, — після неї.
+  async seed(db) {
+    await db.run(`CREATE INDEX IF NOT EXISTS users_partner ON users (partner_id)`);
+  },
 };

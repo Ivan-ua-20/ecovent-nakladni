@@ -136,6 +136,7 @@ assert.equal((await req('GET', '/api/b2b/p/entities', null, A)).length, 1);
 
 // ---------- 6. Файли старші за 30 днів видаляються ----------
 await db.run(`UPDATE b2b_files SET created_at = '2020-01-01T00:00:00Z'`);
+await db.run(`DELETE FROM settings WHERE key = 'cleanup_at'`); // чистка — раз на годину на всі екземпляри
 await req('GET', '/api/b2b/p/orders', null, A); // щогодинна чистка спрацьовує на запиті
 assert.equal((await db.get(`SELECT COUNT(*) AS n FROM b2b_file_parts`)).n, 0);
 assert.equal((await send('GET', `/api/b2b/files/${fid}`)).status, 404);
