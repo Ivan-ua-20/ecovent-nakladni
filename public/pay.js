@@ -281,7 +281,9 @@ export function createPayUI(ctx) {
       const d = await api('GET', `/api/odb/payments?${p}`);
       const sel = $('#pAcc');
       if (sel && sel.options.length <= 1) sel.insertAdjacentHTML('beforeend', d.accounts.map((a) => `<option value="${esc(a.id)}" ${pf.account === a.id ? 'selected' : ''}>${esc(a.alias)} · ${KIND[a.kind]}</option>`).join(''));
-      if (d.lastSync && $('#paySync')) $('#paySync').textContent = `Перевірено ${new Date(d.lastSync).toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
+      const dt = (v) => new Date(v).toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      // Останнє повідомлення від Opendatabot (вебхук) — якщо давно не було, оплати приходять лише звіркою раз на 5 хв.
+      if (d.lastSync && $('#paySync')) $('#paySync').textContent = `Перевірено ${dt(d.lastSync)} · вебхук Opendatabot: ${d.hookAt ? dt(d.hookAt) : 'ще не надходив'}`;
       if (!d.connected) { box.innerHTML = `<div class="alert">Opendatabot не підключено. ${can('api') ? 'Вкажіть ключ у <a href="#/rsettings">«Налаштуваннях рахунків»</a>.' : 'Зверніться до адміністратора.'}</div>`; return; }
       showHist(d.hist);
       box.innerHTML = `<div class="pay-total"><span>Надходжень: <b>${d.count}</b></span><span>Сума: <b>${uah(d.sum)}</b></span>${d.count > d.rows.length ? `<span class="small muted">показано останні ${d.rows.length}</span>` : ''}</div>

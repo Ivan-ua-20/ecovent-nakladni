@@ -482,7 +482,8 @@ export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () 
       added += fresh;
       newRows.push(...freshRows);
       changedIds.push(...ch);
-      if (items.length < PAGE || (rows.length && fresh === 0)) break;
+      // Немає нових надходжень на сторінці — далі лише старіші (сторінка лише з витратами теж зупиняє, а не тягне ще 4).
+      if (items.length < PAGE || fresh === 0) break;
     }
     // 2) історія — кілька сторінок за раз, з місця, де зупинились
     let hist = {};
@@ -558,7 +559,7 @@ export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () 
     const s = await settings();
     let hist = {};
     try { hist = JSON.parse(s.odb_hist || '{}'); } catch { /* */ }
-    return c.json({ rows, count: tot?.n || 0, sum: round2(tot?.sum || 0), accounts, lastSync: s.odb_sync_at || '', hist, connected: Boolean(s.odb_key && s.odb_name) });
+    return c.json({ rows, count: tot?.n || 0, sum: round2(tot?.sum || 0), accounts, lastSync: s.odb_sync_at || '', hookAt: s.odb_hook_at || '', hist, connected: Boolean(s.odb_key && s.odb_name) });
   });
 
   // Ручна прив'язка платежу до посилання (або відв'язка: link_id = null)

@@ -44,9 +44,17 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   // ---------- Строк зберігання: модулі реєструють свою чистку, вона йде не частіше разу на годину ----------
   const cleanupTasks = [];
   const onCleanup = (fn) => cleanupTasks.push(fn);
+  // На Cloudflare екземплярів (ізолятів) багато й вони короткоживучі, тож пам'ятати час чистки лише в пам'яті
+  // замало: кожен новий екземпляр чистив би знову. Тому «бронюємо» чистку в базі — один запит, раз на годину на всі.
   async function runCleanup() {
     if (Date.now() - (shared.lastCleanup || 0) < 60 * 60 * 1000) return;
     shared.lastCleanup = Date.now();
+    const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const claim = await db.run(
+      `INSERT INTO settings (key, value) VALUES ('cleanup_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
+      [new Date().toISOString(), hourAgo],
+    );
+    if (!claim.changes) return;
     const s = await loadSettings(db);
     const days = Math.max(1, Number(s.retention_days) || 7);
     const border = new Date(Date.now() - days * 86400000).toISOString();
