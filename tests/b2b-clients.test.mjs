@@ -196,6 +196,7 @@ assert.equal(add.office, '7', 'відділ B2B');
 assert.equal(add.key, 'abcdef0123456789abcdef0123456789', 'вхідний ключ для addNewOrder');
 assert.equal(crm.find((x) => x.method === 'getOrdersByID').p.key, 'k', 'статуси — основним ключем');
 assert.equal(add.delivery, '3');
+assert.match(decodeURIComponent(add.sender.replace(/\+/g, ' ')), /s:9:"HTTP_HOST";s:\d+:"[^"]+"/, 'сайт-джерело (sender) для LP-CRM');
 assert.equal(add.additional_2, '20450000000001', 'ТТН у вибране поле');
 assert.equal(add.country, 'UA');
 assert.equal(add.bayer_name, 'Петренко Олена');
