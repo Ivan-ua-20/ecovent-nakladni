@@ -9,7 +9,7 @@ async function viewUsers() {
   const [{ users, roles }, vals] = await Promise.all([api('GET', '/api/users'), can('analytics') ? api('GET', '/api/an/values').catch(() => null) : null]);
   const crmUsers = (vals?.users || []).map((x) => x.v);
   const me = ctx.boot.user;
-  const assignable = ['admin', 'manager', 'viewer'];
+  const assignable = ['admin', 'admin_lite', 'manager', 'viewer'];
   const roleOpts = (sel) => assignable.map((r) => `<option value="${r}" ${r === sel ? 'selected' : ''}>${esc(roles[r])}</option>`).join('');
   main.innerHTML = `
     <div class="head-row"><h2>Користувачі</h2><div class="btn-row">${me.role === 'owner' && users.length > 1 ? '<button class="btn" id="uOwner">Передати права власника</button>' : ''}<button class="btn primary" id="uNew">+ Новий користувач</button></div></div>

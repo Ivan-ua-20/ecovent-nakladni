@@ -6,7 +6,9 @@ import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, s
 
 const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
 
-export function createB2bPages() {
+export function createB2bPages(ctx = {}) {
+  // Додавати, змінювати й видаляти людей (користувачів партнерів) і партнерів — лише з правом «people».
+  const people = () => !ctx.can || ctx.can('people');
   // ---------------------------------------------------------------- партнери
   async function viewPartners(id) {
     if (id) return viewPartner(id);
@@ -52,7 +54,7 @@ export function createB2bPages() {
     const byPartner = users.filter((u) => u.added_by_partner).length;
     main.innerHTML = `
       <div class="head-row"><h2>${esc(p.name)} ${p.active ? '' : '<span class="badge bad">вимкнений</span>'}</h2>
-        <div class="btn-row"><a class="btn" href="#/b2bpartners">← До списку</a><button class="btn" id="pEdit">Змінити</button><button class="btn danger" id="pDel">Видалити</button></div></div>
+        <div class="btn-row"><a class="btn" href="#/b2bpartners">← До списку</a><button class="btn" id="pEdit">Змінити</button>${people() ? '<button class="btn danger" id="pDel">Видалити</button>' : ''}</div></div>
       <div class="form-page">
         <div class="form-stack">
           <div class="card form-stack">
@@ -79,9 +81,9 @@ export function createB2bPages() {
             ${p.note ? `<div class="small muted">${esc(p.note)}</div>` : ''}
           </div>
           <div class="card form-stack">
-            <div class="head-row" style="margin:0"><h3 style="margin:0">Користувачі партнера</h3><button class="btn sm primary" id="uNew">+ Користувач</button></div>
+            <div class="head-row" style="margin:0"><h3 style="margin:0">Користувачі партнера</h3>${people() ? '<button class="btn sm primary" id="uNew">+ Користувач</button>' : ''}</div>
             <div class="small muted">Усього: ${users.length}${byPartner ? ` · додав сам партнер: <b>${byPartner}</b>` : ''}. Керівник партнера може сам додавати колег у вкладці «Команда» свого кабінету.</div>
-            ${users.length ? teamTable(users)
+            ${users.length ? teamTable(users, { editable: people() })
               : '<div class="small muted">Ще немає. Додайте логін і пароль — передайте їх партнеру; увійти він зможе на цьому ж сайті.</div>'}
           </div>
           <div class="card form-stack">
@@ -130,14 +132,14 @@ export function createB2bPages() {
         } catch (e) { toast(e.message, true); }
       };
     };
-    $('#uNew').onclick = () => userForm(null);
-    $('#pDel').onclick = async () => {
+    $('#uNew') && ($('#uNew').onclick = () => userForm(null));
+    $('#pDel') && ($('#pDel').onclick = async () => {
       if (!(await confirmDanger(`Видалити партнера «${p.name}»?`,
         `Усі його користувачі (${users.length}) втратять доступ, бренди й маржа видаляться. Якщо в партнера є замовлення — вони залишаться в списках закупівель і замовлень клієнтів (архів).`,
         'Видалити партнера'))) return;
       try { const r = await api('DELETE', `/api/b2b/partners/${p.id}`); toast(r.archived ? 'Партнера видалено, замовлення збережено' : 'Партнера видалено'); location.hash = '#/b2bpartners'; }
       catch (e) { toast(e.message, true); }
-    };
+    });
     $$('[data-ue]').forEach((b) => (b.onclick = () => userForm(users.find((x) => String(x.id) === b.dataset.ue))));
   }
 

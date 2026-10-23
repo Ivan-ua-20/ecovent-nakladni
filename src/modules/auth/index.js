@@ -98,16 +98,16 @@ export function mountAuth(app, { db, runCleanup, onCleanup }) {
   });
 
   // ---------- Користувачі (власник і адміністратори) ----------
-  const ASSIGNABLE = ['admin', 'manager', 'viewer'];
+  const ASSIGNABLE = ['admin', 'admin_lite', 'manager', 'viewer'];
   app.get('/api/users', async (c) => {
-    need(c, 'users');
+    need(c, 'people');
     // Користувачі партнерів керуються в розділі B2B.
-    const rows = await db.all(`SELECT * FROM users WHERE role != 'partner' ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'manager' THEN 2 ELSE 3 END, login`);
+    const rows = await db.all(`SELECT * FROM users WHERE role != 'partner' ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'admin_lite' THEN 2 WHEN 'manager' THEN 3 ELSE 4 END, login`);
     return c.json({ users: rows.map(publicUser), roles: ROLES });
   });
 
   app.post('/api/users', async (c) => {
-    need(c, 'users');
+    need(c, 'people');
     const b = await c.req.json();
     const login = String(b.login || '').trim().toLowerCase();
     if (!/^[a-z0-9._@-]{2,40}$/.test(login)) throw fail(400, 'Логін: латинські літери, цифри, крапка, дефіс (2–40 символів).');
@@ -121,7 +121,7 @@ export function mountAuth(app, { db, runCleanup, onCleanup }) {
   });
 
   app.put('/api/users/:id', async (c) => {
-    need(c, 'users');
+    need(c, 'people');
     const me = c.get('user');
     const target = await db.get(`SELECT * FROM users WHERE id = ?`, [c.req.param('id')]);
     if (!target) throw fail(404, 'Користувача не знайдено.');
@@ -178,7 +178,7 @@ export function mountAuth(app, { db, runCleanup, onCleanup }) {
   });
 
   app.delete('/api/users/:id', async (c) => {
-    need(c, 'users');
+    need(c, 'people');
     const me = c.get('user');
     const target = await db.get(`SELECT * FROM users WHERE id = ?`, [c.req.param('id')]);
     if (!target) throw fail(404, 'Користувача не знайдено.');

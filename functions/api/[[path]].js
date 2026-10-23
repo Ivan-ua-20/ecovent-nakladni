@@ -1776,13 +1776,16 @@ var Hono3 = class extends Hono {
 var ROLES = {
   owner: "\u0412\u043B\u0430\u0441\u043D\u0438\u043A",
   admin: "\u0410\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440",
+  admin_lite: "\u0410\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440 (\u0431\u0435\u0437 \u043A\u0435\u0440\u0443\u0432\u0430\u043D\u043D\u044F \u043B\u044E\u0434\u044C\u043C\u0438)",
   manager: "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440",
   viewer: "\u041F\u0435\u0440\u0435\u0433\u043B\u044F\u0434",
   partner: "\u041F\u0430\u0440\u0442\u043D\u0435\u0440 (B2B)"
 };
 var PERMS = {
-  owner: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "analytics", "an.view", "b2b.admin"],
-  admin: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "analytics", "an.view", "b2b.admin"],
+  owner: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "people", "analytics", "an.view", "b2b.admin"],
+  admin: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "people", "analytics", "an.view", "b2b.admin"],
+  // Як адміністратор, але без керування людьми (аналітику вмикає/вимикає лише власник).
+  admin_lite: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "analytics", "an.view", "b2b.admin"],
   manager: ["docs.view", "docs.edit", "refs.edit", "an.view"],
   viewer: ["docs.view"],
   partner: ["b2b.partner"]
@@ -2092,14 +2095,14 @@ function mountAuth(app, { db, runCleanup, onCleanup }) {
     await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [await hashPassword(b.password), me.id]);
     return c.json({ ok: true });
   });
-  const ASSIGNABLE = ["admin", "manager", "viewer"];
+  const ASSIGNABLE = ["admin", "admin_lite", "manager", "viewer"];
   app.get("/api/users", async (c) => {
-    need(c, "users");
-    const rows = await db.all(`SELECT * FROM users WHERE role != 'partner' ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'manager' THEN 2 ELSE 3 END, login`);
+    need(c, "people");
+    const rows = await db.all(`SELECT * FROM users WHERE role != 'partner' ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'admin_lite' THEN 2 WHEN 'manager' THEN 3 ELSE 4 END, login`);
     return c.json({ users: rows.map(publicUser), roles: ROLES });
   });
   app.post("/api/users", async (c) => {
-    need(c, "users");
+    need(c, "people");
     const b = await c.req.json();
     const login = String(b.login || "").trim().toLowerCase();
     if (!/^[a-z0-9._@-]{2,40}$/.test(login)) throw fail(400, "\u041B\u043E\u0433\u0456\u043D: \u043B\u0430\u0442\u0438\u043D\u0441\u044C\u043A\u0456 \u043B\u0456\u0442\u0435\u0440\u0438, \u0446\u0438\u0444\u0440\u0438, \u043A\u0440\u0430\u043F\u043A\u0430, \u0434\u0435\u0444\u0456\u0441 (2\u201340 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432).");
@@ -2117,7 +2120,7 @@ function mountAuth(app, { db, runCleanup, onCleanup }) {
     return c.json({ id: r.lastId });
   });
   app.put("/api/users/:id", async (c) => {
-    need(c, "users");
+    need(c, "people");
     const me = c.get("user");
     const target = await db.get(`SELECT * FROM users WHERE id = ?`, [c.req.param("id")]);
     if (!target) throw fail(404, "\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
@@ -2181,7 +2184,7 @@ function mountAuth(app, { db, runCleanup, onCleanup }) {
     return c.json({ ok: true });
   });
   app.delete("/api/users/:id", async (c) => {
-    need(c, "users");
+    need(c, "people");
     const me = c.get("user");
     const target = await db.get(`SELECT * FROM users WHERE id = ?`, [c.req.param("id")]);
     if (!target) throw fail(404, "\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
@@ -4708,7 +4711,7 @@ function mountTg(app, { db, fetchFn }) {
     const s = await settings();
     if (!s.tg_token) return 0;
     const out = [];
-    const admins = await db.all(`SELECT id, tg_chat_id, tg_all_links, tg_all_tx FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin') AND (tg_all_links = 1 OR tg_all_tx = 1)`);
+    const admins = await db.all(`SELECT id, tg_chat_id, tg_all_links, tg_all_tx FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin', 'admin_lite') AND (tg_all_links = 1 OR tg_all_tx = 1)`);
     if (linkIds.length) {
       const links = await db.all(
         `SELECT l.id, l.number, l.amount, l.paid_amount, l.status, l.client, l.created_by_id, l.created_by, COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, ''), a.iban) AS alias, u.tg_chat_id AS chat
@@ -4751,7 +4754,7 @@ ${h(l.alias || "")}${l.created_by ? `
     const s = await settings();
     if (!s.tg_token) return 0;
     const chats = /* @__PURE__ */ new Set();
-    if (admins) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin')`)) chats.add(r.tg_chat_id);
+    if (admins) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin', 'admin_lite')`)) chats.add(r.tg_chat_id);
     if (userIds.length) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND id IN (SELECT value FROM json_each(?))`, [JSON.stringify(userIds)])) chats.add(r.tg_chat_id);
     if (partnerId) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'partner' AND partner_id = ?`, [partnerId])) chats.add(r.tg_chat_id);
     let sent = 0;
@@ -4794,7 +4797,7 @@ function mountErrLog(app, { db, fetchFn, onCleanup, shared: shared2 = {} }) {
     if (Date.now() - mem.at < 10 * 6e4 && mem.token) return mem;
     try {
       const s = await loadSettings(db);
-      const rows = await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND role IN ('owner', 'admin') AND tg_chat_id != ''`);
+      const rows = await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND role IN ('owner', 'admin', 'admin_lite') AND tg_chat_id != ''`);
       Object.assign(mem, { token: s.tg_token || "", chats: rows.map((r) => r.tg_chat_id), at: Date.now() });
     } catch {
     }
@@ -5780,6 +5783,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   });
   app.delete("/api/b2b/partners/:id", async (c) => {
     need(c, "b2b.admin");
+    need(c, "people");
     const p = await getPartner(c.req.param("id"));
     const hasOrders = await db.get(`SELECT id FROM b2b_orders WHERE partner_id = ? LIMIT 1`, [p.id]);
     const st = [
@@ -5918,12 +5922,14 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   }
   app.post("/api/b2b/partners/:id/users", async (c) => {
     need(c, "b2b.admin");
+    need(c, "people");
     const p = await getPartner(c.req.param("id"));
     const r = await addTeamUser(c, p, await c.req.json(), `staff:${actorName(c)}`);
     return c.json({ id: r.id });
   });
   app.put("/api/b2b/partners/:id/users/:uid", async (c) => {
     need(c, "b2b.admin");
+    need(c, "people");
     const p = await getPartner(c.req.param("id"));
     const u = await db.get(`SELECT * FROM users WHERE id = ? AND partner_id = ? AND role = 'partner'`, [c.req.param("uid"), p.id]);
     if (!u) throw fail(404, "\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
