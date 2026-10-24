@@ -123,12 +123,16 @@ export function mountB2bPay(app, { db, services, orders, hooks }) {
   // Зарахувати платіж у закупівлю (вручну).
   app.post('/api/b2b/orders/:id/payments', async (c) => {
     const o = await supplyOf(c);
-    if (!['pay_wait', 'partial', 'paid'].includes(o.status) || (o.status === 'paid' && o.paid_by !== 'Opendatabot')) {
-      throw fail(400, o.status === 'paid' ? 'Закупівлю вже позначено «Оплачено» вручну.' : 'Платіж зараховується в закупівлю з рахунком («Очікує оплату» або «Частково оплачено»).');
+    if (!['pay_wait', 'partial', 'paid'].includes(o.status)) {
+      throw fail(400, 'Платіж зараховується в закупівлю з рахунком («Очікує оплату», «Частково оплачено» або «Оплачено»).');
     }
     const txId = String((await c.req.json()).tx_id || '');
     const ex = await db.get(`SELECT tx_id, order_id FROM b2b_payments WHERE tx_id = ?`, [txId]);
     if (ex?.order_id && ex.order_id !== o.id) throw fail(400, `Цей платіж уже зараховано в ${orderNo(ex.order_id)} — спершу відв'яжіть його там.`);
+    // «Оплачено» вручну → оплата підтверджується платежем: далі статус рахується за платежами.
+    if (o.status === 'paid' && o.paid_by !== 'Opendatabot') {
+      await db.run(`UPDATE b2b_orders SET status = 'pay_wait', paid_amount = 0, paid_at = '', paid_by = '' WHERE id = ?`, [o.id]);
+    }
     if (ex) await db.run(`UPDATE b2b_payments SET order_id = ?, dismissed = 0, auto = 0, created_by = ? WHERE tx_id = ?`, [o.id, userName(c.get('user')), txId]);
     else {
       const [t] = services.payments?.txs ? await services.payments.txs([txId]) : [];
@@ -139,6 +143,26 @@ export function mountB2bPay(app, { db, services, orders, hooks }) {
     await log(o.id, c.get('user'), 'зараховано платіж вручну');
     await recalc(o.id, c, c.get('user'));
     return c.json({ ok: true });
+  });
+
+  // «Перевірити оплату»: забрати нові платежі з Opendatabot зараз і показати, що прийшло від юрособи закупівлі.
+  app.post('/api/b2b/orders/:id/check-pay', async (c) => {
+    let o = await supplyOf(c);
+    const r = services.payments?.refresh ? await services.payments.refresh(new URL(c.req.url).origin) : { connected: false };
+    if (!r.connected) throw fail(400, 'Opendatabot не підключено (Налаштування рахунків).');
+    o = await supplyOf(c); // автозарахування могло змінити статус
+    const linked = await db.all(`SELECT tx_id, amount, date, payer_name, purpose FROM b2b_payments WHERE order_id = ? ORDER BY date`, [o.id]);
+    const since = o.invoice_date || o.created_at.slice(0, 10);
+    const fromPayer = o.entity_code && services.payments?.txByPayer ? await services.payments.txByPayer(o.entity_code, 120) : [];
+    const elsewhere = new Map((await db.all(`SELECT tx_id, order_id FROM b2b_payments WHERE order_id IS NOT NULL AND tx_id IN (SELECT value FROM json_each(?))`,
+      [JSON.stringify(fromPayer.map((t) => t.id))])).map((x) => [x.tx_id, x.order_id]));
+    const others = fromPayer.filter((t) => !linked.some((l) => l.tx_id === t.id)).map((t) => ({
+      tx_id: t.id, amount: t.amount, date: t.date, payer_name: t.payer_name, purpose: t.purpose,
+      order: elsewhere.get(t.id) ? orderNo(elsewhere.get(t.id)) : '', hint: purposeHasNo(t.purpose, o.invoice_no), before: t.date.slice(0, 10) < since,
+    }));
+    const paidSum = round2(linked.reduce((a, t) => a + t.amount, 0));
+    const verdict = paidSum >= o.total - DUE_EPS ? 'confirmed' : paidSum > 0 ? 'partial' : others.some((t) => !t.order && !t.before) ? 'maybe' : 'none';
+    return c.json({ verdict, status: o.status, paid_by: o.paid_by, total: o.total, paid: paidSum, due: round2(Math.max(0, o.total - paidSum)), linked, others, added: r.added, code: o.entity_code || '' });
   });
 
   // Відв'язати платіж (Opendatabot помилився): він більше не зараховується автоматично.

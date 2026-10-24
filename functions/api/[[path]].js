@@ -7475,12 +7475,15 @@ ${link(base, `b2borders/${pool[0].id}`)}` : ""}`);
   });
   app.post("/api/b2b/orders/:id/payments", async (c) => {
     const o = await supplyOf(c);
-    if (!["pay_wait", "partial", "paid"].includes(o.status) || o.status === "paid" && o.paid_by !== "Opendatabot") {
-      throw fail(400, o.status === "paid" ? "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0432\u0436\u0435 \u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443." : "\u041F\u043B\u0430\u0442\u0456\u0436 \u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0443\u0454\u0442\u044C\u0441\u044F \u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437 \u0440\u0430\u0445\u0443\u043D\u043A\u043E\u043C (\xAB\u041E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443\xBB \u0430\u0431\u043E \xAB\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB).");
+    if (!["pay_wait", "partial", "paid"].includes(o.status)) {
+      throw fail(400, "\u041F\u043B\u0430\u0442\u0456\u0436 \u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0443\u0454\u0442\u044C\u0441\u044F \u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437 \u0440\u0430\u0445\u0443\u043D\u043A\u043E\u043C (\xAB\u041E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443\xBB, \xAB\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0430\u0431\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB).");
     }
     const txId = String((await c.req.json()).tx_id || "");
     const ex = await db.get(`SELECT tx_id, order_id FROM b2b_payments WHERE tx_id = ?`, [txId]);
     if (ex?.order_id && ex.order_id !== o.id) throw fail(400, `\u0426\u0435\u0439 \u043F\u043B\u0430\u0442\u0456\u0436 \u0443\u0436\u0435 \u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0430\u043D\u043E \u0432 ${orderNo(ex.order_id)} \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0432\u0456\u0434\u0432'\u044F\u0436\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u0442\u0430\u043C.`);
+    if (o.status === "paid" && o.paid_by !== "Opendatabot") {
+      await db.run(`UPDATE b2b_orders SET status = 'pay_wait', paid_amount = 0, paid_at = '', paid_by = '' WHERE id = ?`, [o.id]);
+    }
     if (ex) await db.run(`UPDATE b2b_payments SET order_id = ?, dismissed = 0, auto = 0, created_by = ? WHERE tx_id = ?`, [o.id, userName3(c.get("user")), txId]);
     else {
       const [t] = services.payments?.txs ? await services.payments.txs([txId]) : [];
@@ -7493,6 +7496,32 @@ ${link(base, `b2borders/${pool[0].id}`)}` : ""}`);
     await log(o.id, c.get("user"), "\u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0430\u043D\u043E \u043F\u043B\u0430\u0442\u0456\u0436 \u0432\u0440\u0443\u0447\u043D\u0443");
     await recalc(o.id, c, c.get("user"));
     return c.json({ ok: true });
+  });
+  app.post("/api/b2b/orders/:id/check-pay", async (c) => {
+    let o = await supplyOf(c);
+    const r = services.payments?.refresh ? await services.payments.refresh(new URL(c.req.url).origin) : { connected: false };
+    if (!r.connected) throw fail(400, "Opendatabot \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u0440\u0430\u0445\u0443\u043D\u043A\u0456\u0432).");
+    o = await supplyOf(c);
+    const linked = await db.all(`SELECT tx_id, amount, date, payer_name, purpose FROM b2b_payments WHERE order_id = ? ORDER BY date`, [o.id]);
+    const since = o.invoice_date || o.created_at.slice(0, 10);
+    const fromPayer = o.entity_code && services.payments?.txByPayer ? await services.payments.txByPayer(o.entity_code, 120) : [];
+    const elsewhere = new Map((await db.all(
+      `SELECT tx_id, order_id FROM b2b_payments WHERE order_id IS NOT NULL AND tx_id IN (SELECT value FROM json_each(?))`,
+      [JSON.stringify(fromPayer.map((t) => t.id))]
+    )).map((x) => [x.tx_id, x.order_id]));
+    const others = fromPayer.filter((t) => !linked.some((l) => l.tx_id === t.id)).map((t) => ({
+      tx_id: t.id,
+      amount: t.amount,
+      date: t.date,
+      payer_name: t.payer_name,
+      purpose: t.purpose,
+      order: elsewhere.get(t.id) ? orderNo(elsewhere.get(t.id)) : "",
+      hint: purposeHasNo(t.purpose, o.invoice_no),
+      before: t.date.slice(0, 10) < since
+    }));
+    const paidSum = round2(linked.reduce((a, t) => a + t.amount, 0));
+    const verdict = paidSum >= o.total - DUE_EPS ? "confirmed" : paidSum > 0 ? "partial" : others.some((t) => !t.order && !t.before) ? "maybe" : "none";
+    return c.json({ verdict, status: o.status, paid_by: o.paid_by, total: o.total, paid: paidSum, due: round2(Math.max(0, o.total - paidSum)), linked, others, added: r.added, code: o.entity_code || "" });
   });
   app.delete("/api/b2b/orders/:id/payments/:tx", async (c) => {
     const o = await supplyOf(c);
@@ -8390,6 +8419,31 @@ function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, notify = a
     return c.json({ ok: true, fresh, paid: paid.length });
   });
   const PAGE2 = 100;
+  async function pullNew(cr) {
+    let added = 0;
+    const newRows = [];
+    const changedIds = [];
+    for (let p = 0; p < 5; p++) {
+      const j = await odb(cr, "GET", `/api/transactions?limit=${PAGE2}&offset=${p * PAGE2}`);
+      const items = Array.isArray(j.items) ? j.items : [];
+      const { fresh, freshRows, changedIds: ch } = await saveTx(items);
+      added += fresh;
+      newRows.push(...freshRows);
+      changedIds.push(...ch);
+      if (items.length < PAGE2 || fresh === 0) break;
+    }
+    return { added, newRows, changedIds };
+  }
+  async function refresh(origin = "") {
+    const s = await settings();
+    if (!s.odb_key || !s.odb_name) return { connected: false };
+    const { added, newRows, changedIds } = await pullNew({ key: s.odb_key, name: s.odb_name });
+    const paid = await relink({ txIds: changedIds });
+    await putSetting2("odb_sync_at", nowIso());
+    await notify({ linkIds: paid, freshRows: newRows }).catch(() => 0);
+    if (newRows.length) await onTx(newRows.map((r) => r.id), origin).catch(() => 0);
+    return { connected: true, added };
+  }
   app.post("/api/odb/sync", async (c) => {
     need(c, "docs.edit");
     const b = await c.req.json().catch(() => ({}));
@@ -8399,18 +8453,9 @@ function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, notify = a
     if (!b.force && Date.now() - last < 4 * 6e4) return c.json({ ok: true, skipped: true, lastSync: s.odb_sync_at, hist: JSON.parse(s.odb_hist || "{}") });
     await putSetting2("odb_sync_at", nowIso());
     const cr = { key: s.odb_key, name: s.odb_name };
-    let added = 0;
-    const newRows = [];
-    const changedIds = [];
-    for (let p = 0; p < 5; p++) {
-      const j = await odb(cr, "GET", `/api/transactions?limit=${PAGE2}&offset=${p * PAGE2}`);
-      const items = Array.isArray(j.items) ? j.items : [];
-      const { rows, fresh, freshRows, changedIds: ch } = await saveTx(items);
-      added += fresh;
-      newRows.push(...freshRows);
-      changedIds.push(...ch);
-      if (items.length < PAGE2 || fresh === 0) break;
-    }
+    const pulled = await pullNew(cr);
+    let { added } = pulled;
+    const { newRows, changedIds } = pulled;
     let hist = {};
     try {
       hist = JSON.parse(s.odb_hist || "{}");
@@ -8621,7 +8666,7 @@ function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, notify = a
     `SELECT ${TX_COLS} FROM odb_tx WHERE payer_code = ? AND link_id IS NULL AND currency = 'UAH' AND date >= ? ORDER BY date DESC LIMIT 50`,
     [code, new Date(Date.now() - days * 864e5).toISOString().slice(0, 10)]
   );
-  return { linkForRahunok, txs, txByPayer };
+  return { linkForRahunok, txs, txByPayer, refresh };
 }
 
 // src/app.js

@@ -462,6 +462,33 @@ export function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, not
 
   // Звірка: нові надходження (зверху стрічки), поступово — уся історія, і статуси наших рахунків.
   const PAGE = 100;
+  async function pullNew(cr) {
+    let added = 0;
+    const newRows = [];
+    const changedIds = [];
+    for (let p = 0; p < 5; p++) {
+      const j = await odb(cr, 'GET', `/api/transactions?limit=${PAGE}&offset=${p * PAGE}`);
+      const items = Array.isArray(j.items) ? j.items : [];
+      const { fresh, freshRows, changedIds: ch } = await saveTx(items);
+      added += fresh;
+      newRows.push(...freshRows);
+      changedIds.push(...ch);
+      // Немає нових надходжень на сторінці — далі лише старіші (сторінка лише з витратами теж зупиняє, а не тягне ще 4).
+      if (items.length < PAGE || fresh === 0) break;
+    }
+    return { added, newRows, changedIds };
+  }
+  // Для B2B «Перевірити оплату»: забрати нові платежі зі стрічки Opendatabot зараз (без очікування звірки).
+  async function refresh(origin = '') {
+    const s = await settings();
+    if (!s.odb_key || !s.odb_name) return { connected: false };
+    const { added, newRows, changedIds } = await pullNew({ key: s.odb_key, name: s.odb_name });
+    const paid = await relink({ txIds: changedIds });
+    await putSetting('odb_sync_at', nowIso());
+    await notify({ linkIds: paid, freshRows: newRows }).catch(() => 0);
+    if (newRows.length) await onTx(newRows.map((r) => r.id), origin).catch(() => 0);
+    return { connected: true, added };
+  }
   app.post('/api/odb/sync', async (c) => {
     need(c, 'docs.edit');
     const b = await c.req.json().catch(() => ({}));
@@ -472,20 +499,10 @@ export function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, not
     if (!b.force && Date.now() - last < 4 * 60000) return c.json({ ok: true, skipped: true, lastSync: s.odb_sync_at, hist: JSON.parse(s.odb_hist || '{}') });
     await putSetting('odb_sync_at', nowIso());
     const cr = { key: s.odb_key, name: s.odb_name };
-    let added = 0;
-    const newRows = [];
-    const changedIds = [];
     // 1) нові: з початку стрічки, доки не підуть уже відомі
-    for (let p = 0; p < 5; p++) {
-      const j = await odb(cr, 'GET', `/api/transactions?limit=${PAGE}&offset=${p * PAGE}`);
-      const items = Array.isArray(j.items) ? j.items : [];
-      const { rows, fresh, freshRows, changedIds: ch } = await saveTx(items);
-      added += fresh;
-      newRows.push(...freshRows);
-      changedIds.push(...ch);
-      // Немає нових надходжень на сторінці — далі лише старіші (сторінка лише з витратами теж зупиняє, а не тягне ще 4).
-      if (items.length < PAGE || fresh === 0) break;
-    }
+    const pulled = await pullNew(cr);
+    let { added } = pulled;
+    const { newRows, changedIds } = pulled;
     // 2) історія — кілька сторінок за раз, з місця, де зупинились
     let hist = {};
     try { hist = JSON.parse(s.odb_hist || '{}'); } catch { /* */ }
@@ -680,5 +697,5 @@ export function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, not
     [code, new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)],
   );
 
-  return { linkForRahunok, txs, txByPayer };
+  return { linkForRahunok, txs, txByPayer, refresh };
 }

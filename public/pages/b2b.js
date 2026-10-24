@@ -354,7 +354,8 @@ export function createB2bPages(ctx = {}) {
             <div class="btn-row" style="flex-wrap:wrap">
               ${['pay_wait', 'partial'].includes(o.status) ? '<button class="btn primary" data-set="paid">Оплачено (вручну)</button>' : ''}
               ${o.status === 'partial' ? '<button class="btn" data-set="pay_wait">Зняти часткову оплату</button>' : ''}
-              ${['paid'].includes(o.status) ? '<button class="btn primary" data-set="done">Завершено</button><button class="btn" data-set="pay_wait">Повернути «Очікує оплату»</button>' : ''}
+              ${['paid'].includes(o.status) ? '<button class="btn primary" data-set="done">Завершено</button><button class="btn" data-set="pay_wait">Скасувати «Оплачено»</button>' : ''}
+              ${['pay_wait', 'partial', 'paid', 'done'].includes(o.status) ? '<button class="btn" id="oCheckPay">Перевірити оплату (Opendatabot)</button>' : ''}
               ${o.status === 'done' ? '<button class="btn" data-set="paid">Повернути «Оплачено»</button>' : ''}
               ${closed ? '' : '<button class="btn danger" data-set="cancelled">Скасувати замовлення</button>'}
             </div>
@@ -384,9 +385,10 @@ export function createB2bPages(ctx = {}) {
       try { await api('DELETE', `/api/b2b/files/${b.dataset.fdel}`); toast('Видалено'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
     }));
     if ($('#oPays')) loadPays(o);
+    if ($('#oCheckPay')) $('#oCheckPay').onclick = () => checkPay(o);
     $$('[data-set]').forEach((b) => (b.onclick = async () => {
       const st = b.dataset.set;
-      if (st === 'pay_wait' && !(await confirmDanger(o.status === 'partial' ? 'Зняти часткову оплату?' : 'Повернути «Очікує оплату»?', 'Платежі Opendatabot відв’яжуться від закупівлі й більше не зараховуватимуться в неї автоматично.', 'Так, зняти оплату'))) return;
+      if (st === 'pay_wait' && !(await confirmDanger(o.status === 'partial' ? 'Зняти часткову оплату?' : 'Скасувати статус «Оплачено»?', 'Платежі Opendatabot відв’яжуться від закупівлі й більше не зараховуватимуться в неї автоматично.', 'Так, зняти оплату'))) return;
       if (st === 'cancelled' && !(await confirmDanger(`Скасувати ${o.number}?`, 'Партнер отримає сповіщення.', 'Скасувати замовлення'))) return;
       try { await api('POST', `/api/b2b/orders/${o.id}/status`, { status: st }); toast('Статус змінено'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
     }));
@@ -401,7 +403,7 @@ export function createB2bPages(ctx = {}) {
       const d = await api('GET', `/api/b2b/orders/${o.id}/payments`);
       const row = (t, btn) => `<tr><td class="small nowrap">${esc(fmtDateTime(t.date))}</td><td class="r nowrap"><b>${uah(t.amount)}</b></td>
         <td class="small">${esc(t.payer_name || t.payer_code)}<div class="muted">${esc(t.purpose)}</div></td><td>${btn}</td></tr>`;
-      const canAdd = ['pay_wait', 'partial'].includes(d.status) || (d.status === 'paid' && o.paid_by === 'Opendatabot');
+      const canAdd = ['pay_wait', 'partial', 'paid'].includes(d.status);
       box.innerHTML = `<h3>Платежі (Opendatabot)</h3>
         ${d.linked.length ? `<table class="list"><tbody>${d.linked.map((t) => row(t, `<span class="small muted">${t.auto ? 'авто' : 'вручну'}</span> <button class="btn sm danger" data-unpay="${esc(t.tx_id)}">Відв’язати</button>`)).join('')}</tbody></table>`
           : '<div class="small muted">Платежів ще не зараховано. Opendatabot зараховує їх автоматично: платник — ця юрособа, сума не більша за залишок.</div>'}
@@ -415,6 +417,38 @@ export function createB2bPages(ctx = {}) {
         try { await api('DELETE', `/api/b2b/orders/${o.id}/payments/${encodeURIComponent(b.dataset.unpay)}`); toast('Платіж відв’язано'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
       }));
     } catch (er) { box.innerHTML = `<h3>Платежі (Opendatabot)</h3><div class="small muted">${esc(er.message)}</div>`; }
+  }
+
+  // «Перевірити оплату»: свіжі платежі з Opendatabot і висновок — чи підтверджена оплата цієї закупівлі.
+  async function checkPay(o) {
+    const btn = $('#oCheckPay');
+    btn.disabled = true;
+    btn.textContent = 'Перевіряю…';
+    let d;
+    try { d = await api('POST', `/api/b2b/orders/${o.id}/check-pay`); } catch (er) { toast(er.message, true); btn.disabled = false; btn.textContent = 'Перевірити оплату (Opendatabot)'; return; }
+    const manualPaid = ['paid', 'done'].includes(d.status) && d.paid_by && d.paid_by !== 'Opendatabot';
+    const VERDICT = {
+      confirmed: ['ok', `✅ Оплату підтверджено Opendatabot: ${uah(d.paid)} з ${uah(d.total)}.`],
+      partial: ['info', `💳 За Opendatabot оплачено частково: ${uah(d.paid)} з ${uah(d.total)}, ще ${uah(d.due)}.`],
+      maybe: ['warn', `Від цієї юрособи є платежі, ще не зараховані в закупівлю — перевірте нижче і натисніть «Зарахувати», якщо це оплата.`],
+      none: ['bad', `Opendatabot не бачив платежів від юрособи закупівлі (код ${esc(d.code || '—')}) за останні 120 днів після рахунку.${manualPaid ? ' Статус «Оплачено» поставлено вручну — якщо грошей не було, скасуйте його.' : ''}`],
+    };
+    const [cls, text] = VERDICT[d.verdict];
+    const row = (t, extra) => `<tr><td class="small nowrap">${esc(fmtDateTime(t.date))}</td><td class="r nowrap"><b>${uah(t.amount)}</b></td>
+      <td class="small">${esc(t.payer_name)}<div class="muted">${esc(t.purpose)}</div></td><td class="small">${extra}</td></tr>`;
+    const m = modal(`Оплата ${o.number}`, `<div class="alert ${cls}">${text}</div>
+      ${d.added ? `<div class="small muted">Щойно отримано нових платежів з Opendatabot: ${d.added}.</div>` : ''}
+      ${d.linked.length ? `<h4 style="margin:12px 0 4px">Зараховані платежі</h4><table class="list"><tbody>${d.linked.map((t) => row(t, '')).join('')}</tbody></table>` : ''}
+      ${d.others.length ? `<h4 style="margin:12px 0 4px">Інші платежі цієї юрособи (120 днів)</h4><table class="list"><tbody>${d.others.map((t) => row(t,
+        t.order ? `у ${esc(t.order)}` : `${t.hint ? '<span class="badge info">№ рахунку</span> ' : ''}${t.before ? '<span class="muted">до рахунку</span> ' : ''}<button class="btn sm" data-cpay="${esc(t.tx_id)}">Зарахувати</button>`)).join('')}</tbody></table>` : ''}
+      <div class="btn-row" style="margin-top:12px">${manualPaid && d.verdict !== 'confirmed' ? '<button class="btn danger" id="cpUnpaid">Скасувати «Оплачено»</button>' : ''}<button class="btn" id="cpClose">Закрити</button></div>`, { wide: true });
+    $('#cpClose', m.el).onclick = () => { m.close(); viewOrder(o.id); };
+    if ($('#cpUnpaid', m.el)) $('#cpUnpaid', m.el).onclick = async () => {
+      try { await api('POST', `/api/b2b/orders/${o.id}/status`, { status: 'pay_wait' }); m.close(); toast('Статус «Оплачено» скасовано'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
+    };
+    $$('[data-cpay]', m.el).forEach((b) => (b.onclick = async () => {
+      try { await api('POST', `/api/b2b/orders/${o.id}/payments`, { tx_id: b.dataset.cpay }); m.close(); toast('Платіж зараховано'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
+    }));
   }
 
   // ---------------------------------------------------------------- замовлення клієнтів партнерів
