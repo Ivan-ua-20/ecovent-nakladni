@@ -41,9 +41,11 @@ export function createAnalyticsUI(ctx) {
   const full = () => ctx.can('analytics'); // менеджер (без цього права) бачить лише свої замовлення
 
   // ---------- стан інтерфейсу (запам'ятовується в браузері) ----------
-  const DEF = { period: 'cm', from: '', to: '', cmpMode: 'auto', cmpFrom: '', cmpTo: '', depts: [], sources: [], managers: [], brands: [], cats: [], metric: 'net', cumulative: true, showTarget: true, showCmp: true, table: false, collapsed: [], sort: {} };
+  const DEF = { period: 'cm', from: '', to: '', cmpMode: 'auto', cmpFrom: '', cmpTo: '', depts: [], sources: [], managers: [], brands: [], cats: [], metric: 'rev', cumulative: true, showTarget: true, showCmp: true, table: false, collapsed: [], sort: {} };
   let ui = { ...DEF };
   try { ui = { ...DEF, ...JSON.parse(localStorage.getItem(LS_KEY) || '{}') }; } catch { /* немає сховища */ }
+  // Один раз: «Динаміка» за замовчуванням — сума з відмовами й поверненнями (раніше збережено «Оборот без відмов»).
+  if (ui.metricV !== 2) { ui.metric = 'rev'; ui.metricV = 2; }
   const persist = () => { try { localStorage.setItem(LS_KEY, JSON.stringify(ui)); } catch { /* немає сховища */ } };
   // На телефоні фільтри за замовчуванням згорнуті (вибрані значення видно в заголовку).
   if (!ui.mobInit && window.matchMedia('(max-width: 760px)').matches) { ui.mobInit = true; ui.collapsed = [...new Set([...ui.collapsed, 'filters'])]; persist(); }
@@ -372,7 +374,7 @@ export function createAnalyticsUI(ctx) {
         <div class="an-chart-head">
           <h3>Динаміка</h3>
           <div class="seg" role="group" aria-label="Показник">
-            ${[['net', 'Оборот без відмов'], ['rev', 'Сума замовлень'], ['cnt', 'Кількість']].map(([k, l]) => `<button data-m="${k}" class="${ui.metric === k ? 'on' : ''}" aria-pressed="${ui.metric === k}">${l}</button>`).join('')}
+            ${[['rev', 'Сума замовлень'], ['net', 'Оборот без відмов'], ['cnt', 'Кількість']].map(([k, l]) => `<button data-m="${k}" class="${ui.metric === k ? 'on' : ''}" aria-pressed="${ui.metric === k}">${l}</button>`).join('')}
           </div>
           <div class="seg" role="group" aria-label="Вигляд">
             <button data-c="0" class="${!ui.cumulative ? 'on' : ''}" aria-pressed="${!ui.cumulative}">По днях</button>
@@ -493,9 +495,9 @@ export function createAnalyticsUI(ctx) {
     renderBody(lastData);
   }
 
-  // Розбивки показують той самий показник, що й «Динаміка»: «Оборот без відмов» або «Сума замовлень».
-  const byMetric = (rows) => (ui.metric === 'net' ? rows.map((r) => ({ ...r, rev: r.net ?? r.rev, prevRev: r.prevNet ?? r.prevRev })) : rows);
-  const sumLabel = () => (ui.metric === 'net' ? 'Оборот' : 'Сума');
+  // Розбивки — сума всіх оброблених замовлень, разом із відмовами й поверненнями (як «Динаміка» за замовчуванням).
+  const byMetric = (rows) => rows;
+  const sumLabel = () => 'Сума';
   function breakdown(title, rows, key, { plan = false, hasCmp = false, refusals = false, qty = false, empty = '' } = {}) {
     const list = sortRows(key, byMetric(rows).filter((r) => r.rev || r.cnt || r.plan));
     if (!list.length) return `<div class="card"><h3>${title}</h3><div class="muted small">${empty || 'Немає даних за період.'}</div></div>`;
