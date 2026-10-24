@@ -1554,10 +1554,10 @@ var RegExpRouter = class {
       const handlers = r[path];
       const pathData = trie.paths[path];
       if (!pathData) {
-        staticMap[path] = [handlers.map(([h5]) => [h5, createNullObject()]), emptyParam];
+        staticMap[path] = [handlers.map(([h6]) => [h6, createNullObject()]), emptyParam];
         continue;
       }
-      handlerData[pathData[0]] = handlers.map(([h5, handlerPath]) => [h5, trie.paths[handlerPath][1].reduceRight((map, [key], i) => {
+      handlerData[pathData[0]] = handlers.map(([h6, handlerPath]) => [h6, trie.paths[handlerPath][1].reduceRight((map, [key], i) => {
         map[key] = paramReplacementMap[pathData[1][i][1]];
         return map;
       }, createNullObject())]);
@@ -1809,7 +1809,7 @@ var hasAnalytics = (u) => permsOfUser(u).includes("an.view");
 var can = (user, perm) => Boolean(user && permsOfUser(user).includes(perm));
 var enc = new TextEncoder();
 var toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-var fromHex = (hex) => new Uint8Array(hex.match(/.{2}/g).map((h5) => parseInt(h5, 16)));
+var fromHex = (hex) => new Uint8Array(hex.match(/.{2}/g).map((h6) => parseInt(h6, 16)));
 function randomToken(bytes = 32) {
   const a = new Uint8Array(bytes);
   crypto.getRandomValues(a);
@@ -1826,15 +1826,15 @@ async function derive(password, saltBytes, iterations) {
 }
 async function hashPassword(password) {
   const salt = fromHex(randomToken(16));
-  const h5 = await derive(password, salt, ITER);
-  return `pbkdf2$${ITER}$${toHex(salt)}$${h5}`;
+  const h6 = await derive(password, salt, ITER);
+  return `pbkdf2$${ITER}$${toHex(salt)}$${h6}`;
 }
 async function verifyPassword(password, stored) {
   const [scheme, iter, saltHex, hashHex] = String(stored || "").split("$");
   if (scheme !== "pbkdf2" || !saltHex || !hashHex) return false;
-  const h5 = await derive(password, fromHex(saltHex), Number(iter));
-  let diff = h5.length ^ hashHex.length;
-  for (let i = 0; i < Math.min(h5.length, hashHex.length); i++) diff |= h5.charCodeAt(i) ^ hashHex.charCodeAt(i);
+  const h6 = await derive(password, fromHex(saltHex), Number(iter));
+  let diff = h6.length ^ hashHex.length;
+  for (let i = 0; i < Math.min(h6.length, hashHex.length); i++) diff |= h6.charCodeAt(i) ^ hashHex.charCodeAt(i);
   return diff === 0;
 }
 var publicUser = (u) => u ? {
@@ -1881,12 +1881,12 @@ var num = (v) => {
 var kyivDay = (d = /* @__PURE__ */ new Date()) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv" }).format(d);
 var parseTpl = (t) => t ? { ...t, options: JSON.parse(t.options || "{}") } : null;
 var hash = (s) => {
-  let h5 = 2166136261;
+  let h6 = 2166136261;
   for (let i = 0; i < s.length; i++) {
-    h5 ^= s.charCodeAt(i);
-    h5 = Math.imul(h5, 16777619) >>> 0;
+    h6 ^= s.charCodeAt(i);
+    h6 = Math.imul(h6, 16777619) >>> 0;
   }
-  return h5.toString(16);
+  return h6.toString(16);
 };
 
 // node_modules/hono/dist/utils/cookie.js
@@ -2685,8 +2685,8 @@ async function getProducts(fetchFn, { subdomain, key }, ids) {
   const cached = {};
   const unique = [];
   for (const id of all) {
-    const h5 = productCache.get(`${subdomain}|${id}`);
-    if (h5 && Date.now() - h5.at < PRODUCT_TTL) cached[id] = h5.value;
+    const h6 = productCache.get(`${subdomain}|${id}`);
+    if (h6 && Date.now() - h6.at < PRODUCT_TTL) cached[id] = h6.value;
     else unique.push(id);
   }
   if (!unique.length) return cached;
@@ -4623,6 +4623,8 @@ async function hashKey(str) {
 
 // src/modules/notify/index.js
 var TG = "https://api.telegram.org";
+var ALLOWED_UPDATES = ["message", "callback_query"];
+var HOOK_V = "2";
 var h = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 var nf = new Intl.NumberFormat("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 var uah = (n) => `${nf.format(Number(n) || 0)} \u20B4`;
@@ -4655,7 +4657,8 @@ function mountTg(app, { db, fetchFn, services = {} }) {
     const me = await tg(token, "getMe");
     const secret = randomToken(16);
     const url = `${new URL(c.req.url).origin}/api/tg/hook`;
-    await tg(token, "setWebhook", { url, secret_token: secret, allowed_updates: ["message"] });
+    await tg(token, "setWebhook", { url, secret_token: secret, allowed_updates: ALLOWED_UPDATES });
+    await putSetting2("tg_hook_v", HOOK_V);
     await putSetting2("tg_token", token);
     await putSetting2("tg_bot", me.username || "");
     await putSetting2("tg_secret", secret);
@@ -4687,6 +4690,25 @@ function mountTg(app, { db, fetchFn, services = {} }) {
     const s = await settings();
     if (!s.tg_token || !s.tg_secret || c.req.header("x-telegram-bot-api-secret-token") !== s.tg_secret) return c.json({ ok: false }, 401);
     const upd = await c.req.json().catch(() => ({}));
+    const base = new URL(c.req.url).origin;
+    if (s.tg_hook_v !== HOOK_V) {
+      await tg(s.tg_token, "setWebhook", { url: `${base}/api/tg/hook`, secret_token: s.tg_secret, allowed_updates: ALLOWED_UPDATES }).catch(() => {
+      });
+      await putSetting2("tg_hook_v", HOOK_V);
+    }
+    if (upd.callback_query) {
+      const cq = upd.callback_query;
+      const u = await db.get(`SELECT * FROM users WHERE tg_chat_id = ? AND active = 1`, [String(cq.from?.id || "")]);
+      let note = "";
+      try {
+        note = u && await services.b2b?.tgCallback?.(cq, u, base) || "";
+      } catch (e) {
+        note = String(e.message || e).slice(0, 150);
+      }
+      await tg(s.tg_token, "answerCallbackQuery", { callback_query_id: cq.id, text: typeof note === "string" ? note : "" }).catch(() => {
+      });
+      return c.json({ ok: true });
+    }
     const msg = upd.message;
     const chat = msg?.chat?.id;
     if (!chat) return c.json({ ok: true });
@@ -4700,6 +4722,10 @@ function mountTg(app, { db, fetchFn, services = {} }) {
         await b2b?.tgGroupLeft?.(String(chat));
         return c.json({ ok: true });
       }
+      if ((msg.document || msg.photo) && msg.reply_to_message?.from?.is_bot && msg.reply_to_message.from.username === s.tg_bot) {
+        await services.b2b?.tgGroupFile?.(msg, base);
+        return c.json({ ok: true });
+      }
       const g = /^\/(?:link|start)(?:@\w+)?\s+([0-9a-f]{12,24})\b/i.exec(String(msg.text || ""));
       if (!g) return c.json({ ok: true });
       const reply2 = await b2b?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || "") || "\u041A\u043E\u0434 \u043D\u0435 \u043F\u0456\u0434\u0456\u0439\u0448\u043E\u0432. \u0412\u0456\u0437\u044C\u043C\u0456\u0442\u044C \u043D\u043E\u0432\u0438\u0439 \u043A\u043E\u0434 \u0443 \u043A\u0430\u0440\u0442\u0446\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0430 \u0441\u0430\u0439\u0442\u0456.";
@@ -4708,6 +4734,10 @@ function mountTg(app, { db, fetchFn, services = {} }) {
       return c.json({ ok: true });
     }
     const m = /^\/start(?:@\w+)?\s+([0-9a-f]{24})\b/.exec(String(msg.text || ""));
+    if (!m && msg.chat.type === "private") {
+      const u = await db.get(`SELECT * FROM users WHERE tg_chat_id = ? AND active = 1`, [String(chat)]);
+      if (u && await services.b2b?.tgPrivate?.(msg, u, base)) return c.json({ ok: true });
+    }
     let reply = "\u0429\u043E\u0431 \u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0442\u0438 \u0441\u043F\u043E\u0432\u0456\u0449\u0435\u043D\u043D\u044F, \u0432\u0456\u0434\u043A\u0440\u0438\u0439\u0442\u0435 \u0441\u0430\u0439\u0442, \u043D\u0430\u0442\u0438\u0441\u043D\u0456\u0442\u044C \xABTelegram\xBB \u0443\u0433\u043E\u0440\u0456 \u0456 \u043F\u043E\u0442\u0456\u043C \xAB\u041F\u0456\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u0438 Telegram\xBB.";
     if (m) {
       const u = await db.get(`SELECT id, name, login, tg_code FROM users WHERE tg_code LIKE ? AND active = 1`, [`${m[1]}|%`]);
@@ -4784,11 +4814,21 @@ ${h(l.alias || "")}${l.created_by ? `
     }
     return sent;
   }
-  async function sendFile({ chatIds = [] }, { bytes, name, mime }, caption = "") {
+  let lastMessage = null;
+  async function sendFile({ chatIds = [] }, { bytes, name, mime, fileId }, caption = "") {
     const s = await settings();
+    lastMessage = null;
     if (!s.tg_token || !chatIds.length) return 0;
     let sent = 0;
     for (const chat of chatIds.slice(0, 5)) {
+      if (fileId) {
+        const r = await tg(s.tg_token, "sendDocument", { chat_id: chat, document: fileId, ...caption ? { caption: caption.slice(0, 1e3), parse_mode: "HTML" } : {} }).catch(() => null);
+        if (r) {
+          sent++;
+          lastMessage = { chat: String(chat), id: r.message_id };
+        }
+        continue;
+      }
       const fd = new FormData();
       fd.append("chat_id", String(chat));
       if (caption) {
@@ -4799,13 +4839,28 @@ ${h(l.alias || "")}${l.created_by ? `
       try {
         const r = await fetchFn(`${TG}/bot${s.tg_token}/sendDocument`, { method: "POST", body: fd });
         const j = await r.json().catch(() => null);
-        if (j?.ok) sent++;
+        if (j?.ok) {
+          sent++;
+          lastMessage = { chat: String(chat), id: j.result?.message_id };
+        }
       } catch {
       }
     }
     return sent;
   }
-  return { notify, sendText, sendFile };
+  async function api(method, body) {
+    const s = await settings();
+    if (!s.tg_token) throw fail(400, "Telegram-\u0431\u043E\u0442\u0430 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E.");
+    return tg(s.tg_token, method, body);
+  }
+  async function download(fileId) {
+    const s = await settings();
+    const f = await tg(s.tg_token, "getFile", { file_id: fileId });
+    const r = await fetchFn(`${TG}/file/bot${s.tg_token}/${f.file_path}`);
+    if (!r.ok) throw fail(502, "Telegram: \u043D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0438\u0442\u0438 \u0444\u0430\u0439\u043B.");
+    return new Uint8Array(await r.arrayBuffer());
+  }
+  return { notify, sendText, sendFile, api, download, lastFileMessage: () => lastMessage };
 }
 
 // src/modules/errlog/index.js
@@ -5014,7 +5069,7 @@ function toB64(bytes) {
 }
 var fromB64 = (s) => Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0));
 var userName2 = (u) => u?.name || u?.login || "";
-function mountB2bOrders(app, { db, services, myPartner, partnerPrice: partnerPrice2, onCleanup }) {
+function mountB2bOrders(app, { db, services, myPartner, partnerPrice: partnerPrice2, onCleanup, hooks = {} }) {
   onCleanup(async () => {
     const border = new Date(Date.now() - KEEP_FILES_DAYS * 864e5).toISOString();
     await db.batch([
@@ -5048,7 +5103,7 @@ ${lines.join("\n")}
 
 <i>\u041A\u043E\u043C\u0435\u043D\u0442\u0430\u0440: ${h3(String(o.comment).slice(0, 300))}</i>` : ""}`;
   };
-  const link = (c, hash2) => `${new URL(c.req.url).origin}/#/${hash2}`;
+  const link = (c, hash2) => `${typeof c === "string" ? c : new URL(c.req.url).origin}/#/${hash2}`;
   function entityFields(b) {
     const kind = ENTITY_KIND[b.kind] ? b.kind : "fop";
     const code = String(b.code ?? "").replace(/\s/g, "");
@@ -5288,6 +5343,10 @@ ${link(c, `b2borders/${o.id}`)}`);
     const o = await orderOf(c.req.param("id"));
     if (o.status === "cancelled") throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.");
     const b = await c.req.json();
+    const status = await applyNumbers(o, b, c.get("user"), c);
+    return c.json({ ok: true, status });
+  });
+  async function applyNumbers(o, b, user, c, how = "") {
     const next = {
       invoice_no: b.invoice_no !== void 0 ? String(b.invoice_no).trim().slice(0, 40) : o.invoice_no,
       invoice_date: b.invoice_date !== void 0 ? String(b.invoice_date).trim().slice(0, 10) : o.invoice_date,
@@ -5304,14 +5363,14 @@ ${link(c, `b2borders/${o.id}`)}`);
     const changes = [];
     if (next.invoice_no !== o.invoice_no) changes.push(`\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${next.invoice_no || "\u2014"}${next.invoice_date ? ` \u0432\u0456\u0434 ${next.invoice_date}` : ""}`);
     if (next.waybill_no !== o.waybill_no) changes.push(`\u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0430 \u2116 ${next.waybill_no || "\u2014"}`);
-    if (changes.length) await log(o.id, c.get("user"), changes.join("; "));
+    if (changes.length) await log(o.id, user, `${changes.join("; ")}${how}`);
     if (next.invoice_no && next.invoice_no !== o.invoice_no) {
       await tgPartner(o.partner_id, `\u{1F9FE} <b>\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h3(next.invoice_no)}</b> \u043D\u0430 ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E"} ${orderNo(o.id)} \u2014 <b>${uah2(o.total)}</b>
 \u041E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443. \u0424\u0430\u0439\u043B \u0440\u0430\u0445\u0443\u043D\u043A\u0443 \u2014 \u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430.
 ${link(c, `${o.kind === "client" ? "pclients" : "porders"}/${o.id}`)}`);
     }
-    return c.json({ ok: true, status });
-  });
+    return status;
+  }
   app.post("/api/b2b/orders/:id/status", async (c) => {
     need(c, "b2b.admin");
     const o = await orderOf(c.req.param("id"));
@@ -5338,6 +5397,10 @@ ${link(c, `${o.kind === "client" ? "pclients" : "porders"}/${o.id}`)}`);
     const o = await orderOf(c.req.param("id"));
     const kind = FILE_KIND[c.req.query("kind")] ? c.req.query("kind") : "other";
     const f = await saveFile(c, o, kind);
+    if (kind === "label") {
+      const r = await hooks.afterLabel?.(o, f, c.get("user"));
+      return c.json({ id: f.id, warnings: r?.warnings || [] });
+    }
     const g = ["invoice", "waybill"].includes(kind) ? await groupOf(o.partner_id) : "";
     let toGroup = 0;
     if (g) {
@@ -5349,17 +5412,19 @@ ${link(c, `${o.kind === "client" ? "pclients" : "porders"}/${o.id}`)}`);
   });
   async function saveFile(c, o, kind) {
     const bytes = new Uint8Array(await c.req.arrayBuffer());
-    if (!bytes.length) throw fail(400, "\u041F\u043E\u0440\u043E\u0436\u043D\u0456\u0439 \u0444\u0430\u0439\u043B.");
-    if (bytes.length > MAX_FILE) throw fail(400, "\u0424\u0430\u0439\u043B \u0437\u0430\u0432\u0435\u043B\u0438\u043A\u0438\u0439 (\u0434\u043E 5 \u041C\u0411).");
     let name = "file";
     try {
       name = decodeURIComponent(c.req.header("x-file-name") || "file");
     } catch {
     }
-    name = name.replace(/[\\/:*?"<>|\r\n]+/g, "_").slice(0, 150) || "file";
-    const mime = String(c.req.header("content-type") || "application/octet-stream").slice(0, 100);
+    return storeFile(o, kind, { bytes, name, mime: c.req.header("content-type") }, c.get("user"));
+  }
+  async function storeFile(o, kind, { bytes, name, mime }, u, how = "") {
+    if (!bytes?.length) throw fail(400, "\u041F\u043E\u0440\u043E\u0436\u043D\u0456\u0439 \u0444\u0430\u0439\u043B.");
+    if (bytes.length > MAX_FILE) throw fail(400, "\u0424\u0430\u0439\u043B \u0437\u0430\u0432\u0435\u043B\u0438\u043A\u0438\u0439 (\u0434\u043E 5 \u041C\u0411).");
+    name = String(name || "file").replace(/[\\/:*?"<>|\r\n]+/g, "_").slice(0, 150) || "file";
+    mime = String(mime || "application/octet-stream").slice(0, 100);
     const parts = Math.ceil(bytes.length / PART);
-    const u = c.get("user");
     const r = await db.run(
       `INSERT INTO b2b_files (order_id, kind, name, mime, size, parts, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [o.id, kind, name, mime, bytes.length, parts, userName2(u), nowIso()]
@@ -5367,8 +5432,11 @@ ${link(c, `${o.kind === "client" ? "pclients" : "porders"}/${o.id}`)}`);
     const st = [];
     for (let n = 0; n < parts; n++) st.push([`INSERT INTO b2b_file_parts (file_id, n, data) VALUES (?, ?, ?)`, [r.lastId, n, toB64(bytes.subarray(n * PART, (n + 1) * PART))]]);
     await db.batch(st);
-    await log(o.id, u, `\u0434\u043E\u0434\u0430\u043D\u043E \u0444\u0430\u0439\u043B: ${FILE_KIND[kind]} \xAB${name}\xBB`);
+    await log(o.id, u, `\u0434\u043E\u0434\u0430\u043D\u043E \u0444\u0430\u0439\u043B: ${FILE_KIND[kind]} \xAB${name}\xBB${how}`);
     return { id: r.lastId, bytes, name, mime };
+  }
+  async function deleteFile(fileId) {
+    await db.batch([[`DELETE FROM b2b_file_parts WHERE file_id = ?`, [fileId]], [`DELETE FROM b2b_files WHERE id = ?`, [fileId]]]);
   }
   async function sendFile(f) {
     const parts = await db.all(`SELECT data FROM b2b_file_parts WHERE file_id = ? ORDER BY n`, [f.id]);
@@ -5425,7 +5493,7 @@ ${link(c, `${o.kind === "client" ? "pclients" : "porders"}/${o.id}`)}`);
     await logAudit(db, { user: c.get("user"), kind: "b2b", refId: o.partner_id, action: `\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E"} ${orderNo(o.id)} \u043D\u0430 ${uah2(o.total)}${o.crm_id ? ` (\u0443 LP-CRM \u2116 ${o.crm_id} \u2014 \u043D\u0435 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E)` : ""}` }).catch(() => 0);
     return c.json({ ok: true, inCrm: o.crm_id || "" });
   });
-  return { ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah2, h: h3 };
+  return { applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah2, h: h3 };
 }
 
 // src/modules/b2b/clients.js
@@ -5438,8 +5506,8 @@ var DEFAULT_OFFICE = "27";
 var OPT_ID_RE = /^\d{0,10}$/;
 var TTN_FIELDS = ["", "additional_2", "additional_3", "additional_4", "delivery_adress"];
 var newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Math.random() * 9e4))}`;
-function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
-  const { priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h5 } = orders;
+function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {} }) {
+  const { priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h6 } = orders;
   const userName3 = (u) => u?.name || u?.login || "";
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files
     FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id`;
@@ -5540,6 +5608,7 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
       params.push(partnerId);
     }
     const rows = await db.all(`SELECT id, crm_id, crm_ext FROM b2b_orders WHERE ${where.join(" AND ")} ORDER BY crm_checked_at LIMIT 100`, params);
+    const linked = [];
     if (!rows.length) return;
     const { creds } = await crmConfig();
     if (!creds.subdomain || !creds.key) return;
@@ -5562,11 +5631,13 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
           const name = o ? String((names[s]?.name ?? names[s]) || s || "\u2014").trim() : "\u041D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 CRM";
           const num4 = o && /^\d+$/.test(String(o.id ?? "")) ? String(o.id) : r.crm_id;
           st.push([`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ?, crm_ext = ?, crm_id = ? WHERE id = ?`, [name, now, r.crm_ext, num4 || "", r.id]]);
+          if (num4 && !r.crm_id) linked.push([r.id, num4]);
         }
       }
     } catch {
     }
     if (st.length) await db.batch(st);
+    for (const [id, num4] of linked) await hooks.crmLinked?.(id, num4).catch(() => 0);
   }
   function clientFields(b) {
     const name = String(b.client_name ?? "").trim().replace(/\s+/g, " ").slice(0, 150);
@@ -5619,11 +5690,11 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     }));
   }
   const tgNew = async (c, p, id, f, it, verb = "\u041D\u043E\u0432\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430") => {
-    const lines = it.items.slice(0, 60).map((i) => `${h5(i.name)} \u2014 ${i.qty} \u0448\u0442 \u2014 ${uah3(i.price)}`).join("\n");
-    const text = `\u{1F4E6} <b>${verb} ${orderNo(id)}</b> \u0432\u0456\u0434 \xAB${h5(p.name)}\xBB
+    const lines = it.items.slice(0, 60).map((i) => `${h6(i.name)} \u2014 ${i.qty} \u0448\u0442 \u2014 ${uah3(i.price)}`).join("\n");
+    const text = `\u{1F4E6} <b>${verb} ${orderNo(id)}</b> \u0432\u0456\u0434 \xAB${h6(p.name)}\xBB
 
-<b>\u041A\u043B\u0456\u0454\u043D\u0442:</b> ${h5(f.client_name)}, ${h5(f.client_phone)}${f.ttn ? `
-<b>\u0422\u0422\u041D:</b> ${h5(f.ttn)}` : ""}
+<b>\u041A\u043B\u0456\u0454\u043D\u0442:</b> ${h6(f.client_name)}, ${h6(f.client_phone)}${f.ttn ? `
+<b>\u0422\u0422\u041D:</b> ${h6(f.ttn)}` : ""}
 ${it.supplyId ? `\u0406\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : "\u{1F534} <b>\u0411\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456</b>"}
 
 <b>\u0422\u043E\u0432\u0430\u0440\u0438:</b>
@@ -5720,7 +5791,7 @@ ${link(c, `b2bclients/${id}`)}`);
     if (o.status !== "new") throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u0435 \u0432 \u0440\u043E\u0431\u043E\u0442\u0443 \u2014 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438 \u0439\u043E\u0433\u043E \u043C\u043E\u0436\u0435 \u043B\u0438\u0448\u0435 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440.");
     await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
     await log(o.id, c.get("user"), "\u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430");
-    await tgAdmins(`\u274C <b>\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)}</b> (\xAB${h5(p.name)}\xBB)
+    await tgAdmins(`\u274C <b>\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)}</b> (\xAB${h6(p.name)}\xBB)
 ${link(c, `b2bclients/${o.id}`)}`);
     return c.json({ ok: true });
   });
@@ -5729,7 +5800,9 @@ ${link(c, `b2bclients/${o.id}`)}`);
     const o = await myClientOrder(c, p);
     if (o.status !== "new") throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u0432 \u0440\u043E\u0431\u043E\u0442\u0456 \u2014 \u043D\u043E\u0432\u0438\u0439 \u0444\u0430\u0439\u043B \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u043D\u0430\u0434\u0456\u0448\u043B\u0456\u0442\u044C \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0443.");
     if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_files WHERE order_id = ?`, [o.id])).n >= 10) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 10 \u0444\u0430\u0439\u043B\u0456\u0432 \u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.");
-    return c.json({ id: (await saveFile(c, o, "label")).id });
+    const f = await saveFile(c, o, "label");
+    const r = await hooks.afterLabel?.(o, f, c.get("user"));
+    return c.json({ id: f.id, warnings: r?.warnings || [] });
   });
   app.delete("/api/b2b/p/clients/:id/files/:fid", async (c) => {
     const p = await myPartner(c);
@@ -5837,7 +5910,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
     await refreshCrm({ ids: [o.id] });
     const crmId = (await db.get(`SELECT crm_id FROM b2b_orders WHERE id = ?`, [o.id]))?.crm_id || "";
     await log(o.id, c.get("user"), `\u0434\u043E\u0434\u0430\u043D\u043E \u0432 LP-CRM${crmId ? `: \u2116 ${crmId}` : ` (\u043A\u043E\u0434 ${code}; \u043D\u043E\u043C\u0435\u0440 \u0437\u2019\u044F\u0432\u0438\u0442\u044C\u0441\u044F \u043F\u0456\u0441\u043B\u044F \u043E\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0441\u0442\u0430\u0442\u0443\u0441\u0443)`}`);
-    await tgPartner(o.partner_id, `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h5(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${crmId ? `, \u2116 \u0443 CRM ${crmId}` : ""}.
+    await tgPartner(o.partner_id, `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h6(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${crmId ? `, \u2116 \u0443 CRM ${crmId}` : ""}.
 ${link(c, `pclients/${o.id}`)}`);
     return c.json({ ok: true, crm_id: crmId, code });
   });
@@ -5860,7 +5933,8 @@ ${link(c, `pclients/${o.id}`)}`);
     if (val && val !== o.crm_id && val !== o.crm_ext) {
       await refreshCrm({ ids: [o.id] });
       const num4 = (await db.get(`SELECT crm_id FROM b2b_orders WHERE id = ?`, [o.id]))?.crm_id || "";
-      await tgPartner(o.partner_id, `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h5(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${num4 ? `, \u2116 \u0443 CRM ${num4}` : ""}.
+      if (!isCode && num4) await hooks.crmLinked?.(o.id, num4).catch(() => 0);
+      await tgPartner(o.partner_id, `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h6(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${num4 ? `, \u2116 \u0443 CRM ${num4}` : ""}.
 ${link(c, `pclients/${o.id}`)}`);
     }
     return c.json({ ok: true });
@@ -5882,7 +5956,7 @@ ${link(c, `pclients/${o.id}`)}`);
     if (paid) await db.run(`UPDATE b2b_orders SET paid_amount = total, paid_at = ?, paid_by = ?, updated_at = ? WHERE id = ?`, [now, userName3(u), now, o.id]);
     else await db.run(`UPDATE b2b_orders SET paid_amount = 0, paid_at = '', paid_by = '', updated_at = ? WHERE id = ?`, [now, o.id]);
     await log(o.id, u, paid ? "\u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443" : "\u0437\u043D\u044F\u0442\u043E \u043F\u043E\u0437\u043D\u0430\u0447\u043A\u0443 \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB");
-    if (paid) await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h5(o.client_name)}) \u2014 ${uah3(o.total)}`);
+    if (paid) await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h6(o.client_name)}) \u2014 ${uah3(o.total)}`);
     return c.json({ ok: true });
   });
   app.post("/api/b2b/clients/:id/cancel", async (c) => {
@@ -5891,7 +5965,7 @@ ${link(c, `pclients/${o.id}`)}`);
     if (o.status === "cancelled") throw fail(400, "\u0423\u0436\u0435 \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.");
     await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
     await log(o.id, c.get("user"), "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430");
-    await tgPartner(o.partner_id, `\u274C \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h5(o.client_name)}) \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u043E\u043C.`);
+    await tgPartner(o.partner_id, `\u274C \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h6(o.client_name)}) \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u043E\u043C.`);
     return c.json({ ok: true, inCrm: !!o.crm_id });
   });
   return { refreshCrm };
@@ -6197,6 +6271,706 @@ ${l}`;
     }
     return c.json({ results });
   });
+}
+
+// src/integrations/pdftext.js
+var dec1252 = new TextDecoder("latin1");
+var W1252 = new Map([...Array(32)].map((_, i) => [dec1252.decode(new Uint8Array([128 + i])).charCodeAt(0), 128 + i]));
+var latin1 = (u8) => dec1252.decode(u8);
+var byteAt = (ch) => {
+  const c = ch.charCodeAt(0);
+  return c < 256 ? c : W1252.get(c) ?? 63;
+};
+async function inflate(u8) {
+  const ds = new DecompressionStream("deflate");
+  const w = ds.writable.getWriter();
+  w.write(u8).catch(() => {
+  });
+  w.close().catch(() => {
+  });
+  const chunks = [];
+  let n = 0;
+  const r = ds.readable.getReader();
+  try {
+    for (; ; ) {
+      const { done, value } = await r.read();
+      if (done) break;
+      chunks.push(value);
+      n += value.length;
+    }
+  } catch {
+  }
+  const out = new Uint8Array(n);
+  let o = 0;
+  for (const c of chunks) {
+    out.set(c, o);
+    o += c.length;
+  }
+  return out;
+}
+function objects(bytes) {
+  const s = latin1(bytes);
+  const out = /* @__PURE__ */ new Map();
+  const re = /(\d+)\s+0\s+obj\b/g;
+  let m;
+  while (m = re.exec(s)) {
+    const start = m.index + m[0].length;
+    const end = s.indexOf("endobj", start);
+    if (end < 0) break;
+    const body = s.slice(start, end);
+    const si = body.indexOf("stream");
+    let dict = body;
+    let stream = null;
+    if (si >= 0) {
+      dict = body.slice(0, si);
+      let a = start + si + 6;
+      if (s[a] === "\r") a++;
+      if (s[a] === "\n") a++;
+      const lm = /\/Length\s+(\d+)(\s+\d+\s+R)?/.exec(dict);
+      const direct = lm && !lm[2];
+      let b = direct ? a + Number(lm[1]) : s.indexOf("endstream", a);
+      if (!direct) while (b > a && (s[b - 1] === "\n" || s[b - 1] === "\r")) b--;
+      stream = bytes.subarray(a, b);
+    }
+    out.set(Number(m[1]), { dict, stream });
+    re.lastIndex = end;
+  }
+  return out;
+}
+var hexToStr = (hex) => {
+  let r = "";
+  for (let i = 0; i + 4 <= hex.length; i += 4) {
+    const c = parseInt(hex.slice(i, i + 4), 16);
+    if (!Number.isNaN(c)) r += String.fromCodePoint(c);
+  }
+  return r;
+};
+function parseCMap(txt) {
+  const map = /* @__PURE__ */ new Map();
+  for (const blk of txt.matchAll(/beginbfchar([\s\S]*?)endbfchar/g)) {
+    for (const m of blk[1].matchAll(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g)) map.set(parseInt(m[1], 16), hexToStr(m[2]));
+  }
+  for (const blk of txt.matchAll(/beginbfrange([\s\S]*?)endbfrange/g)) {
+    for (const m of blk[1].matchAll(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(?:<([0-9A-Fa-f]+)>|\[([^\]]*)\])/g)) {
+      const a = parseInt(m[1], 16);
+      const b = parseInt(m[2], 16);
+      if (m[3]) {
+        const base = parseInt(m[3], 16);
+        for (let c = a; c <= b && c - a < 5e3; c++) map.set(c, String.fromCodePoint(base + c - a));
+      } else [...m[4].matchAll(/<([0-9A-Fa-f]+)>/g)].forEach((x, i) => map.set(a + i, hexToStr(x[1])));
+    }
+  }
+  return map;
+}
+function bytesOf(tokS) {
+  const out = [];
+  if (tokS[0] === "<") {
+    const hx = tokS.slice(1, -1).replace(/\s/g, "");
+    for (let i = 0; i < hx.length; i += 2) out.push(parseInt(hx.slice(i, i + 2).padEnd(2, "0"), 16));
+    return out;
+  }
+  const t = tokS.slice(1, -1);
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (ch !== "\\") {
+      out.push(byteAt(ch));
+      continue;
+    }
+    const nx = t[++i];
+    if (nx === void 0) break;
+    if (/[0-7]/.test(nx)) {
+      let o = nx;
+      while (o.length < 3 && /[0-7]/.test(t[i + 1])) o += t[++i];
+      out.push(parseInt(o, 8) & 255);
+    } else if (nx === "\n" || nx === "\r") continue;
+    else out.push({ n: 10, r: 13, t: 9, b: 8, f: 12 }[nx] ?? byteAt(nx));
+  }
+  return out;
+}
+var MAX_PDF = 6 * 1024 * 1024;
+async function pdfText(bytes) {
+  try {
+    if (!bytes?.length || bytes.length > MAX_PDF || latin1(bytes.subarray(0, 5)) !== "%PDF-") return "";
+    const objs = objects(bytes);
+    const dec = async (o) => o.stream ? /FlateDecode/.test(o.dict) ? await inflate(o.stream) : o.stream : null;
+    const fontCmap = /* @__PURE__ */ new Map();
+    for (const [n, o] of objs) {
+      if (!/\/Type\s*\/Font/.test(o.dict)) continue;
+      const tu = /\/ToUnicode\s+(\d+)\s+0\s+R/.exec(o.dict);
+      const cm = tu && objs.get(Number(tu[1]));
+      if (cm) fontCmap.set(n, parseCMap(latin1(await dec(cm))));
+    }
+    const resName = /* @__PURE__ */ new Map();
+    for (const [, o] of objs) {
+      const fm = /\/Font\s*<<([^>]*)>>/.exec(o.dict);
+      if (fm) for (const m of fm[1].matchAll(/\/(\S+?)\s+(\d+)\s+0\s+R/g)) resName.set(m[1], Number(m[2]));
+    }
+    const lines = [];
+    const tok = /\/(\S+)\s+[\d.]+\s+Tf|([\d.-]+)\s+([\d.-]+)\s+Td|[\d.-]+\s+[\d.-]+\s+[\d.-]+\s+[\d.-]+\s+([\d.-]+)\s+([\d.-]+)\s+Tm|(<[0-9A-Fa-f\s]*>|\((?:\\[\s\S]|[^\\)])*\))\s*Tj|\[((?:\\[\s\S]|[^\]\\])*)\]\s*TJ|\bT\*|\bET\b/g;
+    for (const [, o] of objs) {
+      if (!o.stream || /\/(Subtype\s*\/Image|Length1|FontFile|Type\s*\/Font|Type\s*\/XRef|Type\s*\/ObjStm)/.test(o.dict)) continue;
+      let content;
+      try {
+        content = latin1(await dec(o));
+      } catch {
+        continue;
+      }
+      if (!/\bTf\b/.test(content)) continue;
+      let cmap = null;
+      let line = "";
+      let lastY = null;
+      const flush = () => {
+        if (line.trim()) lines.push(line.replace(/\s+/g, " ").trim());
+        line = "";
+      };
+      const decode = (s) => {
+        if (!cmap) return "";
+        const b = bytesOf(s);
+        let r = "";
+        for (let i = 0; i + 1 < b.length; i += 2) r += cmap.get(b[i] << 8 | b[i + 1]) ?? "";
+        return r;
+      };
+      tok.lastIndex = 0;
+      let m;
+      while (m = tok.exec(content)) {
+        if (m[1]) cmap = fontCmap.get(resName.get(m[1])) || null;
+        else if (m[3] !== void 0) {
+          if (Math.abs(Number(m[3])) > 0.5) flush();
+          else line += " ";
+        } else if (m[5] !== void 0) {
+          const y = Number(m[5]);
+          if (lastY !== null && Math.abs(y - lastY) > 2) flush();
+          else line += " ";
+          lastY = y;
+        } else if (m[6] !== void 0) line += decode(m[6]);
+        else if (m[7] !== void 0) {
+          for (const p of m[7].matchAll(/(<[0-9A-Fa-f\s]*>|\((?:\\[\s\S]|[^\\)])*\))|(-?[\d.]+)/g)) {
+            if (p[1] !== void 0) line += decode(p[1]);
+            else if (Number(p[2]) < -200) line += " ";
+          }
+        } else flush();
+      }
+      flush();
+    }
+    return lines.join("\n");
+  } catch {
+    return "";
+  }
+}
+var MONTHS = { \u0441\u0456\u0447\u043D\u044F: 1, \u043B\u044E\u0442\u043E\u0433\u043E: 2, \u0431\u0435\u0440\u0435\u0437\u043D\u044F: 3, \u043A\u0432\u0456\u0442\u043D\u044F: 4, \u0442\u0440\u0430\u0432\u043D\u044F: 5, \u0447\u0435\u0440\u0432\u043D\u044F: 6, \u043B\u0438\u043F\u043D\u044F: 7, \u0441\u0435\u0440\u043F\u043D\u044F: 8, \u0432\u0435\u0440\u0435\u0441\u043D\u044F: 9, \u0436\u043E\u0432\u0442\u043D\u044F: 10, \u043B\u0438\u0441\u0442\u043E\u043F\u0430\u0434\u0430: 11, \u0433\u0440\u0443\u0434\u043D\u044F: 12 };
+var money = (s) => Number(String(s).replace(/[\s  ]/g, "").replace(",", "."));
+var MONEY_RE = /^\d{1,3}(?:[\s  ]\d{3})*,\d{2}$/;
+function parseBasDoc(text) {
+  const t = String(text || "").replace(/[  ]/g, " ");
+  const head = /(Рахунок на оплату|Рахунок-фактура|Рахунок|Видаткова накладна|Накладна)\s*№\s*([\w\-/.]+)\s*від\s*(\d{1,2})\s+([а-яіїєґ']+)\s+(\d{4})/i.exec(t);
+  if (!head) return null;
+  const total = /Всього:\s*([\d ]+,\d{2})/.exec(t) || /на суму\s*([\d ]+,\d{2})\s*UAH/.exec(t);
+  const buyer = /Покупець:\s*([^\n]+)/.exec(t);
+  const mon = MONTHS[head[4].toLowerCase()];
+  const items = [];
+  const lines = t.split("\n").map((x) => x.trim());
+  let i = lines.findIndex((x) => /^Сума з ПДВ$/i.test(x));
+  if (i >= 0) {
+    for (i += 1; i < lines.length; i++) {
+      if (/^Всього/.test(lines[i])) break;
+      if (!/^\d{1,3}$/.test(lines[i])) continue;
+      const name = [];
+      let j = i + 1;
+      while (j < lines.length && !(/^\d+(?:[.,]\d+)?$/.test(lines[j]) && /^[а-яіїєґa-z.]{1,6}$/i.test(lines[j + 1] || "") && MONEY_RE.test(lines[j + 2] || ""))) {
+        if (/^Всього/.test(lines[j])) break;
+        name.push(lines[j]);
+        j++;
+      }
+      if (j >= lines.length || /^Всього/.test(lines[j])) break;
+      items.push({ n: Number(lines[i]), name: name.join(" ").replace(/\s+/g, " ").trim(), qty: Number(lines[j].replace(",", ".")), price: money(lines[j + 2]), sum: MONEY_RE.test(lines[j + 3] || "") ? money(lines[j + 3]) : null });
+      i = j + 3;
+    }
+  }
+  return {
+    kind: /накладна/i.test(head[1]) ? "waybill" : "invoice",
+    number: head[2].replace(/[.]+$/, ""),
+    date: mon ? `${head[5]}-${String(mon).padStart(2, "0")}-${head[3].padStart(2, "0")}` : "",
+    total: total ? money(total[1]) : null,
+    buyer: buyer ? buyer[1].trim() : "",
+    items
+  };
+}
+function parseNpLabel(text) {
+  const t = String(text || "");
+  const ttn = (/(?<![\d ])((?:20|59)(?:[ \n]?\d){12})(?![ \n]?\d)/.exec(t)?.[1] || "").replace(/\D/g, "");
+  const phones = [...t.matchAll(/(?<!\d)(0\d{2})[ -]?(\d{3})[ -]?(\d{2})[ -]?(\d{2})(?!\d)/g)].map((m) => `38${m[1]}${m[2]}${m[3]}${m[4]}`);
+  const lines = t.split("\n").map((x) => x.trim());
+  let recipient = "";
+  const komu = lines.findIndex((x) => /^КОМУ:?$/i.test(x));
+  if (komu >= 0) {
+    const after = lines.slice(komu + 1);
+    const priv = after.findIndex((x) => /^Приватна особа$/i.test(x));
+    if (priv >= 0) {
+      const name = [];
+      for (const x of after.slice(priv + 1)) {
+        if (/Відділення|Поштомат|вул\.|\d{3} \d{3}/i.test(x)) break;
+        name.push(x);
+      }
+      recipient = name.join(" ").trim();
+    }
+  }
+  return ttn ? { ttn, phone: phones.at(-1) || "", recipient, rozetka: /РОЗ\s?(\d{6,})/.exec(t)?.[1] || "" } : null;
+}
+function hintsOf(str) {
+  const s = String(str || "");
+  const order2 = /B2B[\s-]*(\d{1,9})/i.exec(s)?.[1];
+  const kind = /накладн|\bрн\b|\bвн\b/i.test(s) ? "waybill" : /рахун|\bсф\b|invoice/i.test(s) ? "invoice" : "";
+  const number = /(?:№|N|#|номер)\s*([A-Za-zА-Яа-яІЇЄ]{0,4}-?\d{1,10})/i.exec(s)?.[1] || "";
+  return { order: order2 ? Number(order2) : null, kind, number };
+}
+function nameKey(s) {
+  return String(s || "").toLowerCase().replace(/товариство з обмеженою відповідальністю|приватне підприємство|фізична особа[\s-]*підприємець/g, " ").replace(/[«»"'’`.,()]/g, " ").split(/\s+/).filter((w) => w && !["\u0442\u043E\u0432", "\u0444\u043E\u043F", "\u043F\u043F", "\u0444\u043E-\u043F", "\u0444\u043E\u043F-"].includes(w)).sort().join(" ");
+}
+function sameName(a, b) {
+  const x = nameKey(a);
+  const y = nameKey(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const xs = new Set(x.split(" "));
+  const ys = y.split(" ");
+  const common = ys.filter((w) => xs.has(w)).length;
+  return common >= Math.min(2, Math.min(xs.size, ys.length)) && common >= Math.min(xs.size, ys.length) * 0.66;
+}
+var modelTokens = (s) => new Set(String(s || "").toLowerCase().replace(/\[\d+\]/g, " ").split(/[^a-z0-9а-яіїєґ]+/i).filter((w) => w.length >= 2 && (/[a-z]/.test(w) || /\d/.test(w)) && !["wi", "fi", "uv", "hepa", "smart", "true", "mod", "auto"].includes(w)));
+
+// src/modules/b2b/tgdocs.js
+var KIND_NAME = { invoice: "\u0420\u0430\u0445\u0443\u043D\u043E\u043A", waybill: "\u041D\u0430\u043A\u043B\u0430\u0434\u043D\u0430" };
+var h5 = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+var nf4 = new Intl.NumberFormat("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+var m22 = (n) => nf4.format(Number(n) || 0);
+var UNDO_MIN = 15;
+var MAX_FILE2 = 5 * 1024 * 1024;
+var PAGE = 8;
+var kyivToday = () => (/* @__PURE__ */ new Date()).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+var fmtDate = (d) => d ? d.split("-").reverse().join(".") : "";
+var phoneFmt = (p) => /^380\d{9}$/.test(p || "") ? `+${p.slice(0, 2)} ${p.slice(2, 5)} ${p.slice(5, 8)} ${p.slice(8, 10)} ${p.slice(10)}` : p || "";
+function mountB2bTgDocs(app, { db, services, orders, hooks }) {
+  const notify = () => services.notify;
+  const tgApi = (method, body) => notify()?.api(method, body);
+  const set = (key, value) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]);
+  const isPdf = (bytes) => bytes?.[0] === 37 && bytes[1] === 80 && bytes[2] === 68 && bytes[3] === 70;
+  app.get("/api/b2b/labels-group", async (c) => {
+    need(c, "b2b.admin");
+    const s = await loadSettings(db);
+    return c.json({ chat: s.b2b_labels_chat || "", title: s.b2b_labels_title || "", bot: s.tg_bot || "" });
+  });
+  app.post("/api/b2b/labels-group", async (c) => {
+    need(c, "b2b.admin");
+    const s = await loadSettings(db);
+    if (!s.tg_token || !s.tg_bot) throw fail(400, "Telegram-\u0431\u043E\u0442\u0430 \u0449\u0435 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 Telegram).");
+    const code = randomToken(6);
+    await set("b2b_labels_code", `${code}|${Date.now() + 30 * 6e4}`);
+    return c.json({ code, bot: s.tg_bot });
+  });
+  app.delete("/api/b2b/labels-group", async (c) => {
+    need(c, "b2b.admin");
+    await db.batch([[`DELETE FROM settings WHERE key IN ('b2b_labels_chat', 'b2b_labels_title', 'b2b_labels_code')`, []]]);
+    return c.json({ ok: true });
+  });
+  async function linkLabelsGroup(code, chat, title) {
+    const s = await loadSettings(db);
+    const [want, exp] = String(s.b2b_labels_code || "").split("|");
+    if (!want || want !== code || (Number(exp) || 0) < Date.now()) return "";
+    await db.batch([
+      [`INSERT INTO settings (key, value) VALUES ('b2b_labels_chat', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [chat]],
+      [`INSERT INTO settings (key, value) VALUES ('b2b_labels_title', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(title).slice(0, 120)]],
+      [`DELETE FROM settings WHERE key = 'b2b_labels_code'`, []]
+    ]);
+    return "\u2705 \u0413\u0440\u0443\u043F\u0443 \u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u043E \u0434\u043B\u044F <b>\u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u044C</b>: \u0441\u044E\u0434\u0438 \u043D\u0430\u0434\u0445\u043E\u0434\u0438\u0442\u0438\u043C\u0443\u0442\u044C \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 B2B \u0437 \u041F\u0406\u0411 \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u0456 \u2116 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 CRM.";
+  }
+  const labelsChat = async () => (await db.get(`SELECT value FROM settings WHERE key = 'b2b_labels_chat'`))?.value || "";
+  const labelCaption = (o, extra = "") => `\u{1F3F7} <b>${h5(o.client_name)}</b> \xB7 ${o.crm_id ? `CRM \u2116 <b>${h5(o.crm_id)}</b>` : "<i>\u0449\u0435 \u043D\u0435 \u0432 CRM</i>"} \xB7 ${orderNo(o.id)}${o.ttn ? ` \xB7 \u0422\u0422\u041D ${h5(o.ttn)}` : ""}${extra}`;
+  async function afterLabel(o, f, _user, { fileId = "", replaced = false } = {}) {
+    const warnings = [];
+    let np = null;
+    if (f.bytes && isPdf(f.bytes)) np = parseNpLabel(await pdfText(f.bytes));
+    if (np?.ttn) {
+      if (!o.ttn) {
+        await db.run(`UPDATE b2b_orders SET ttn = ?, updated_at = ? WHERE id = ?`, [np.ttn, nowIso(), o.id]);
+        await orders.log(o.id, { name: "Telegram" }, `\u0422\u0422\u041D ${np.ttn} \u2014 \u0437 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F`);
+        o = { ...o, ttn: np.ttn };
+      } else if (np.ttn !== o.ttn) warnings.push(`\u0422\u0422\u041D \u0443 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u0456 ${np.ttn} \u043D\u0435 \u0437\u0431\u0456\u0433\u0430\u0454\u0442\u044C\u0441\u044F \u0456\u0437 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F\u043C (${o.ttn})`);
+      if (np.phone && o.client_phone && np.phone !== o.client_phone) warnings.push(`\u0442\u0435\u043B\u0435\u0444\u043E\u043D \u043E\u0434\u0435\u0440\u0436\u0443\u0432\u0430\u0447\u0430 ${phoneFmt(np.phone)} \u2260 \u0442\u0435\u043B\u0435\u0444\u043E\u043D \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${phoneFmt(o.client_phone)}`);
+    }
+    const chat = await labelsChat();
+    if (chat) {
+      const extra = `${replaced ? " \xB7 <b>\u043E\u043D\u043E\u0432\u043B\u0435\u043D\u043E</b>" : ""}${np?.rozetka ? ` \xB7 \u0420\u043E\u0437\u0435\u0442\u043A\u0430 ${h5(np.rozetka)}` : ""}${warnings.length ? `
+\u26A0\uFE0F ${h5(warnings.join("; "))}` : ""}`;
+      const sent = await notify()?.sendFile({ chatIds: [chat] }, fileId ? { fileId } : f, labelCaption(o, extra)).catch(() => 0);
+      if (sent) await orders.log(o.id, { name: "Telegram" }, "\u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u043D\u0430\u0434\u0456\u0441\u043B\u0430\u043D\u043E \u0432 \u0433\u0440\u0443\u043F\u0443 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u044C");
+    }
+    return { warnings, ttn: np?.ttn || "" };
+  }
+  async function crmLinked(orderId, num4) {
+    const chat = await labelsChat();
+    if (!chat) return;
+    const o = await db.get(`SELECT id, client_name, ttn, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = b2b_orders.id AND f.kind = 'label') AS labels FROM b2b_orders WHERE id = ?`, [orderId]);
+    if (!o?.labels) return;
+    await notify()?.sendText({ chatIds: [chat] }, `\u{1F517} ${orderNo(o.id)} \xB7 <b>${h5(o.client_name)}</b> \u2192 CRM \u2116 <b>${h5(num4)}</b>${o.ttn ? ` \xB7 \u0422\u0422\u041D ${h5(o.ttn)}` : ""}`).catch(() => 0);
+  }
+  async function tgGroupFile(msg, base) {
+    const chat = String(msg.chat.id);
+    const reply = (text) => tgApi("sendMessage", { chat_id: chat, text, parse_mode: "HTML", reply_to_message_id: msg.message_id }).catch(() => 0);
+    const p = await db.get(`SELECT id, name FROM b2b_partners WHERE tg_group = ? AND COALESCE(deleted_at, '') = ''`, [chat]);
+    if (!p) return;
+    const replied = String(msg.reply_to_message?.text || msg.reply_to_message?.caption || "");
+    const id = /B2B-(\d+)/.exec(replied)?.[1];
+    if (!id || !/замовлення клієнта/i.test(replied)) {
+      await reply("\u041C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u0434\u043E\u0434\u0430\u0454\u0442\u044C\u0441\u044F <b>\u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0434\u044E \u043D\u0430 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F \u043F\u0440\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430</b> (\u{1F4E6} \u041D\u043E\u0432\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 B2B-\u2026).");
+      return;
+    }
+    const o = await db.get(`SELECT * FROM b2b_orders WHERE id = ? AND partner_id = ? AND kind = 'client'`, [Number(id), p.id]);
+    if (!o) {
+      await reply("\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+      return;
+    }
+    if (o.status === "cancelled") {
+      await reply(`\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u2014 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u043D\u0435 \u0434\u043E\u0434\u0430\u043D\u043E.`);
+      return;
+    }
+    const file = fileOf(msg);
+    if (file.size > MAX_FILE2) {
+      await reply("\u0424\u0430\u0439\u043B \u0437\u0430\u0432\u0435\u043B\u0438\u043A\u0438\u0439 (\u0434\u043E 5 \u041C\u0411).");
+      return;
+    }
+    const bytes = await notify().download(file.id);
+    const replaced = !!await db.get(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = 'label' LIMIT 1`, [o.id]);
+    const who = { name: `${[msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || "\u043F\u0430\u0440\u0442\u043D\u0435\u0440"} (Telegram)` };
+    const f = await orders.storeFile(o, "label", { bytes, name: file.name, mime: file.mime }, who, " \u0447\u0435\u0440\u0435\u0437 \u0433\u0440\u0443\u043F\u0443 Telegram");
+    const r = await afterLabel(o, f, who, { fileId: file.id, replaced });
+    await reply(`\u2705 \u041C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u0434\u043E\u0434\u0430\u043D\u043E \u0434\u043E <b>${orderNo(o.id)}</b> (${h5(o.client_name)})${r.ttn && !o.ttn ? `
+\u0422\u0422\u041D ${r.ttn} \u0437\u0430\u043F\u0438\u0441\u0430\u043D\u043E \u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.` : ""}${r.warnings.length ? `
+\u26A0\uFE0F ${h5(r.warnings.join("; "))}` : ""}`);
+  }
+  const fileOf = (msg) => {
+    if (msg.document) return { id: msg.document.file_id, uid: msg.document.file_unique_id, name: msg.document.file_name || "document", mime: msg.document.mime_type || "application/octet-stream", size: msg.document.file_size || 0 };
+    const ph = [...msg.photo || []].sort((a, b) => (b.file_size || 0) - (a.file_size || 0))[0];
+    return { id: ph.file_id, uid: ph.file_unique_id, name: `\u0444\u043E\u0442\u043E_${kyivToday()}.jpg`, mime: "image/jpeg", size: ph.file_size || 0, photo: true };
+  };
+  const docOf = (id) => db.get(`SELECT * FROM b2b_tg_docs WHERE id = ?`, [id]);
+  const saveDoc = (d, fields) => db.run(`UPDATE b2b_tg_docs SET ${Object.keys(fields).map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, [...Object.values(fields), d.id]);
+  const parsedOf = (d) => {
+    try {
+      return JSON.parse(d.parsed || "null");
+    } catch {
+      return null;
+    }
+  };
+  async function candidates() {
+    const since = new Date(Date.now() - 120 * 864e5).toISOString();
+    const rows = await db.all(
+      `SELECT o.id, o.kind, o.status, o.partner_id, o.total, o.entity, o.invoice_no, o.waybill_no, o.client_name, o.created_at, p.name AS partner
+       FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id
+       WHERE o.status != 'cancelled' AND o.created_at > ? AND (o.kind = 'supply' OR o.supply_id IS NULL) ORDER BY o.id DESC LIMIT 200`,
+      [since]
+    );
+    const ents = await db.all(`SELECT partner_id, name FROM b2b_entities`);
+    const byPartner = /* @__PURE__ */ new Map();
+    for (const e of ents) byPartner.set(e.partner_id, [...byPartner.get(e.partner_id) || [], e.name]);
+    return rows.map((r) => ({ ...r, names: r.kind === "supply" ? [String(r.entity || "").split("\n")[0].split(",")[0]] : byPartner.get(r.partner_id) || [] }));
+  }
+  const needs = (o, kind) => kind === "waybill" ? !o.waybill_no : !o.invoice_no;
+  function score(o, doc, kind) {
+    let s = 0;
+    if (doc?.total != null && Math.abs(doc.total - o.total) < 0.01) s += 100;
+    if (doc?.buyer && o.names.some((n) => sameName(n, doc.buyer))) s += 50;
+    if (kind && needs(o, kind)) s += 20;
+    if (kind === "waybill" && o.invoice_no) s += 5;
+    return s;
+  }
+  async function ranked(doc, kind) {
+    const list = await candidates();
+    return list.map((o) => ({ o, s: score(o, doc, kind) })).sort((a, b) => b.s - a.s || b.o.id - a.o.id).map((x) => x.o);
+  }
+  async function autoPick(doc, kind) {
+    if (!doc) return null;
+    const list = await candidates();
+    const best = list.filter((o) => score(o, doc, kind) >= 150);
+    if (best.length === 1) return best[0].id;
+    const needy = best.filter((o) => needs(o, kind));
+    return needy.length === 1 ? needy[0].id : null;
+  }
+  function compareItems(docItems, orderItems) {
+    const left = orderItems.map((i) => ({ ...i, tokens: modelTokens(i.name), used: false }));
+    const lines = [];
+    let bad = 0;
+    for (const d of docItems) {
+      let hit = left.find((i) => !i.used && Math.abs(i.price - d.price) < 0.01 && i.qty === d.qty);
+      if (!hit) {
+        const dt = modelTokens(d.name);
+        let best = null;
+        let bestN = 0;
+        for (const i of left) {
+          if (i.used) continue;
+          const n = [...dt].filter((t) => i.tokens.has(t)).length;
+          if (n > bestN) {
+            best = i;
+            bestN = n;
+          }
+        }
+        hit = bestN >= 1 ? best : null;
+      }
+      const short = h5(d.name.length > 60 ? `${d.name.slice(0, 58)}\u2026` : d.name);
+      if (!hit) {
+        bad++;
+        lines.push(`\u274C ${short} \u2014 ${d.qty} \u0448\u0442 \xD7 ${m22(d.price)} \u2014 <b>\u043D\u0435\u043C\u0430\u0454 \u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456</b>`);
+        continue;
+      }
+      hit.used = true;
+      if (hit.qty === d.qty && Math.abs(hit.price - d.price) < 0.01) lines.push(`\u2705 ${short} \u2014 ${d.qty} \u0448\u0442 \xD7 ${m22(d.price)}`);
+      else {
+        bad++;
+        lines.push(`\u26A0\uFE0F ${short} \u2014 \u0443 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0456 <b>${d.qty} \u0448\u0442 \xD7 ${m22(d.price)}</b>, \u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 <b>${hit.qty} \u0448\u0442 \xD7 ${m22(hit.price)}</b>`);
+      }
+    }
+    for (const i of left.filter((x) => !x.used)) {
+      bad++;
+      lines.push(`\u274C ${h5(i.name.slice(0, 60))} \u2014 ${i.qty} \u0448\u0442 \xD7 ${m22(i.price)} \u2014 <b>\u043D\u0435\u043C\u0430\u0454 \u0432 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0456</b>`);
+    }
+    return { lines, bad };
+  }
+  const kbd = (rows) => ({ inline_keyboard: rows.filter((r) => r.length) });
+  const btn = (text, d, act, arg = "") => ({ text, callback_data: `bd:${d.id}:${act}${arg !== "" ? `:${arg}` : ""}` });
+  async function render(d, { page = 0 } = {}) {
+    const doc = parsedOf(d);
+    const kind = d.kind;
+    const head = `${kind ? `${kind === "invoice" ? "\u{1F9FE}" : "\u{1F4E6}"} <b>${KIND_NAME[kind]}</b>` : "\u{1F4C4} <b>\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442</b>"}${d.number ? ` \u2116 <b>${h5(d.number)}</b>` : ""}${d.doc_date ? ` \u0432\u0456\u0434 ${fmtDate(d.doc_date)}` : ""}${doc?.total != null ? ` \xB7 <b>${m22(doc.total)} \u0433\u0440\u043D</b>` : ""}${doc?.buyer ? `
+\u041F\u043E\u043A\u0443\u043F\u0435\u0446\u044C: ${h5(doc.buyer)}` : ""}
+<i>${h5(d.name)}</i>${doc ? "" : d.mime === "application/pdf" ? "\n<i>\u0422\u0435\u043A\u0441\u0442 \u0443 PDF \u043D\u0435 \u043F\u0440\u043E\u0447\u0438\u0442\u0430\u043D\u043E \u2014 \u2116 \u0432\u0432\u0435\u0434\u0456\u0442\u044C \u0432\u0440\u0443\u0447\u043D\u0443.</i>" : ""}`;
+    if (!d.order_id) {
+      const list = await ranked(doc, kind);
+      const slice = list.slice(page * PAGE, page * PAGE + PAGE);
+      const rows2 = slice.map((o2) => [btn(`${o2.kind === "client" ? "\u{1F534} " : ""}${orderNo(o2.id)} \xB7 ${o2.partner} \xB7 ${m22(o2.total)} \u20B4${score(o2, doc, kind) >= 150 ? " \u2705" : ""}${needs(o2, kind || "invoice") ? kind === "waybill" ? " \xB7 \u0431\u0435\u0437 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u043E\u0457" : " \xB7 \u0431\u0435\u0437 \u0440\u0430\u0445\u0443\u043D\u043A\u0443" : ""}`.slice(0, 64), d, "o", o2.id)]);
+      const nav = [];
+      if (page > 0) nav.push(btn("\u25C0\uFE0F \u041D\u0430\u0437\u0430\u0434", d, "pg", page - 1));
+      if (list.length > (page + 1) * PAGE) nav.push(btn("\u0429\u0435 \u25B6\uFE0F", d, "pg", page + 1));
+      return {
+        text: `${head}
+
+<b>\u0414\u043E \u044F\u043A\u043E\u0433\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043F\u0440\u0438\u043A\u0440\u0456\u043F\u0438\u0442\u0438?</b>${list.length ? "\n\u2705 \u2014 \u0437\u0431\u0456\u0433\u0430\u044E\u0442\u044C\u0441\u044F \u0441\u0443\u043C\u0430 \u0456 \u043F\u043E\u043A\u0443\u043F\u0435\u0446\u044C \xB7 \u{1F534} \u2014 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456" : "\n\u041D\u0435\u043C\u0430\u0454 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0438\u0445 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C."}`,
+        keyboard: kbd([...rows2, nav, [btn("\u0421\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438", d, "cancel")]])
+      };
+    }
+    const o = await db.get(`SELECT o.*, p.name AS partner FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id WHERE o.id = ?`, [d.order_id]);
+    if (!o || o.status === "cancelled") {
+      await saveDoc(d, { order_id: null });
+      return render({ ...d, order_id: null });
+    }
+    const items = await db.all(`SELECT name, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
+    const names = o.kind === "supply" ? [String(o.entity || "").split("\n")[0].split(",")[0]] : (await db.all(`SELECT name FROM b2b_entities WHERE partner_id = ?`, [o.partner_id])).map((x) => x.name);
+    const checks = [];
+    let bad = 0;
+    if (doc?.buyer) {
+      const ok = names.some((n) => sameName(n, doc.buyer));
+      bad += ok ? 0 : 1;
+      checks.push(ok ? "\u2705 \u041F\u043E\u043A\u0443\u043F\u0435\u0446\u044C \u0437\u0431\u0456\u0433\u0430\u0454\u0442\u044C\u0441\u044F" : `\u26A0\uFE0F \u041F\u043E\u043A\u0443\u043F\u0435\u0446\u044C \u0443 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0456 \u043D\u0435 \u0437\u0431\u0456\u0433\u0430\u0454\u0442\u044C\u0441\u044F \u0437 \u044E\u0440\u043E\u0441\u043E\u0431\u043E\u044E (${h5(names[0] || "\u2014")})`);
+    }
+    if (doc?.total != null) {
+      const ok = Math.abs(doc.total - o.total) < 0.01;
+      bad += ok ? 0 : 1;
+      checks.push(ok ? "\u2705 \u0421\u0443\u043C\u0430 \u0437\u0431\u0456\u0433\u0430\u0454\u0442\u044C\u0441\u044F" : `\u26A0\uFE0F \u0421\u0443\u043C\u0430: \u0443 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0456 <b>${m22(doc.total)}</b>, \u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 <b>${m22(o.total)}</b>`);
+    }
+    let itemLines = [];
+    if (doc?.items?.length) {
+      const r = compareItems(doc.items, items);
+      bad += r.bad;
+      itemLines = r.lines;
+    }
+    if (kind === "invoice" && o.invoice_no && o.invoice_no !== d.number) checks.push(`\u26A0\uFE0F \u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u0432\u0436\u0435 \u0454 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h5(o.invoice_no)} \u2014 \u0431\u0443\u0434\u0435 \u0437\u0430\u043C\u0456\u043D\u0435\u043D\u043E`);
+    if (kind === "waybill" && o.waybill_no && o.waybill_no !== d.number) checks.push(`\u26A0\uFE0F \u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u0432\u0436\u0435 \u0454 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0430 \u2116 ${h5(o.waybill_no)} \u2014 \u0431\u0443\u0434\u0435 \u0437\u0430\u043C\u0456\u043D\u0435\u043D\u043E`);
+    if (d.number && kind) {
+      const dup = await db.get(`SELECT id FROM b2b_orders WHERE id != ? AND ${kind === "invoice" ? "invoice_no" : "waybill_no"} = ? AND status != 'cancelled' LIMIT 1`, [o.id, d.number]);
+      if (dup) {
+        bad++;
+        checks.push(`\u26A0\uFE0F ${KIND_NAME[kind]} \u2116 ${h5(d.number)} \u0443\u0436\u0435 \u0454 \u0432 ${orderNo(dup.id)}`);
+      }
+    }
+    const target = `\u2192 <b>${orderNo(o.id)}</b> \xB7 ${h5(o.partner)}${o.kind === "client" ? ` \xB7 \u043A\u043B\u0456\u0454\u043D\u0442 ${h5(o.client_name)} \xB7 \u{1F534} <b>\u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456</b>` : ` \xB7 ${h5(names[0] || "")}`} \xB7 ${m22(o.total)} \u20B4`;
+    const more = itemLines.length > 20 ? [`\u2026\u0449\u0435 ${itemLines.length - 20}`] : [];
+    const text = `${head}
+
+${target}
+${[...checks, ...itemLines.slice(0, 20), ...more].join("\n")}${!kind ? "\n\n<b>\u0429\u043E \u0446\u0435 \u0437\u0430 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442?</b>" : ""}${kind === "invoice" && !d.number ? "\n\n\u26A0\uFE0F \u041D\u0435\u043C\u0430\u0454 \u2116 \u0440\u0430\u0445\u0443\u043D\u043A\u0443 \u2014 \u043D\u0430\u0442\u0438\u0441\u043D\u0456\u0442\u044C \xAB\u0412\u043A\u0430\u0437\u0430\u0442\u0438 \u2116\xBB." : ""}`;
+    const rows = [];
+    if (!kind) rows.push([btn("\u{1F9FE} \u0420\u0430\u0445\u0443\u043D\u043E\u043A", d, "k", "invoice"), btn("\u{1F4E6} \u041D\u0430\u043A\u043B\u0430\u0434\u043D\u0430", d, "k", "waybill")]);
+    else rows.push([btn(bad ? "\u26A0\uFE0F \u0417\u0431\u0435\u0440\u0435\u0433\u0442\u0438 \u0432\u0441\u0435 \u043E\u0434\u043D\u043E" : "\u2705 \u0417\u0431\u0435\u0440\u0435\u0433\u0442\u0438", d, "save")]);
+    rows.push([btn(d.number ? "\u0417\u043C\u0456\u043D\u0438\u0442\u0438 \u2116" : "\u0412\u043A\u0430\u0437\u0430\u0442\u0438 \u2116", d, "num"), ...kind ? [btn(kind === "invoice" ? "\u0426\u0435 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0430" : "\u0426\u0435 \u0440\u0430\u0445\u0443\u043D\u043E\u043A", d, "k", kind === "invoice" ? "waybill" : "invoice")] : []]);
+    rows.push([btn("\u0406\u043D\u0448\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F", d, "other"), btn("\u0421\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438", d, "cancel")]);
+    return { text, keyboard: kbd(rows) };
+  }
+  async function show(d, { page = 0, fresh = false } = {}) {
+    const r = await render(d, { page });
+    if (d.msg_id && !fresh) {
+      await tgApi("editMessageText", { chat_id: d.chat_id, message_id: d.msg_id, text: r.text, parse_mode: "HTML", reply_markup: r.keyboard, disable_web_page_preview: true }).catch(() => 0);
+    } else {
+      const m = await tgApi("sendMessage", { chat_id: d.chat_id, text: r.text, parse_mode: "HTML", reply_markup: r.keyboard, disable_web_page_preview: true });
+      await saveDoc(d, { msg_id: m?.message_id || 0 });
+    }
+  }
+  async function tgPrivate(msg, user, base) {
+    if (!can(user, "b2b.admin")) return false;
+    const chat = String(msg.chat.id);
+    if (msg.text && !msg.text.startsWith("/")) {
+      const d = await db.get(`SELECT * FROM b2b_tg_docs WHERE chat_id = ? AND state = 'await_number' ORDER BY id DESC LIMIT 1`, [chat]);
+      if (!d) return false;
+      const num4 = String(msg.text).trim().replace(/^№\s*/, "").slice(0, 40);
+      await saveDoc(d, { number: num4, state: "pending" });
+      await show({ ...await docOf(d.id) }, { fresh: true });
+      return true;
+    }
+    if (!msg.document && !msg.photo) return false;
+    const file = fileOf(msg);
+    if (file.size > MAX_FILE2) {
+      await tgApi("sendMessage", { chat_id: chat, text: "\u0424\u0430\u0439\u043B \u0437\u0430\u0432\u0435\u043B\u0438\u043A\u0438\u0439: \u043D\u0430 \u0441\u0430\u0439\u0442\u0456 \u0437\u0431\u0435\u0440\u0456\u0433\u0430\u044E\u0442\u044C\u0441\u044F \u0444\u0430\u0439\u043B\u0438 \u0434\u043E 5 \u041C\u0411. \u0421\u0442\u0438\u0441\u043D\u0456\u0442\u044C PDF \u0430\u0431\u043E \u043D\u0430\u0434\u0456\u0448\u043B\u0456\u0442\u044C \u043C\u0435\u043D\u0448\u0438\u0439 \u0444\u0430\u0439\u043B." }).catch(() => 0);
+      return true;
+    }
+    const bytes = await notify().download(file.id);
+    const doc = isPdf(bytes) ? parseBasDoc(await pdfText(bytes)) : null;
+    const hints = hintsOf(`${msg.caption || ""} ${file.name}`);
+    const replyId = Number(/B2B-(\d+)/.exec(String(msg.reply_to_message?.text || msg.reply_to_message?.caption || ""))?.[1]) || null;
+    const kind = doc?.kind || hints.kind || "";
+    const orderId = replyId || hints.order || await autoPick(doc, kind);
+    const r = await db.run(
+      `INSERT INTO b2b_tg_docs (chat_id, user_id, file_id, file_uid, name, mime, size, parsed, order_id, kind, number, doc_date, state, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+      [
+        chat,
+        user.id,
+        file.id,
+        file.uid || "",
+        file.name,
+        file.mime,
+        file.size || bytes.length,
+        doc ? JSON.stringify(doc) : "",
+        orderId,
+        kind,
+        doc?.number || hints.number || "",
+        doc?.date || kyivToday(),
+        nowIso()
+      ]
+    );
+    await show(await docOf(r.lastId), { fresh: true });
+    return true;
+  }
+  async function tgCallback(cq, user, base) {
+    const m = /^bd:(\d+):(\w+)(?::(.+))?$/.exec(String(cq.data || ""));
+    if (!m) return "";
+    if (!can(user, "b2b.admin")) return "\u041D\u0435\u043C\u0430\u0454 \u0434\u043E\u0441\u0442\u0443\u043F\u0443.";
+    const d = await docOf(Number(m[1]));
+    if (!d || d.chat_id !== String(cq.message?.chat?.id)) return "\u0417\u0430\u0441\u0442\u0430\u0440\u0456\u043B\u0430 \u043A\u043D\u043E\u043F\u043A\u0430.";
+    const act = m[2];
+    const arg = m[3];
+    if (d.state === "cancelled") return "\u0423\u0436\u0435 \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.";
+    if (act === "undo") return undo(d, user, base);
+    if (d.state === "saved" || d.state === "undone") return "\u0423\u0436\u0435 \u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u043E.";
+    if (act === "cancel") {
+      await saveDoc(d, { state: "cancelled" });
+      await tgApi("editMessageText", { chat_id: d.chat_id, message_id: d.msg_id, text: `\u2716\uFE0F \u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u2014 \xAB${h5(d.name)}\xBB \u043D\u0456\u043A\u0443\u0434\u0438 \u043D\u0435 \u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u043E.`, parse_mode: "HTML" }).catch(() => 0);
+      return "";
+    }
+    if (act === "pg") {
+      await show(d, { page: Number(arg) || 0 });
+      return "";
+    }
+    if (act === "other") {
+      await saveDoc(d, { order_id: null });
+      await show({ ...d, order_id: null });
+      return "";
+    }
+    if (act === "o") {
+      await saveDoc(d, { order_id: Number(arg) });
+      await show({ ...d, order_id: Number(arg) });
+      return "";
+    }
+    if (act === "k" && KIND_NAME[arg]) {
+      await saveDoc(d, { kind: arg });
+      await show({ ...d, kind: arg });
+      return "";
+    }
+    if (act === "num") {
+      await saveDoc(d, { state: "await_number" });
+      await tgApi("sendMessage", { chat_id: d.chat_id, text: `\u041D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u2116 ${d.kind === "waybill" ? "\u043D\u0430\u043A\u043B\u0430\u0434\u043D\u043E\u0457" : "\u0440\u0430\u0445\u0443\u043D\u043A\u0443"} \u043E\u0434\u043D\u0438\u043C \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F\u043C (\u043D\u0430\u043F\u0440\u0438\u043A\u043B\u0430\u0434: 125).`, reply_markup: { force_reply: true } }).catch(() => 0);
+      return "";
+    }
+    if (act === "save") return save(d, user, base);
+    return "";
+  }
+  async function save(d, user, base) {
+    if (!d.order_id) return "\u0421\u043F\u0435\u0440\u0448\u0443 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.";
+    if (!d.kind) return "\u041E\u0431\u0435\u0440\u0456\u0442\u044C: \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u0447\u0438 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0430.";
+    if (d.kind === "invoice" && !d.number) {
+      await saveDoc(d, { state: "await_number" });
+      await tgApi("sendMessage", { chat_id: d.chat_id, text: "\u041D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u2116 \u0440\u0430\u0445\u0443\u043D\u043A\u0443 \u043E\u0434\u043D\u0438\u043C \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F\u043C \u2014 \u0456 \u043D\u0430\u0442\u0438\u0441\u043D\u0456\u0442\u044C \xAB\u0417\u0431\u0435\u0440\u0435\u0433\u0442\u0438\xBB \u0449\u0435 \u0440\u0430\u0437.", reply_markup: { force_reply: true } }).catch(() => 0);
+      return "\u041F\u043E\u0442\u0440\u0456\u0431\u0435\u043D \u2116 \u0440\u0430\u0445\u0443\u043D\u043A\u0443";
+    }
+    const o = await orders.orderOf(d.order_id);
+    if (o.status === "cancelled") return "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.";
+    const claim = await db.run(`UPDATE b2b_tg_docs SET state = 'saving' WHERE id = ? AND state = 'pending'`, [d.id]);
+    if (!claim.changes) return "\u0423\u0436\u0435 \u0437\u0431\u0435\u0440\u0456\u0433\u0430\u0454\u0442\u044C\u0441\u044F\u2026";
+    try {
+      const bytes = await notify().download(d.file_id);
+      const who = { id: user.id, name: user.name || user.login };
+      const f = await orders.storeFile(o, d.kind, { bytes, name: d.name, mime: d.mime }, who, " \u0447\u0435\u0440\u0435\u0437 Telegram");
+      const prev = { invoice_no: o.invoice_no, invoice_date: o.invoice_date, waybill_no: o.waybill_no, status: o.status };
+      const next = d.kind === "invoice" ? { invoice_no: d.number, invoice_date: d.doc_date || kyivToday() } : d.number ? { waybill_no: d.number } : {};
+      await orders.applyNumbers(o, next, who, base, " (\u0447\u0435\u0440\u0435\u0437 Telegram)");
+      const r = await render({ ...d, state: "saving" });
+      const issues = r.text.split("\n").filter((l) => l.startsWith("\u26A0\uFE0F") || l.startsWith("\u274C")).map((l) => l.replace(/<[^>]+>/g, ""));
+      if (issues.length) await orders.log(o.id, who, `\u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u043E \u0437 \u0440\u043E\u0437\u0431\u0456\u0436\u043D\u043E\u0441\u0442\u044F\u043C\u0438: ${issues.join("; ").slice(0, 900)}`);
+      let group = null;
+      const g = await orders.groupOf(o.partner_id);
+      if (g) {
+        const cap = `${d.kind === "invoice" ? "\u{1F9FE} \u0420\u0430\u0445\u0443\u043D\u043E\u043A" : "\u{1F4E6} \u041D\u0430\u043A\u043B\u0430\u0434\u043D\u0430"}${d.number ? ` \u2116 ${h5(d.number)}` : ""} \u2014 ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F"} <b>${orderNo(o.id)}</b> \u043D\u0430 ${m22(o.total)} \u0433\u0440\u043D`;
+        if (await notify().sendFile({ chatIds: [g] }, { fileId: d.file_id }, cap).catch(() => 0)) group = notify().lastFileMessage?.() || null;
+      }
+      await saveDoc(d, { state: "saved", saved_at: nowIso(), file_row: f.id, prev: JSON.stringify(prev), group_msg: group ? JSON.stringify(group) : "" });
+      const url = `${base}/#/${o.kind === "client" ? "b2bclients" : "b2borders"}/${o.id}`;
+      await tgApi("editMessageText", {
+        chat_id: d.chat_id,
+        message_id: d.msg_id,
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        text: `\u2705 <b>\u0417\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u043E:</b> ${KIND_NAME[d.kind]}${d.number ? ` \u2116 ${h5(d.number)}` : ""} \u2192 <b>${orderNo(o.id)}</b> (${h5(o.client_name || o.entity.split("\n")[0].split(",")[0])}, ${m22(o.total)} \u20B4)${issues.length ? `
+\u26A0\uFE0F \u0437 \u0440\u043E\u0437\u0431\u0456\u0436\u043D\u043E\u0441\u0442\u044F\u043C\u0438 (${issues.length}) \u2014 \u0437\u0430\u043F\u0438\u0441\u0430\u043D\u043E \u0432 \u0456\u0441\u0442\u043E\u0440\u0456\u044E` : ""}${group ? "\n\u{1F4E4} \u041D\u0430\u0434\u0456\u0441\u043B\u0430\u043D\u043E \u0432 \u0433\u0440\u0443\u043F\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430" : ""}`,
+        reply_markup: kbd([[{ text: "\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0438 \u043D\u0430 \u0441\u0430\u0439\u0442\u0456", url }, btn(`\u21A9\uFE0F \u0421\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438 (${UNDO_MIN} \u0445\u0432)`, d, "undo")]])
+      }).catch(() => 0);
+      return "\u0417\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u043E";
+    } catch (e) {
+      await saveDoc(d, { state: "pending" });
+      throw e;
+    }
+  }
+  async function undo(d, user, base) {
+    if (d.state !== "saved") return "\u041D\u0456\u0447\u043E\u0433\u043E \u0441\u043A\u0430\u0441\u043E\u0432\u0443\u0432\u0430\u0442\u0438.";
+    if (Date.now() - Date.parse(d.saved_at) > UNDO_MIN * 6e4) return `\u0421\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438 \u043C\u043E\u0436\u043D\u0430 \u043B\u0438\u0448\u0435 ${UNDO_MIN} \u0445\u0432 \u2014 \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u043D\u0430 \u0441\u0430\u0439\u0442\u0456.`;
+    const prev = JSON.parse(d.prev || "{}");
+    const o = await orders.orderOf(d.order_id).catch(() => null);
+    if (o) {
+      await orders.deleteFile(d.file_row);
+      await db.run(
+        `UPDATE b2b_orders SET invoice_no = ?, invoice_date = ?, waybill_no = ?, status = ?, updated_at = ? WHERE id = ?`,
+        [prev.invoice_no ?? o.invoice_no, prev.invoice_date ?? o.invoice_date, prev.waybill_no ?? o.waybill_no, prev.status ?? o.status, nowIso(), o.id]
+      );
+      await orders.log(o.id, { name: user.name || user.login }, `\u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0447\u0435\u0440\u0435\u0437 Telegram: ${KIND_NAME[d.kind]}${d.number ? ` \u2116 ${d.number}` : ""}`);
+      if (d.kind === "invoice" && d.number && d.number !== prev.invoice_no) {
+        await orders.tgPartner(o.partner_id, `\u21A9\uFE0F \u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h5(d.number)} \u0434\u043E ${orderNo(o.id)} \u0432\u0456\u0434\u043A\u043B\u0438\u043A\u0430\u043D\u043E \u2014 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u043D\u0430\u0434\u0456\u0448\u043B\u0435 \u043F\u0440\u0430\u0432\u0438\u043B\u044C\u043D\u0438\u0439.`);
+      }
+    }
+    const g = d.group_msg ? JSON.parse(d.group_msg) : null;
+    if (g?.id) await tgApi("deleteMessage", { chat_id: g.chat, message_id: g.id }).catch(() => 0);
+    await saveDoc(d, { state: "undone" });
+    await tgApi("editMessageText", { chat_id: d.chat_id, message_id: d.msg_id, text: `\u21A9\uFE0F \u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E: ${KIND_NAME[d.kind]}${d.number ? ` \u2116 ${h5(d.number)}` : ""} \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 ${orderNo(d.order_id)}.`, parse_mode: "HTML" }).catch(() => 0);
+    return "\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E";
+  }
+  hooks.cleanup = () => db.run(`DELETE FROM b2b_tg_docs WHERE created_at < ?`, [new Date(Date.now() - 3 * 864e5).toISOString()]);
+  hooks.afterLabel = afterLabel;
+  hooks.crmLinked = crmLinked;
+  return { tgPrivate, tgCallback, tgGroupFile, linkLabelsGroup };
 }
 
 // src/modules/b2b/index.js
@@ -6600,8 +7374,11 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       }))
     });
   });
-  const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup });
-  mountB2bClients(app, { db, fetchFn, myPartner, orders });
+  const hooks = {};
+  const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup, hooks });
+  mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks });
+  const tgdocs = mountB2bTgDocs(app, { db, services, orders, hooks });
+  onCleanup(() => hooks.cleanup?.());
   mountB2bStats(app, { db, myPartner });
   mountB2bPrices(app, { db, services, partnerPrice });
   app.post("/api/b2b/partners/:id/tg-group", async (c) => {
@@ -6622,14 +7399,14 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   });
   const tgGroupLink = async (code, chat, title) => {
     const p = await db.get(`SELECT id, name, tg_group_code FROM b2b_partners WHERE tg_group_code LIKE ? AND COALESCE(deleted_at, '') = ''`, [`${code}|%`]);
-    if (!p || (Number(p.tg_group_code.split("|")[1]) || 0) < Date.now()) return "";
+    if (!p || (Number(p.tg_group_code.split("|")[1]) || 0) < Date.now()) return tgdocs.linkLabelsGroup(code, chat, title);
     await db.run(`UPDATE b2b_partners SET tg_group = ?, tg_group_title = ?, tg_group_code = '' WHERE id = ?`, [chat, String(title).slice(0, 120), p.id]);
     await logAudit(db, { user: null, kind: "b2b", refId: p.id, action: `\u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u043E Telegram-\u0433\u0440\u0443\u043F\u0443 \xAB${title}\xBB`, changes: [] }).catch(() => 0);
     return `\u2705 \u0413\u0440\u0443\u043F\u0443 \u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u043E \u0434\u043E \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 <b>${String(p.name).replace(/[<>&]/g, "")}</b>. \u0421\u044E\u0434\u0438 \u043D\u0430\u0434\u0445\u043E\u0434\u0438\u0442\u0438\u043C\u0443\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456, \u0440\u0430\u0445\u0443\u043D\u043A\u0438 \u0439 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0456 (\u0444\u0430\u0439\u043B\u0430\u043C\u0438) \u0442\u0430 \u043E\u043F\u043B\u0430\u0442\u0438.`;
   };
   const tgGroupMoved = (from, to) => db.run(`UPDATE b2b_partners SET tg_group = ? WHERE tg_group = ?`, [to, from]);
   const tgGroupLeft = (chat) => db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '' WHERE tg_group = ?`, [chat]);
-  return { partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft };
+  return { partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupFile: tgdocs.tgGroupFile };
 }
 
 // src/modules/payments/index.js
@@ -7057,7 +7834,7 @@ function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 })
     await notify({ linkIds: paid, freshRows }).catch(() => 0);
     return c.json({ ok: true, fresh, paid: paid.length });
   });
-  const PAGE = 100;
+  const PAGE2 = 100;
   app.post("/api/odb/sync", async (c) => {
     need(c, "docs.edit");
     const b = await c.req.json().catch(() => ({}));
@@ -7071,13 +7848,13 @@ function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 })
     const newRows = [];
     const changedIds = [];
     for (let p = 0; p < 5; p++) {
-      const j = await odb(cr, "GET", `/api/transactions?limit=${PAGE}&offset=${p * PAGE}`);
+      const j = await odb(cr, "GET", `/api/transactions?limit=${PAGE2}&offset=${p * PAGE2}`);
       const items = Array.isArray(j.items) ? j.items : [];
       const { rows, fresh, freshRows, changedIds: ch } = await saveTx(items);
       added += fresh;
       newRows.push(...freshRows);
       changedIds.push(...ch);
-      if (items.length < PAGE || fresh === 0) break;
+      if (items.length < PAGE2 || fresh === 0) break;
     }
     let hist = {};
     try {
@@ -7091,14 +7868,14 @@ function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 })
     if (!hist.done) {
       let off = hist.offset || 0;
       for (let p = 0; p < 3; p++) {
-        const j = await odb(cr, "GET", `/api/transactions?limit=${PAGE}&offset=${off}`);
+        const j = await odb(cr, "GET", `/api/transactions?limit=${PAGE2}&offset=${off}`);
         const items = Array.isArray(j.items) ? j.items : [];
         const { fresh, changedIds: ch } = await saveTx(items);
         added += fresh;
         changedIds.push(...ch);
         off += items.length;
         hist.total = Number(j.count) || hist.total || 0;
-        if (items.length < PAGE) {
+        if (items.length < PAGE2) {
           hist.done = true;
           break;
         }
@@ -7109,7 +7886,7 @@ function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 })
     const linkIds = [];
     const open = await db.get(`SELECT COUNT(*) AS n FROM pay_links WHERE status IN ('pending', 'check')`);
     if (open?.n) {
-      const j = await odb(cr, "GET", `/api/invoices?status=paid&limit=${PAGE}&offset=0`);
+      const j = await odb(cr, "GET", `/api/invoices?status=paid&limit=${PAGE2}&offset=0`);
       const paidIds = (Array.isArray(j.items) ? j.items : []).filter((x) => String(x.paymentStatus || "paid") === "paid").map((x) => String(x.id));
       if (paidIds.length) {
         const hit = await db.all(`SELECT id FROM pay_links WHERE odb_paid = 0 AND odb_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(paidIds)]);
@@ -8071,7 +8848,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 7,
+  version: 8,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -8195,6 +8972,31 @@ var schema11 = {
   )`,
     `CREATE INDEX IF NOT EXISTS b2b_files_o ON b2b_files (order_id)`,
     `CREATE INDEX IF NOT EXISTS b2b_files_at ON b2b_files (created_at)`,
+    // Документи, надіслані боту особисто (рахунок / накладна): стан підтвердження, що збережено, як скасувати.
+    `CREATE TABLE IF NOT EXISTS b2b_tg_docs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id TEXT NOT NULL,
+    user_id INTEGER,
+    msg_id INTEGER DEFAULT 0,
+    file_id TEXT NOT NULL,
+    file_uid TEXT DEFAULT '',
+    name TEXT DEFAULT '',
+    mime TEXT DEFAULT '',
+    size INTEGER DEFAULT 0,
+    parsed TEXT DEFAULT '',
+    order_id INTEGER,
+    kind TEXT DEFAULT '',
+    number TEXT DEFAULT '',
+    doc_date TEXT DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'pending',
+    file_row INTEGER,
+    prev TEXT DEFAULT '',
+    group_msg TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    saved_at TEXT DEFAULT ''
+  )`,
+    `CREATE INDEX IF NOT EXISTS b2b_tg_docs_chat ON b2b_tg_docs (chat_id, state)`,
+    `CREATE INDEX IF NOT EXISTS b2b_tg_docs_at ON b2b_tg_docs (created_at)`,
     `CREATE TABLE IF NOT EXISTS b2b_file_parts (
     file_id INTEGER NOT NULL,
     n INTEGER NOT NULL,
@@ -8310,7 +9112,7 @@ async function onRequest(ctx) {
   await ready;
   if (env.OWNER_RESET_PASSWORD && env.OWNER_RESET_PASSWORD.length >= 6) {
     const mark = await db.get(`SELECT value FROM settings WHERE key = 'owner_reset_mark'`);
-    const tag = `${env.OWNER_RESET_PASSWORD.length}:${[...env.OWNER_RESET_PASSWORD].reduce((h5, ch) => Math.imul(h5, 31) + ch.charCodeAt(0) >>> 0, 7)}`;
+    const tag = `${env.OWNER_RESET_PASSWORD.length}:${[...env.OWNER_RESET_PASSWORD].reduce((h6, ch) => Math.imul(h6, 31) + ch.charCodeAt(0) >>> 0, 7)}`;
     if (mark?.value !== tag) {
       await resetOwnerPassword(db, env.OWNER_RESET_PASSWORD);
       await db.run(`INSERT INTO settings (key, value) VALUES ('owner_reset_mark', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [tag]);
