@@ -66,7 +66,7 @@ const hook = async ({ amount, purpose = 'Оплата за товар', code = '
   n++;
   const body = JSON.stringify({
     transactionId: `t${n}`, autoclientConfigId: 'cfg1', possibleInvoices: [],
-    transaction: { date: `2026-10-24T1${n % 10}:00:00.000Z`, amount, currency: 'UAH', purpose, iban: 'UA213223130000026007233566001', edrpou: '2882618253', counterpartyName: payer, counterpartyEdrpou: code, counterpartyAcc: `UA00${n}`, transactionType: 'credit' },
+    transaction: { date: `${new Date().toISOString().slice(0, 10)}T${String(10 + n).slice(-2)}:00:00.000Z`, amount, currency: 'UAH', purpose, iban: 'UA213223130000026007233566001', edrpou: '2882618253', counterpartyName: payer, counterpartyEdrpou: code, counterpartyAcc: `UA00${n}`, transactionType: 'credit' },
   });
   const r = await app.request('/api/odb/hook', { method: 'POST', headers: { 'Content-Type': 'application/json', Signature: createHmac('sha256', KEY).update(body).digest('hex') }, body });
   assert.equal(r.status, 200);
@@ -135,7 +135,17 @@ await req('POST', `/api/b2b/orders/${s1}/status`, { status: 'paid' });
 await hook({ amount: 100, purpose: 'СФ-101' });
 o = await order(s1);
 assert.deepEqual([o.status, o.paid_amount], ['paid', 18000]);
-assert.match(await errOf(() => req('POST', `/api/b2b/orders/${s1}/payments`, { tx_id: txD })), /вручну/);
+// «Перевірити оплату»: Opendatabot не підключений до стрічки в тесті — звірка без нових платежів
+const chk = await req('POST', `/api/b2b/orders/${s1}/check-pay`);
+{
+  assert.equal(chk.verdict, 'maybe', 'оплачено вручну, а платежі юрособи не зараховані');
+  assert.ok(chk.others.some((t) => t.tx_id === txD && !t.order));
+  assert.ok(chk.others.some((t) => t.amount === 10000 && !t.order), 'відв’язаний разом зі зняттям оплати');
+}
+// зарахувати платіж у закупівлю, «Оплачену» вручну: статус рахується за платежами
+await req('POST', `/api/b2b/orders/${s1}/payments`, { tx_id: txD });
+o = await order(s1);
+assert.deepEqual([o.status, o.paid_amount, o.paid_by], ['partial', 9000, 'Opendatabot']);
 
 // ---------- 5. Кілька закупівель з однаковим залишком без № → «перевірити» з кандидатами ----------
 const s3 = await supply([{ product_id: 12, qty: 1 }], 'СФ-103');
