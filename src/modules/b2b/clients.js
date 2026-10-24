@@ -8,6 +8,7 @@
 import { fail, need, nowIso, loadSettings, MASK } from '../../core/common.js';
 import { addNewOrder, getOrdersBatch, getStatuses, phpSerialize, phpUrlencode } from '../../integrations/lpcrm.js';
 import { CLIENT_STATUS, ORDER_STATUS, payState, orderNo } from './orders.js';
+import { listFilter } from './filters.js';
 
 const CRM_REFRESH_MIN = 10;
 const CRM_TRACK_DAYS = 60;
@@ -213,7 +214,10 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
   app.get('/api/b2b/p/clients', async (c) => {
     const p = await myPartner(c);
     await refreshCrm({ partnerId: p.id });
-    const rows = await db.all(`${SELECT} WHERE o.partner_id = ? AND o.kind = 'client' ORDER BY o.id DESC LIMIT 300`, [p.id]);
+    const f = listFilter(c, { client: true });
+    const st = c.req.query('status');
+    if (st && CLIENT_STATUS[st]) { f.where.push('o.status = ?'); f.params.push(st); }
+    const rows = await db.all(`${SELECT} WHERE o.partner_id = ? AND o.kind = 'client' ${f.where.map((w) => `AND ${w}`).join(' ')} ORDER BY o.id DESC LIMIT 300`, [p.id, ...f.params]);
     return c.json({ rows: rows.map(publicOrder), statuses: CLIENT_STATUS });
   });
 
@@ -306,8 +310,9 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
   app.get('/api/b2b/clients', async (c) => {
     need(c, 'b2b.admin');
     await refreshCrm();
-    const where = [`o.kind = 'client'`];
-    const params = [];
+    const f = listFilter(c, { client: true });
+    const where = [`o.kind = 'client'`, ...f.where];
+    const params = [...f.params];
     const v = c.req.query('view');
     const pid = parseInt(c.req.query('partner'), 10);
     if (VIEWS[v]) where.push(VIEWS[v]);

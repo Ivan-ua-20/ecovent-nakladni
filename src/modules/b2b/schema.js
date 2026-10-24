@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 5,
+  version: 6,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -161,6 +161,7 @@ export const schema = {
     await db.batch([
       [`CREATE INDEX IF NOT EXISTS b2b_orders_supply ON b2b_orders (supply_id)`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_orders_kind ON b2b_orders (kind, partner_id, id)`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_created ON b2b_orders (created_at)`, []],
     ]);
   },
 };

@@ -4,6 +4,7 @@
 // змінити або скасувати закупівлю. Ціни фіксуються в момент оформлення (зміна маржі не чіпає наявних замовлень).
 import { fail, need, nowIso, round2 } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
+import { listFilter } from './filters.js';
 
 export const ORDER_STATUS = {
   invoice_wait: 'Очікує рахунок',
@@ -225,9 +226,12 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
 
   app.get('/api/b2b/p/orders', async (c) => {
     const p = await myPartner(c);
+    const f = listFilter(c);
+    const st = c.req.query('status');
+    if (st && ORDER_STATUS[st]) { f.where.push('o.status = ?'); f.params.push(st); }
     const rows = await db.all(
       `SELECT o.*, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files FROM b2b_orders o
-       WHERE o.partner_id = ? AND o.kind = 'supply' ORDER BY o.id DESC LIMIT 300`, [p.id],
+       WHERE o.partner_id = ? AND o.kind = 'supply' ${f.where.map((w) => `AND ${w}`).join(' ')} ORDER BY o.id DESC LIMIT 300`, [p.id, ...f.params],
     );
     return c.json({ rows: rows.map(publicOrder), statuses: ORDER_STATUS });
   });
@@ -285,8 +289,9 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   // ================================================================ ЗАМОВЛЕННЯ ПАРТНЕРІВ (адмін / бухгалтер)
   app.get('/api/b2b/orders', async (c) => {
     need(c, 'b2b.admin');
-    const where = [`o.kind = 'supply'`];
-    const params = [];
+    const f = listFilter(c);
+    const where = [`o.kind = 'supply'`, ...f.where];
+    const params = [...f.params];
     const st = c.req.query('status');
     const pid = parseInt(c.req.query('partner'), 10);
     if (st && ORDER_STATUS[st]) { where.push('o.status = ?'); params.push(st); }
