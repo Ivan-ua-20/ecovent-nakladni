@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 10,
+  version: 11,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,6 +158,23 @@ export const schema = {
     data TEXT NOT NULL,
     PRIMARY KEY (file_id, n)
   )`,
+  // Платежі Opendatabot за закупівлі: order_id — куди зараховано (порожньо — треба перевірити, candidates — можливі
+  // закупівлі); dismissed — адмін відв'язав (Opendatabot помилився), більше не пропонується автоматично.
+  `CREATE TABLE IF NOT EXISTS b2b_payments (
+    tx_id TEXT PRIMARY KEY,
+    order_id INTEGER,
+    candidates TEXT NOT NULL DEFAULT '[]',
+    dismissed INTEGER NOT NULL DEFAULT 0,
+    amount REAL NOT NULL,
+    date TEXT DEFAULT '',
+    payer_name TEXT DEFAULT '',
+    payer_code TEXT DEFAULT '',
+    purpose TEXT DEFAULT '',
+    auto INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    created_by TEXT DEFAULT ''
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_payments_order ON b2b_payments (order_id)`,
   ],
   // ---------- етап 3: замовлення для клієнтів партнера ----------
   // supply_id — закупівля, з якої взято товари (порожньо — «без закупівлі»); дані клієнта й ТТН партнера;

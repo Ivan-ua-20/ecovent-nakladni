@@ -273,6 +273,8 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   }
   const publicOrder = (o) => {
     const out = { ...o, number: orderNo(o.id), status_name: ANY_STATUS[o.status] || o.status };
+    if (o.kind === 'supply' && ['partial', 'pay_wait'].includes(o.status)) out.due = round2(o.total - (o.paid_amount || 0));
+    if (o.kind === 'supply' && o.status === 'partial') out.status_name = `Частково оплачено · ще ${uah(out.due)}`;
     if (o.kind === 'client') Object.assign(out, { no_supply: !o.supply_id || o.supply_status === 'open', open_supply: o.supply_status === 'open', pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : '' });
     return out;
   };
@@ -444,6 +446,12 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       await log(o.id, u, 'позначено «Оплачено» вручну');
       await tgPartner(o.partner_id, `✅ <b>Оплату отримано</b>: закупівля ${orderNo(o.id)}${o.invoice_no ? `, рахунок № ${h(o.invoice_no)}` : ''} — ${uah(o.total)}`);
       await hooks.finPaid?.(o.id).catch(() => 0); // запит накладної в «Фінансові питання»
+    } else if (status === 'pay_wait') {
+      // Повернути «Очікує оплату» (або зняти часткову оплату): платежі Opendatabot відв'язуються.
+      if (!['paid', 'partial'].includes(o.status)) throw fail(400, 'Закупівля й так очікує оплату.');
+      await hooks.payReset?.(o.id);
+      await db.run(`UPDATE b2b_orders SET status = 'pay_wait', paid_amount = 0, paid_at = '', paid_by = '', updated_at = ? WHERE id = ?`, [now, o.id]);
+      await log(o.id, u, o.status === 'partial' ? 'знято часткову оплату — «Очікує оплату»' : 'статус: «Очікує оплату» (оплату знято)');
     } else {
       await db.run(`UPDATE b2b_orders SET status = ?, updated_at = ? WHERE id = ?`, [status, now, o.id]);
       await log(o.id, u, `статус: «${ORDER_STATUS[status]}»`);
