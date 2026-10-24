@@ -48,6 +48,7 @@ await req('POST', `/api/b2b/partners/${pa.id}/users`, { login: 'pa', password: '
 await req('PUT', `/api/b2b/partners/${pa.id}/margins`, [{ brand_id: 901, margin: 10 }]); // Fan 9000, Fan 2 4500
 await req('POST', '/api/b2b/catalog/sync');
 await db.run(`UPDATE users SET tg_chat_id = '1' WHERE login = 'owner'`);
+await db.run(`UPDATE users SET tg_chat_id = '200' WHERE login = 'pa'`);
 const A = await login('pa', 'pass1234');
 const ent = await req('POST', '/api/b2b/p/entities', { name: 'ФОП Альфа', code: '1234567890' }, A);
 const supply = async (items, no) => {
