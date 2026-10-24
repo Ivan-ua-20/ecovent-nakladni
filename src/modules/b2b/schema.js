@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 8,
+  version: 9,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -182,6 +182,16 @@ export const schema = {
     ['b2b_partners', 'tg_group_code', "TEXT DEFAULT ''"],
     // Коли партнеру востаннє надіслали зміни цін (кнопка «Надіслати зміни цін»).
     ['b2b_partners', 'prices_sent_at', "TEXT DEFAULT ''"],
+    // «Фінансові питання»: повідомлення бота із запитом рахунку, повідомлення з рахунком (відповідь на нього — запит
+    // накладної), повідомлення із запитом накладної.
+    ['b2b_orders', 'fin_req_msg', 'INTEGER'],
+    ['b2b_orders', 'fin_inv_msg', 'INTEGER'],
+    ['b2b_orders', 'fin_pay_msg', 'INTEGER'],
+    // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
+    ['b2b_tg_docs', 'source', "TEXT DEFAULT 'private'"],
+    ['b2b_tg_docs', 'reply_to', 'INTEGER'],
+    ['b2b_tg_docs', 'tg_name', "TEXT DEFAULT ''"],
+    ['b2b_tg_docs', 'choices', "TEXT DEFAULT ''"],
   ],
   // Індекси на нові колонки — після ALTER TABLE (у старих базах колонок ще немає, коли створюються таблиці).
   async seed(db) {

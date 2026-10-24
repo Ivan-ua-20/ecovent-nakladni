@@ -88,7 +88,7 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
       const cq = upd.callback_query;
       const u = await db.get(`SELECT * FROM users WHERE tg_chat_id = ? AND active = 1`, [String(cq.from?.id || '')]);
       let note = '';
-      try { note = (u && await services.b2b?.tgCallback?.(cq, u, base)) || ''; } catch (e) { note = String(e.message || e).slice(0, 150); }
+      try { note = (await services.b2b?.tgCallback?.(cq, u || null, base)) || ''; } catch (e) { note = String(e.message || e).slice(0, 150); }
       await tg(s.tg_token, 'answerCallbackQuery', { callback_query_id: cq.id, text: typeof note === 'string' ? note : '' }).catch(() => {});
       return c.json({ ok: true });
     }
@@ -100,9 +100,9 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
       const b2b = services.b2b;
       if (msg.migrate_to_chat_id) { await b2b?.tgGroupMoved?.(String(chat), String(msg.migrate_to_chat_id)); return c.json({ ok: true }); }
       if (msg.left_chat_member?.is_bot && msg.left_chat_member.username === s.tg_bot) { await b2b?.tgGroupLeft?.(String(chat)); return c.json({ ok: true }); }
-      // Файл у відповідь на повідомлення бота (маркування до замовлення клієнта).
-      if ((msg.document || msg.photo) && msg.reply_to_message?.from?.is_bot && msg.reply_to_message.from.username === s.tg_bot) {
-        await services.b2b?.tgGroupFile?.(msg, base);
+      // Файл у групі: маркування (відповідь боту в групі партнера) або рахунок / накладна («Фінансові питання»).
+      if (msg.document || msg.photo) {
+        try { await services.b2b?.tgGroupMessage?.(msg, base); } catch (e) { console.error('tg group file', e); }
         return c.json({ ok: true });
       }
       const g = /^\/(?:link|start)(?:@\w+)?\s+([0-9a-f]{12,24})\b/i.exec(String(msg.text || ''));

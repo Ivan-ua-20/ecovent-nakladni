@@ -184,6 +184,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const full = orderText('🆕 Нова закупівля', { id: r.lastId, entity: entityText(e), total, comment: b.comment }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${r.lastId}`)}`);
     await tgGroup(p.id, full);
+    await hooks.finRequest?.(r.lastId).catch(() => 0); // запит рахунку в групу «Фінансові питання»
     return c.json({ id: r.lastId, number: orderNo(r.lastId), total });
   });
 
@@ -268,6 +269,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const full = orderText('✏️ Змінено закупівлю', { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${o.id}`)}`);
     await tgGroup(p.id, full);
+    await hooks.finRequest?.(o.id, 'changed').catch(() => 0);
     return c.json({ ok: true, total });
   });
 
@@ -283,6 +285,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     await log(o.id, c.get('user'), 'партнер скасував замовлення');
     await tgAdmins(`❌ <b>Скасовано закупівлю ${orderNo(o.id)}</b> («${h(p.name)}»)\n${link(c, `b2borders/${o.id}`)}`);
     await tgGroup(p.id, `❌ Закупівлю <b>${orderNo(o.id)}</b> скасовано.`);
+    await hooks.finClosed?.(o.id, '❌ скасовано партнером').catch(() => 0);
     return c.json({ ok: true });
   });
 
@@ -338,6 +341,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (next.invoice_no !== o.invoice_no) changes.push(`рахунок № ${next.invoice_no || '—'}${next.invoice_date ? ` від ${next.invoice_date}` : ''}`);
     if (next.waybill_no !== o.waybill_no) changes.push(`накладна № ${next.waybill_no || '—'}`);
     if (changes.length) await log(o.id, user, `${changes.join('; ')}${how}`);
+    if (next.invoice_no !== o.invoice_no || next.waybill_no !== o.waybill_no) await hooks.finNumbers?.(o.id, how).catch(() => 0);
     if (next.invoice_no && next.invoice_no !== o.invoice_no) {
       await tgPartner(o.partner_id, `🧾 <b>Рахунок № ${h(next.invoice_no)}</b> на ${o.kind === 'client' ? 'замовлення' : 'закупівлю'} ${orderNo(o.id)} — <b>${uah(o.total)}</b>\nОчікує оплату. Файл рахунку — у кабінеті партнера.\n${link(c, `${o.kind === 'client' ? 'pclients' : 'porders'}/${o.id}`)}`);
     }
@@ -359,10 +363,14 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       await db.run(`UPDATE b2b_orders SET status = 'paid', paid_amount = total, paid_at = ?, paid_by = ?, updated_at = ? WHERE id = ?`, [now, userName(u), now, o.id]);
       await log(o.id, u, 'позначено «Оплачено» вручну');
       await tgPartner(o.partner_id, `✅ <b>Оплату отримано</b>: закупівля ${orderNo(o.id)}${o.invoice_no ? `, рахунок № ${h(o.invoice_no)}` : ''} — ${uah(o.total)}`);
+      await hooks.finPaid?.(o.id).catch(() => 0); // запит накладної в «Фінансові питання»
     } else {
       await db.run(`UPDATE b2b_orders SET status = ?, updated_at = ? WHERE id = ?`, [status, now, o.id]);
       await log(o.id, u, `статус: «${ORDER_STATUS[status]}»`);
-      if (status === 'cancelled') await tgPartner(o.partner_id, `❌ Закупівлю ${orderNo(o.id)} скасовано менеджером.`);
+      if (status === 'cancelled') {
+        await tgPartner(o.partner_id, `❌ Закупівлю ${orderNo(o.id)} скасовано менеджером.`);
+        await hooks.finClosed?.(o.id, '❌ скасовано').catch(() => 0);
+      }
     }
     return c.json({ ok: true });
   });
@@ -467,6 +475,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       [`DELETE FROM b2b_order_log WHERE order_id = ?`, [o.id]],
       [`DELETE FROM b2b_orders WHERE id = ?`, [o.id]],
     ]);
+    await hooks.finClosed?.(o.id, '🗑 видалено', o).catch(() => 0);
     await logAudit(db, { user: c.get('user'), kind: 'b2b', refId: o.partner_id, action: `видалено ${o.kind === 'client' ? 'замовлення клієнта' : 'закупівлю'} ${orderNo(o.id)} на ${uah(o.total)}${o.crm_id ? ` (у LP-CRM № ${o.crm_id} — не видалено)` : ''}` }).catch(() => 0);
     return c.json({ ok: true, inCrm: o.crm_id || '' });
   });
