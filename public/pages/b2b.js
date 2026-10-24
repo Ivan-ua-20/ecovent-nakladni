@@ -260,7 +260,7 @@ export function createB2bPages(ctx = {}) {
     const qs = filterQs(ordFilter);
     const [{ rows, statuses, counts }, partners] = await Promise.all([api('GET', `/api/b2b/orders${qs ? `?${qs}` : ''}`), api('GET', '/api/b2b/partners')]);
     main.innerHTML = `
-      <div class="head-row"><h2>Закупівлі партнерів</h2></div>
+      <div class="head-row"><h2>Закупівлі партнерів</h2><button class="btn" id="finGroup">Група «Фінансові питання»</button></div>
       <div class="btn-row" style="margin-bottom:12px;flex-wrap:wrap">
         <button class="chip ${ordFilter.status ? '' : 'on'}" data-st="">Усі</button>
         ${Object.entries(statuses).map(([k, v]) => `<button class="chip ${ordFilter.status === k ? 'on' : ''}" data-st="${k}">${esc(v)}${counts[k] ? ` · ${counts[k]}` : ''}</button>`).join('')}
@@ -280,6 +280,7 @@ export function createB2bPages(ctx = {}) {
         </tr>`).join('')}</tbody></table>`
         : `<div class="card empty"><div class="big">Замовлень немає</div>${qs ? 'За цими фільтрами нічого не знайдено.' : 'Тут з’являться закупівлі, які оформлюють партнери.'}</div>`}`;
     wireFilterBar(ordFilter, () => viewOrders());
+    $('#finGroup').onclick = () => groupModal('fin');
     const setSt = (status) => (id) => api('POST', `/api/b2b/orders/${id}/status`, { status });
     wireBulk([
       { key: 'paid', label: 'Оплачено', run: setSt('paid') },
@@ -441,27 +442,43 @@ export function createB2bPages(ctx = {}) {
     };
   }
 
-  // Telegram-група для маркувань (напр. «накладні розетка»): бот пересилає туди маркування з ПІБ клієнта і № у CRM.
-  async function labelsGroup() {
-    const g = await api('GET', '/api/b2b/labels-group');
-    const m = modal('Група маркувань у Telegram', `<div class="form-stack">
+  // Службові Telegram-групи: маркування («накладні розетка») і «Фінансові питання» (рахунки й накладні).
+  const GROUPS = {
+    labels: {
+      url: '/api/b2b/labels-group', title: 'Група маркувань у Telegram', example: '«накладні розетка»', ok: 'Групу прив’язано для маркувань',
+      about: `Сюди бот надсилає кожне маркування замовлення клієнта (з сайту або з групи партнера) з підписом:
+        <b>ПІБ клієнта · CRM № … (або «ще не в CRM») · B2B-… · ТТН</b>; коли замовлення отримує № у CRM — окремий рядок із номером.
+        З маркування Нової пошти бот читає ТТН і телефон: порожню ТТН у замовленні заповнює, розбіжності показує.`,
+    },
+    fin: {
+      url: '/api/b2b/fin-group', title: 'Група «Фінансові питання»', example: '«Фінансові питання»', ok: 'Групу прив’язано як «Фінансові питання»',
+      about: `<b>Нова закупівля</b> → бот пише в гілку General запит рахунку (на кого, товари, сума). Бухгалтер надсилає PDF рахунку
+        <b>відповіддю на запит</b>: якщо покупець, сума і всі товари збіглися — рахунок одразу в закупівлі й у групі партнера.
+        <b>Після оплати</b> бот відповіддю на рахунок просить видаткову накладну — так само.
+        Є розбіжності — бот показує їх і кнопки, які спрацьовують лише для адміністраторів групи або сайту.
+        Щоб бот впізнавав і PDF без відповіді — зробіть його <b>адміністратором</b> групи (права можна мінімальні).`,
+    },
+  };
+  async function groupModal(key) {
+    const G = GROUPS[key];
+    const g = await api('GET', G.url);
+    const m = modal(G.title, `<div class="form-stack">
         ${g.chat ? `<div>✅ Прив’язано: <b>${esc(g.title || g.chat)}</b></div>` : '<div class="small muted">Групу ще не прив’язано.</div>'}
-        <div class="small">Сюди бот надсилає кожне маркування замовлення клієнта (з сайту або з групи партнера) з підписом:
-          <b>ПІБ клієнта · CRM № … (або «ще не в CRM») · B2B-… · ТТН</b>; коли замовлення отримує № у CRM — окремий рядок із номером.
-          З маркування Нової пошти бот читає ТТН і телефон: порожню ТТН у замовленні заповнює, розбіжності показує.</div>
-        <div id="lgCode"></div>
-      </div>`, { footer: `${g.chat ? '<button class="btn danger" id="lgOff" style="margin-right:auto">Відв’язати</button>' : ''}<button class="btn" data-close>Закрити</button><button class="btn primary" id="lgLink">${g.chat ? 'Прив’язати іншу' : 'Прив’язати групу'}</button>` });
-    $('#lgLink', m.el).onclick = async () => {
+        <div class="small">${G.about}</div>
+        <div id="grCode"></div>
+      </div>`, { footer: `${g.chat ? '<button class="btn danger" id="grOff" style="margin-right:auto">Відв’язати</button>' : ''}<button class="btn" data-close>Закрити</button><button class="btn primary" id="grLink">${g.chat ? 'Прив’язати іншу' : 'Прив’язати групу'}</button>` });
+    $('#grLink', m.el).onclick = async () => {
       try {
-        const { code, bot } = await api('POST', '/api/b2b/labels-group');
-        $('#lgCode', m.el).innerHTML = `<ol class="form-stack" style="padding-left:18px;margin:0">
-          <li>Додайте <b>@${esc(bot)}</b> у групу (наприклад, «накладні розетка»).</li>
+        const { code, bot } = await api('POST', G.url);
+        $('#grCode', m.el).innerHTML = `<ol class="form-stack" style="padding-left:18px;margin:0">
+          <li>Додайте <b>@${esc(bot)}</b> у групу ${G.example}.</li>
           <li>Надішліть у групі: <code style="font-size:16px">/link ${esc(code)}</code></li>
-          <li>Бот відповість «Групу прив’язано для маркувань». Код діє 30 хвилин.</li></ol>`;
+          <li>Бот відповість «${G.ok}». Код діє 30 хвилин.</li></ol>`;
       } catch (e) { toast(e.message, true); }
     };
-    $('#lgOff', m.el) && ($('#lgOff', m.el).onclick = async () => { try { await api('DELETE', '/api/b2b/labels-group'); m.close(); toast('Відв’язано'); } catch (e) { toast(e.message, true); } });
+    $('#grOff', m.el) && ($('#grOff', m.el).onclick = async () => { try { await api('DELETE', G.url); m.close(); toast('Відв’язано'); } catch (e) { toast(e.message, true); } });
   }
+  const labelsGroup = () => groupModal('labels');
 
   async function viewClient(id) {
     const [{ order: o, items, files, history, partner }, cfg] = await Promise.all([api('GET', `/api/b2b/orders/${id}`), api('GET', '/api/b2b/crm-settings')]);

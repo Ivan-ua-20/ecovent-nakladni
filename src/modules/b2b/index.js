@@ -446,7 +446,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   });
   const tgGroupLink = async (code, chat, title) => {
     const p = await db.get(`SELECT id, name, tg_group_code FROM b2b_partners WHERE tg_group_code LIKE ? AND COALESCE(deleted_at, '') = ''`, [`${code}|%`]);
-    if (!p || (Number(p.tg_group_code.split('|')[1]) || 0) < Date.now()) return tgdocs.linkLabelsGroup(code, chat, title);
+    if (!p || (Number(p.tg_group_code.split('|')[1]) || 0) < Date.now()) return tgdocs.linkSpecialGroup(code, chat, title);
     await db.run(`UPDATE b2b_partners SET tg_group = ?, tg_group_title = ?, tg_group_code = '' WHERE id = ?`, [chat, String(title).slice(0, 120), p.id]);
     await logAudit(db, { user: null, kind: 'b2b', refId: p.id, action: `прив'язано Telegram-групу «${title}»`, changes: [] }).catch(() => 0);
     return `✅ Групу прив'язано до партнера <b>${String(p.name).replace(/[<>&]/g, '')}</b>. Сюди надходитимуть закупівлі, рахунки й накладні (файлами) та оплати.`;
@@ -454,5 +454,5 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   const tgGroupMoved = (from, to) => db.run(`UPDATE b2b_partners SET tg_group = ? WHERE tg_group = ?`, [to, from]);
   const tgGroupLeft = (chat) => db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '' WHERE tg_group = ?`, [chat]);
 
-  return { partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupFile: tgdocs.tgGroupFile };
+  return { partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupMessage: tgdocs.tgGroupMessage };
 }
