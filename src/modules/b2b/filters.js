@@ -27,13 +27,19 @@ export function listFilter(c, { client = false } = {}) {
     const or = [];
     const num = /^(?:b2b\s*-?\s*)?(\d{1,9})$/i.exec(q);
     if (num) { or.push('o.id = ?'); params.push(Number(num[1])); }
+    // SQLite LIKE не враховує регістр лише для латиниці — для кирилиці шукаємо кількома варіантами регістру.
+    const low = q.toLocaleLowerCase('uk');
+    const variants = [...new Set([q, low, low.toLocaleUpperCase('uk'), low.charAt(0).toLocaleUpperCase('uk') + low.slice(1),
+      low.replace(/(^|[\s«"'-])(\p{L})/gu, (m, a, b) => a + b.toLocaleUpperCase('uk'))])].map((v) => `%${v}%`);
+    const anyCase = (col) => { or.push(`(${variants.map(() => `${col} LIKE ?`).join(' OR ')})`); params.push(...variants); };
     const like = `%${q}%`;
     const digits = q.replace(/\D/g, '');
     if (client) {
-      or.push('o.client_name LIKE ?'); params.push(like);
+      anyCase('o.client_name');
       if (digits.length >= 4) { or.push('o.client_phone LIKE ?', 'o.ttn LIKE ?', 'o.crm_id = ?'); params.push(`%${digits}%`, `%${digits}%`, digits); }
     } else {
-      or.push('o.entity LIKE ?', 'o.invoice_no LIKE ?', 'o.waybill_no LIKE ?'); params.push(like, like, like);
+      anyCase('o.entity');
+      or.push('o.invoice_no LIKE ?', 'o.waybill_no LIKE ?'); params.push(like, like);
     }
     where.push(`(${or.join(' OR ')})`);
   }
