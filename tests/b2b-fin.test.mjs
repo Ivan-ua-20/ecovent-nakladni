@@ -95,8 +95,8 @@ assert.equal((await db.get(`SELECT fin_inv_msg FROM b2b_orders WHERE id = ?`, [s
 assert.ok(calls.some(([m, b]) => m === 'sendDocument' && b.chat_id === '-500' && b.document === 'inv1'), 'рахунок — у групу партнера');
 assert.ok(!sent((b) => String(b.chat_id) === String(FIN) && /Збережено/.test(b.text)).length, 'у групі — без «Збережено»');
 assert.ok(calls.some(([m, b]) => m === 'setMessageReaction' && b.message_id === invMsg && b.reaction[0].emoji === '👌'), 'реакція на рахунок');
-assert.ok(calls.some(([m, b]) => m === 'deleteMessage' && b.message_id === reqId), 'виконаний запит прибрано');
-assert.equal((await db.get(`SELECT fin_req_msg FROM b2b_orders WHERE id = ?`, [s1.id])).fin_req_msg, null);
+assert.ok(!calls.some(([m, b]) => m === 'deleteMessage' && b.message_id === reqId), 'замовлення (запит рахунку) лишається');
+assert.ok(calls.some(([m, b]) => m === 'editMessageText' && b.message_id === reqId && /✅ рахунок № 110 додано.*Осушувач Evoair Dryora 12 — 2 шт/s.test(b.text) && !/Надішліть рахунок/.test(b.text)), 'з позначкою, товари на місці');
 assert.match((await req('GET', `/api/b2b/orders/${s1.id}`)).history.map((x) => x.action).join('\n'), /Фінансові питання/);
 
 // ---------- 4. Оплачено → запит накладної відповіддю на рахунок → накладна ----------
