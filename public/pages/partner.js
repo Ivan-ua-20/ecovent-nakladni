@@ -12,6 +12,37 @@ export function createPartnerPages(ctx = {}) {
   const cliFilter = { status: '', q: '', from: '', to: '', pay: '' };
   const filter = { brand: '', q: '', cat: '', sort: 'brand' };
 
+  // ---------------------------------------------------------------- відкрита закупівля (замовлення без закупівлі)
+  // Червоний банер на всю ширину: сума відкритої закупівлі, ліміт, вибір юрособи і «Сформувати рахунок».
+  async function openBanner() {
+    const [lim, entities] = await Promise.all([api('GET', '/api/b2b/p/limits'), canEdit() ? api('GET', '/api/b2b/p/entities') : []]);
+    const o = lim.open;
+    const unpaidLine = `<div class="small" style="margin-top:6px">Неоплачені закупівлі: <b>${uah(lim.unpaid.total)}</b> з ліміту ${uah(lim.unpaid.limit)}</div>`;
+    if (!o.id) return { html: lim.unpaid.total ? `<div class="small muted" style="margin-bottom:10px">Неоплачені закупівлі: ${uah(lim.unpaid.total)} з ліміту ${uah(lim.unpaid.limit)}</div>` : '', wire: () => {} };
+    const full = o.total >= o.limit - 0.01;
+    const html = `<div class="alert bad open-banner" style="margin-bottom:12px">
+        <div style="font-size:17px"><b>🔴 Закупівля не оплачена</b> — відкрита закупівля <a href="#/porders/${o.id}">${esc(o.number)}</a>:
+          <b>${uah(o.total)}</b> з ліміту ${uah(o.limit)} · замовлень без закупівлі: ${o.orders}</div>
+        <div class="small" style="margin:4px 0 8px">${full ? '<b>Ліміт вичерпано — нові замовлення без закупівлі неможливі.</b> ' : ''}Оберіть, на кого виставити рахунок, і сформуйте його — після цього можна продовжувати.</div>
+        ${canEdit() ? (entities.length ? `<div class="btn-row" style="flex-wrap:wrap">
+          <select id="obEnt" aria-label="Юрособа для рахунку" style="max-width:320px">${entities.map((e) => `<option value="${e.id}">${esc(e.name)} (${esc(e.code)})</option>`).join('')}</select>
+          <button class="btn primary" id="obForm">Сформувати рахунок на закупівлю</button></div>`
+          : '<a class="btn primary" href="#/pentities">Додати юрособу для рахунку</a>') : ''}
+        ${unpaidLine}
+      </div>`;
+    const wire = (after) => {
+      const b = $('#obForm');
+      if (!b) return;
+      b.onclick = async () => {
+        if (!(await confirmDanger(`Сформувати рахунок на ${o.number} (${uah(o.total)})?`, 'Закупівля піде бухгалтеру на рахунок; нові замовлення без закупівлі почнуть нову відкриту закупівлю.', 'Сформувати рахунок'))) return;
+        b.disabled = true;
+        try { await api('POST', '/api/b2b/p/open/form', { entity_id: Number($('#obEnt').value) }); toast(`Рахунок на ${o.number} замовлено — сповістимо в Telegram`); after(); }
+        catch (e) { toast(e.message, true); b.disabled = false; }
+      };
+    };
+    return { html, wire };
+  }
+
   // ---------------------------------------------------------------- каталог
   // Фільтри: бренд (зі знижкою від РРЦ), категорія (з кількістю, у межах бренду), пошук, сортування.
   // Список згрупований за брендами. Вибір запам'ятовується в браузері.
@@ -170,8 +201,10 @@ export function createPartnerPages(ctx = {}) {
   async function viewOrder(id) {
     const { order: o, items, files, history, clients = [], left = [] } = await api('GET', `/api/b2b/p/orders/${id}`);
     const editable = o.status === 'invoice_wait' && canEdit();
-    const hasLeft = o.status !== 'cancelled' && left.some((r) => r.left > 0);
+    const hasLeft = !['cancelled', 'open'].includes(o.status) && left.some((r) => r.left > 0);
+    const ob = o.status === 'open' ? await openBanner() : { html: '', wire: () => {} };
     main.innerHTML = `
+      ${ob.html}
       <div class="head-row"><h2>Закупівля ${esc(o.number)} ${statusBadge(o)}</h2>
         <div class="btn-row"><a class="btn" href="#/porders">← До списку</a>
           ${editable ? `<a class="btn" href="#/porders/${o.id}/edit">Змінити</a><button class="btn danger" id="oCancel">Скасувати</button>` : ''}</div></div>
@@ -199,6 +232,7 @@ export function createPartnerPages(ctx = {}) {
           ${historyCard(history)}
         </div>
       </div>`;
+    ob.wire(() => viewOrder(o.id));
     $('#oCancel') && ($('#oCancel').onclick = async () => {
       if (!(await confirmDanger(`Скасувати закупівлю ${o.number}?`, 'Замовлення буде скасовано, менеджер отримає сповіщення.', 'Скасувати закупівлю'))) return;
       try { await api('POST', `/api/b2b/p/orders/${o.id}/cancel`); toast('Скасовано'); viewOrder(o.id); } catch (e) { toast(e.message, true); }
@@ -285,9 +319,10 @@ export function createPartnerPages(ctx = {}) {
     if (id && mode === 'edit') return clientForm(id);
     if (id) return viewClient(id);
     const qs = filterQs(cliFilter);
-    const { rows, statuses } = await api('GET', `/api/b2b/p/clients${qs ? `?${qs}` : ''}`);
+    const [{ rows, statuses }, ob] = await Promise.all([api('GET', `/api/b2b/p/clients${qs ? `?${qs}` : ''}`), openBanner()]);
     main.innerHTML = `
       <div class="head-row"><h2>Замовлення клієнтів</h2>${canEdit() ? '<a class="btn primary" href="#/pclients/new">+ Замовлення клієнта</a>' : ''}</div>
+      ${ob.html}
       <div class="small muted" style="margin-bottom:10px">Замовлення, яке ви оформлюєте для свого клієнта: товари з вашої закупівлі, ваша ТТН і маркування.
         <span class="badge bad">Без закупівлі</span> — товари не з закупівлі, менеджер виставить рахунок окремо.</div>
       <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap"><button class="chip ${cliFilter.status ? '' : 'on'}" data-pst="">Усі</button>
@@ -304,6 +339,7 @@ export function createPartnerPages(ctx = {}) {
         </tr>`).join('')}</tbody></table>`
         : `<div class="card empty"><div class="big">${qs ? 'Нічого не знайдено' : 'Замовлень клієнтів ще немає'}</div>${qs ? 'Змініть фільтри.' : 'Відкрийте закупівлю і натисніть «+ Замовлення клієнта» або створіть замовлення тут.'}</div>`}`;
     wireFilterBar(cliFilter, () => viewClients());
+    ob.wire(() => viewClients());
     $$('[data-pst]').forEach((b) => (b.onclick = () => { cliFilter.status = b.dataset.pst; viewClients(); }));
     $$('[data-o]').forEach((tr) => (tr.onclick = () => { location.hash = `#/pclients/${tr.dataset.o}`; }));
   }
@@ -367,7 +403,7 @@ export function createPartnerPages(ctx = {}) {
     ]);
     if (cur && cur.order.status !== 'new') { location.hash = `#/pclients/${id}`; return; }
     // Закупівля поточного замовлення — із залишком з урахуванням його власних позицій.
-    if (cur?.order.supply_id) {
+    if (cur?.order.supply_id && !cur.order.open_supply) {
       const own = new Map(cur.items.map((i) => [i.product_id, i.qty]));
       const s = supplies.find((x) => x.id === cur.order.supply_id);
       if (s) s.items.forEach((i) => { i.left += own.get(i.product_id) || 0; });
@@ -376,7 +412,8 @@ export function createPartnerPages(ctx = {}) {
         if (d) supplies.unshift({ id: d.order.id, number: d.order.number, pay: '', items: d.left.map((r) => ({ ...r, left: r.left + (own.get(r.product_id) || 0) })) });
       }
     }
-    let source = cur ? String(cur.order.supply_id || '') : (presetSupply || (supplies[0] ? String(supplies[0].id) : ''));
+    const lim = await api('GET', '/api/b2b/p/limits');
+    let source = cur ? String(cur.order.open_supply ? '' : (cur.order.supply_id || '')) : (presetSupply || (supplies[0] ? String(supplies[0].id) : ''));
     const qty = new Map((cur?.items || []).map((i) => [i.product_id, i.qty]));
     const o = cur?.order || {};
     const payTxt = { paid: 'оплачено', partial: 'частково оплачено', unpaid: 'не оплачено' };
@@ -396,7 +433,8 @@ export function createPartnerPages(ctx = {}) {
               <label class="src-card bad ${source === '' ? 'on' : ''}">
                 <input type="radio" name="cfSrc" value="" ${source === '' ? 'checked' : ''}>
                 <span class="src-head"><b>Без закупівлі</b><span class="badge bad">червоним</span></span>
-                <span class="small muted">Товари з каталогу за вашою ціною — менеджер виставить на них рахунок окремо.</span>
+                <span class="small muted">Товари з каталогу за вашою ціною — додаються у відкриту закупівлю${lim.open.id ? ` ${esc(lim.open.number)}` : ''}:
+                  <b>${uah(lim.open.total)}</b> з ліміту ${uah(lim.open.limit)}. Рахунок на неї формуєте самі.</span>
               </label>
             </div>
             ${supplies.length ? '' : '<div class="small muted">Закупівель із залишком немає — можна оформити без закупівлі або спершу оформити закупівлю.</div>'}
@@ -452,6 +490,27 @@ export function createPartnerPages(ctx = {}) {
       $$('.src-card').forEach((c) => c.classList.toggle('on', c.contains(r)));
       draw();
     }));
+    // Маркування Нової пошти → ПІБ, телефон і ТТН клієнта (порожні поля заповнюються, різницю показуємо).
+    $('#cfFiles').onchange = async () => {
+      const pdf = [...$('#cfFiles').files].find((f) => /pdf/i.test(f.type) || /\.pdf$/i.test(f.name));
+      if (!pdf || pdf.size > 5 * 1024 * 1024) return;
+      try {
+        const res = await fetch('/api/b2b/p/parse-label', { method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: pdf });
+        const r = await res.json();
+        if (!r.found) { toast('У файлі не знайдено маркування Нової пошти — заповніть дані вручну.'); return; }
+        const fm = $('#cfForm');
+        const diff = [];
+        for (const [k, label] of [['client_name', 'ПІБ'], ['client_phone', 'телефон'], ['ttn', 'ТТН']]) {
+          if (!r[k]) continue;
+          const cur = fm[k].value.trim();
+          const norm = (v) => String(v).replace(/\D/g, '').replace(/^38(?=0)/, '');
+          if (!cur) fm[k].value = r[k];
+          else if ((k === 'client_name' ? cur.toLowerCase() !== r[k].toLowerCase() : norm(cur) !== norm(r[k]))) diff.push(`${label}: у маркуванні «${r[k]}»`);
+        }
+        if (r.address && !fm.comment.value.trim()) fm.comment.value = `НП: ${r.address}`;
+        toast(diff.length ? `⚠️ Дані відрізняються від маркування — ${diff.join('; ')}` : 'Дані клієнта підтягнуто з маркування', diff.length > 0);
+      } catch { /* розбір не вдався — нічого */ }
+    };
     $('#cfForm').onsubmit = async (e) => {
       e.preventDefault();
       const allowed = new Set(lines().map((l) => l.product_id));

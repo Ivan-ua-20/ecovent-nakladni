@@ -37,20 +37,30 @@ export function createB2bPages(ctx = {}) {
           <label class="f"><span>E-mail</span><input name="email" value="${esc(p?.email || '')}"></label></div>
         <label class="f"><span>Примітка (бачать лише адміністратори)</span><textarea name="note" rows="2">${esc(p?.note || '')}</textarea></label>
         ${isNew ? '' : `<label class="check"><input type="checkbox" name="active" ${p.active ? 'checked' : ''}> Активний (вимкнений партнер не може входити)</label>`}
+        <div class="grid2">
+          <label class="f"><span>Ліміт відкритої закупівлі, грн</span><input name="open_limit" inputmode="decimal" value="${esc(p?.open_limit ?? '')}" placeholder="20000 (типово)"></label>
+          <label class="f"><span>Ліміт неоплачених закупівель, грн</span><input name="unpaid_limit" inputmode="decimal" value="${esc(p?.unpaid_limit ?? '')}" placeholder="100000 (типово)"></label>
+        </div>
+        <div class="small muted">Відкрита закупівля — замовлення клієнтів без закупівлі; понад ліміт нові такі замовлення не приймаються, доки партнер не сформує рахунок.
+          Неоплачені закупівлі — сума всіх неоплачених (разом із відкритою); понад ліміт нові закупівлі не приймаються.</div>
       </form>`, { footer: `<button class="btn" data-close>Скасувати</button><button class="btn primary" id="pSave">${isNew ? 'Створити' : 'Зберегти'}</button>` });
     $('#pSave', m.el).onclick = async () => {
       const f = $('#pF', m.el);
       const d = Object.fromEntries(new FormData(f));
       if (f.active) d.active = f.active.checked;
       try {
-        if (isNew) { const r = await api('POST', '/api/b2b/partners', d); m.close(); location.hash = `#/b2bpartners/${r.id}`; }
+        if (isNew) {
+          const r = await api('POST', '/api/b2b/partners', d);
+          if (d.open_limit || d.unpaid_limit) await api('PUT', `/api/b2b/partners/${r.id}`, { open_limit: d.open_limit, unpaid_limit: d.unpaid_limit });
+          m.close(); location.hash = `#/b2bpartners/${r.id}`;
+        }
         else { await api('PUT', `/api/b2b/partners/${p.id}`, d); m.close(); toast('Збережено'); viewPartner(p.id); }
       } catch (e) { toast(e.message, true); }
     };
   }
 
   async function viewPartner(id) {
-    const { partner: p, users, brands, entities = [], roles = {} } = await api('GET', `/api/b2b/partners/${id}`);
+    const { partner: p, users, brands, entities = [], roles = {}, limits } = await api('GET', `/api/b2b/partners/${id}`);
     const byPartner = users.filter((u) => u.added_by_partner).length;
     main.innerHTML = `
       <div class="head-row"><h2>${esc(p.name)} ${p.active ? '' : '<span class="badge bad">вимкнений</span>'}</h2>
@@ -75,6 +85,12 @@ export function createB2bPages(ctx = {}) {
           </div>
         </div>
         <div class="form-stack">
+          ${limits ? `<div class="card form-stack">
+            <h3>Ліміти</h3>
+            <div class="small">Відкрита закупівля${limits.openId ? ` <a href="#/b2borders/${limits.openId}">B2B-${limits.openId}</a>` : ''}: <b>${money(limits.openTotal)}</b> з ${money(limits.open)} грн</div>
+            <div class="small">Неоплачені закупівлі: <b>${money(limits.unpaidTotal)}</b> з ${money(limits.unpaid)} грн</div>
+            <div class="small muted">Змінити — кнопка «Змінити» вгорі картки.</div>
+          </div>` : ''}
           <div class="card form-stack">
             <h3>Контакти</h3>
             <div class="small">${esc([p.phone, p.email].filter(Boolean).join(' · ') || 'Не вказано')}</div>

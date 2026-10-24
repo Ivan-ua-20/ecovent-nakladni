@@ -105,7 +105,10 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     const brands = [...names].map(([id, name]) => ({
       id, name, enabled: m.has(id), margin: m.get(id) ?? null, products: cnt.get(id)?.n || 0, priced: cnt.get(id)?.priced || 0,
     }));
-    return c.json({ partner: p, users: users.map(teamRow), brands, entities, roles: PARTNER_ROLES });
+    const lim = orders.limitsOf(p);
+    const open = await orders.getOpen(p.id);
+    return c.json({ partner: p, users: users.map(teamRow), brands, entities, roles: PARTNER_ROLES,
+      limits: { open: lim.open, unpaid: lim.unpaid, openTotal: open?.total || 0, openId: open?.id || null, unpaidTotal: await orders.unpaidTotal(p.id) } });
   });
 
   // Видалення партнера. Без замовлень — повністю; із замовленнями — в архів (замовлення й документи лишаються,
@@ -138,6 +141,16 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     const f = { ...partnerFields({ ...p, ...b }) };
     if (!f.name) throw fail(400, 'Вкажіть назву партнера.');
     const active = b.active === undefined ? p.active : (b.active ? 1 : 0);
+    // Ліміти: відкрита закупівля (замовлення без закупівлі) і всі неоплачені закупівлі; порожньо — типові 20 000 / 100 000.
+    for (const [k, label] of [['open_limit', 'відкритої закупівлі'], ['unpaid_limit', 'неоплачених закупівель']]) {
+      if (b[k] === undefined) continue;
+      const v = b[k] === '' || b[k] === null ? null : round2(num(b[k]));
+      if (v !== null && !(v >= 0 && v <= 100000000)) throw fail(400, `Ліміт ${label} — сума в гривнях.`);
+      if (v !== (p[k] ?? null)) {
+        await db.run(`UPDATE b2b_partners SET ${k} = ? WHERE id = ?`, [v, p.id]);
+        await audit(c, p.id, `ліміт ${label}: ${p[k] ?? 'типовий'} → ${v ?? 'типовий'}`);
+      }
+    }
     await db.run(`UPDATE b2b_partners SET name = ?, phone = ?, email = ?, note = ?, active = ? WHERE id = ?`, [f.name, f.phone, f.email, f.note, active, p.id]);
     // Вимкнений партнер не може входити (усі його користувачі вимикаються разом із ним; вмикаються окремо).
     if (!active && p.active) {

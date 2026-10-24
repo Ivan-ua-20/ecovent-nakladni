@@ -113,7 +113,7 @@ export function mountB2bStats(app, { db, myPartner }) {
       db.get(`SELECT SUM(i.qty) AS units, SUM(i.qty * i.price) AS sum FROM b2b_order_items i JOIN b2b_orders o ON o.id = i.order_id
         WHERE o.kind = 'client' AND o.status != 'cancelled' AND o.supply_id IS NOT NULL ${byPartner}`, pp),
     ]);
-    const noSupply = cur.filter((o) => o.kind === 'client' && !o.supply_id).length;
+    const noSupply = cur.filter((o) => o.kind === 'client' && (!o.supply_id || o.supply_status === 'open')).length;
     const unpaidClients = cur.filter((o) => o.kind === 'client' && !(o.supply_id ? ['paid', 'done'].includes(o.supply_status) : o.paid_at)).length;
 
     const out = {
