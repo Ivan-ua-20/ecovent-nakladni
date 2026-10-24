@@ -12,6 +12,7 @@ import { call } from '../../integrations/lpcrm.js';
 import { mountB2bOrders } from './orders.js';
 import { mountB2bClients } from './clients.js';
 import { mountB2bStats } from './stats.js';
+import { mountB2bPrices } from './prices.js';
 
 export const partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 
@@ -391,20 +392,26 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   // Каталог партнера: лише увімкнені бренди; РРЦ і ціна партнера (маржу не показуємо — лише ціну).
   app.get('/api/b2b/p/catalog', async (c) => {
     const p = await myPartner(c);
-    const [rows, names] = await Promise.all([
-      db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.image, c.brand_id, m.margin
-        FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id
+    const [rows, names, cats] = await Promise.all([
+      db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.image, c.brand_id, m.margin, COALESCE(a.cat_manual, a.category_id, 0) AS cat
+        FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id LEFT JOIN an_products a ON a.product_id = c.product_id
         WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [p.id]),
       brandNames(),
+      db.all(`SELECT id, name FROM an_categories`).catch(() => []),
     ]);
-    const brands = [...new Set(rows.map((r) => r.brand_id))].map((id) => ({ id, name: names.get(id) || 'Інші' }))
+    const catName = new Map(cats.map((x) => [x.id, x.name]));
+    // Бренди з відсотком знижки від РРЦ (маржа партнера на бренд) і категорії з кількістю товарів.
+    const brands = [...new Map(rows.map((r) => [r.brand_id, { id: r.brand_id, name: names.get(r.brand_id) || 'Інші', margin: r.margin }])).values()]
       .sort((a, b) => a.name.localeCompare(b.name, 'uk'));
+    const categories = [...rows.reduce((m, r) => m.set(r.cat, (m.get(r.cat) || 0) + 1), new Map())]
+      .map(([id, n]) => ({ id, name: catName.get(id) || 'Інше', n })).sort((a, b) => a.name.localeCompare(b.name, 'uk'));
     return c.json({
       partner: { id: p.id, name: p.name },
       brands,
+      categories,
       products: rows.map((r) => ({
-        id: r.product_id, name: r.name, article: r.article, image: r.image, brand_id: r.brand_id,
-        brand: names.get(r.brand_id) || 'Інші', rrp: r.rrp, price: partnerPrice(r.rrp, r.margin),
+        id: r.product_id, name: r.name, article: r.article, image: r.image, brand_id: r.brand_id, cat: r.cat,
+        brand: names.get(r.brand_id) || 'Інші', rrp: r.rrp, price: partnerPrice(r.rrp, r.margin), margin: r.margin,
       })),
     });
   });
@@ -412,6 +419,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup });
   mountB2bClients(app, { db, fetchFn, myPartner, orders });
   mountB2bStats(app, { db, myPartner });
+  mountB2bPrices(app, { db, services, partnerPrice });
 
   // ---------- Telegram-група партнера ----------
   // Адмін бере код у картці партнера, додає бота в групу і пишe там «/link КОД» (код діє 30 хв).
