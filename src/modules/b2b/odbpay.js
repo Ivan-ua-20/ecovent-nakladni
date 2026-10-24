@@ -20,7 +20,7 @@ export function purposeHasNo(purpose, invoiceNo) {
 const digitsOf = (v) => String(v || '').replace(/\D/g, '').replace(/^0+/, '');
 export function purposeNos(purpose) {
   const t = String(purpose || '');
-  const out = [...t.matchAll(/№\s*([A-Za-zА-Яа-яІіЇїЄє]{0,4}[-–]?\s?\d[\d\-/]*)/g), ...t.matchAll(/рах(?:ун\w*|\.)?\s*№?\s*(\d+)/gi)]
+  const out = [...t.matchAll(/№\s*([A-Za-zА-Яа-яІіЇїЄє]{0,4}[-–]?\s?\d[\d\-/]*)/g), ...t.matchAll(/рах(?:ун[а-яіїє]*|\.)?\s*№?\s*(\d+)/gi)]
     .map((m) => digitsOf(m[1].split('/')[0])).filter(Boolean);
   return [...new Set(out)];
 }
