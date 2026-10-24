@@ -16,6 +16,20 @@ export function purposeHasNo(purpose, invoiceNo) {
   return [...String(purpose || '').matchAll(/\d+/g)].some((m) => m[0].replace(/^0+/, '') === digits);
 }
 
+// Номери рахунків, названі в призначенні: «Рахунок на оплату № 102», «рах. 46», «СФ-0099» → ['102'].
+const digitsOf = (v) => String(v || '').replace(/\D/g, '').replace(/^0+/, '');
+export function purposeNos(purpose) {
+  const t = String(purpose || '');
+  const out = [...t.matchAll(/№\s*([A-Za-zА-Яа-яІіЇїЄє]{0,4}[-–]?\s?\d[\d\-/]*)/g), ...t.matchAll(/рах(?:ун[а-яіїє]*|\.)?\s*№?\s*(\d+)/gi)]
+    .map((m) => digitsOf(m[1].split('/')[0])).filter(Boolean);
+  return [...new Set(out)];
+}
+// Платіж явно за інший рахунок (у призначенні є №, і це не № цієї закупівлі).
+export const foreignInvoice = (purpose, invoiceNo) => {
+  const nos = purposeNos(purpose);
+  return nos.length > 0 && !nos.includes(digitsOf(invoiceNo));
+};
+
 export function mountB2bPay(app, { db, services, orders, hooks }) {
   const { log, tgAdmins, tgPartner, link, uah, h } = orders;
 
@@ -68,6 +82,7 @@ export function mountB2bPay(app, { db, services, orders, hooks }) {
       const cands = all.filter((o) => o.code === t.payer_code && o.total - o.paid_amount > 0.004);
       if (!cands.length) continue;
       const byNo = cands.filter((o) => purposeHasNo(t.purpose, o.invoice_no));
+      if (!byNo.length && purposeNos(t.purpose).length) continue; // оплата за інший рахунок (не цих закупівель)
       let pool = byNo.length ? byNo : cands;
       if (pool.length > 1) {
         const exact = pool.filter((o) => Math.abs(due(o) - t.amount) <= DUE_EPS);
@@ -114,7 +129,10 @@ export function mountB2bPay(app, { db, services, orders, hooks }) {
     const checks = await db.all(`SELECT tx_id AS id, amount, date, payer_name, payer_code, purpose FROM b2b_payments
       WHERE order_id IS NULL AND dismissed = 0 AND EXISTS (SELECT 1 FROM json_each(candidates) j WHERE j.value = ?)`, [o.id]);
     const seen = new Set();
-    const possible = [...checks, ...fromOdb].filter((t) => !used.has(t.id) && !seen.has(t.id) && seen.add(t.id))
+    const since = o.invoice_date || o.created_at.slice(0, 10);
+    // Не показуємо: уже зараховані в будь-яку закупівлю; за інший рахунок (інший № у призначенні); раніші за цю закупівлю.
+    const possible = [...checks, ...fromOdb].filter((t) => !used.has(t.id) && !seen.has(t.id) && seen.add(t.id)
+      && !foreignInvoice(t.purpose, o.invoice_no) && (t.date.slice(0, 10) >= since || purposeHasNo(t.purpose, o.invoice_no)))
       .map((t) => ({ tx_id: t.id, amount: t.amount, date: t.date, payer_name: t.payer_name, payer_code: t.payer_code, purpose: t.purpose, hint: purposeHasNo(t.purpose, o.invoice_no) }))
       .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 30);
     return c.json({ linked, possible, due: round2(o.total - o.paid_amount), status: o.status });
@@ -129,6 +147,11 @@ export function mountB2bPay(app, { db, services, orders, hooks }) {
     const txId = String((await c.req.json()).tx_id || '');
     const ex = await db.get(`SELECT tx_id, order_id FROM b2b_payments WHERE tx_id = ?`, [txId]);
     if (ex?.order_id && ex.order_id !== o.id) throw fail(400, `Цей платіж уже зараховано в ${orderNo(ex.order_id)} — спершу відв'яжіть його там.`);
+    const [tx] = ex ? [ex] : (services.payments?.txs ? await services.payments.txs([txId]) : []);
+    const purpose = ex ? (await db.get(`SELECT purpose FROM b2b_payments WHERE tx_id = ?`, [txId]))?.purpose : tx?.purpose;
+    if (foreignInvoice(purpose, o.invoice_no)) {
+      throw fail(400, `Це оплата за інший рахунок (№ ${purposeNos(purpose).join(', ')} у призначенні), а в закупівлі — № ${o.invoice_no || '—'}.`);
+    }
     // «Оплачено» вручну → оплата підтверджується платежем: далі статус рахується за платежами.
     if (o.status === 'paid' && o.paid_by !== 'Opendatabot') {
       await db.run(`UPDATE b2b_orders SET status = 'pay_wait', paid_amount = 0, paid_at = '', paid_by = '' WHERE id = ?`, [o.id]);
@@ -156,10 +179,12 @@ export function mountB2bPay(app, { db, services, orders, hooks }) {
     const fromPayer = o.entity_code && services.payments?.txByPayer ? await services.payments.txByPayer(o.entity_code, 120) : [];
     const elsewhere = new Map((await db.all(`SELECT tx_id, order_id FROM b2b_payments WHERE order_id IS NOT NULL AND tx_id IN (SELECT value FROM json_each(?))`,
       [JSON.stringify(fromPayer.map((t) => t.id))])).map((x) => [x.tx_id, x.order_id]));
-    const others = fromPayer.filter((t) => !linked.some((l) => l.tx_id === t.id)).map((t) => ({
-      tx_id: t.id, amount: t.amount, date: t.date, payer_name: t.payer_name, purpose: t.purpose,
-      order: elsewhere.get(t.id) ? orderNo(elsewhere.get(t.id)) : '', hint: purposeHasNo(t.purpose, o.invoice_no), before: t.date.slice(0, 10) < since,
-    }));
+    // Інші платежі юрособи — лише ті, що ще ніде не зараховані і можуть бути саме за цей рахунок.
+    const others = fromPayer.filter((t) => !linked.some((l) => l.tx_id === t.id) && !elsewhere.has(t.id) && !foreignInvoice(t.purpose, o.invoice_no))
+      .map((t) => ({
+        tx_id: t.id, amount: t.amount, date: t.date, payer_name: t.payer_name, purpose: t.purpose,
+        order: '', hint: purposeHasNo(t.purpose, o.invoice_no), before: t.date.slice(0, 10) < since,
+      })).filter((t) => !t.before || t.hint);
     const paidSum = round2(linked.reduce((a, t) => a + t.amount, 0));
     const verdict = paidSum >= o.total - DUE_EPS ? 'confirmed' : paidSum > 0 ? 'partial' : others.some((t) => !t.order && !t.before) ? 'maybe' : 'none';
     return c.json({ verdict, status: o.status, paid_by: o.paid_by, total: o.total, paid: paidSum, due: round2(Math.max(0, o.total - paidSum)), linked, others, added: r.added, code: o.entity_code || '' });

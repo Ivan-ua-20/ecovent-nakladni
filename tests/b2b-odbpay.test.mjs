@@ -5,7 +5,14 @@ import { createHmac } from 'node:crypto';
 import { openDb } from '../src/core/db-node.js';
 import { migrate } from '../src/migrate.js';
 import { createApp } from '../src/app.js';
-import { purposeHasNo } from '../src/modules/b2b/odbpay.js';
+import { purposeHasNo, purposeNos, foreignInvoice } from '../src/modules/b2b/odbpay.js';
+
+assert.deepEqual(purposeNos('СПЛАТА ЗА ТОВАР ЗГІДНО З Рахунок на оплату № 102 від 23 жовтня 2026 р.'), ['102']);
+assert.deepEqual(purposeNos('Оплата згідно рахунку 46 від 08.10'), ['46']);
+assert.deepEqual(purposeNos('Оплата за товар'), []);
+assert.ok(foreignInvoice('Рахунок на оплату № 102 від 23.10', '110'));
+assert.ok(!foreignInvoice('Рахунок на оплату № 110 від 24.10', 'СФ-110'));
+assert.ok(!foreignInvoice('Оплата за товар', '110'));
 
 assert.ok(purposeHasNo('Оплата за рах. № СФ-000102 від 24.10', 'СФ-102'));
 assert.ok(!purposeHasNo('Оплата за рах. 1020', 'СФ-102'));
@@ -147,6 +154,21 @@ await req('POST', `/api/b2b/orders/${s1}/payments`, { tx_id: txD });
 o = await order(s1);
 assert.deepEqual([o.status, o.paid_amount, o.paid_by], ['partial', 9000, 'Opendatabot']);
 await req('POST', `/api/b2b/orders/${s1}/status`, { status: 'paid' }); // залишок отримано іншим способом
+
+// ---------- 4а. Оплата за інший рахунок (інший № у призначенні) — не зараховується і не пропонується ----------
+const s5 = await supply([{ product_id: 12, qty: 1 }], '110'); // 4500
+await hook({ amount: 4500, purpose: 'СПЛАТА ЗА ТОВАР ЗГІДНО З Рахунок на оплату № 102 від 23 жовтня 2026 р.' });
+assert.equal((await order(s5)).status, 'pay_wait', 'не зараховано автоматично');
+p = await req('GET', `/api/b2b/orders/${s5}/payments`);
+assert.ok(!p.possible.some((t) => /№ 102/.test(t.purpose)), 'не в списку можливих');
+const foreignTx = (await req('GET', '/api/odb/payments')).rows.find((r) => /№ 102/.test(r.purpose)).id;
+assert.match(await errOf(() => req('POST', `/api/b2b/orders/${s5}/payments`, { tx_id: foreignTx })), /інший рахунок/);
+// зарахований в одну закупівлю — не пропонується в іншій
+await hook({ amount: 4500, purpose: 'Рахунок на оплату № 110 від 24.10' });
+assert.equal((await order(s5)).status, 'paid');
+const s6 = await supply([{ product_id: 12, qty: 1 }], '111');
+assert.ok(!(await req('GET', `/api/b2b/orders/${s6}/payments`)).possible.some((t) => /№ 110/.test(t.purpose)), 'уже зарахований — не пропонується');
+await req('POST', `/api/b2b/orders/${s6}/status`, { status: 'cancelled' });
 
 // ---------- 5. Кілька закупівель з однаковим залишком без № → «перевірити» з кандидатами ----------
 const s3 = await supply([{ product_id: 12, qty: 1 }], 'СФ-103');
