@@ -2,11 +2,15 @@
 // Закупівля: партнер обирає товари й юрособу → «Очікує рахунок» → бухгалтер (власник/адмін) вносить номер рахунку
 // (і файл) → «Очікує оплату» → «Оплачено» (Opendatabot або вручну) → «Завершено». Доки рахунку немає, партнер може
 // змінити або скасувати закупівлю. Ціни фіксуються в момент оформлення (зміна маржі не чіпає наявних замовлень).
+// Відкрита закупівля (status 'open'): замовлення клієнтів «без закупівлі» автоматично складаються в одну таку закупівлю
+// партнера (ліміт open_limit, типово 20 000); партнер будь-коли обирає юрособу і «Формує рахунок» — вона стає звичайною.
+// Ліміт неоплачених закупівель (unpaid_limit, типово 100 000): понад нього нові закупівлі й поповнення відкритої — ні.
 import { fail, need, nowIso, round2 } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
 import { listFilter } from './filters.js';
 
 export const ORDER_STATUS = {
+  open: 'Відкрита (рахунок не сформовано)',
   invoice_wait: 'Очікує рахунок',
   pay_wait: 'Очікує оплату',
   partial: 'Частково оплачено',
@@ -24,12 +28,18 @@ const ANY_STATUS = { ...ORDER_STATUS, ...CLIENT_STATUS };
 // Стан оплати замовлення клієнта: за закупівлею, з якої воно зібране; «без закупівлі» — оплачено вручну адміністратором.
 export function payState(o) {
   if (o.kind !== 'client') return '';
-  if (!o.supply_id) return o.paid_at ? 'paid' : 'unpaid';
+  if (!o.supply_id) return o.paid_at ? 'paid' : 'unpaid'; // старі «без закупівлі»: оплату ставить адмін
   if (['paid', 'done'].includes(o.supply_status)) return 'paid';
   if (o.supply_status === 'partial') return 'partial';
   return 'unpaid';
 }
-export const PAY_NAME = { paid: 'Оплачено', partial: 'Частково оплачено', unpaid: 'Не оплачено' };
+export const PAY_NAME = { paid: 'Оплачено', partial: 'Частково оплачено', unpaid: 'В процесі оплати' };
+export const DEFAULT_LIMITS = { open: 20000, unpaid: 100000 };
+export const limitsOf = (p) => ({
+  open: Number(p?.open_limit) > 0 ? Number(p.open_limit) : DEFAULT_LIMITS.open,
+  unpaid: Number(p?.unpaid_limit) > 0 ? Number(p.unpaid_limit) : DEFAULT_LIMITS.unpaid,
+});
+const UNPAID = `('open', 'invoice_wait', 'pay_wait', 'partial')`;
 const ENTITY_KIND = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 const FILE_KIND = { invoice: 'Рахунок', waybill: 'Накладна', label: 'Маркування', other: 'Файл' };
 const MAX_FILE = 5 * 1024 * 1024;
@@ -175,6 +185,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const e = await myEntity(p, b.entity_id);
     const items = await priceItems(p, b.items);
     const total = totalOf(items);
+    await checkUnpaid(p, total);
     const now = nowIso();
     const r = await db.run(
       `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?)`,
@@ -188,6 +199,73 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return c.json({ id: r.lastId, number: orderNo(r.lastId), total });
   });
 
+  // ---------------------------------------------------------------- ліміти й відкрита закупівля
+  async function unpaidTotal(partnerId, exceptId = 0) {
+    const r = await db.get(`SELECT COALESCE(SUM(total - paid_amount), 0) AS t FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status IN ${UNPAID} AND id != ?`, [partnerId, exceptId]);
+    return round2(r?.t || 0);
+  }
+  // Нова сума неоплачених закупівель (exceptId — закупівля, що змінюється) не має перевищити ліміт партнера.
+  async function checkUnpaid(p, addTotal, exceptId = 0) {
+    const lim = limitsOf(p).unpaid;
+    const cur = await unpaidTotal(p.id, exceptId);
+    if (cur + addTotal > lim + 0.004) {
+      throw fail(400, `Ліміт неоплачених закупівель — ${uah(lim)}: зараз неоплачено ${uah(cur)}, нова сума ${uah(addTotal)}. Спершу оплатіть закупівлі або зверніться до менеджера.`);
+    }
+  }
+  const getOpen = (partnerId) => db.get(`SELECT * FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status = 'open' ORDER BY id LIMIT 1`, [partnerId]);
+  // Товари відкритої закупівлі = товари її замовлень клієнтів (без скасованих). Порожня — видаляється.
+  async function rebuildOpen(supplyId) {
+    const s = await db.get(`SELECT id, status FROM b2b_orders WHERE id = ?`, [supplyId]);
+    if (!s || s.status !== 'open') return;
+    const rows = await db.all(
+      `SELECT i.product_id, MAX(i.name) AS name, MAX(i.article) AS article, i.price, MAX(i.rrp) AS rrp, SUM(i.qty) AS qty
+       FROM b2b_order_items i JOIN b2b_orders co ON co.id = i.order_id
+       WHERE co.supply_id = ? AND co.kind = 'client' AND co.status != 'cancelled' GROUP BY i.product_id, i.price ORDER BY MIN(i.id)`, [s.id],
+    );
+    if (!rows.length) {
+      await db.batch([
+        [`DELETE FROM b2b_order_items WHERE order_id = ?`, [s.id]], [`DELETE FROM b2b_order_log WHERE order_id = ?`, [s.id]],
+        [`UPDATE b2b_orders SET supply_id = NULL WHERE supply_id = ?`, [s.id]], [`DELETE FROM b2b_orders WHERE id = ?`, [s.id]],
+      ]);
+      return;
+    }
+    await db.batch([
+      [`DELETE FROM b2b_order_items WHERE order_id = ?`, [s.id]],
+      ...itemRows(s.id, rows),
+      [`UPDATE b2b_orders SET total = ?, updated_at = ? WHERE id = ?`, [totalOf(rows), nowIso(), s.id]],
+    ]);
+  }
+
+  app.get('/api/b2b/p/limits', async (c) => {
+    const p = await myPartner(c);
+    const lim = limitsOf(p);
+    const open = await getOpen(p.id);
+    const cnt = open ? (await db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled'`, [open.id])).n : 0;
+    return c.json({
+      open: { id: open?.id || null, number: open ? orderNo(open.id) : '', total: open?.total || 0, limit: lim.open, orders: cnt },
+      unpaid: { total: await unpaidTotal(p.id), limit: lim.unpaid },
+    });
+  });
+
+  // «Сформувати рахунок»: відкрита закупівля → звичайна («Очікує рахунок») на обрану юрособу.
+  app.post('/api/b2b/p/open/form', async (c) => {
+    const p = await myPartner(c);
+    const open = await getOpen(p.id);
+    if (!open) throw fail(400, 'Відкритої закупівлі немає.');
+    const b = await c.req.json();
+    const e = await myEntity(p, b.entity_id);
+    const now = nowIso();
+    await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity_id = ?, entity = ?, comment = ?, updated_at = ? WHERE id = ?`,
+      [e.id, entityText(e), String(b.comment || '').trim().slice(0, 1000), now, open.id]);
+    await log(open.id, c.get('user'), `сформовано рахунок на відкриту закупівлю: ${uah(open.total)}, юрособа ${e.name}`);
+    const items = await db.all(`SELECT product_id, name, article, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [open.id]);
+    const full = orderText('🆕 Сформовано закупівлю (з замовлень клієнтів)', { id: open.id, entity: entityText(e), total: open.total, comment: b.comment }, p, items);
+    await tgAdmins(`${full}\n\n${link(c, `b2borders/${open.id}`)}`);
+    await tgGroup(p.id, full);
+    await hooks.finRequest?.(open.id).catch(() => 0);
+    return c.json({ ok: true, id: open.id, number: orderNo(open.id) });
+  });
+
   async function orderOf(id, partnerId = null) {
     const o = await db.get(`SELECT * FROM b2b_orders WHERE id = ? ${partnerId ? 'AND partner_id = ?' : ''}`, partnerId ? [id, partnerId] : [id]);
     if (!o) throw fail(404, 'Замовлення не знайдено.');
@@ -195,7 +273,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   }
   const publicOrder = (o) => {
     const out = { ...o, number: orderNo(o.id), status_name: ANY_STATUS[o.status] || o.status };
-    if (o.kind === 'client') Object.assign(out, { no_supply: !o.supply_id, pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : '' });
+    if (o.kind === 'client') Object.assign(out, { no_supply: !o.supply_id || o.supply_status === 'open', open_supply: o.supply_status === 'open', pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : '' });
     return out;
   };
   // Залишок товарів закупівлі для замовлень клієнтів (без скасованих; exceptId — замовлення, що зараз змінюється).
@@ -254,6 +332,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const e = await myEntity(p, b.entity_id ?? o.entity_id);
     const items = await priceItems(p, b.items);
     const total = totalOf(items);
+    await checkUnpaid(p, total, o.id);
     // Не менше, ніж уже розписано на замовлення клієнтів.
     const want = new Map(items.map((i) => [i.product_id, i.qty]));
     for (const r of await supplyLeft(o.id)) {
@@ -355,6 +434,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (o.kind !== 'supply') throw fail(400, 'Статус замовлення клієнта змінюється на його сторінці.');
     const { status } = await c.req.json();
     if (!['paid', 'done', 'cancelled', 'pay_wait'].includes(status)) throw fail(400, 'Невідомий статус.');
+    if (o.status === 'open') throw fail(400, 'Це відкрита закупівля: вона складається із замовлень клієнтів. Спершу партнер формує на неї рахунок.');
     if (status === 'pay_wait' && !o.invoice_no) throw fail(400, 'Спершу внесіть номер рахунку.');
     if (status === 'paid' && !o.invoice_no) throw fail(400, 'Спершу внесіть номер рахунку.');
     const u = c.get('user');
@@ -476,9 +556,10 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       [`DELETE FROM b2b_orders WHERE id = ?`, [o.id]],
     ]);
     await hooks.finClosed?.(o.id, '🗑 видалено', o).catch(() => 0);
+    if (o.kind === 'client' && o.supply_id) await rebuildOpen(o.supply_id);
     await logAudit(db, { user: c.get('user'), kind: 'b2b', refId: o.partner_id, action: `видалено ${o.kind === 'client' ? 'замовлення клієнта' : 'закупівлю'} ${orderNo(o.id)} на ${uah(o.total)}${o.crm_id ? ` (у LP-CRM № ${o.crm_id} — не видалено)` : ''}` }).catch(() => 0);
     return c.json({ ok: true, inCrm: o.crm_id || '' });
   });
 
-  return { applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
+  return { getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
 }

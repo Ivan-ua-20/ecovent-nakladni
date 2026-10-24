@@ -162,7 +162,13 @@ assert.equal(crm.filter((x) => x.method === 'getOrdersByID').length, 1, 'одн�
 // ---------- 5. Оплата: без закупівлі — вручну, із закупівлі — за закупівлею ----------
 await req('PUT', `/api/b2b/orders/${c2.id}`, { invoice_no: 'СФ-9', waybill_no: 'РН-9' });
 assert.equal((await req('GET', `/api/b2b/orders/${c2.id}`)).order.status, 'crm', 'рахунок не змінює статус замовлення клієнта');
-await req('POST', `/api/b2b/clients/${c2.id}/paid`, { paid: true });
+// без закупівлі → відкрита закупівля: оплата — лише після того, як партнер сформує на неї рахунок
+assert.match(await errOf(() => req('POST', `/api/b2b/clients/${c2.id}/paid`, { paid: true })), /спершу партнер формує/);
+const openId = (await req('GET', `/api/b2b/p/clients/${c2.id}`, null, A)).order.supply_id;
+assert.equal((await req('GET', `/api/b2b/p/clients/${c2.id}`, null, A)).order.pay_name, 'В процесі оплати');
+await req('POST', '/api/b2b/p/open/form', { entity_id: ea.id }, A);
+await req('PUT', `/api/b2b/orders/${openId}`, { invoice_no: 'СФ-9' });
+await req('POST', `/api/b2b/orders/${openId}/status`, { status: 'paid' });
 assert.equal((await req('GET', `/api/b2b/p/clients/${c2.id}`, null, A)).order.pay, 'paid');
 assert.equal(await status(() => req('POST', `/api/b2b/clients/${c1.id}/paid`, { paid: true })), 400, 'оплата — за закупівлею');
 assert.equal(await status(() => req('POST', `/api/b2b/orders/${c1.id}/status`, { status: 'paid' })), 400);

@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 9,
+  version: 10,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,6 +192,9 @@ export const schema = {
     ['b2b_tg_docs', 'reply_to', 'INTEGER'],
     ['b2b_tg_docs', 'tg_name', "TEXT DEFAULT ''"],
     ['b2b_tg_docs', 'choices', "TEXT DEFAULT ''"],
+    // Ліміти партнера (порожньо — типові): відкрита закупівля і всі неоплачені закупівлі.
+    ['b2b_partners', 'open_limit', 'REAL'],
+    ['b2b_partners', 'unpaid_limit', 'REAL'],
   ],
   // Індекси на нові колонки — після ALTER TABLE (у старих базах колонок ще немає, коли створюються таблиці).
   async seed(db) {

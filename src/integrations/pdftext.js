@@ -217,17 +217,21 @@ export function parseNpLabel(text) {
   const lines = t.split('\n').map((x) => x.trim());
   // одержувач: рядки між «Приватна особа»/назвою (після «КОМУ:») і адресою «…, Відділення …»
   let recipient = '';
+  let address = '';
   const komu = lines.findIndex((x) => /^КОМУ:?$/i.test(x));
   if (komu >= 0) {
     const after = lines.slice(komu + 1);
     const priv = after.findIndex((x) => /^Приватна особа$/i.test(x));
     if (priv >= 0) {
       const name = [];
-      for (const x of after.slice(priv + 1)) { if (/Відділення|Поштомат|вул\.|\d{3} \d{3}/i.test(x)) break; name.push(x); }
+      for (const x of after.slice(priv + 1)) {
+        if (/Відділення|Поштомат|вул\.|\d{3} \d{3}/i.test(x)) { if (/Відділення|Поштомат|вул\./i.test(x)) address = x; break; }
+        name.push(x);
+      }
       recipient = name.join(' ').trim();
     }
   }
-  return ttn ? { ttn, phone: phones.at(-1) || '', recipient, rozetka: /РОЗ\s?(\d{6,})/.exec(t)?.[1] || '' } : null;
+  return ttn ? { ttn, phone: phones.at(-1) || '', recipient, address, rozetka: /РОЗ\s?(\d{6,})/.exec(t)?.[1] || '' } : null;
 }
 
 // Підказки з назви файлу або підпису: № замовлення B2B, тип і № документа.
