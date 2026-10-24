@@ -4627,7 +4627,7 @@ var h = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").repl
 var nf = new Intl.NumberFormat("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 var uah = (n) => `${nf.format(Number(n) || 0)} \u20B4`;
 var kyivAt = (ms) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(ms)).replace(" ", "T");
-function mountTg(app, { db, fetchFn }) {
+function mountTg(app, { db, fetchFn, services = {} }) {
   const settings = () => loadSettings(db);
   const putSetting2 = (key, value) => putSetting(db, key, value);
   async function tg(token, method, body) {
@@ -4690,6 +4690,23 @@ function mountTg(app, { db, fetchFn }) {
     const msg = upd.message;
     const chat = msg?.chat?.id;
     if (!chat) return c.json({ ok: true });
+    if (["group", "supergroup"].includes(msg.chat.type)) {
+      const b2b = services.b2b;
+      if (msg.migrate_to_chat_id) {
+        await b2b?.tgGroupMoved?.(String(chat), String(msg.migrate_to_chat_id));
+        return c.json({ ok: true });
+      }
+      if (msg.left_chat_member?.is_bot && msg.left_chat_member.username === s.tg_bot) {
+        await b2b?.tgGroupLeft?.(String(chat));
+        return c.json({ ok: true });
+      }
+      const g = /^\/(?:link|start)(?:@\w+)?\s+([0-9a-f]{12,24})\b/i.exec(String(msg.text || ""));
+      if (!g) return c.json({ ok: true });
+      const reply2 = await b2b?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || "") || "\u041A\u043E\u0434 \u043D\u0435 \u043F\u0456\u0434\u0456\u0439\u0448\u043E\u0432. \u0412\u0456\u0437\u044C\u043C\u0456\u0442\u044C \u043D\u043E\u0432\u0438\u0439 \u043A\u043E\u0434 \u0443 \u043A\u0430\u0440\u0442\u0446\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0430 \u0441\u0430\u0439\u0442\u0456.";
+      await tg(s.tg_token, "sendMessage", { chat_id: chat, text: reply2, parse_mode: "HTML" }).catch(() => {
+      });
+      return c.json({ ok: true });
+    }
     const m = /^\/start(?:@\w+)?\s+([0-9a-f]{24})\b/.exec(String(msg.text || ""));
     let reply = "\u0429\u043E\u0431 \u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0442\u0438 \u0441\u043F\u043E\u0432\u0456\u0449\u0435\u043D\u043D\u044F, \u0432\u0456\u0434\u043A\u0440\u0438\u0439\u0442\u0435 \u0441\u0430\u0439\u0442, \u043D\u0430\u0442\u0438\u0441\u043D\u0456\u0442\u044C \xABTelegram\xBB \u0443\u0433\u043E\u0440\u0456 \u0456 \u043F\u043E\u0442\u0456\u043C \xAB\u041F\u0456\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u0438 Telegram\xBB.";
     if (m) {
@@ -4750,10 +4767,10 @@ ${h(l.alias || "")}${l.created_by ? `
     }
     return sent;
   }
-  async function sendText({ admins = false, userIds = [], partnerId = null }, text) {
+  async function sendText({ admins = false, userIds = [], partnerId = null, chatIds = [] }, text) {
     const s = await settings();
     if (!s.tg_token) return 0;
-    const chats = /* @__PURE__ */ new Set();
+    const chats = new Set(chatIds.filter(Boolean).map(String));
     if (admins) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin', 'admin_lite')`)) chats.add(r.tg_chat_id);
     if (userIds.length) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND id IN (SELECT value FROM json_each(?))`, [JSON.stringify(userIds)])) chats.add(r.tg_chat_id);
     if (partnerId) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'partner' AND partner_id = ?`, [partnerId])) chats.add(r.tg_chat_id);
@@ -4767,7 +4784,28 @@ ${h(l.alias || "")}${l.created_by ? `
     }
     return sent;
   }
-  return { notify, sendText };
+  async function sendFile({ chatIds = [] }, { bytes, name, mime }, caption = "") {
+    const s = await settings();
+    if (!s.tg_token || !chatIds.length) return 0;
+    let sent = 0;
+    for (const chat of chatIds.slice(0, 5)) {
+      const fd = new FormData();
+      fd.append("chat_id", String(chat));
+      if (caption) {
+        fd.append("caption", caption.slice(0, 1e3));
+        fd.append("parse_mode", "HTML");
+      }
+      fd.append("document", new Blob([bytes], { type: mime || "application/octet-stream" }), name || "file");
+      try {
+        const r = await fetchFn(`${TG}/bot${s.tg_token}/sendDocument`, { method: "POST", body: fd });
+        const j = await r.json().catch(() => null);
+        if (j?.ok) sent++;
+      } catch {
+      }
+    }
+    return sent;
+  }
+  return { notify, sendText, sendFile };
 }
 
 // src/modules/errlog/index.js
@@ -4922,7 +4960,27 @@ function mountB2bOrders(app, { db, services, myPartner, partnerPrice: partnerPri
     [orderId, nowIso(), userName2(user), action]
   );
   const tgAdmins = (text) => services.notify?.sendText({ admins: true }, text).catch(() => 0);
-  const tgPartner = (partnerId, text) => services.notify?.sendText({ partnerId }, text).catch(() => 0);
+  const groupOf = async (partnerId) => (await db.get(`SELECT tg_group FROM b2b_partners WHERE id = ?`, [partnerId]))?.tg_group || "";
+  const tgPartner = async (partnerId, text) => services.notify?.sendText({ partnerId, chatIds: [await groupOf(partnerId)] }, text).catch(() => 0);
+  const tgGroup = async (partnerId, text) => {
+    const g = await groupOf(partnerId);
+    return g ? services.notify?.sendText({ chatIds: [g] }, text).catch(() => 0) : 0;
+  };
+  const orderText = (title, o, p, items) => {
+    const lines = items.slice(0, 60).map((i) => `${h3(i.name)}${i.article ? ` (${h3(i.article)})` : ""} \u2014 ${i.qty} \u0448\u0442 \u2014 ${uah2(i.price)}`);
+    if (items.length > 60) lines.push(`\u2026\u0456 \u0449\u0435 ${items.length - 60} \u043F\u043E\u0437.`);
+    return `${title} <b>${orderNo(o.id)}</b> \u0432\u0456\u0434 \xAB${h3(p.name)}\xBB
+
+<b>\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u0456 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0430 \u043D\u0430:</b>
+${h3(o.entity || "\u2014")}
+
+<b>\u0422\u043E\u0432\u0430\u0440\u0438:</b>
+${lines.join("\n")}
+
+<b>\u0420\u0430\u0437\u043E\u043C: ${uah2(o.total)}</b> (\u0437 \u041F\u0414\u0412)${o.comment ? `
+
+<i>\u041A\u043E\u043C\u0435\u043D\u0442\u0430\u0440: ${h3(String(o.comment).slice(0, 300))}</i>` : ""}`;
+  };
   const link = (c, hash2) => `${new URL(c.req.url).origin}/#/${hash2}`;
   function entityFields(b) {
     const kind = ENTITY_KIND[b.kind] ? b.kind : "fop";
@@ -5021,11 +5079,11 @@ ${e.email}` : ""}`;
       [p.id, e.id, entityText(e), total, String(b.comment || "").trim().slice(0, 1e3), userName2(c.get("user")), now, now]
     );
     await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r.lastId, now, userName2(c.get("user")), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah2(total)}`]]]);
-    await tgAdmins(`\u{1F195} <b>\u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(r.lastId)}</b> \u0432\u0456\u0434 \xAB${h3(p.name)}\xBB
-${items.length} \u043F\u043E\u0437. \xB7 <b>${uah2(total)}</b>
-\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430: ${h3(e.name)} (${h3(e.code)})${b.comment ? `
-<i>${h3(String(b.comment).slice(0, 300))}</i>` : ""}
+    const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: r.lastId, entity: entityText(e), total, comment: b.comment }, p, items);
+    await tgAdmins(`${full}
+
 ${link(c, `b2borders/${r.lastId}`)}`);
+    await tgGroup(p.id, full);
     return c.json({ id: r.lastId, number: orderNo(r.lastId), total });
   });
   async function orderOf(id, partnerId = null) {
@@ -5101,8 +5159,11 @@ ${link(c, `b2borders/${r.lastId}`)}`);
       ]
     ]);
     await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F: ${items.length} \u043F\u043E\u0437., ${uah2(total)}`);
-    await tgAdmins(`\u270F\uFE0F <b>\u0417\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)}</b> (\xAB${h3(p.name)}\xBB): ${items.length} \u043F\u043E\u0437. \xB7 <b>${uah2(total)}</b>
+    const full = orderText("\u270F\uFE0F \u0417\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E", { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment }, p, items);
+    await tgAdmins(`${full}
+
 ${link(c, `b2borders/${o.id}`)}`);
+    await tgGroup(p.id, full);
     return c.json({ ok: true, total });
   });
   app.post("/api/b2b/p/orders/:id/cancel", async (c) => {
@@ -5117,6 +5178,7 @@ ${link(c, `b2borders/${o.id}`)}`);
     await log(o.id, c.get("user"), "\u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F");
     await tgAdmins(`\u274C <b>\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)}</b> (\xAB${h3(p.name)}\xBB)
 ${link(c, `b2borders/${o.id}`)}`);
+    await tgGroup(p.id, `\u274C \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E <b>${orderNo(o.id)}</b> \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.`);
     return c.json({ ok: true });
   });
   app.get("/api/b2b/orders", async (c) => {
@@ -5201,7 +5263,15 @@ ${link(c, `${o.kind === "client" ? "pclients" : "porders"}/${o.id}`)}`);
     need(c, "b2b.admin");
     const o = await orderOf(c.req.param("id"));
     const kind = FILE_KIND[c.req.query("kind")] ? c.req.query("kind") : "other";
-    return c.json({ id: await saveFile(c, o, kind) });
+    const f = await saveFile(c, o, kind);
+    const g = ["invoice", "waybill"].includes(kind) ? await groupOf(o.partner_id) : "";
+    let toGroup = 0;
+    if (g) {
+      const caption = `${kind === "invoice" ? "\u{1F9FE} \u0420\u0430\u0445\u0443\u043D\u043E\u043A" : "\u{1F4E6} \u041D\u0430\u043A\u043B\u0430\u0434\u043D\u0430"}${kind === "invoice" && o.invoice_no ? ` \u2116 ${h3(o.invoice_no)}` : ""}${kind === "waybill" && o.waybill_no ? ` \u2116 ${h3(o.waybill_no)}` : ""} \u2014 ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F"} <b>${orderNo(o.id)}</b> \u043D\u0430 ${uah2(o.total)}`;
+      toGroup = await services.notify?.sendFile?.({ chatIds: [g] }, f, caption).catch(() => 0) || 0;
+      if (toGroup) await log(o.id, c.get("user"), `\u0444\u0430\u0439\u043B \xAB${f.name}\xBB \u043D\u0430\u0434\u0456\u0441\u043B\u0430\u043D\u043E \u0432 Telegram-\u0433\u0440\u0443\u043F\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430`);
+    }
+    return c.json({ id: f.id, toGroup: !!toGroup });
   });
   async function saveFile(c, o, kind) {
     const bytes = new Uint8Array(await c.req.arrayBuffer());
@@ -5224,7 +5294,7 @@ ${link(c, `${o.kind === "client" ? "pclients" : "porders"}/${o.id}`)}`);
     for (let n = 0; n < parts; n++) st.push([`INSERT INTO b2b_file_parts (file_id, n, data) VALUES (?, ?, ?)`, [r.lastId, n, toB64(bytes.subarray(n * PART, (n + 1) * PART))]]);
     await db.batch(st);
     await log(o.id, u, `\u0434\u043E\u0434\u0430\u043D\u043E \u0444\u0430\u0439\u043B: ${FILE_KIND[kind]} \xAB${name}\xBB`);
-    return r.lastId;
+    return { id: r.lastId, bytes, name, mime };
   }
   async function sendFile(f) {
     const parts = await db.all(`SELECT data FROM b2b_file_parts WHERE file_id = ? ORDER BY n`, [f.id]);
@@ -5264,7 +5334,24 @@ ${link(c, `${o.kind === "client" ? "pclients" : "porders"}/${o.id}`)}`);
     if (!f) throw fail(404, "\u0424\u0430\u0439\u043B \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (\u0437\u0431\u0435\u0440\u0456\u0433\u0430\u044E\u0442\u044C\u0441\u044F 30 \u0434\u043D\u0456\u0432).");
     return sendFile(f);
   });
-  return { ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, link, uah: uah2, h: h3 };
+  app.delete("/api/b2b/orders/:id", async (c) => {
+    need(c, "b2b.admin");
+    const o = await orderOf(c.req.param("id"));
+    if (o.kind === "supply") {
+      const n = (await db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE supply_id = ? AND kind = 'client'`, [o.id])).n;
+      if (n) throw fail(400, `\u0417 \u0446\u0456\u0454\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0454 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 (${n}) \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0432\u0438\u0434\u0430\u043B\u0456\u0442\u044C \u0457\u0445.`);
+    }
+    await db.batch([
+      [`DELETE FROM b2b_file_parts WHERE file_id IN (SELECT id FROM b2b_files WHERE order_id = ?)`, [o.id]],
+      [`DELETE FROM b2b_files WHERE order_id = ?`, [o.id]],
+      [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
+      [`DELETE FROM b2b_order_log WHERE order_id = ?`, [o.id]],
+      [`DELETE FROM b2b_orders WHERE id = ?`, [o.id]]
+    ]);
+    await logAudit(db, { user: c.get("user"), kind: "b2b", refId: o.partner_id, action: `\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E"} ${orderNo(o.id)} \u043D\u0430 ${uah2(o.total)}${o.crm_id ? ` (\u0443 LP-CRM \u2116 ${o.crm_id} \u2014 \u043D\u0435 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E)` : ""}` }).catch(() => 0);
+    return c.json({ ok: true, inCrm: o.crm_id || "" });
+  });
+  return { ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah2, h: h3 };
 }
 
 // src/modules/b2b/clients.js
@@ -5278,7 +5365,7 @@ var OPT_ID_RE = /^\d{0,10}$/;
 var TTN_FIELDS = ["", "additional_2", "additional_3", "additional_4", "delivery_adress"];
 var newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Math.random() * 9e4))}`;
 function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
-  const { priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, link, uah: uah3, h: h4 } = orders;
+  const { priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h4 } = orders;
   const userName3 = (u) => u?.name || u?.login || "";
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files
     FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id`;
@@ -5457,12 +5544,23 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
       HTTPS: "on"
     }));
   }
-  const tgNew = (c, p, id, f, it, verb = "\u041D\u043E\u0432\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430") => tgAdmins(
-    `\u{1F4E6} <b>${verb} ${orderNo(id)}</b> \u0432\u0456\u0434 \xAB${h4(p.name)}\xBB
-${h4(f.client_name)} \xB7 ${it.items.length} \u043F\u043E\u0437. \xB7 <b>${uah3(it.total)}</b>
-${it.supplyId ? `\u0406\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : "\u{1F534} <b>\u0411\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456</b>"}${f.ttn ? ` \xB7 \u0422\u0422\u041D ${h4(f.ttn)}` : ""}
-${link(c, `b2bclients/${id}`)}`
-  );
+  const tgNew = async (c, p, id, f, it, verb = "\u041D\u043E\u0432\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430") => {
+    const lines = it.items.slice(0, 60).map((i) => `${h4(i.name)} \u2014 ${i.qty} \u0448\u0442 \u2014 ${uah3(i.price)}`).join("\n");
+    const text = `\u{1F4E6} <b>${verb} ${orderNo(id)}</b> \u0432\u0456\u0434 \xAB${h4(p.name)}\xBB
+
+<b>\u041A\u043B\u0456\u0454\u043D\u0442:</b> ${h4(f.client_name)}, ${h4(f.client_phone)}${f.ttn ? `
+<b>\u0422\u0422\u041D:</b> ${h4(f.ttn)}` : ""}
+${it.supplyId ? `\u0406\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : "\u{1F534} <b>\u0411\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456</b>"}
+
+<b>\u0422\u043E\u0432\u0430\u0440\u0438:</b>
+${lines}
+
+<b>\u0420\u0430\u0437\u043E\u043C: ${uah3(it.total)}</b>`;
+    await tgAdmins(`${text}
+
+${link(c, `b2bclients/${id}`)}`);
+    await tgGroup(p.id, text);
+  };
   app.get("/api/b2b/p/supplies", async (c) => {
     const p = await myPartner(c);
     const since = new Date(Date.now() - 180 * 864e5).toISOString();
@@ -5551,7 +5649,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
     const o = await myClientOrder(c, p);
     if (o.status !== "new") throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u0432 \u0440\u043E\u0431\u043E\u0442\u0456 \u2014 \u043D\u043E\u0432\u0438\u0439 \u0444\u0430\u0439\u043B \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u043D\u0430\u0434\u0456\u0448\u043B\u0456\u0442\u044C \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0443.");
     if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_files WHERE order_id = ?`, [o.id])).n >= 10) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 10 \u0444\u0430\u0439\u043B\u0456\u0432 \u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.");
-    return c.json({ id: await saveFile(c, o, "label") });
+    return c.json({ id: (await saveFile(c, o, "label")).id });
   });
   app.delete("/api/b2b/p/clients/:id/files/:fid", async (c) => {
     const p = await myPartner(c);
@@ -6115,7 +6213,32 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   });
   const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup });
   mountB2bClients(app, { db, fetchFn, myPartner, orders });
-  return { partnerPrice };
+  app.post("/api/b2b/partners/:id/tg-group", async (c) => {
+    need(c, "b2b.admin");
+    const p = await getPartner(c.req.param("id"));
+    const s = await loadSettings(db);
+    if (!s.tg_token || !s.tg_bot) throw fail(400, "Telegram-\u0431\u043E\u0442\u0430 \u0449\u0435 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 Telegram).");
+    const code = randomToken(6);
+    await db.run(`UPDATE b2b_partners SET tg_group_code = ? WHERE id = ?`, [`${code}|${Date.now() + 30 * 6e4}`, p.id]);
+    return c.json({ code, bot: s.tg_bot });
+  });
+  app.delete("/api/b2b/partners/:id/tg-group", async (c) => {
+    need(c, "b2b.admin");
+    const p = await getPartner(c.req.param("id"));
+    await db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '', tg_group_code = '' WHERE id = ?`, [p.id]);
+    await audit(c, p.id, `\u0432\u0456\u0434\u0432'\u044F\u0437\u0430\u043D\u043E Telegram-\u0433\u0440\u0443\u043F\u0443 \xAB${p.tg_group_title || p.tg_group}\xBB`);
+    return c.json({ ok: true });
+  });
+  const tgGroupLink = async (code, chat, title) => {
+    const p = await db.get(`SELECT id, name, tg_group_code FROM b2b_partners WHERE tg_group_code LIKE ? AND COALESCE(deleted_at, '') = ''`, [`${code}|%`]);
+    if (!p || (Number(p.tg_group_code.split("|")[1]) || 0) < Date.now()) return "";
+    await db.run(`UPDATE b2b_partners SET tg_group = ?, tg_group_title = ?, tg_group_code = '' WHERE id = ?`, [chat, String(title).slice(0, 120), p.id]);
+    await logAudit(db, { user: null, kind: "b2b", refId: p.id, action: `\u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u043E Telegram-\u0433\u0440\u0443\u043F\u0443 \xAB${title}\xBB`, changes: [] }).catch(() => 0);
+    return `\u2705 \u0413\u0440\u0443\u043F\u0443 \u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u043E \u0434\u043E \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 <b>${String(p.name).replace(/[<>&]/g, "")}</b>. \u0421\u044E\u0434\u0438 \u043D\u0430\u0434\u0445\u043E\u0434\u0438\u0442\u0438\u043C\u0443\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456, \u0440\u0430\u0445\u0443\u043D\u043A\u0438 \u0439 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0456 (\u0444\u0430\u0439\u043B\u0430\u043C\u0438) \u0442\u0430 \u043E\u043F\u043B\u0430\u0442\u0438.`;
+  };
+  const tgGroupMoved = (from, to) => db.run(`UPDATE b2b_partners SET tg_group = ? WHERE tg_group = ?`, [to, from]);
+  const tgGroupLeft = (chat) => db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '' WHERE tg_group = ?`, [chat]);
+  return { partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft };
 }
 
 // src/modules/payments/index.js
@@ -7557,7 +7680,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 4,
+  version: 5,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -7704,7 +7827,11 @@ var schema11 = {
     // етап 3а: команда партнера (роль у команді, хто додав) і видалені партнери (з замовленнями — в архіві)
     ["users", "partner_role", "TEXT DEFAULT ''"],
     ["users", "added_by", "TEXT DEFAULT ''"],
-    ["b2b_partners", "deleted_at", "TEXT DEFAULT ''"]
+    ["b2b_partners", "deleted_at", "TEXT DEFAULT ''"],
+    // Telegram-група партнера: туди бот дублює закупівлі, рахунки й накладні (файлами), оплату.
+    ["b2b_partners", "tg_group", "TEXT DEFAULT ''"],
+    ["b2b_partners", "tg_group_title", "TEXT DEFAULT ''"],
+    ["b2b_partners", "tg_group_code", "TEXT DEFAULT ''"]
   ],
   // Індекси на нові колонки — після ALTER TABLE (у старих базах колонок ще немає, коли створюються таблиці).
   async seed(db) {
