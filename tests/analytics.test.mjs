@@ -136,6 +136,17 @@ assert.deepEqual([grp.accepted.cnt, grp.done.cnt, grp.shipping.cnt, grp.refused.
 assert.ok(Math.abs(grp.shipping.rev - revOf(['14', '53'])) < 0.05 && Math.abs(grp.refused.rev - revOf(['54', '58'])) < 0.05, 'групи статусів: суми');
 assert.deepEqual(grp.shipping.statuses, [14, 53]);
 assert.equal(q.byStatusGroup.reduce((a, g) => a + g.cnt, 0), q.kpi.cur.cnt, 'групи покривають усі замовлення');
+// «Відправлено» — усі, крім «Прийнято» (відправлено, очікує викупу, завершено, відмови, повернення).
+assert.equal(q.kpi.cur.scnt, q.kpi.cur.cnt - grp.accepted.cnt, 'відправлено: кількість');
+assert.ok(Math.abs(q.kpi.cur.srev - (q.kpi.cur.rev - grp.accepted.rev)) < 0.05, 'відправлено: сума');
+assert.ok(q.kpi.prev.srev != null);
+// Кожен менеджер: його рядок у «Менеджерах» = «Динаміка» з фільтром за ним (і сума, і оборот без відмов).
+for (const m of q.byManager) {
+  const one = await req('POST', '/api/an/query', { from, to: today, managers: [m.login || ''] });
+  const daySum = (k) => one.daily.cur.reduce((a, d) => a + d[k], 0);
+  assert.ok(Math.abs(daySum('rev') - m.rev) < 0.05 && Math.abs(daySum('net') - m.net) < 0.05, `менеджер ${m.login}: динаміка = рядок менеджера`);
+  assert.ok(m.prevNet != null, 'є оборот без відмов для порівняння');
+}
 assert.equal(q.daily.cur.length, daysBetween(from, today));
 assert.ok(q.kpi.prev && q.kpi.prev.cnt > 0, 'є порівняння');
 assert.ok(q.byStatus.find((x) => x.id === 54).refuse);

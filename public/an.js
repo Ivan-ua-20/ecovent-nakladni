@@ -352,7 +352,7 @@ export function createAnalyticsUI(ctx) {
       tile('Сума замовлень', uah(c.rev), `${orders(c.cnt)} · усі статуси`, hasCmp ? `було ${uah(p.rev)} · ${int(p.cnt)}` : '', hasCmp ? delta(c.rev, p.rev) : ''),
       tile('Оборот без відмов', uah(c.net), `${orders(ncnt(c))} без відмов і повернень`, hasCmp ? `було ${uah(p.net)} · ${int(ncnt(p))}` : '', hasCmp ? delta(c.net, p.net) : ''),
       c.drev != null ? tile('Завершені замовлення', uah(c.drev), `${orders(c.dcnt)} · ${pct1(c.dpct)} від усіх`, hasCmp ? `було ${uah(p.drev)} · ${int(p.dcnt)}` : '', hasCmp ? delta(c.drev, p.drev) : '') : '',
-      tile('Кількість замовлень', int(c.cnt), `на суму ${uah(c.rev)}`, hasCmp ? `було ${int(p.cnt)} на ${uah(p.rev)}` : '', hasCmp ? delta(c.cnt, p.cnt) : ''),
+      c.srev != null ? tile('Відправлено', uah(c.srev), `${orders(c.scnt)} · ${pct1(c.spct)} від усіх`, hasCmp ? `було ${uah(p.srev)} · ${int(p.scnt)}` : 'усі, крім «Прийнято»', hasCmp ? delta(c.srev, p.srev) : '') : '',
       tile('Середній чек', uah(c.avg), `${orders(c.cnt)} на ${uah(c.rev)}`, hasCmp ? `було ${uah(p.avg)}` : '', hasCmp ? delta(c.avg, p.avg) : ''),
       tile('Відмови і повернення', `${int(c.rcnt)} <small>· ${pct1(c.rpct)}</small>`, `на суму ${uah(rrev(c))}`, hasCmp ? `було ${int(p.rcnt)} · ${pct1(p.rpct)} на ${uah(rrev(p))}` : 'від усіх замовлень', hasCmp ? delta(c.rpct, p.rpct, { inverse: true, pp: true }) : ''),
     ].filter(Boolean);
@@ -493,14 +493,17 @@ export function createAnalyticsUI(ctx) {
     renderBody(lastData);
   }
 
+  // Розбивки показують той самий показник, що й «Динаміка»: «Оборот без відмов» або «Сума замовлень».
+  const byMetric = (rows) => (ui.metric === 'net' ? rows.map((r) => ({ ...r, rev: r.net ?? r.rev, prevRev: r.prevNet ?? r.prevRev })) : rows);
+  const sumLabel = () => (ui.metric === 'net' ? 'Оборот' : 'Сума');
   function breakdown(title, rows, key, { plan = false, hasCmp = false, refusals = false, qty = false, empty = '' } = {}) {
-    const list = sortRows(key, rows.filter((r) => r.rev || r.cnt || r.plan));
+    const list = sortRows(key, byMetric(rows).filter((r) => r.rev || r.cnt || r.plan));
     if (!list.length) return `<div class="card"><h3>${title}</h3><div class="muted small">${empty || 'Немає даних за період.'}</div></div>`;
     const max = Math.max(...list.map((r) => r.rev), 1);
     const active = ui[key] || [];
     const head = `<div class="bk-row bk-head">
         <span>${sortBtn(key, 'name', 'Назва')}</span><span></span>
-        <span class="bk-hv">${sortBtn(key, 'rev', 'Сума')}${sortBtn(key, qty ? 'qty' : 'cnt', qty ? 'Шт' : 'Зам.')}${refusals ? sortBtn(key, 'refuse', 'Відм.') : ''}</span>
+        <span class="bk-hv">${sortBtn(key, 'rev', sumLabel())}${sortBtn(key, qty ? 'qty' : 'cnt', qty ? 'Шт' : 'Зам.')}${refusals ? sortBtn(key, 'refuse', 'Відм.') : ''}</span>
         <span class="bk-hd">${hasCmp ? sortBtn(key, 'dyn', 'Динаміка') : ''}${plan ? sortBtn(key, 'plan', 'План') : ''}</span>
       </div>`;
     return `<div class="card"><h3>${title}</h3><div class="bk">${head}
@@ -570,8 +573,8 @@ export function createAnalyticsUI(ctx) {
   function brandTable(rows, hasCmp) {
     if (!rows.length) return '<div class="card"><h3>Бренди</h3><div class="muted small">Немає даних за період.</div></div>';
     return `<div class="card"><h3>Бренди</h3><div class="table-wrap"><table class="list an-table">
-      <thead><tr><th>${sortBtn('brands', 'name', 'Бренд')}</th><th class="r">${sortBtn('brands', 'cnt', 'Зам.')}</th><th class="r">${sortBtn('brands', 'rev', 'Сума')}</th><th class="r hide-m">${sortBtn('brands', 'avg', 'Сер. чек')}</th><th class="r hide-m">${sortBtn('brands', 'refuse', 'Відмови')}</th>${hasCmp ? `<th class="r">${sortBtn('brands', 'dyn', 'Динаміка')}</th>` : ''}</tr></thead>
-      <tbody>${sortRows('brands', rows).map((r) => `<tr class="click ${ui.brands.includes(r.id) ? 'on' : ''}" data-row="${r.id}" data-key="brands" tabindex="0">
+      <thead><tr><th>${sortBtn('brands', 'name', 'Бренд')}</th><th class="r">${sortBtn('brands', 'cnt', 'Зам.')}</th><th class="r">${sortBtn('brands', 'rev', sumLabel())}</th><th class="r hide-m">${sortBtn('brands', 'avg', 'Сер. чек')}</th><th class="r hide-m">${sortBtn('brands', 'refuse', 'Відмови')}</th>${hasCmp ? `<th class="r">${sortBtn('brands', 'dyn', 'Динаміка')}</th>` : ''}</tr></thead>
+      <tbody>${sortRows('brands', byMetric(rows)).map((r) => `<tr class="click ${ui.brands.includes(r.id) ? 'on' : ''}" data-row="${r.id}" data-key="brands" tabindex="0">
         <td><b>${esc(r.name)}</b></td><td class="r">${int(r.cnt)}</td><td class="r">${uah(r.rev)}</td><td class="r hide-m">${uah(r.avg)}</td>
         <td class="r hide-m">${r.cnt ? pct1((r.rcnt / r.cnt) * 100) : '—'}</td>${hasCmp ? `<td class="r">${delta(r.rev, r.prevRev)}</td>` : ''}</tr>`).join('')}</tbody>
     </table></div><div class="small muted">Бренд — за назвою товару, а якщо її не вистачає — за категорією; решта — «Інші». Ручна прив’язка — у налаштуваннях аналітики.</div></div>`;

@@ -4311,7 +4311,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
     const ph = (a) => a.map(() => "?").join(",");
     const rfExpr = `(CASE WHEN o.status IN (${rf.join(",") || "-1"}) THEN 1 ELSE 0 END)`;
     const ver = (await db.get(`SELECT value FROM settings WHERE key = 'an_ver'`))?.value || "0";
-    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today, kpi: 3 }));
+    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today, kpi: 4 }));
     const hit = await db.get(`SELECT value FROM an_cache WHERE key = ?`, [cacheKey]);
     if (hit) return c.body(hit.value, 200, { "content-type": "application/json; charset=UTF-8" });
     function base(range, { items = itemLevel, skipCats = false } = {}) {
@@ -4385,9 +4385,17 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
     const statusNames0 = await getJson("an_status_names") || {};
     const done = (Array.isArray(st.doneStatuses) && st.doneStatuses.length ? st.doneStatuses.map(Number) : ok.filter((id) => /заверш|выполн|викон/i.test(statusNames0[id] || ""))).filter((id) => ok.includes(id));
     const doneIds = done.length ? done : ok.filter((id) => id === 18);
+    const statusNamesG = statusNames0;
+    const byName = (re, fallback) => {
+      const ids = ok.filter((id) => re.test(statusNamesG[id] || ""));
+      return ids.length ? ids : ok.filter((id) => fallback.includes(id));
+    };
+    const shipping = byName(/отправ|відправ|ожида|очіку/i, [14, 53]).filter((id) => !doneIds.includes(id));
+    const acceptedOnly = byName(/принят|прийн/i, [11]).filter((id) => !doneIds.includes(id) && !shipping.includes(id));
     const kpi = (p) => {
       const t = sumRows(p.groups);
       const d = sumRows(p.groups.filter((r) => doneIds.includes(Number(r.status))));
+      const sh = sumRows(p.groups.filter((r) => !acceptedOnly.includes(Number(r.status))));
       return {
         ...t,
         rev: round2(t.rev),
@@ -4400,8 +4408,14 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
         // сума відмов і повернень
         drev: round2(d.rev),
         dcnt: d.cnt,
-        dpct: t.cnt ? round2(d.cnt / t.cnt * 100) : 0
+        dpct: t.cnt ? round2(d.cnt / t.cnt * 100) : 0,
         // завершені
+        // відправлені: усі, крім «Прийнято» (відправлено, очікує викупу, завершено, відмови, повернення)
+        srev: round2(sh.rev),
+        snet: round2(sh.net),
+        scnt: sh.cnt,
+        srcnt: sh.rcnt,
+        spct: t.cnt ? round2(sh.cnt / t.cnt * 100) : 0
       };
     };
     const fillDays = (p, a, z) => {
@@ -4487,7 +4501,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
     const row = (m, pm, k) => {
       const a = pick2(m, k);
       const p = pm ? pick2(pm, k) : null;
-      return { rev: round2(a.rev), net: round2(a.net), cnt: a.cnt, rcnt: a.rcnt, prevRev: p ? round2(p.rev) : null, prevCnt: p ? p.cnt : null };
+      return { rev: round2(a.rev), net: round2(a.net), cnt: a.cnt, rcnt: a.rcnt, prevRev: p ? round2(p.rev) : null, prevNet: p ? round2(p.net) : null, prevCnt: p ? p.cnt : null };
     };
     const planPeriod = (fn) => f.managers.length || itemLevel ? 0 : planFor(fn, from, to);
     const byDept = [...depts.map((d) => ({ id: d.id, name: d.name })), { id: 0, name: "\u0411\u0435\u0437 \u0432\u0456\u0434\u0434\u0456\u043B\u0443" }].map((d) => ({ ...d, ...row(dCur, prev && dPrev, d.id), plan: d.id ? planPeriod((m) => deptTarget(m, d.id)) : 0 })).filter((d) => d.cnt || d.prevCnt || d.plan);
@@ -4501,10 +4515,6 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
     })).sort((a, b2) => b2.rev - a.rev);
     const statusNames = await getJson("an_status_names") || {};
     const byStatus = tracked.map((id) => ({ id, name: statusNames[id] || `\u0421\u0442\u0430\u0442\u0443\u0441 ${id}`, refuse: rf.includes(id), ...row(stCur, null, id) }));
-    const byName = (re, fallback) => {
-      const ids = ok.filter((id) => re.test(statusNames[id] || ""));
-      return ids.length ? ids : ok.filter((id) => fallback.includes(id));
-    };
     const stPrev = prev ? group(prev, "status") : null;
     const groupRow = (id, name, ids) => {
       const sum = (m) => ids.reduce((a2, s) => {
@@ -4515,10 +4525,8 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
       const p = stPrev ? sum(stPrev) : null;
       return { id, name, statuses: ids, rev: round2(a.rev), cnt: a.cnt, prevRev: p ? round2(p.rev) : null, prevCnt: p ? p.cnt : null };
     };
-    const accepted = byName(/принят|прийн/i, [11]);
-    const shipping = byName(/отправ|відправ|ожида|очіку/i, [14, 53]).filter((id) => !doneIds.includes(id));
     const byStatusGroup = [
-      groupRow("accepted", "\u041F\u0440\u0438\u0439\u043D\u044F\u0442\u043E", accepted.filter((id) => !doneIds.includes(id) && !shipping.includes(id))),
+      groupRow("accepted", "\u041F\u0440\u0438\u0439\u043D\u044F\u0442\u043E", acceptedOnly),
       groupRow("done", "\u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u043E", doneIds),
       groupRow("shipping", "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u0456 \u043E\u0447\u0456\u043A\u0443\u0454 \u0432\u0438\u043A\u0443\u043F\u0443", shipping),
       groupRow("refused", "\u041F\u043E\u0432\u0435\u0440\u043D\u0443\u0442\u043E \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u0456 \u0432\u0456\u0434\u043C\u043E\u0432\u0438", rf)
@@ -4564,7 +4572,8 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
       cnt: r.cnt,
       rcnt: r.rcnt,
       avg: r.cnt ? round2(r.rev / r.cnt) : 0,
-      prevRev: prev ? round2(prevBrands.get(r.id)?.rev || 0) : null
+      prevRev: prev ? round2(prevBrands.get(r.id)?.rev || 0) : null,
+      prevNet: prev ? round2(prevBrands.get(r.id)?.net || 0) : null
     })).sort((a, b2) => b2.rev - a.rev);
     const cName = new Map(categories.map((x) => [x.id, x.name]));
     const prevCats = new Map((prev?.cats || []).map((r) => [r.id, r]));
@@ -4575,7 +4584,8 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
       net: round2(r.net),
       qty: r.qty,
       cnt: r.cnt,
-      prevRev: prev ? round2(prevCats.get(r.id)?.rev || 0) : null
+      prevRev: prev ? round2(prevCats.get(r.id)?.rev || 0) : null,
+      prevNet: prev ? round2(prevCats.get(r.id)?.net || 0) : null
     })).sort((a, b2) => b2.rev - a.rev);
     const top = cur.top.map((r) => ({ id: r.id, name: r.name || `\u0422\u043E\u0432\u0430\u0440 ${r.id}`, brand: r.brand ? bName.get(r.brand) || "\u0406\u043D\u0448\u0456" : "\u0406\u043D\u0448\u0456", rev: round2(r.rev), qty: r.qty, rqty: r.rqty }));
     const last = await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`);
