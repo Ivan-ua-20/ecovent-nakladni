@@ -12,6 +12,7 @@ import { createUsersPages } from './pages/users.js';
 import { createErrorsPages } from './pages/errors.js';
 import { createB2bPages } from './pages/b2b.js';
 import { createPartnerPages } from './pages/partner.js';
+import { createB2bStats } from './pages/b2b-stats.js';
 
 // ---------- стан ----------
 let boot = { fops: [], templates: [], offices: [], channels: [], invFops: [], settings: {}, user: null };
@@ -45,6 +46,7 @@ const SECTIONS = [
     { id: 'b2bclients', label: 'Замовлення клієнтів' },
     { id: 'b2bpartners', label: 'Партнери' },
     { id: 'b2bcatalog', label: 'Каталог і ціни' },
+    { id: 'b2bstats', label: 'Аналітика' },
   ] },
   // Кабінет партнера — єдиний розділ, який бачить партнер.
   { id: 'partner', label: 'Кабінет партнера', perm: 'b2b.partner', home: 'pcatalog', tabs: [
@@ -52,6 +54,7 @@ const SECTIONS = [
     { id: 'porders', label: 'Закупівлі' },
     { id: 'pclients', label: 'Замовлення клієнтів' },
     { id: 'pentities', label: 'Мої юрособи' },
+    { id: 'pstats', label: 'Аналітика' },
     { id: 'pteam', label: 'Команда', perm: 'b2b.team' },
     { id: 'phelp', label: 'Інструкція' },
   ] },
@@ -200,6 +203,7 @@ const { viewSettings, viewNakladniSettings, viewRahunkySettings } = createSettin
 const { viewRahunky, viewRahunkyList } = createRahunkyPages(ctx);
 const { viewUsers } = createUsersPages(ctx);
 const { viewErrors } = createErrorsPages(ctx);
+const B2BSTATS = createB2bStats();
 const { viewPartners, viewCatalog, viewOrders: viewB2bOrders, viewClients: viewB2bClients } = createB2bPages(ctx);
 const { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients, viewTeam: viewPartnerTeam } = createPartnerPages(ctx);
 setUnauthorized(() => showAuth());
@@ -228,6 +232,8 @@ const routes = {
   porders: viewPartnerOrders,
   pclients: viewPartnerClients,
   pteam: viewPartnerTeam,
+  pstats: () => B2BSTATS.view({ url: '/api/b2b/p/stats', title: 'Аналітика продажів' }),
+  b2bstats: (pid) => B2BSTATS.view({ url: '/api/b2b/stats', admin: true, title: 'Аналітика B2B', partner: pid }),
   b2bclients: viewB2bClients,
   pentities: viewEntities,
   b2bcatalog: viewCatalog,

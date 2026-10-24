@@ -1,6 +1,6 @@
 // Спільне для сторінок B2B (адмін і партнер): статуси, суми, завантаження файлів.
 import { esc, money } from '../invoice.js';
-import { fmtDateTime as fmtDT } from '../core/ui.js';
+import { fmtDateTime as fmtDT, $, $$, toast, modal } from '../core/ui.js';
 
 export const uah = (n) => `${money(n)} грн`;
 const ST_CLS = { invoice_wait: 'warn', pay_wait: 'warn', partial: 'info', paid: 'ok', done: 'ok', cancelled: 'bad', new: 'warn', crm: 'info' };
@@ -75,3 +75,64 @@ export function teamFormData(form) {
   if (!d.password) delete d.password;
   return d;
 }
+
+// ---------- фільтри списків: пошук, період, оплата ----------
+export function filterBar(f, { pay = false, placeholder = '№, клієнт, телефон, ТТН…' } = {}) {
+  return `<div class="btn-row" style="margin-bottom:12px;flex-wrap:wrap">
+    <input id="fQ" type="search" value="${esc(f.q || '')}" placeholder="${esc(placeholder)}" aria-label="Пошук" style="max-width:260px">
+    <input id="fFrom" type="date" value="${esc(f.from || '')}" aria-label="З дати" style="max-width:150px">
+    <input id="fTo" type="date" value="${esc(f.to || '')}" aria-label="По дату" style="max-width:150px">
+    ${pay ? `<select id="fPay" aria-label="Оплата" style="max-width:170px"><option value="">Будь-яка оплата</option><option value="paid" ${f.pay === 'paid' ? 'selected' : ''}>Оплачені</option><option value="unpaid" ${f.pay === 'unpaid' ? 'selected' : ''}>Не оплачені</option></select>` : ''}
+    ${f.q || f.from || f.to || f.pay ? '<button class="btn sm" id="fReset">Скинути</button>' : ''}
+  </div>`;
+}
+export function wireFilterBar(f, reload) {
+  let t;
+  const q = $('#fQ');
+  if (f._focusQ) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+  q.oninput = () => { clearTimeout(t); t = setTimeout(() => { f.q = q.value.trim(); f._focusQ = true; reload(); }, 450); };
+  q.onblur = () => { f._focusQ = false; };
+  $('#fFrom').onchange = (e) => { f.from = e.target.value; reload(); };
+  $('#fTo').onchange = (e) => { f.to = e.target.value; reload(); };
+  if ($('#fPay')) $('#fPay').onchange = (e) => { f.pay = e.target.value; reload(); };
+  if ($('#fReset')) $('#fReset').onclick = () => { Object.assign(f, { q: '', from: '', to: '', pay: '' }); reload(); };
+}
+export const filterQs = (f) => new URLSearchParams(Object.entries(f).filter(([k, v]) => v && !k.startsWith('_'))).toString();
+
+// ---------- галочки і масові дії ----------
+export const selCell = (id) => `<td style="width:34px" data-nosel><input type="checkbox" data-sel="${id}" aria-label="Обрати"></td>`;
+export const selHead = () => '<th style="width:34px"><input type="checkbox" id="selAll" aria-label="Обрати всі"></th>';
+// actions: [{ key, label, danger?, confirm?: (n) => текст, run: (id) => Promise }]
+export function wireBulk(actions, { onDone, confirmDanger }) {
+  const bar = $('#bulkBar');
+  const sel = () => $$('[data-sel]').filter((x) => x.checked).map((x) => Number(x.dataset.sel));
+  const draw = () => {
+    const ids = sel();
+    bar.hidden = !ids.length;
+    bar.innerHTML = ids.length ? `<b>Обрано: ${ids.length}</b>${actions.map((a) => `<button class="btn sm ${a.danger ? 'danger' : ''}" data-bulk="${a.key}">${esc(a.label)}</button>`).join('')}
+      <button class="btn sm" data-bulk="_clear">Зняти вибір</button>` : '';
+    $$('[data-bulk]', bar).forEach((b) => (b.onclick = () => run(b.dataset.bulk)));
+  };
+  $$('[data-nosel]').forEach((td) => (td.onclick = (e) => e.stopPropagation()));
+  $$('[data-sel]').forEach((cb) => (cb.onchange = draw));
+  const all = $('#selAll');
+  if (all) all.onchange = () => { $$('[data-sel]').forEach((x) => { x.checked = all.checked; }); draw(); };
+  async function run(key) {
+    if (key === '_clear') { $$('[data-sel]').forEach((x) => { x.checked = false; }); if (all) all.checked = false; draw(); return; }
+    const a = actions.find((x) => x.key === key);
+    const ids = sel();
+    if (a.confirm && !(await confirmDanger(a.confirm(ids.length), '', a.label))) return;
+    const fails = [];
+    let ok = 0;
+    bar.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    for (const [n, id] of ids.entries()) {
+      bar.querySelector('b').textContent = `${a.label}: ${n + 1} з ${ids.length}…`;
+      try { await a.run(id); ok++; } catch (e) { fails.push(`B2B-${id}: ${e.message}`); }
+    }
+    toast(`${a.label}: виконано ${ok} з ${ids.length}`, fails.length > 0);
+    if (fails.length) modal('Не вдалося для частини замовлень', `<div class="form-stack small">${fails.map((x) => `<div>${esc(x)}</div>`).join('')}</div>`, { footer: '<button class="btn primary" data-close>Зрозуміло</button>' });
+    onDone();
+  }
+  draw();
+}
+export const bulkBar = () => '<div id="bulkBar" class="btn-row card" hidden style="position:sticky;top:8px;z-index:5;margin-bottom:10px;padding:8px 12px;flex-wrap:wrap;align-items:center"></div>';

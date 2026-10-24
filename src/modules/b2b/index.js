@@ -11,6 +11,7 @@ import { logAudit } from '../../core/requisites.js';
 import { call } from '../../integrations/lpcrm.js';
 import { mountB2bOrders } from './orders.js';
 import { mountB2bClients } from './clients.js';
+import { mountB2bStats } from './stats.js';
 
 export const partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 
@@ -410,6 +411,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
 
   const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup });
   mountB2bClients(app, { db, fetchFn, myPartner, orders });
+  mountB2bStats(app, { db, myPartner });
 
   // ---------- Telegram-група партнера ----------
   // Адмін бере код у картці партнера, додає бота в групу і пишe там «/link КОД» (код діє 30 хв).

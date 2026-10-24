@@ -1,13 +1,15 @@
 // Кабінет партнера (B2B): каталог, юрособи, закупівлі (оформлення, зміна до рахунку, файли), замовлення клієнтів, інструкція.
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
 export function createPartnerPages(ctx = {}) {
   // «Лише перегляд» — без кнопок створення й зміни (сервер теж не дасть).
   const canEdit = () => !ctx.can || ctx.can('b2b.order');
+  const supFilter = { status: '', q: '', from: '', to: '' };
+  const cliFilter = { status: '', q: '', from: '', to: '', pay: '' };
   let filter = { brand: '', q: '' };
 
   // ---------------------------------------------------------------- каталог
@@ -94,9 +96,13 @@ export function createPartnerPages(ctx = {}) {
     if (id === 'new') return orderForm(null);
     if (id && mode === 'edit') return orderForm(id);
     if (id) return viewOrder(id);
-    const { rows } = await api('GET', '/api/b2b/p/orders');
+    const qs = filterQs(supFilter);
+    const { rows, statuses } = await api('GET', `/api/b2b/p/orders${qs ? `?${qs}` : ''}`);
     main.innerHTML = `
       <div class="head-row"><h2>Закупівлі</h2>${canEdit() ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div>
+      <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap"><button class="chip ${supFilter.status ? '' : 'on'}" data-pst="">Усі</button>
+        ${Object.entries(statuses).map(([k, v]) => `<button class="chip ${supFilter.status === k ? 'on' : ''}" data-pst="${k}">${esc(v)}</button>`).join('')}</div>
+      ${filterBar(supFilter, { placeholder: '№, юрособа, № рахунку…' })}
       ${rows.length ? `<table class="list"><thead><tr><th>№</th><th class="hide-m">Дата</th><th>Сума</th><th>Статус</th><th class="hide-m">Рахунок</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click" data-o="${o.id}">
           <td><b>${esc(o.number)}</b><div class="small muted">${esc(o.entity.split('\n')[0].split(',')[0])}</div></td>
@@ -105,7 +111,9 @@ export function createPartnerPages(ctx = {}) {
           <td>${statusBadge(o)}</td>
           <td class="small hide-m">${o.invoice_no ? `№ ${esc(o.invoice_no)}${o.files ? ` · 📎 ${o.files}` : ''}` : '—'}</td>
         </tr>`).join('')}</tbody></table>`
-        : '<div class="card empty"><div class="big">Закупівель ще немає</div>Оберіть товари в каталозі й оформіть першу закупівлю.</div>'}`;
+        : `<div class="card empty"><div class="big">${qs ? 'Нічого не знайдено' : 'Закупівель ще немає'}</div>${qs ? 'Змініть фільтри.' : 'Оберіть товари в каталозі й оформіть першу закупівлю.'}</div>`}`;
+    wireFilterBar(supFilter, () => viewOrders());
+    $$('[data-pst]').forEach((b) => (b.onclick = () => { supFilter.status = b.dataset.pst; viewOrders(); }));
     $$('[data-o]').forEach((tr) => (tr.onclick = () => { location.hash = `#/porders/${tr.dataset.o}`; }));
   }
 
@@ -226,11 +234,15 @@ export function createPartnerPages(ctx = {}) {
     if (id === 'new') return clientForm(null, mode);
     if (id && mode === 'edit') return clientForm(id);
     if (id) return viewClient(id);
-    const { rows } = await api('GET', '/api/b2b/p/clients');
+    const qs = filterQs(cliFilter);
+    const { rows, statuses } = await api('GET', `/api/b2b/p/clients${qs ? `?${qs}` : ''}`);
     main.innerHTML = `
       <div class="head-row"><h2>Замовлення клієнтів</h2>${canEdit() ? '<a class="btn primary" href="#/pclients/new">+ Замовлення клієнта</a>' : ''}</div>
       <div class="small muted" style="margin-bottom:10px">Замовлення, яке ви оформлюєте для свого клієнта: товари з вашої закупівлі, ваша ТТН і маркування.
         <span class="badge bad">Без закупівлі</span> — товари не з закупівлі, менеджер виставить рахунок окремо.</div>
+      <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap"><button class="chip ${cliFilter.status ? '' : 'on'}" data-pst="">Усі</button>
+        ${Object.entries(statuses).map(([k, v]) => `<button class="chip ${cliFilter.status === k ? 'on' : ''}" data-pst="${k}">${esc(v)}</button>`).join('')}</div>
+      ${filterBar(cliFilter, { pay: true })}
       ${rows.length ? `<table class="list"><thead><tr><th>№</th><th>Клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th class="hide-m">CRM</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click ${o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''}" data-o="${o.id}">
           <td><b>${esc(o.number)}</b><div>${supplyMark(o)}</div><div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
@@ -240,7 +252,9 @@ export function createPartnerPages(ctx = {}) {
           <td class="hide-m">${payBadge(o)}</td>
           <td class="hide-m">${crmCell(o)}</td>
         </tr>`).join('')}</tbody></table>`
-        : '<div class="card empty"><div class="big">Замовлень клієнтів ще немає</div>Відкрийте закупівлю і натисніть «+ Замовлення клієнта» або створіть замовлення тут.</div>'}`;
+        : `<div class="card empty"><div class="big">${qs ? 'Нічого не знайдено' : 'Замовлень клієнтів ще немає'}</div>${qs ? 'Змініть фільтри.' : 'Відкрийте закупівлю і натисніть «+ Замовлення клієнта» або створіть замовлення тут.'}</div>`}`;
+    wireFilterBar(cliFilter, () => viewClients());
+    $$('[data-pst]').forEach((b) => (b.onclick = () => { cliFilter.status = b.dataset.pst; viewClients(); }));
     $$('[data-o]').forEach((tr) => (tr.onclick = () => { location.hash = `#/pclients/${tr.dataset.o}`; }));
   }
 
