@@ -9,7 +9,7 @@ const db = openDb(':memory:');
 await migrate(db);
 await db.batch([
   [`UPDATE settings SET value = 'k' WHERE key = 'lpcrm_key'`, []],
-  ...[['tg_token', '1:x'], ['tg_bot', 'ecobot'], ['tg_secret', 'sec']].map(([k, v]) => [`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, v]]),
+  ...[['tg_token', '1:x'], ['tg_bot', 'ecobot'], ['tg_secret', 'sec'], ['tg_hook_v', '2']].map(([k, v]) => [`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, v]]),
   [`INSERT INTO an_brands (id, name, keywords, sort) VALUES (901, 'TestBrand', 'testbrand', 98)`, []],
   [`INSERT INTO an_products (product_id, name, brand_id) VALUES (11, 'Fan', 901), (12, 'Fan 2', 901)`, []],
 ]);
