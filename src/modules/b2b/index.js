@@ -144,7 +144,9 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     // Ліміти: відкрита закупівля (замовлення без закупівлі) і всі неоплачені закупівлі; порожньо — типові 20 000 / 100 000.
     for (const [k, label] of [['open_limit', 'відкритої закупівлі'], ['unpaid_limit', 'неоплачених закупівель']]) {
       if (b[k] === undefined) continue;
-      const v = b[k] === '' || b[k] === null ? null : round2(num(b[k]));
+      const raw = String(b[k] ?? '').replace(/\s/g, '');
+      if (raw && !/^\d+([.,]\d+)?$/.test(raw)) throw fail(400, `Ліміт ${label} — сума в гривнях.`);
+      const v = raw ? round2(num(raw)) : null;
       if (v !== null && !(v >= 0 && v <= 100000000)) throw fail(400, `Ліміт ${label} — сума в гривнях.`);
       if (v !== (p[k] ?? null)) {
         await db.run(`UPDATE b2b_partners SET ${k} = ? WHERE id = ?`, [v, p.id]);
