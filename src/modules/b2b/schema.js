@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 4,
+  version: 5,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,6 +151,10 @@ export const schema = {
     ['users', 'partner_role', "TEXT DEFAULT ''"],
     ['users', 'added_by', "TEXT DEFAULT ''"],
     ['b2b_partners', 'deleted_at', "TEXT DEFAULT ''"],
+    // Telegram-група партнера: туди бот дублює закупівлі, рахунки й накладні (файлами), оплату.
+    ['b2b_partners', 'tg_group', "TEXT DEFAULT ''"],
+    ['b2b_partners', 'tg_group_title', "TEXT DEFAULT ''"],
+    ['b2b_partners', 'tg_group_code', "TEXT DEFAULT ''"],
   ],
   // Індекси на нові колонки — після ALTER TABLE (у старих базах колонок ще немає, коли створюються таблиці).
   async seed(db) {

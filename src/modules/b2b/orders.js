@@ -3,6 +3,7 @@
 // (і файл) → «Очікує оплату» → «Оплачено» (Opendatabot або вручну) → «Завершено». Доки рахунку немає, партнер може
 // змінити або скасувати закупівлю. Ціни фіксуються в момент оформлення (зміна маржі не чіпає наявних замовлень).
 import { fail, need, nowIso, round2 } from '../../core/common.js';
+import { logAudit } from '../../core/requisites.js';
 
 export const ORDER_STATUS = {
   invoice_wait: 'Очікує рахунок',
@@ -60,7 +61,22 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   const log = (orderId, user, action) => db.run(`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
     [orderId, nowIso(), userName(user), action]);
   const tgAdmins = (text) => services.notify?.sendText({ admins: true }, text).catch(() => 0);
-  const tgPartner = (partnerId, text) => services.notify?.sendText({ partnerId }, text).catch(() => 0);
+  // Партнеру: особисто його користувачам і в Telegram-групу партнера (якщо прив'язана).
+  const groupOf = async (partnerId) => (await db.get(`SELECT tg_group FROM b2b_partners WHERE id = ?`, [partnerId]))?.tg_group || '';
+  const tgPartner = async (partnerId, text) => services.notify?.sendText({ partnerId, chatIds: [await groupOf(partnerId)] }, text).catch(() => 0);
+  const tgGroup = async (partnerId, text) => {
+    const g = await groupOf(partnerId);
+    return g ? services.notify?.sendText({ chatIds: [g] }, text).catch(() => 0) : 0;
+  };
+  // Детально про закупівлю: на кого рахунок і накладна, товари «назва — кількість — ціна партнера».
+  const orderText = (title, o, p, items) => {
+    const lines = items.slice(0, 60).map((i) => `${h(i.name)}${i.article ? ` (${h(i.article)})` : ''} — ${i.qty} шт — ${uah(i.price)}`);
+    if (items.length > 60) lines.push(`…і ще ${items.length - 60} поз.`);
+    return `${title} <b>${orderNo(o.id)}</b> від «${h(p.name)}»\n\n`
+      + `<b>Рахунок і накладна на:</b>\n${h(o.entity || '—')}\n\n`
+      + `<b>Товари:</b>\n${lines.join('\n')}\n\n<b>Разом: ${uah(o.total)}</b> (з ПДВ)`
+      + `${o.comment ? `\n\n<i>Коментар: ${h(String(o.comment).slice(0, 300))}</i>` : ''}`;
+  };
   const link = (c, hash) => `${new URL(c.req.url).origin}/#/${hash}`;
 
   // ================================================================ ЮРОСОБИ ПАРТНЕРА
@@ -164,7 +180,9 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now],
     );
     await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r.lastId, now, userName(c.get('user')), `оформлено закупівлю на ${uah(total)}`]]]);
-    await tgAdmins(`🆕 <b>Нова закупівля ${orderNo(r.lastId)}</b> від «${h(p.name)}»\n${items.length} поз. · <b>${uah(total)}</b>\nРахунок на: ${h(e.name)} (${h(e.code)})${b.comment ? `\n<i>${h(String(b.comment).slice(0, 300))}</i>` : ''}\n${link(c, `b2borders/${r.lastId}`)}`);
+    const full = orderText('🆕 Нова закупівля', { id: r.lastId, entity: entityText(e), total, comment: b.comment }, p, items);
+    await tgAdmins(`${full}\n\n${link(c, `b2borders/${r.lastId}`)}`);
+    await tgGroup(p.id, full);
     return c.json({ id: r.lastId, number: orderNo(r.lastId), total });
   });
 
@@ -243,7 +261,9 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
         [e.id, entityText(e), total, String(b.comment ?? o.comment ?? '').trim().slice(0, 1000), nowIso(), o.id]],
     ]);
     await log(o.id, c.get('user'), `змінено замовлення: ${items.length} поз., ${uah(total)}`);
-    await tgAdmins(`✏️ <b>Змінено закупівлю ${orderNo(o.id)}</b> («${h(p.name)}»): ${items.length} поз. · <b>${uah(total)}</b>\n${link(c, `b2borders/${o.id}`)}`);
+    const full = orderText('✏️ Змінено закупівлю', { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment }, p, items);
+    await tgAdmins(`${full}\n\n${link(c, `b2borders/${o.id}`)}`);
+    await tgGroup(p.id, full);
     return c.json({ ok: true, total });
   });
 
@@ -258,6 +278,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
     await log(o.id, c.get('user'), 'партнер скасував замовлення');
     await tgAdmins(`❌ <b>Скасовано закупівлю ${orderNo(o.id)}</b> («${h(p.name)}»)\n${link(c, `b2borders/${o.id}`)}`);
+    await tgGroup(p.id, `❌ Закупівлю <b>${orderNo(o.id)}</b> скасовано.`);
     return c.json({ ok: true });
   });
 
@@ -341,7 +362,16 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     need(c, 'b2b.admin');
     const o = await orderOf(c.req.param('id'));
     const kind = FILE_KIND[c.req.query('kind')] ? c.req.query('kind') : 'other';
-    return c.json({ id: await saveFile(c, o, kind) });
+    const f = await saveFile(c, o, kind);
+    // Рахунок і накладну бот дублює файлом у Telegram-групу партнера.
+    const g = ['invoice', 'waybill'].includes(kind) ? await groupOf(o.partner_id) : '';
+    let toGroup = 0;
+    if (g) {
+      const caption = `${kind === 'invoice' ? '🧾 Рахунок' : '📦 Накладна'}${kind === 'invoice' && o.invoice_no ? ` № ${h(o.invoice_no)}` : ''}${kind === 'waybill' && o.waybill_no ? ` № ${h(o.waybill_no)}` : ''} — ${o.kind === 'client' ? 'замовлення' : 'закупівля'} <b>${orderNo(o.id)}</b> на ${uah(o.total)}`;
+      toGroup = await services.notify?.sendFile?.({ chatIds: [g] }, f, caption).catch(() => 0) || 0;
+      if (toGroup) await log(o.id, c.get('user'), `файл «${f.name}» надіслано в Telegram-групу партнера`);
+    }
+    return c.json({ id: f.id, toGroup: !!toGroup });
   });
 
   async function saveFile(c, o, kind) {
@@ -360,7 +390,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     for (let n = 0; n < parts; n++) st.push([`INSERT INTO b2b_file_parts (file_id, n, data) VALUES (?, ?, ?)`, [r.lastId, n, toB64(bytes.subarray(n * PART, (n + 1) * PART))]]);
     await db.batch(st);
     await log(o.id, u, `додано файл: ${FILE_KIND[kind]} «${name}»`);
-    return r.lastId;
+    return { id: r.lastId, bytes, name, mime };
   }
 
   async function sendFile(f) {
@@ -403,5 +433,24 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return sendFile(f);
   });
 
-  return { ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, link, uah, h };
+  // Видалення замовлення (тестові тощо): разом із позиціями, історією і файлами. Закупівлю з замовленнями клієнтів — ні.
+  app.delete('/api/b2b/orders/:id', async (c) => {
+    need(c, 'b2b.admin');
+    const o = await orderOf(c.req.param('id'));
+    if (o.kind === 'supply') {
+      const n = (await db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE supply_id = ? AND kind = 'client'`, [o.id])).n;
+      if (n) throw fail(400, `З цієї закупівлі є замовлення клієнтів (${n}) — спершу видаліть їх.`);
+    }
+    await db.batch([
+      [`DELETE FROM b2b_file_parts WHERE file_id IN (SELECT id FROM b2b_files WHERE order_id = ?)`, [o.id]],
+      [`DELETE FROM b2b_files WHERE order_id = ?`, [o.id]],
+      [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
+      [`DELETE FROM b2b_order_log WHERE order_id = ?`, [o.id]],
+      [`DELETE FROM b2b_orders WHERE id = ?`, [o.id]],
+    ]);
+    await logAudit(db, { user: c.get('user'), kind: 'b2b', refId: o.partner_id, action: `видалено ${o.kind === 'client' ? 'замовлення клієнта' : 'закупівлю'} ${orderNo(o.id)} на ${uah(o.total)}${o.crm_id ? ` (у LP-CRM № ${o.crm_id} — не видалено)` : ''}` }).catch(() => 0);
+    return c.json({ ok: true, inCrm: o.crm_id || '' });
+  });
+
+  return { ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
 }

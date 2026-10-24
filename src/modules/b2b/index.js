@@ -5,7 +5,7 @@
 //  замовлення для своїх клієнтів із залишку закупівлі (адмін передає їх у LP-CRM — clients.js).
 // Ціна партнера = РРЦ × (1 − маржа %), округлення до копійок (ціни з ПДВ).
 // Бренди й товари — з аналітики (an_brands, an_products; лише читання), РРЦ і фото — з LP-CRM (getProduct).
-import { hashPassword, can, PARTNER_ROLES, partnerRole } from '../../core/auth.js';
+import { hashPassword, can, PARTNER_ROLES, partnerRole, randomToken } from '../../core/auth.js';
 import { fail, need, nowIso, kyivDay, loadSettings, round2 } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
 import { call } from '../../integrations/lpcrm.js';
@@ -411,5 +411,33 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup });
   mountB2bClients(app, { db, fetchFn, myPartner, orders });
 
-  return { partnerPrice };
+  // ---------- Telegram-група партнера ----------
+  // Адмін бере код у картці партнера, додає бота в групу і пишe там «/link КОД» (код діє 30 хв).
+  app.post('/api/b2b/partners/:id/tg-group', async (c) => {
+    need(c, 'b2b.admin');
+    const p = await getPartner(c.req.param('id'));
+    const s = await loadSettings(db);
+    if (!s.tg_token || !s.tg_bot) throw fail(400, 'Telegram-бота ще не підключено (Налаштування → Telegram).');
+    const code = randomToken(6);
+    await db.run(`UPDATE b2b_partners SET tg_group_code = ? WHERE id = ?`, [`${code}|${Date.now() + 30 * 60000}`, p.id]);
+    return c.json({ code, bot: s.tg_bot });
+  });
+  app.delete('/api/b2b/partners/:id/tg-group', async (c) => {
+    need(c, 'b2b.admin');
+    const p = await getPartner(c.req.param('id'));
+    await db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '', tg_group_code = '' WHERE id = ?`, [p.id]);
+    await audit(c, p.id, `відв'язано Telegram-групу «${p.tg_group_title || p.tg_group}»`);
+    return c.json({ ok: true });
+  });
+  const tgGroupLink = async (code, chat, title) => {
+    const p = await db.get(`SELECT id, name, tg_group_code FROM b2b_partners WHERE tg_group_code LIKE ? AND COALESCE(deleted_at, '') = ''`, [`${code}|%`]);
+    if (!p || (Number(p.tg_group_code.split('|')[1]) || 0) < Date.now()) return '';
+    await db.run(`UPDATE b2b_partners SET tg_group = ?, tg_group_title = ?, tg_group_code = '' WHERE id = ?`, [chat, String(title).slice(0, 120), p.id]);
+    await logAudit(db, { user: null, kind: 'b2b', refId: p.id, action: `прив'язано Telegram-групу «${title}»`, changes: [] }).catch(() => 0);
+    return `✅ Групу прив'язано до партнера <b>${String(p.name).replace(/[<>&]/g, '')}</b>. Сюди надходитимуть закупівлі, рахунки й накладні (файлами) та оплати.`;
+  };
+  const tgGroupMoved = (from, to) => db.run(`UPDATE b2b_partners SET tg_group = ? WHERE tg_group = ?`, [to, from]);
+  const tgGroupLeft = (chat) => db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '' WHERE tg_group = ?`, [chat]);
+
+  return { partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft };
 }

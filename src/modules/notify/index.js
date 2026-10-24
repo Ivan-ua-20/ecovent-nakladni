@@ -8,7 +8,7 @@ const nf = new Intl.NumberFormat('uk-UA', { minimumFractionDigits: 2, maximumFra
 const uah = (n) => `${nf.format(Number(n) || 0)} ₴`;
 const kyivAt = (ms) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(ms)).replace(' ', 'T');
 
-export function mountTg(app, { db, fetchFn }) {
+export function mountTg(app, { db, fetchFn, services = {} }) {
   const settings = () => loadSettings(db);
   const putSetting = (key, value) => putSettingDb(db, key, value);
   async function tg(token, method, body) {
@@ -76,6 +76,17 @@ export function mountTg(app, { db, fetchFn }) {
     const msg = upd.message;
     const chat = msg?.chat?.id;
     if (!chat) return c.json({ ok: true });
+    // Групи (B2B: група партнера). Бота додають у групу і пишуть /link КОД із картки партнера.
+    if (['group', 'supergroup'].includes(msg.chat.type)) {
+      const b2b = services.b2b;
+      if (msg.migrate_to_chat_id) { await b2b?.tgGroupMoved?.(String(chat), String(msg.migrate_to_chat_id)); return c.json({ ok: true }); }
+      if (msg.left_chat_member?.is_bot && msg.left_chat_member.username === s.tg_bot) { await b2b?.tgGroupLeft?.(String(chat)); return c.json({ ok: true }); }
+      const g = /^\/(?:link|start)(?:@\w+)?\s+([0-9a-f]{12,24})\b/i.exec(String(msg.text || ''));
+      if (!g) return c.json({ ok: true }); // звичайні повідомлення в групі бот ігнорує
+      const reply = (await b2b?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || '')) || 'Код не підійшов. Візьміть новий код у картці партнера на сайті.';
+      await tg(s.tg_token, 'sendMessage', { chat_id: chat, text: reply, parse_mode: 'HTML' }).catch(() => {});
+      return c.json({ ok: true });
+    }
     const m = /^\/start(?:@\w+)?\s+([0-9a-f]{24})\b/.exec(String(msg.text || ''));
     let reply = 'Щоб отримувати сповіщення, відкрийте сайт, натисніть «Telegram» угорі і потім «Підключити Telegram».';
     if (m) {
@@ -132,10 +143,10 @@ export function mountTg(app, { db, fetchFn }) {
   }
 
   // Довільне повідомлення: адміністраторам (власник і адміни з підключеним Telegram) або вказаним користувачам.
-  async function sendText({ admins = false, userIds = [], partnerId = null }, text) {
+  async function sendText({ admins = false, userIds = [], partnerId = null, chatIds = [] }, text) {
     const s = await settings();
     if (!s.tg_token) return 0;
-    const chats = new Set();
+    const chats = new Set(chatIds.filter(Boolean).map(String));
     if (admins) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin', 'admin_lite')`)) chats.add(r.tg_chat_id);
     if (userIds.length) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND id IN (SELECT value FROM json_each(?))`, [JSON.stringify(userIds)])) chats.add(r.tg_chat_id);
     if (partnerId) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'partner' AND partner_id = ?`, [partnerId])) chats.add(r.tg_chat_id);
@@ -146,5 +157,24 @@ export function mountTg(app, { db, fetchFn }) {
     return sent;
   }
 
-  return { notify, sendText };
+  // Файл (рахунок, накладна) у чати/групи — sendDocument; підпис — HTML.
+  async function sendFile({ chatIds = [] }, { bytes, name, mime }, caption = '') {
+    const s = await settings();
+    if (!s.tg_token || !chatIds.length) return 0;
+    let sent = 0;
+    for (const chat of chatIds.slice(0, 5)) {
+      const fd = new FormData();
+      fd.append('chat_id', String(chat));
+      if (caption) { fd.append('caption', caption.slice(0, 1000)); fd.append('parse_mode', 'HTML'); }
+      fd.append('document', new Blob([bytes], { type: mime || 'application/octet-stream' }), name || 'file');
+      try {
+        const r = await fetchFn(`${TG}/bot${s.tg_token}/sendDocument`, { method: 'POST', body: fd });
+        const j = await r.json().catch(() => null);
+        if (j?.ok) sent++;
+      } catch { /* бота прибрали з групи */ }
+    }
+    return sent;
+  }
+
+  return { notify, sendText, sendFile };
 }

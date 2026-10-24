@@ -68,7 +68,7 @@ assert.equal(o1.number, `B2B-${o1.id}`);
 assert.equal(o1.total, 2 * 900 + 3 * 300, 'ціни партнера: 1000 − 10% = 900; 333,33 − 10% = 300,00');
 assert.equal(tg.length, 1, 'адміну — сповіщення про нову закупівлю');
 assert.equal(tg[0].chat_id, '100');
-assert.match(tg[0].text, /Нова закупівля B2B-\d+.*Партнер А/s);
+assert.match(tg[0].text, /Нова закупівля.*B2B-\d+.*Партнер А.*Рахунок і накладна на:.*ФОП Петренко.*Товари:.*— 2 шт — 900,00/s);
 let d = await req('GET', `/api/b2b/p/orders/${o1.id}`, null, A);
 assert.equal(d.order.status, 'invoice_wait');
 assert.match(d.order.entity, /ФОП Петренко П\.П\., ІПН 1234567890/);
