@@ -4,6 +4,13 @@ import { openDb } from '../src/core/db-node.js';
 import { migrate } from '../src/migrate.js';
 import { createApp } from '../src/app.js';
 
+import { kyivDayStartIso } from '../src/modules/b2b/filters.js';
+// Дні переходу на зимовий / літній час: доба починається за зсувом опівночі.
+assert.equal(kyivDayStartIso('2026-10-25'), '2026-10-24T21:00:00.000Z');
+assert.equal(kyivDayStartIso('2026-10-26'), '2026-10-25T22:00:00.000Z');
+assert.equal(kyivDayStartIso('2026-03-29'), '2026-03-28T22:00:00.000Z');
+assert.equal(kyivDayStartIso('2026-03-30'), '2026-03-29T21:00:00.000Z');
+
 const db = openDb(':memory:');
 await migrate(db);
 await db.batch([

@@ -7,8 +7,10 @@ export function kyivOffsetMin(ms) {
 }
 // Початок київського дня (YYYY-MM-DD) як ISO UTC.
 export function kyivDayStartIso(day) {
-  const noon = Date.parse(`${day}T12:00:00Z`);
-  return new Date(Date.parse(`${day}T00:00:00Z`) - kyivOffsetMin(noon) * 60000).toISOString();
+  // Зсув — на саму північ (у дні переходу на літній/зимовий час він інший, ніж опівдні).
+  const utc0 = Date.parse(`${day}T00:00:00Z`);
+  const guess = utc0 - kyivOffsetMin(utc0) * 60000;
+  return new Date(utc0 - kyivOffsetMin(guess) * 60000).toISOString();
 }
 export const nextDay = (day) => new Date(Date.parse(`${day}T12:00:00Z`) + 86400000).toISOString().slice(0, 10);
 export const kyivDayOf = (iso) => new Date(iso).toLocaleDateString('sv-SE', { timeZone: 'Europe/Kyiv' });
