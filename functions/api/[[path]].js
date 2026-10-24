@@ -4908,6 +4908,73 @@ ${h2(message.slice(0, 500))}${path ? `
   return { log };
 }
 
+// src/modules/b2b/filters.js
+function kyivOffsetMin(ms) {
+  const s = new Date(ms).toLocaleString("sv-SE", { timeZone: "Europe/Kyiv" }).replace(" ", "T");
+  return Math.round((Date.parse(`${s}Z`) - ms) / 6e4);
+}
+function kyivDayStartIso(day) {
+  const noon = Date.parse(`${day}T12:00:00Z`);
+  return new Date(Date.parse(`${day}T00:00:00Z`) - kyivOffsetMin(noon) * 6e4).toISOString();
+}
+var nextDay = (day) => new Date(Date.parse(`${day}T12:00:00Z`) + 864e5).toISOString().slice(0, 10);
+var kyivDayOf = (iso) => new Date(iso).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+var isDay2 = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ""));
+var PAID_SQL = `((o.supply_id IS NULL AND COALESCE(o.paid_at, '') != '') OR s.status IN ('paid', 'done'))`;
+function listFilter(c, { client = false } = {}) {
+  const where = [];
+  const params = [];
+  const q = String(c.req.query("q") || "").trim().slice(0, 60);
+  if (q) {
+    const or = [];
+    const num4 = /^(?:b2b\s*-?\s*)?(\d{1,9})$/i.exec(q);
+    if (num4) {
+      or.push("o.id = ?");
+      params.push(Number(num4[1]));
+    }
+    const low2 = q.toLocaleLowerCase("uk");
+    const variants = [.../* @__PURE__ */ new Set([
+      q,
+      low2,
+      low2.toLocaleUpperCase("uk"),
+      low2.charAt(0).toLocaleUpperCase("uk") + low2.slice(1),
+      low2.replace(/(^|[\s«"'-])(\p{L})/gu, (m, a, b) => a + b.toLocaleUpperCase("uk"))
+    ])].map((v) => `%${v}%`);
+    const anyCase = (col) => {
+      or.push(`(${variants.map(() => `${col} LIKE ?`).join(" OR ")})`);
+      params.push(...variants);
+    };
+    const like = `%${q}%`;
+    const digits = q.replace(/\D/g, "");
+    if (client) {
+      anyCase("o.client_name");
+      if (digits.length >= 4) {
+        or.push("o.client_phone LIKE ?", "o.ttn LIKE ?", "o.crm_id = ?");
+        params.push(`%${digits}%`, `%${digits}%`, digits);
+      }
+    } else {
+      anyCase("o.entity");
+      or.push("o.invoice_no LIKE ?", "o.waybill_no LIKE ?");
+      params.push(like, like);
+    }
+    where.push(`(${or.join(" OR ")})`);
+  }
+  const from = c.req.query("from");
+  const to = c.req.query("to");
+  if (isDay2(from)) {
+    where.push("o.created_at >= ?");
+    params.push(kyivDayStartIso(from));
+  }
+  if (isDay2(to)) {
+    where.push("o.created_at < ?");
+    params.push(kyivDayStartIso(nextDay(to)));
+  }
+  const pay = c.req.query("pay");
+  if (client && pay === "paid") where.push(PAID_SQL);
+  if (client && pay === "unpaid") where.push(`NOT ${PAID_SQL}`);
+  return { where, params };
+}
+
 // src/modules/b2b/orders.js
 var ORDER_STATUS = {
   invoice_wait: "\u041E\u0447\u0456\u043A\u0443\u0454 \u0440\u0430\u0445\u0443\u043D\u043E\u043A",
@@ -5124,10 +5191,16 @@ ${link(c, `b2borders/${r.lastId}`)}`);
   }
   app.get("/api/b2b/p/orders", async (c) => {
     const p = await myPartner(c);
+    const f = listFilter(c);
+    const st = c.req.query("status");
+    if (st && ORDER_STATUS[st]) {
+      f.where.push("o.status = ?");
+      f.params.push(st);
+    }
     const rows = await db.all(
       `SELECT o.*, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files FROM b2b_orders o
-       WHERE o.partner_id = ? AND o.kind = 'supply' ORDER BY o.id DESC LIMIT 300`,
-      [p.id]
+       WHERE o.partner_id = ? AND o.kind = 'supply' ${f.where.map((w) => `AND ${w}`).join(" ")} ORDER BY o.id DESC LIMIT 300`,
+      [p.id, ...f.params]
     );
     return c.json({ rows: rows.map(publicOrder), statuses: ORDER_STATUS });
   });
@@ -5183,8 +5256,9 @@ ${link(c, `b2borders/${o.id}`)}`);
   });
   app.get("/api/b2b/orders", async (c) => {
     need(c, "b2b.admin");
-    const where = [`o.kind = 'supply'`];
-    const params = [];
+    const f = listFilter(c);
+    const where = [`o.kind = 'supply'`, ...f.where];
+    const params = [...f.params];
     const st = c.req.query("status");
     const pid = parseInt(c.req.query("partner"), 10);
     if (st && ORDER_STATUS[st]) {
@@ -5582,7 +5656,13 @@ ${link(c, `b2bclients/${id}`)}`);
   app.get("/api/b2b/p/clients", async (c) => {
     const p = await myPartner(c);
     await refreshCrm({ partnerId: p.id });
-    const rows = await db.all(`${SELECT} WHERE o.partner_id = ? AND o.kind = 'client' ORDER BY o.id DESC LIMIT 300`, [p.id]);
+    const f = listFilter(c, { client: true });
+    const st = c.req.query("status");
+    if (st && CLIENT_STATUS[st]) {
+      f.where.push("o.status = ?");
+      f.params.push(st);
+    }
+    const rows = await db.all(`${SELECT} WHERE o.partner_id = ? AND o.kind = 'client' ${f.where.map((w) => `AND ${w}`).join(" ")} ORDER BY o.id DESC LIMIT 300`, [p.id, ...f.params]);
     return c.json({ rows: rows.map(publicOrder), statuses: CLIENT_STATUS });
   });
   async function myClientOrder(c, p) {
@@ -5670,8 +5750,9 @@ ${link(c, `b2bclients/${o.id}`)}`);
   app.get("/api/b2b/clients", async (c) => {
     need(c, "b2b.admin");
     await refreshCrm();
-    const where = [`o.kind = 'client'`];
-    const params = [];
+    const f = listFilter(c, { client: true });
+    const where = [`o.kind = 'client'`, ...f.where];
+    const params = [...f.params];
     const v = c.req.query("view");
     const pid = parseInt(c.req.query("partner"), 10);
     if (VIEWS[v]) where.push(VIEWS[v]);
@@ -5814,6 +5895,170 @@ ${link(c, `pclients/${o.id}`)}`);
     return c.json({ ok: true, inCrm: !!o.crm_id });
   });
   return { refreshCrm };
+}
+
+// src/modules/b2b/stats.js
+var DAY = 864e5;
+var addDays2 = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * DAY).toISOString().slice(0, 10);
+var daysBetween2 = (a, b) => Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / DAY) + 1;
+function mountB2bStats(app, { db, myPartner }) {
+  async function names() {
+    const [cats, brands] = await Promise.all([
+      db.all(`SELECT id, name FROM an_categories`).catch(() => []),
+      db.all(`SELECT id, name FROM an_brands`).catch(() => [])
+    ]);
+    return { cat: new Map(cats.map((r) => [r.id, r.name])), brand: new Map([...brands.map((r) => [r.id, r.name]), [0, "\u0406\u043D\u0448\u0456"]]) };
+  }
+  async function report(partnerId, q) {
+    const today = kyivDayOf((/* @__PURE__ */ new Date()).toISOString());
+    const to = isDay2(q.to) ? q.to : today;
+    const from = isDay2(q.from) && q.from <= to ? q.from : addDays2(to, -29);
+    const days = Math.min(daysBetween2(from, to), 400);
+    const prevTo = addDays2(from, -1);
+    const prevFrom = addDays2(prevTo, -(days - 1));
+    const byPartner = partnerId ? "AND o.partner_id = ?" : "";
+    const pp = partnerId ? [partnerId] : [];
+    const orders = await db.all(
+      `SELECT o.id, o.partner_id, o.kind, o.status, o.supply_id, o.total, o.paid_amount, o.paid_at, o.created_at, o.crm_status, s.status AS supply_status
+       FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id
+       WHERE o.created_at >= ? AND o.created_at < ? AND o.status != 'cancelled' ${byPartner}`,
+      [kyivDayStartIso(prevFrom), kyivDayStartIso(nextDay(to)), ...pp]
+    );
+    for (const o of orders) {
+      o.day = kyivDayOf(o.created_at);
+      o.cur = o.day >= from;
+    }
+    const cur = orders.filter((o) => o.cur);
+    const prev = orders.filter((o) => !o.cur);
+    const items = cur.length ? await db.all(
+      `SELECT order_id, product_id, name, qty, price, rrp FROM b2b_order_items WHERE order_id IN (SELECT value FROM json_each(?))`,
+      [JSON.stringify(cur.map((o) => o.id))]
+    ) : [];
+    const prevItems = prev.length ? await db.all(
+      `SELECT order_id, qty, price, rrp FROM b2b_order_items WHERE order_id IN (SELECT value FROM json_each(?))`,
+      [JSON.stringify(prev.filter((o) => o.kind === "client").map((o) => o.id))]
+    ) : [];
+    const kindOf3 = new Map(orders.map((o) => [o.id, o.kind]));
+    const sales = (list, its) => {
+      const ids = new Set(list.filter((o) => o.kind === "client").map((o) => o.id));
+      const li = its.filter((i) => ids.has(i.order_id));
+      const sum = round2(list.filter((o) => o.kind === "client").reduce((t, o) => t + o.total, 0));
+      const rrp = round2(li.reduce((t, i) => t + (i.rrp || i.price) * i.qty, 0));
+      const cnt = ids.size;
+      return { cnt, units: li.reduce((t, i) => t + i.qty, 0), sum, rrp, earn: round2(rrp - sum), avg: cnt ? round2(sum / cnt) : 0, perDay: round2(cnt / days) };
+    };
+    const supplies = (list) => {
+      const s = list.filter((o) => o.kind === "supply");
+      return { cnt: s.length, sum: round2(s.reduce((t, o) => t + o.total, 0)), paid: round2(s.filter((o) => ["paid", "done"].includes(o.status)).reduce((t, o) => t + o.total, 0)) };
+    };
+    const series = [];
+    const byDay = /* @__PURE__ */ new Map();
+    for (let d = from; d <= to && series.length < 400; d = nextDay(d)) {
+      const r = { d, cnt: 0, sum: 0, supply: 0 };
+      series.push(r);
+      byDay.set(d, r);
+    }
+    for (const o of cur) {
+      const r = byDay.get(o.day);
+      if (!r) continue;
+      if (o.kind === "client") {
+        r.cnt++;
+        r.sum = round2(r.sum + o.total);
+      } else r.supply = round2(r.supply + o.total);
+    }
+    const weekdays = [0, 0, 0, 0, 0, 0, 0];
+    for (const o of cur) if (o.kind === "client") weekdays[((/* @__PURE__ */ new Date(`${o.day}T12:00:00Z`)).getUTCDay() + 6) % 7]++;
+    const clientItems = items.filter((i) => kindOf3.get(i.order_id) === "client");
+    const pids = [...new Set(clientItems.map((i) => i.product_id))];
+    const meta = pids.length ? new Map((await db.all(
+      `SELECT c.product_id, c.brand_id, COALESCE(p.cat_manual, p.category_id) AS cat FROM b2b_catalog c LEFT JOIN an_products p ON p.product_id = c.product_id
+       WHERE c.product_id IN (SELECT value FROM json_each(?))`,
+      [JSON.stringify(pids)]
+    ).catch(() => [])).map((r) => [r.product_id, r])) : /* @__PURE__ */ new Map();
+    const nm = await names();
+    const agg = (keyOf, nameOf) => {
+      const m = /* @__PURE__ */ new Map();
+      for (const i of clientItems) {
+        const k = keyOf(i);
+        const r = m.get(k) || { key: k, name: nameOf(i, k), units: 0, sum: 0, rrp: 0, orders: /* @__PURE__ */ new Set() };
+        r.units += i.qty;
+        r.sum += i.price * i.qty;
+        r.rrp += (i.rrp || i.price) * i.qty;
+        r.orders.add(i.order_id);
+        m.set(k, r);
+      }
+      return [...m.values()].map((r) => ({
+        key: r.key,
+        name: r.name,
+        units: r.units,
+        sum: round2(r.sum),
+        earn: round2(r.rrp - r.sum),
+        orders: r.orders.size,
+        marginPct: r.rrp ? round2((r.rrp - r.sum) / r.rrp * 100) : 0
+      })).sort((a, b) => b.sum - a.sum);
+    };
+    const products = agg((i) => i.product_id, (i) => i.name).slice(0, 100);
+    const categories = agg((i) => meta.get(i.product_id)?.cat || 0, (i, k) => nm.cat.get(k) || "\u0411\u0435\u0437 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457");
+    const brands = agg((i) => meta.get(i.product_id)?.brand_id ?? 0, (i, k) => nm.brand.get(k) || "\u0406\u043D\u0448\u0456");
+    const crm = /* @__PURE__ */ new Map();
+    for (const o of cur) if (o.kind === "client") {
+      const k = o.crm_status || (o.status === "crm" ? "\u041F\u0435\u0440\u0435\u0434\u0430\u043D\u043E" : "\u0429\u0435 \u043D\u0435 \u0432 CRM");
+      crm.set(k, (crm.get(k) || 0) + 1);
+    }
+    const [debt, stockIn, stockOut] = await Promise.all([
+      db.get(`SELECT SUM(CASE WHEN o.status = 'invoice_wait' THEN o.total ELSE 0 END) AS wait,
+          SUM(CASE WHEN o.status IN ('pay_wait', 'partial') THEN o.total - o.paid_amount ELSE 0 END) AS due,
+          SUM(CASE WHEN o.status IN ('pay_wait', 'partial') THEN 1 ELSE 0 END) AS due_cnt
+        FROM b2b_orders o WHERE o.kind = 'supply' AND o.status IN ('invoice_wait', 'pay_wait', 'partial') ${byPartner}`, pp),
+      db.get(`SELECT SUM(i.qty) AS units, SUM(i.qty * i.price) AS sum FROM b2b_order_items i JOIN b2b_orders o ON o.id = i.order_id
+        WHERE o.kind = 'supply' AND o.status != 'cancelled' ${byPartner}`, pp),
+      db.get(`SELECT SUM(i.qty) AS units, SUM(i.qty * i.price) AS sum FROM b2b_order_items i JOIN b2b_orders o ON o.id = i.order_id
+        WHERE o.kind = 'client' AND o.status != 'cancelled' AND o.supply_id IS NOT NULL ${byPartner}`, pp)
+    ]);
+    const noSupply = cur.filter((o) => o.kind === "client" && !o.supply_id).length;
+    const unpaidClients = cur.filter((o) => o.kind === "client" && !(o.supply_id ? ["paid", "done"].includes(o.supply_status) : o.paid_at)).length;
+    const out = {
+      period: { from, to, days },
+      prev: { from: prevFrom, to: prevTo },
+      sales: sales(cur, items),
+      salesPrev: sales(prev, prevItems),
+      supplies: supplies(cur),
+      suppliesPrev: supplies(prev),
+      noSupply,
+      unpaidClients,
+      debt: { wait: round2(debt?.wait || 0), due: round2(debt?.due || 0), dueCnt: debt?.due_cnt || 0 },
+      stock: { units: (stockIn?.units || 0) - (stockOut?.units || 0), sum: round2((stockIn?.sum || 0) - (stockOut?.sum || 0)) },
+      series,
+      weekdays,
+      products,
+      categories,
+      brands,
+      crm: [...crm].map(([status, n]) => ({ status, n })).sort((a, b) => b.n - a.n)
+    };
+    if (!partnerId) {
+      const ps = new Map((await db.all(`SELECT id, name FROM b2b_partners`)).map((p) => [p.id, { id: p.id, name: p.name, cnt: 0, sum: 0, supply: 0 }]));
+      for (const o of cur) {
+        const r = ps.get(o.partner_id);
+        if (!r) continue;
+        if (o.kind === "client") {
+          r.cnt++;
+          r.sum = round2(r.sum + o.total);
+        } else r.supply = round2(r.supply + o.total);
+      }
+      out.partners = [...ps.values()].filter((r) => r.cnt || r.supply).sort((a, b) => b.sum + b.supply - (a.sum + a.supply));
+    }
+    return out;
+  }
+  app.get("/api/b2b/p/stats", async (c) => {
+    const p = await myPartner(c);
+    return c.json(await report(p.id, c.req.query()));
+  });
+  app.get("/api/b2b/stats", async (c) => {
+    need(c, "b2b.admin");
+    const pid = parseInt(c.req.query("partner"), 10) || null;
+    if (pid && !await db.get(`SELECT id FROM b2b_partners WHERE id = ?`, [pid])) throw fail(404, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return c.json(await report(pid, c.req.query()));
+  });
 }
 
 // src/modules/b2b/index.js
@@ -6213,6 +6458,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   });
   const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup });
   mountB2bClients(app, { db, fetchFn, myPartner, orders });
+  mountB2bStats(app, { db, myPartner });
   app.post("/api/b2b/partners/:id/tg-group", async (c) => {
     need(c, "b2b.admin");
     const p = await getPartner(c.req.param("id"));
@@ -7680,7 +7926,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 5,
+  version: 6,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -7837,7 +8083,8 @@ var schema11 = {
   async seed(db) {
     await db.batch([
       [`CREATE INDEX IF NOT EXISTS b2b_orders_supply ON b2b_orders (supply_id)`, []],
-      [`CREATE INDEX IF NOT EXISTS b2b_orders_kind ON b2b_orders (kind, partner_id, id)`, []]
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_kind ON b2b_orders (kind, partner_id, id)`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_created ON b2b_orders (created_at)`, []]
     ]);
   }
 };
