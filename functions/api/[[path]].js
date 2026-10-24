@@ -5305,6 +5305,8 @@ ${link(c, `b2borders/${open.id}`)}`);
   }
   const publicOrder = (o) => {
     const out = { ...o, number: orderNo(o.id), status_name: ANY_STATUS[o.status] || o.status };
+    if (o.kind === "supply" && ["partial", "pay_wait"].includes(o.status)) out.due = round2(o.total - (o.paid_amount || 0));
+    if (o.kind === "supply" && o.status === "partial") out.status_name = `\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E \xB7 \u0449\u0435 ${uah2(out.due)}`;
     if (o.kind === "client") Object.assign(out, { no_supply: !o.supply_id || o.supply_status === "open", open_supply: o.supply_status === "open", pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : "" });
     return out;
   };
@@ -5481,6 +5483,11 @@ ${link(c, `${o.kind === "client" ? "pclients" : "porders"}/${o.id}`)}`);
       await log(o.id, u, "\u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443");
       await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}${o.invoice_no ? `, \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h3(o.invoice_no)}` : ""} \u2014 ${uah2(o.total)}`);
       await hooks.finPaid?.(o.id).catch(() => 0);
+    } else if (status === "pay_wait") {
+      if (!["paid", "partial"].includes(o.status)) throw fail(400, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F \u0439 \u0442\u0430\u043A \u043E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443.");
+      await hooks.payReset?.(o.id);
+      await db.run(`UPDATE b2b_orders SET status = 'pay_wait', paid_amount = 0, paid_at = '', paid_by = '', updated_at = ? WHERE id = ?`, [now, o.id]);
+      await log(o.id, u, o.status === "partial" ? "\u0437\u043D\u044F\u0442\u043E \u0447\u0430\u0441\u0442\u043A\u043E\u0432\u0443 \u043E\u043F\u043B\u0430\u0442\u0443 \u2014 \xAB\u041E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443\xBB" : "\u0441\u0442\u0430\u0442\u0443\u0441: \xAB\u041E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443\xBB (\u043E\u043F\u043B\u0430\u0442\u0443 \u0437\u043D\u044F\u0442\u043E)");
     } else {
       await db.run(`UPDATE b2b_orders SET status = ?, updated_at = ? WHERE id = ?`, [status, now, o.id]);
       await log(o.id, u, `\u0441\u0442\u0430\u0442\u0443\u0441: \xAB${ORDER_STATUS[status]}\xBB`);
@@ -5878,7 +5885,7 @@ var TTN_FIELDS = ["", "additional_2", "additional_3", "additional_4", "delivery_
 var newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Math.random() * 9e4))}`;
 function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {} }) {
   const { getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h6 } = orders;
-  const userName3 = (u) => u?.name || u?.login || "";
+  const userName4 = (u) => u?.name || u?.login || "";
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files
     FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id`;
   async function crmConfig() {
@@ -6165,11 +6172,11 @@ ${link(c, `b2bclients/${id}`)}`);
     const r = await db.run(
       `INSERT INTO b2b_orders (partner_id, kind, status, supply_id, client_name, client_phone, ttn, total, comment, created_by, created_at, updated_at)
        VALUES (?, 'client', 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [p.id, it.supplyId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, userName3(u), now, now]
+      [p.id, it.supplyId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, userName4(u), now, now]
     );
     await db.batch([...itemRows(r.lastId, it.items), [
       `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-      [r.lastId, now, userName3(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah3(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}`]
+      [r.lastId, now, userName4(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah3(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}`]
     ]]);
     if (it.openId) await rebuildOpen(it.openId);
     await tgNew(c, p, r.lastId, f, it);
@@ -6377,7 +6384,7 @@ ${link(c, `pclients/${o.id}`)}`);
     const { paid } = await c.req.json();
     const u = c.get("user");
     const now = nowIso();
-    if (paid) await db.run(`UPDATE b2b_orders SET paid_amount = total, paid_at = ?, paid_by = ?, updated_at = ? WHERE id = ?`, [now, userName3(u), now, o.id]);
+    if (paid) await db.run(`UPDATE b2b_orders SET paid_amount = total, paid_at = ?, paid_by = ?, updated_at = ? WHERE id = ?`, [now, userName4(u), now, o.id]);
     else await db.run(`UPDATE b2b_orders SET paid_amount = 0, paid_at = '', paid_by = '', updated_at = ? WHERE id = ?`, [now, o.id]);
     await log(o.id, u, paid ? "\u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443" : "\u0437\u043D\u044F\u0442\u043E \u043F\u043E\u0437\u043D\u0430\u0447\u043A\u0443 \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB");
     if (paid) await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h6(o.client_name)}) \u2014 ${uah3(o.total)}`);
@@ -7358,6 +7365,147 @@ ${h5(firstLine(o.entity))} \xB7 ${m22(o.total)} \u0433\u0440\u043D`
   return { tgPrivate, tgCallback, tgGroupMessage, linkSpecialGroup };
 }
 
+// src/modules/b2b/odbpay.js
+var DUE_EPS = 1;
+var userName3 = (u) => u?.name || u?.login || "";
+function purposeHasNo(purpose, invoiceNo) {
+  const digits = String(invoiceNo || "").replace(/\D/g, "").replace(/^0+/, "");
+  if (!digits) return false;
+  return [...String(purpose || "").matchAll(/\d+/g)].some((m) => m[0].replace(/^0+/, "") === digits);
+}
+function mountB2bPay(app, { db, services, orders, hooks }) {
+  const { log, tgAdmins, tgPartner, link, uah: uah3, h: h6 } = orders;
+  const candidatesFor = (codes) => db.all(
+    `SELECT o.id, o.partner_id, o.total, o.paid_amount, o.invoice_no, o.status, e.code FROM b2b_orders o JOIN b2b_entities e ON e.id = o.entity_id
+     WHERE o.kind = 'supply' AND o.status IN ('pay_wait', 'partial') AND e.code IN (SELECT value FROM json_each(?)) ORDER BY o.id`,
+    [JSON.stringify(codes)]
+  );
+  const due = (o) => round2(o.total - o.paid_amount);
+  async function recalc(orderId, base, user = null) {
+    const o = await db.get(`SELECT * FROM b2b_orders WHERE id = ?`, [orderId]);
+    if (!o || o.kind !== "supply" || ["cancelled", "done", "open"].includes(o.status)) return;
+    if (o.status === "paid" && o.paid_by !== "Opendatabot") return;
+    const s = await db.get(`SELECT COALESCE(SUM(amount), 0) AS sum, MAX(date) AS at FROM b2b_payments WHERE order_id = ?`, [o.id]);
+    const sum = round2(s.sum);
+    const status = sum > 0 && sum >= o.total - DUE_EPS ? "paid" : sum > 0 ? "partial" : o.invoice_no ? "pay_wait" : "invoice_wait";
+    await db.run(
+      `UPDATE b2b_orders SET paid_amount = ?, paid_at = ?, paid_by = ?, status = ?, updated_at = ? WHERE id = ?`,
+      [sum, sum ? s.at : "", sum ? "Opendatabot" : "", status, nowIso(), o.id]
+    );
+    if (status === o.status && sum === round2(o.paid_amount)) return;
+    const who = user ? ` (${userName3(user)})` : " (Opendatabot)";
+    const url = (hash2) => base ? `
+${link(base, hash2)}` : "";
+    if (status === "paid") {
+      await log(o.id, user, `\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E: ${uah3(sum)}${user ? "" : " \u2014 Opendatabot"}`);
+      await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}${o.invoice_no ? `, \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h6(o.invoice_no)}` : ""} \u2014 ${uah3(o.total)}${url(`porders/${o.id}`)}`);
+      await tgAdmins(`\u2705 <b>\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E</b>${who}: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 ${uah3(sum)}${url(`b2borders/${o.id}`)}`);
+      if (o.status !== "paid") await hooks.finPaid?.(o.id).catch(() => 0);
+    } else if (status === "partial") {
+      const left = round2(o.total - sum);
+      await log(o.id, user, `\u0447\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E: ${uah3(sum)} \u0437 ${uah3(o.total)}, \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah3(left)}`);
+      await tgPartner(o.partner_id, `\u{1F4B3} <b>\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E ${uah3(sum)} \u0437 ${uah3(o.total)}.
+<b>\u0429\u0435 \u0434\u043E \u043E\u043F\u043B\u0430\u0442\u0438: ${uah3(left)}</b>${url(`porders/${o.id}`)}`);
+      await tgAdmins(`\u{1F4B3} <b>\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E</b>${who}: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 ${uah3(sum)} \u0437 ${uah3(o.total)}, \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah3(left)}${url(`b2borders/${o.id}`)}`);
+    } else {
+      await log(o.id, user, `\u043E\u043F\u043B\u0430\u0442\u0443 \u0437\u043D\u044F\u0442\u043E: \xAB${status === "pay_wait" ? "\u041E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443" : "\u041E\u0447\u0456\u043A\u0443\u0454 \u0440\u0430\u0445\u0443\u043D\u043E\u043A"}\xBB`);
+    }
+  }
+  async function onPayments(ids, base = "") {
+    if (!ids?.length || !services.payments?.txs) return;
+    let txs = (await services.payments.txs(ids)).filter((t) => t.currency === "UAH" && t.amount > 0 && t.payer_code);
+    if (!txs.length) return;
+    const all = await candidatesFor([...new Set(txs.map((t) => t.payer_code))]);
+    if (!all.length) return;
+    txs = txs.filter((t) => all.some((o) => o.code === t.payer_code)).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 10);
+    const known = new Set((await db.all(`SELECT tx_id FROM b2b_payments WHERE tx_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(txs.map((t) => t.id))])).map((r) => r.tx_id));
+    for (const t of txs) {
+      if (known.has(t.id)) continue;
+      const cands = all.filter((o) => o.code === t.payer_code && o.total - o.paid_amount > 4e-3);
+      if (!cands.length) continue;
+      const byNo = cands.filter((o) => purposeHasNo(t.purpose, o.invoice_no));
+      let pool = byNo.length ? byNo : cands;
+      if (pool.length > 1) {
+        const exact = pool.filter((o) => Math.abs(due(o) - t.amount) <= DUE_EPS);
+        if (exact.length === 1) pool = exact;
+      }
+      const hit = pool.length === 1 && t.amount <= due(pool[0]) + DUE_EPS ? pool[0] : null;
+      await db.run(
+        `INSERT OR IGNORE INTO b2b_payments (tx_id, order_id, candidates, amount, date, payer_name, payer_code, purpose, auto, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+        [t.id, hit?.id ?? null, JSON.stringify(hit ? [] : pool.map((o) => o.id)), t.amount, t.date, t.payer_name, t.payer_code, t.purpose, nowIso()]
+      );
+      if (hit) {
+        hit.paid_amount = round2(hit.paid_amount + t.amount);
+        await recalc(hit.id, base);
+      } else {
+        const why = pool.length > 1 ? `\u043F\u0456\u0434\u0445\u043E\u0434\u0438\u0442\u044C \u043A\u0456\u043B\u044C\u043A\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C: ${pool.map((o) => `${orderNo(o.id)} (\u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah3(due(o))})`).join(", ")}` : `\u0441\u0443\u043C\u0430 \u0431\u0456\u043B\u044C\u0448\u0430 \u0437\u0430 \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah3(due(pool[0]))} \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(pool[0].id)}`;
+        await tgAdmins(`\u{1F4B3} <b>\u041F\u043B\u0430\u0442\u0456\u0436 \u0437\u0430 B2B \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435</b>: ${uah3(t.amount)} \u0432\u0456\u0434 ${h6(t.payer_name || t.payer_code)}
+${why}.
+\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0432\u0440\u0443\u0447\u043D\u0443 \u043D\u0430 \u0457\u0457 \u0441\u0442\u043E\u0440\u0456\u043D\u0446\u0456 \u0430\u0431\u043E \u0432 \xAB\u041F\u043B\u0430\u0442\u0435\u0436\u0430\u0445\xBB.${base ? `
+${link(base, `b2borders/${pool[0].id}`)}` : ""}`);
+      }
+    }
+  }
+  async function payInfo(txIds) {
+    if (!txIds.length) return /* @__PURE__ */ new Map();
+    const rows = await db.all(`SELECT tx_id, order_id, candidates, dismissed FROM b2b_payments WHERE tx_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(txIds)]);
+    return new Map(rows.map((r) => [r.tx_id, {
+      order_id: r.order_id,
+      number: r.order_id ? orderNo(r.order_id) : "",
+      check: !r.order_id && !r.dismissed && r.candidates !== "[]",
+      candidates: JSON.parse(r.candidates || "[]")
+    }]));
+  }
+  async function supplyOf(c) {
+    need(c, "b2b.admin");
+    const o = await db.get(`SELECT o.*, e.code AS entity_code FROM b2b_orders o LEFT JOIN b2b_entities e ON e.id = o.entity_id WHERE o.id = ? AND o.kind = 'supply'`, [c.req.param("id")]);
+    if (!o) throw fail(404, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return o;
+  }
+  app.get("/api/b2b/orders/:id/payments", async (c) => {
+    const o = await supplyOf(c);
+    const linked = await db.all(`SELECT tx_id, amount, date, payer_name, payer_code, purpose, auto FROM b2b_payments WHERE order_id = ? ORDER BY date`, [o.id]);
+    const used = new Set((await db.all(`SELECT tx_id FROM b2b_payments WHERE order_id IS NOT NULL`)).map((r) => r.tx_id));
+    const fromOdb = o.entity_code && services.payments?.txByPayer ? await services.payments.txByPayer(o.entity_code, 120) : [];
+    const checks = await db.all(`SELECT tx_id AS id, amount, date, payer_name, payer_code, purpose FROM b2b_payments
+      WHERE order_id IS NULL AND dismissed = 0 AND EXISTS (SELECT 1 FROM json_each(candidates) j WHERE j.value = ?)`, [o.id]);
+    const seen = /* @__PURE__ */ new Set();
+    const possible = [...checks, ...fromOdb].filter((t) => !used.has(t.id) && !seen.has(t.id) && seen.add(t.id)).map((t) => ({ tx_id: t.id, amount: t.amount, date: t.date, payer_name: t.payer_name, payer_code: t.payer_code, purpose: t.purpose, hint: purposeHasNo(t.purpose, o.invoice_no) })).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 30);
+    return c.json({ linked, possible, due: round2(o.total - o.paid_amount), status: o.status });
+  });
+  app.post("/api/b2b/orders/:id/payments", async (c) => {
+    const o = await supplyOf(c);
+    if (!["pay_wait", "partial", "paid"].includes(o.status) || o.status === "paid" && o.paid_by !== "Opendatabot") {
+      throw fail(400, o.status === "paid" ? "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0432\u0436\u0435 \u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443." : "\u041F\u043B\u0430\u0442\u0456\u0436 \u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0443\u0454\u0442\u044C\u0441\u044F \u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437 \u0440\u0430\u0445\u0443\u043D\u043A\u043E\u043C (\xAB\u041E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443\xBB \u0430\u0431\u043E \xAB\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB).");
+    }
+    const txId = String((await c.req.json()).tx_id || "");
+    const ex = await db.get(`SELECT tx_id, order_id FROM b2b_payments WHERE tx_id = ?`, [txId]);
+    if (ex?.order_id && ex.order_id !== o.id) throw fail(400, `\u0426\u0435\u0439 \u043F\u043B\u0430\u0442\u0456\u0436 \u0443\u0436\u0435 \u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0430\u043D\u043E \u0432 ${orderNo(ex.order_id)} \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0432\u0456\u0434\u0432'\u044F\u0436\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u0442\u0430\u043C.`);
+    if (ex) await db.run(`UPDATE b2b_payments SET order_id = ?, dismissed = 0, auto = 0, created_by = ? WHERE tx_id = ?`, [o.id, userName3(c.get("user")), txId]);
+    else {
+      const [t] = services.payments?.txs ? await services.payments.txs([txId]) : [];
+      if (!t) throw fail(404, "\u041F\u043B\u0430\u0442\u0456\u0436 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (\u0430\u0431\u043E \u0432\u0456\u043D \u0443\u0436\u0435 \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u0438\u0439 \u0434\u043E \u043F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u043D\u0430 \u043E\u043F\u043B\u0430\u0442\u0443).");
+      await db.run(
+        `INSERT INTO b2b_payments (tx_id, order_id, candidates, amount, date, payer_name, payer_code, purpose, auto, created_at, created_by) VALUES (?, ?, '[]', ?, ?, ?, ?, ?, 0, ?, ?)`,
+        [t.id, o.id, t.amount, t.date, t.payer_name, t.payer_code, t.purpose, nowIso(), userName3(c.get("user"))]
+      );
+    }
+    await log(o.id, c.get("user"), "\u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0430\u043D\u043E \u043F\u043B\u0430\u0442\u0456\u0436 \u0432\u0440\u0443\u0447\u043D\u0443");
+    await recalc(o.id, c, c.get("user"));
+    return c.json({ ok: true });
+  });
+  app.delete("/api/b2b/orders/:id/payments/:tx", async (c) => {
+    const o = await supplyOf(c);
+    const r = await db.run(`UPDATE b2b_payments SET order_id = NULL, dismissed = 1 WHERE tx_id = ? AND order_id = ?`, [c.req.param("tx"), o.id]);
+    if (!r.changes) throw fail(404, "\u041F\u043B\u0430\u0442\u0456\u0436 \u043D\u0435 \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u0438\u0439 \u0434\u043E \u0446\u0456\u0454\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456.");
+    await log(o.id, c.get("user"), "\u0432\u0456\u0434\u0432\u2019\u044F\u0437\u0430\u043D\u043E \u043F\u043B\u0430\u0442\u0456\u0436");
+    await recalc(o.id, c, c.get("user"));
+    return c.json({ ok: true });
+  });
+  hooks.payReset = (orderId) => db.run(`UPDATE b2b_payments SET order_id = NULL, dismissed = 1 WHERE order_id = ?`, [orderId]);
+  return { onPayments, payInfo, recalc };
+}
+
 // src/modules/b2b/index.js
 var partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 var BATCH = 50;
@@ -7783,6 +7931,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup, hooks });
   mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks });
   const tgdocs = mountB2bTgDocs(app, { db, services, orders, hooks });
+  const pay = mountB2bPay(app, { db, services, orders, hooks });
   onCleanup(() => hooks.cleanup?.());
   mountB2bStats(app, { db, myPartner });
   mountB2bPrices(app, { db, services, partnerPrice });
@@ -7811,7 +7960,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   };
   const tgGroupMoved = (from, to) => db.run(`UPDATE b2b_partners SET tg_group = ? WHERE tg_group = ?`, [to, from]);
   const tgGroupLeft = (chat) => db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '' WHERE tg_group = ?`, [chat]);
-  return { partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupMessage: tgdocs.tgGroupMessage };
+  return { partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupMessage: tgdocs.tgGroupMessage, onPayments: pay.onPayments, payInfo: pay.payInfo };
 }
 
 // src/modules/payments/index.js
@@ -7887,7 +8036,7 @@ function pickName(x) {
 var BANKS = { 305299: "\u041F\u0440\u0438\u0432\u0430\u0442", 322001: "\u043C\u043E\u043D\u043E", 300465: "\u041E\u0449\u0430\u0434", 300528: "\u041E\u0422\u041F", 380805: "\u0420\u0430\u0439\u0444\u0444\u0430\u0439\u0437\u0435\u043D", 334851: "\u041F\u0423\u041C\u0411", 351005: "\u0423\u043A\u0440\u0421\u0438\u0431\u0431\u0430\u043D\u043A", 320478: "\u0423\u043A\u0440\u0433\u0430\u0437\u0431\u0430\u043D\u043A", 322313: "\u0423\u043A\u0440\u0435\u043A\u0441\u0456\u043C\u0431\u0430\u043D\u043A", 380775: "\u041A\u0440\u0435\u0434\u0456 \u0410\u0433\u0440\u0456\u043A\u043E\u043B\u044C", 339500: "\u0413\u043B\u043E\u0431\u0443\u0441", 325365: "\u041A\u0440\u0435\u0434\u043E\u0431\u0430\u043D\u043A", 336503: "\u0406\u0434\u0435\u044F \u0411\u0430\u043D\u043A", 320649: "Sense", 380838: "\u041F\u0456\u0432\u0434\u0435\u043D\u043D\u0438\u0439", 313849: "\u0422\u0430\u0441\u043A\u043E\u043C\u0431\u0430\u043D\u043A" };
 var bankOf = (iban) => BANKS[String(iban || "").replace(/\s/g, "").slice(4, 10)] || "";
 var ACC = `COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, ''), a.iban)`;
-function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 }) {
+function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, notify = async () => 0, onTx = async () => 0 }) {
   const settings = () => loadSettings(db);
   const putSetting2 = (key, value) => putSetting(db, key, value);
   async function creds() {
@@ -8237,6 +8386,7 @@ function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 })
     const paid = await relink({ txIds: changedIds });
     await putSetting2("odb_hook_at", nowIso());
     await notify({ linkIds: paid, freshRows }).catch(() => 0);
+    await onTx(freshRows.map((r) => r.id), new URL(c.req.url).origin).catch(() => 0);
     return c.json({ ok: true, fresh, paid: paid.length });
   });
   const PAGE2 = 100;
@@ -8303,6 +8453,7 @@ function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 })
     }
     const paid = await relink({ txIds: changedIds, linkIds });
     await notify({ linkIds: paid, freshRows: hist.done ? newRows : [] }).catch(() => 0);
+    if (hist.done && newRows.length) await onTx(newRows.map((r) => r.id), new URL(c.req.url).origin).catch(() => 0);
     const me = c.get("user");
     const minePaid = paid.length ? await db.all(`SELECT id, number, amount, client FROM pay_links WHERE created_by_id = ? AND id IN (SELECT value FROM json_each(?))`, [me.id, JSON.stringify(paid)]) : [];
     return c.json({ ok: true, added, paid: paid.length, minePaid, hist, lastSync: nowIso() });
@@ -8346,6 +8497,10 @@ function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 })
       db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN t.currency = 'UAH' THEN t.amount END), 0) AS sum FROM odb_tx t LEFT JOIN pay_links l ON l.id = t.link_id ${w}`, params),
       db.all(`SELECT id, ${ACC} AS alias, kind FROM odb_accounts a ORDER BY seen, sort, alias`)
     ]);
+    if (can(c.get("user"), "b2b.admin") && services.b2b?.payInfo) {
+      const info = await services.b2b.payInfo(rows.filter((r) => !r.link_id).map((r) => r.id));
+      for (const r of rows) if (info.has(r.id)) r.b2b = info.get(r.id);
+    }
     const s = await settings();
     let hist = {};
     try {
@@ -8460,7 +8615,13 @@ function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 })
     else await db.run(`INSERT INTO odb_payers (code, name) VALUES (?, ?) ON CONFLICT(code) DO UPDATE SET name = excluded.name`, [code, name]);
     return c.json({ ok: true });
   });
-  return { linkForRahunok };
+  const TX_COLS = `id, date, amount, currency, purpose, payer_name, payer_code`;
+  const txs = (ids) => db.all(`SELECT ${TX_COLS} FROM odb_tx WHERE id IN (SELECT value FROM json_each(?)) AND +link_id IS NULL`, [JSON.stringify(ids)]);
+  const txByPayer = (code, days = 120) => db.all(
+    `SELECT ${TX_COLS} FROM odb_tx WHERE payer_code = ? AND link_id IS NULL AND currency = 'UAH' AND date >= ? ORDER BY date DESC LIMIT 50`,
+    [code, new Date(Date.now() - days * 864e5).toISOString().slice(0, 10)]
+  );
+  return { linkForRahunok, txs, txByPayer };
 }
 
 // src/app.js
@@ -8509,7 +8670,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   mountRahunky(app, ctx);
   mountAnalytics(app, ctx);
   services.notify = mountTg(app, ctx);
-  services.payments = mountOdb(app, { ...ctx, base: odbBase, notify: (...a) => services.notify.notify(...a) });
+  services.payments = mountOdb(app, { ...ctx, base: odbBase, notify: (...a) => services.notify.notify(...a), onTx: (ids, origin) => services.b2b?.onPayments?.(ids, origin) });
   return app;
 }
 
@@ -8861,7 +9022,7 @@ var schema6 = {
 // src/modules/payments/schema.js
 var schema7 = {
   name: "payments",
-  version: 2,
+  version: 3,
   tables: [
     `CREATE TABLE IF NOT EXISTS odb_accounts (
     id TEXT PRIMARY KEY,
@@ -8934,6 +9095,8 @@ var schema7 = {
   async seed(db) {
     await db.batch([
       [`UPDATE odb_tx SET possible = '[]' WHERE possible LIKE '%object Object%'`, []],
+      [`CREATE INDEX IF NOT EXISTS odb_tx_payer ON odb_tx (payer_code, date)`, []],
+      // оплати закупівель B2B за кодом платника
       [`INSERT OR IGNORE INTO odb_tx_possible (tx_id, odb_id)
         SELECT t.id, j.value FROM odb_tx t, json_each(t.possible) j WHERE t.possible != '[]' AND typeof(j.value) = 'text' AND j.value != ''`, []]
     ]);
@@ -9253,7 +9416,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 10,
+  version: 11,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -9407,7 +9570,24 @@ var schema11 = {
     n INTEGER NOT NULL,
     data TEXT NOT NULL,
     PRIMARY KEY (file_id, n)
-  )`
+  )`,
+    // Платежі Opendatabot за закупівлі: order_id — куди зараховано (порожньо — треба перевірити, candidates — можливі
+    // закупівлі); dismissed — адмін відв'язав (Opendatabot помилився), більше не пропонується автоматично.
+    `CREATE TABLE IF NOT EXISTS b2b_payments (
+    tx_id TEXT PRIMARY KEY,
+    order_id INTEGER,
+    candidates TEXT NOT NULL DEFAULT '[]',
+    dismissed INTEGER NOT NULL DEFAULT 0,
+    amount REAL NOT NULL,
+    date TEXT DEFAULT '',
+    payer_name TEXT DEFAULT '',
+    payer_code TEXT DEFAULT '',
+    purpose TEXT DEFAULT '',
+    auto INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    created_by TEXT DEFAULT ''
+  )`,
+    `CREATE INDEX IF NOT EXISTS b2b_payments_order ON b2b_payments (order_id)`
   ],
   // ---------- етап 3: замовлення для клієнтів партнера ----------
   // supply_id — закупівля, з якої взято товари (порожньо — «без закупівлі»); дані клієнта й ТТН партнера;
