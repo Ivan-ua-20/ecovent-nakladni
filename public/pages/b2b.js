@@ -87,6 +87,14 @@ export function createB2bPages(ctx = {}) {
               : '<div class="small muted">Ще немає. Додайте логін і пароль — передайте їх партнеру; увійти він зможе на цьому ж сайті.</div>'}
           </div>
           <div class="card form-stack">
+            <h3>Telegram-група</h3>
+            ${p.tg_group ? `<div>✅ Прив'язано: <b>${esc(p.tg_group_title || p.tg_group)}</b></div>
+              <div class="small muted">Сюди бот надсилає закупівлі й замовлення клієнтів (на кого рахунок і накладна, товари, ціни), рахунки й накладні файлами, оплату.</div>
+              <div class="btn-row"><button class="btn sm" id="tgGrp">Прив'язати іншу групу</button><button class="btn sm danger" id="tgUnlink">Відв'язати</button></div>`
+              : `<div class="small muted">Прив'яжіть групу з партнером — бот дублюватиме туди закупівлі, рахунки й накладні (файлами) та оплату.</div>
+              <div class="btn-row"><button class="btn sm primary" id="tgGrp">Прив'язати групу</button></div>`}
+          </div>
+          <div class="card form-stack">
             <h3>Юрособи партнера</h3>
             ${entities.length ? entities.map((e) => `<div class="small"><b>${esc(e.name)}</b> · ${e.code.length === 8 ? 'ЄДРПОУ' : 'ІПН'} ${esc(e.code)}${e.vat ? ' · ПДВ' : ''}${e.active ? '' : ' <span class="badge">прихована</span>'}</div>`).join('')
               : '<div class="small muted">Партнер ще не додав юросіб (додає сам у своєму кабінеті).</div>'}
@@ -95,6 +103,23 @@ export function createB2bPages(ctx = {}) {
         </div>
       </div>`;
     $('#pEdit').onclick = () => partnerForm(p);
+    $('#tgGrp').onclick = async () => {
+      try {
+        const { code, bot } = await api('POST', `/api/b2b/partners/${p.id}/tg-group`);
+        const m = modal('Прив’язати Telegram-групу', `<ol class="form-stack" style="padding-left:18px;margin:0">
+            <li>Відкрийте групу з партнером у Telegram → «Додати учасників» → знайдіть <b>@${esc(bot)}</b> і додайте.</li>
+            <li>Надішліть у групі повідомлення (натисніть, щоб скопіювати):<br><code id="tgCmd" style="font-size:16px;cursor:pointer">/link ${esc(code)}</code></li>
+            <li>Бот відповість «Групу прив’язано» — натисніть «Перевірити».</li></ol>
+          <div class="small muted" style="margin-top:8px">Код діє 30 хвилин. Інші повідомлення в групі бот не читає.</div>`,
+        { footer: '<button class="btn" data-close>Закрити</button><button class="btn primary" id="tgCheck">Перевірити</button>' });
+        $('#tgCheck', m.el).onclick = () => { m.close(); viewPartner(p.id); };
+        $('#tgCmd').onclick = async () => { try { await navigator.clipboard.writeText(`/link ${code}`); toast('Скопійовано'); } catch { /* */ } };
+      } catch (e) { toast(e.message, true); }
+    };
+    $('#tgUnlink') && ($('#tgUnlink').onclick = async () => {
+      if (!(await confirmDanger('Відв’язати Telegram-групу?', 'Бот перестане надсилати туди повідомлення й файли.', 'Відв’язати'))) return;
+      try { await api('DELETE', `/api/b2b/partners/${p.id}/tg-group`); toast('Відв’язано'); viewPartner(p.id); } catch (e) { toast(e.message, true); }
+    });
     $('[data-pord]').onclick = () => { ordFilter = { status: '', partner: String(p.id) }; };
     $$('[data-be]').forEach((cb) => (cb.onchange = () => {
       const inp = $(`[data-bm="${cb.dataset.be}"]`);
@@ -232,7 +257,7 @@ export function createB2bPages(ctx = {}) {
     const { order: o, items, files, history, partner, clients = [] } = d;
     const closed = o.status === 'cancelled';
     main.innerHTML = `
-      <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)}</h2><a class="btn" href="#/b2borders">← До списку</a></div>
+      <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2borders">← До списку</a><button class="btn danger" id="oDel">Видалити</button></div></div>
       <div class="form-page">
         <div class="form-stack">
           <div class="card">${itemsTable(items, { rrp: true })}</div>
@@ -287,8 +312,12 @@ export function createB2bPages(ctx = {}) {
     $$('[data-up]').forEach((inp) => (inp.onchange = async () => {
       const file = inp.files[0];
       if (!file) return;
-      try { await uploadFile(`/api/b2b/orders/${o.id}/files?kind=${inp.dataset.up}`, file); toast('Файл додано'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
+      try { const r = await uploadFile(`/api/b2b/orders/${o.id}/files?kind=${inp.dataset.up}`, file); toast(r.toGroup ? 'Файл додано й надіслано в Telegram-групу партнера' : 'Файл додано'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
     }));
+    $('#oDel').onclick = async () => {
+      if (!(await confirmDanger(`Видалити закупівлю ${o.number}?`, 'Закупівля, її товари, історія і файли видаляться назавжди (для тестових замовлень). Партнер її більше не побачить.', 'Видалити закупівлю'))) return;
+      try { await api('DELETE', `/api/b2b/orders/${o.id}`); toast('Закупівлю видалено'); location.hash = '#/b2borders'; } catch (er) { toast(er.message, true); }
+    };
     $$('[data-fdel]').forEach((b) => (b.onclick = async () => {
       if (!(await confirmDanger('Видалити файл?', 'Партнер більше не зможе його завантажити.', 'Видалити'))) return;
       try { await api('DELETE', `/api/b2b/files/${b.dataset.fdel}`); toast('Видалено'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
@@ -363,7 +392,7 @@ export function createB2bPages(ctx = {}) {
     if (o.kind !== 'client') { location.hash = `#/b2borders/${id}`; return; }
     const closed = o.status === 'cancelled';
     main.innerHTML = `
-      <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)} ${payBadge(o)}</h2><a class="btn" href="#/b2bclients">← До списку</a></div>
+      <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)} ${payBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2bclients">← До списку</a><button class="btn danger" id="clDel">Видалити</button></div></div>
       ${o.no_supply && !closed ? '<div class="alert bad" style="margin-bottom:12px"><b>Без закупівлі.</b> Товари не з закупівлі партнера — виставте рахунок/накладну нижче і позначте оплату.</div>' : ''}
       ${!o.no_supply && o.pay !== 'paid' && !closed ? `<div class="alert warn" style="margin-bottom:12px">Закупівля <a href="#/b2borders/${o.supply_id}">${esc(o.supply_number)}</a> ще не оплачена.</div>` : ''}
       <div class="form-page">
@@ -428,12 +457,16 @@ export function createB2bPages(ctx = {}) {
     $$('[data-up]').forEach((inp) => (inp.onchange = async () => {
       const file = inp.files[0];
       if (!file) return;
-      try { await uploadFile(`/api/b2b/orders/${o.id}/files?kind=${inp.dataset.up}`, file); toast('Файл додано'); re(); } catch (er) { toast(er.message, true); }
+      try { const r = await uploadFile(`/api/b2b/orders/${o.id}/files?kind=${inp.dataset.up}`, file); toast(r.toGroup ? 'Файл додано й надіслано в Telegram-групу партнера' : 'Файл додано'); re(); } catch (er) { toast(er.message, true); }
     }));
     $$('[data-fdel]').forEach((b) => (b.onclick = async () => {
       if (!(await confirmDanger('Видалити файл?', 'Партнер більше не зможе його завантажити.', 'Видалити'))) return;
       try { await api('DELETE', `/api/b2b/files/${b.dataset.fdel}`); toast('Видалено'); re(); } catch (er) { toast(er.message, true); }
     }));
+    $('#clDel').onclick = async () => {
+      if (!(await confirmDanger(`Видалити замовлення ${o.number}?`, `Замовлення, його товари, історія і файли видаляться назавжди; товар повернеться в залишок закупівлі.${o.crm_id ? ` Замовлення № ${o.crm_id} у LP-CRM видаліть вручну.` : ''}`, 'Видалити замовлення'))) return;
+      try { await api('DELETE', `/api/b2b/orders/${o.id}`); toast('Замовлення видалено'); location.hash = '#/b2bclients'; } catch (er) { toast(er.message, true); }
+    };
     $('#clCancel') && ($('#clCancel').onclick = async () => {
       if (!(await confirmDanger(`Скасувати ${o.number}?`, o.crm_id ? `Замовлення № ${o.crm_id} у LP-CRM скасуйте вручну.` : 'Партнер отримає сповіщення.', 'Скасувати замовлення'))) return;
       try { await api('POST', `/api/b2b/clients/${o.id}/cancel`); toast('Скасовано'); re(); } catch (er) { toast(er.message, true); }

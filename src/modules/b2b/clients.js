@@ -21,7 +21,7 @@ const TTN_FIELDS = ['', 'additional_2', 'additional_3', 'additional_4', 'deliver
 const newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(10000 + Math.random() * 90000))}`;
 
 export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
-  const { priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, link, uah, h } = orders;
+  const { priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h } = orders;
   const userName = (u) => u?.name || u?.login || '';
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files
     FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id`;
@@ -181,10 +181,14 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
       REMOTE_ADDR: ip, HTTP_USER_AGENT: 'Ecovent B2B', REQUEST_SCHEME: 'https', HTTPS: 'on',
     }));
   }
-  const tgNew = (c, p, id, f, it, verb = 'Нове замовлення клієнта') => tgAdmins(
-    `📦 <b>${verb} ${orderNo(id)}</b> від «${h(p.name)}»\n${h(f.client_name)} · ${it.items.length} поз. · <b>${uah(it.total)}</b>\n`
-    + `${it.supplyId ? `Із закупівлі ${orderNo(it.supplyId)}` : '🔴 <b>Без закупівлі</b>'}${f.ttn ? ` · ТТН ${h(f.ttn)}` : ''}\n${link(c, `b2bclients/${id}`)}`,
-  );
+  const tgNew = async (c, p, id, f, it, verb = 'Нове замовлення клієнта') => {
+    const lines = it.items.slice(0, 60).map((i) => `${h(i.name)} — ${i.qty} шт — ${uah(i.price)}`).join('\n');
+    const text = `📦 <b>${verb} ${orderNo(id)}</b> від «${h(p.name)}»\n\n<b>Клієнт:</b> ${h(f.client_name)}, ${h(f.client_phone)}${f.ttn ? `\n<b>ТТН:</b> ${h(f.ttn)}` : ''}\n`
+      + `${it.supplyId ? `Із закупівлі ${orderNo(it.supplyId)}` : '🔴 <b>Без закупівлі</b>'}\n\n<b>Товари:</b>\n${lines}\n\n<b>Разом: ${uah(it.total)}</b>`;
+    await tgAdmins(`${text}\n\n${link(c, `b2bclients/${id}`)}`);
+    await tgGroup(p.id, text);
+  };
+
 
   // ================================================================ ПАРТНЕР
   // Закупівлі, з яких можна оформити замовлення клієнта: не скасовані, із залишком (за останні 180 днів).
@@ -279,7 +283,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     const o = await myClientOrder(c, p);
     if (o.status !== 'new') throw fail(400, 'Замовлення вже в роботі — новий файл маркування надішліть менеджеру.');
     if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_files WHERE order_id = ?`, [o.id])).n >= 10) throw fail(400, 'Не більше 10 файлів у замовленні.');
-    return c.json({ id: await saveFile(c, o, 'label') });
+    return c.json({ id: (await saveFile(c, o, 'label')).id });
   });
   app.delete('/api/b2b/p/clients/:id/files/:fid', async (c) => {
     const p = await myPartner(c);
