@@ -146,6 +146,7 @@ const chk = await req('POST', `/api/b2b/orders/${s1}/check-pay`);
 await req('POST', `/api/b2b/orders/${s1}/payments`, { tx_id: txD });
 o = await order(s1);
 assert.deepEqual([o.status, o.paid_amount, o.paid_by], ['partial', 9000, 'Opendatabot']);
+await req('POST', `/api/b2b/orders/${s1}/status`, { status: 'paid' }); // залишок отримано іншим способом
 
 // ---------- 5. Кілька закупівель з однаковим залишком без № → «перевірити» з кандидатами ----------
 const s3 = await supply([{ product_id: 12, qty: 1 }], 'СФ-103');
