@@ -7126,6 +7126,11 @@ ${[...checks, ...itemLines.slice(0, 20), ...more].join("\n")}${!kind ? "\n\n<b>\
       }
       await saveDoc(d, { state: "saved", saved_at: nowIso(), file_row: f.id, prev: JSON.stringify(prev), group_msg: group ? JSON.stringify(group) : "" });
       if (d.source === "fin" && d.kind === "invoice" && d.reply_to) await db.run(`UPDATE b2b_orders SET fin_inv_msg = ? WHERE id = ?`, [d.reply_to, o.id]);
+      if (d.source === "fin") {
+        if (d.reply_to) await tgApi("setMessageReaction", { chat_id: d.chat_id, message_id: d.reply_to, reaction: [{ type: "emoji", emoji: "\u{1F44C}" }] }).catch(() => 0);
+        if (d.msg_id) await tgApi("deleteMessage", { chat_id: d.chat_id, message_id: d.msg_id }).catch(() => 0);
+        return "\u0417\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u043E";
+      }
       const url = `${base}/#/${o.kind === "client" ? "b2bclients" : "b2borders"}/${o.id}`;
       const done = {
         chat_id: d.chat_id,
@@ -7248,21 +7253,39 @@ ${h5(firstLine(o.entity))} \xB7 ${m22(o.total)} \u0433\u0440\u043D`
     const o = await orderFull(orderId);
     if (!chat || !o) return;
     if (o.fin_req_msg && o.invoice_no) {
-      await tgApi("editMessageText", {
-        chat_id: chat,
-        message_id: o.fin_req_msg,
-        parse_mode: "HTML",
-        text: `\u2705 <b>\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h5(o.invoice_no)} \xB7 ${orderNo(o.id)}</b> \u2014 \u0434\u043E\u0434\u0430\u043D\u043E
+      if (await tgApi("deleteMessage", { chat_id: chat, message_id: o.fin_req_msg }).catch(() => null)) await db.run(`UPDATE b2b_orders SET fin_req_msg = NULL WHERE id = ?`, [o.id]);
+      else {
+        await tgApi("editMessageText", {
+          chat_id: chat,
+          message_id: o.fin_req_msg,
+          parse_mode: "HTML",
+          text: `\u2705 <b>\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h5(o.invoice_no)} \xB7 ${orderNo(o.id)}</b> \u2014 \u0434\u043E\u0434\u0430\u043D\u043E
 \xAB${h5(o.partner)}\xBB \xB7 ${h5(firstLine(o.entity))} \xB7 ${m22(o.total)} \u0433\u0440\u043D`
-      }).catch(() => 0);
+        }).catch(() => 0);
+      }
     }
     if (o.fin_pay_msg && o.waybill_no) {
-      await tgApi("editMessageText", {
-        chat_id: chat,
-        message_id: o.fin_pay_msg,
-        parse_mode: "HTML",
-        text: `\u2705 <b>\u041D\u0430\u043A\u043B\u0430\u0434\u043D\u0430 \u2116 ${h5(o.waybill_no)} \xB7 ${orderNo(o.id)}</b> \u2014 \u0434\u043E\u0434\u0430\u043D\u043E (\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h5(o.invoice_no)}, ${m22(o.total)} \u0433\u0440\u043D)`
-      }).catch(() => 0);
+      if (await tgApi("deleteMessage", { chat_id: chat, message_id: o.fin_pay_msg }).catch(() => null)) await db.run(`UPDATE b2b_orders SET fin_pay_msg = NULL WHERE id = ?`, [o.id]);
+      else {
+        await tgApi("editMessageText", {
+          chat_id: chat,
+          message_id: o.fin_pay_msg,
+          parse_mode: "HTML",
+          text: `\u2705 <b>\u041D\u0430\u043A\u043B\u0430\u0434\u043D\u0430 \u2116 ${h5(o.waybill_no)} \xB7 ${orderNo(o.id)}</b> \u2014 \u0434\u043E\u0434\u0430\u043D\u043E (\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h5(o.invoice_no)}, ${m22(o.total)} \u0433\u0440\u043D)`
+        }).catch(() => 0);
+      }
+    }
+    if (o.kind === "supply" && o.invoice_no && o.waybill_no && !o.fin_done) {
+      const claim = await db.run(`UPDATE b2b_orders SET fin_done = 1 WHERE id = ? AND COALESCE(fin_done, 0) = 0`, [o.id]);
+      if (claim.changes) {
+        await tgApi("sendMessage", {
+          chat_id: chat,
+          parse_mode: "HTML",
+          text: `\u2705 <b>\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)} \u0437\u0430\u043A\u0440\u0438\u0442\u043E</b> \u2014 \xAB${h5(o.partner)}\xBB
+${h5(firstLine(o.entity))}
+\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h5(o.invoice_no)} \xB7 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0430 \u2116 ${h5(o.waybill_no)} \xB7 ${m22(o.total)} \u0433\u0440\u043D`
+        }).catch(() => 0);
+      }
     }
   }
   async function finPaid(orderId) {
@@ -9461,7 +9484,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 11,
+  version: 12,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -9662,6 +9685,8 @@ var schema11 = {
     ["b2b_orders", "fin_req_msg", "INTEGER"],
     ["b2b_orders", "fin_inv_msg", "INTEGER"],
     ["b2b_orders", "fin_pay_msg", "INTEGER"],
+    ["b2b_orders", "fin_done", "INTEGER DEFAULT 0"],
+    // підсумок «закупівлю закрито» вже надіслано
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ["b2b_tg_docs", "source", "TEXT DEFAULT 'private'"],
     ["b2b_tg_docs", "reply_to", "INTEGER"],
