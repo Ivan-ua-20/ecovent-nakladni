@@ -19,10 +19,10 @@ export function purposeHasNo(purpose, invoiceNo) {
 export function mountB2bPay(app, { db, services, orders, hooks }) {
   const { log, tgAdmins, tgPartner, link, uah, h } = orders;
 
-  // Кандидати: закупівлі, що чекають оплату, юрособи з кодом платника.
-  const candidatesFor = (code) => db.all(
-    `SELECT o.id, o.partner_id, o.total, o.paid_amount, o.invoice_no, o.status FROM b2b_orders o JOIN b2b_entities e ON e.id = o.entity_id
-     WHERE o.kind = 'supply' AND o.status IN ('pay_wait', 'partial') AND e.code = ? ORDER BY o.id`, [code],
+  // Кандидати: закупівлі, що чекають оплату, юрособ з кодами платників (одним запитом на всі платежі).
+  const candidatesFor = (codes) => db.all(
+    `SELECT o.id, o.partner_id, o.total, o.paid_amount, o.invoice_no, o.status, e.code FROM b2b_orders o JOIN b2b_entities e ON e.id = o.entity_id
+     WHERE o.kind = 'supply' AND o.status IN ('pay_wait', 'partial') AND e.code IN (SELECT value FROM json_each(?)) ORDER BY o.id`, [JSON.stringify(codes)],
   );
   const due = (o) => round2(o.total - o.paid_amount);
 
@@ -57,13 +57,16 @@ export function mountB2bPay(app, { db, services, orders, hooks }) {
   // Нові платежі з Opendatabot (ids — лише ті, що не прив'язані до наших посилань на оплату).
   async function onPayments(ids, base = '') {
     if (!ids?.length || !services.payments?.txs) return;
-    const txs = (await services.payments.txs(ids)).filter((t) => t.currency === 'UAH' && t.amount > 0 && t.payer_code);
+    let txs = (await services.payments.txs(ids)).filter((t) => t.currency === 'UAH' && t.amount > 0 && t.payer_code);
     if (!txs.length) return;
+    const all = await candidatesFor([...new Set(txs.map((t) => t.payer_code))]);
+    if (!all.length) return; // жоден платіж не від юрособи з неоплаченою закупівлею
+    txs = txs.filter((t) => all.some((o) => o.code === t.payer_code)).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 10);
     const known = new Set((await db.all(`SELECT tx_id FROM b2b_payments WHERE tx_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(txs.map((t) => t.id))])).map((r) => r.tx_id));
     for (const t of txs) {
       if (known.has(t.id)) continue;
-      const cands = await candidatesFor(t.payer_code);
-      if (!cands.length) continue; // не платіж за закупівлю
+      const cands = all.filter((o) => o.code === t.payer_code && o.total - o.paid_amount > 0.004);
+      if (!cands.length) continue;
       const byNo = cands.filter((o) => purposeHasNo(t.purpose, o.invoice_no));
       let pool = byNo.length ? byNo : cands;
       if (pool.length > 1) {
@@ -75,7 +78,7 @@ export function mountB2bPay(app, { db, services, orders, hooks }) {
         `INSERT OR IGNORE INTO b2b_payments (tx_id, order_id, candidates, amount, date, payer_name, payer_code, purpose, auto, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
         [t.id, hit?.id ?? null, JSON.stringify(hit ? [] : pool.map((o) => o.id)), t.amount, t.date, t.payer_name, t.payer_code, t.purpose, nowIso()],
       );
-      if (hit) await recalc(hit.id, base);
+      if (hit) { hit.paid_amount = round2(hit.paid_amount + t.amount); await recalc(hit.id, base); }
       else {
         const why = pool.length > 1 ? `підходить кілька закупівель: ${pool.map((o) => `${orderNo(o.id)} (залишок ${uah(due(o))})`).join(', ')}`
           : `сума більша за залишок ${uah(due(pool[0]))} закупівлі ${orderNo(pool[0].id)}`;
