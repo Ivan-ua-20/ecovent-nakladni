@@ -4983,8 +4983,9 @@ function kyivOffsetMin(ms) {
   return Math.round((Date.parse(`${s}Z`) - ms) / 6e4);
 }
 function kyivDayStartIso(day) {
-  const noon = Date.parse(`${day}T12:00:00Z`);
-  return new Date(Date.parse(`${day}T00:00:00Z`) - kyivOffsetMin(noon) * 6e4).toISOString();
+  const utc0 = Date.parse(`${day}T00:00:00Z`);
+  const guess = utc0 - kyivOffsetMin(utc0) * 6e4;
+  return new Date(utc0 - kyivOffsetMin(guess) * 6e4).toISOString();
 }
 var nextDay = (day) => new Date(Date.parse(`${day}T12:00:00Z`) + 864e5).toISOString().slice(0, 10);
 var kyivDayOf = (iso) => new Date(iso).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
@@ -7205,15 +7206,12 @@ ${[...checks, ...itemLines.slice(0, 20), ...more].join("\n")}${!kind ? "\n\n<b>\
   const finChat = async () => (await db.get(`SELECT value FROM settings WHERE key = 'b2b_fin_chat'`))?.value || "";
   const orderFull = (id) => db.get(`SELECT o.*, p.name AS partner FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id WHERE o.id = ?`, [id]);
   const firstLine = (e) => String(e || "").split("\n")[0];
-  async function finRequest(orderId, mode = "") {
-    const chat = await finChat();
-    if (!chat) return;
-    const o = await orderFull(orderId);
-    if (!o || o.kind !== "supply" || o.status !== "invoice_wait") return;
+  async function reqText(o, { mode = "", done = false } = {}) {
     const items = await db.all(`SELECT name, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
     const lines = items.slice(0, 50).map((i) => `${h5(i.name)} \u2014 ${i.qty} \u0448\u0442 \u2014 ${m22(i.price)}`);
     if (items.length > 50) lines.push(`\u2026\u0456 \u0449\u0435 ${items.length - 50} \u043F\u043E\u0437.`);
-    const text = `\u{1F9FE} <b>\u041F\u043E\u0442\u0440\u0456\u0431\u0435\u043D \u0440\u0430\u0445\u0443\u043D\u043E\u043A \xB7 ${orderNo(o.id)}</b>${mode === "changed" ? " <i>(\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u043C\u0456\u043D\u0435\u043D\u043E)</i>" : ""}
+    const head = done ? `\u{1F9FE} <b>\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}</b> \xB7 \u2705 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h5(o.invoice_no)} \u0434\u043E\u0434\u0430\u043D\u043E` : `\u{1F9FE} <b>\u041F\u043E\u0442\u0440\u0456\u0431\u0435\u043D \u0440\u0430\u0445\u0443\u043D\u043E\u043A \xB7 ${orderNo(o.id)}</b>${mode === "changed" ? " <i>(\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u043C\u0456\u043D\u0435\u043D\u043E)</i>" : ""}`;
+    return `${head}
 \u041F\u0430\u0440\u0442\u043D\u0435\u0440: \xAB${h5(o.partner)}\xBB
 
 <b>\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430:</b>
@@ -7223,9 +7221,14 @@ ${h5(o.entity)}
 ${lines.join("\n")}
 
 <b>\u0420\u0430\u0437\u043E\u043C: ${m22(o.total)} \u0433\u0440\u043D</b> (\u0437 \u041F\u0414\u0412)${o.comment ? `
-<i>\u041A\u043E\u043C\u0435\u043D\u0442\u0430\u0440: ${h5(String(o.comment).slice(0, 200))}</i>` : ""}
-
-\u21A9\uFE0F \u041D\u0430\u0434\u0456\u0448\u043B\u0456\u0442\u044C \u0440\u0430\u0445\u0443\u043D\u043E\u043A <b>\u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0434\u044E \u043D\u0430 \u0446\u0435 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F</b>`;
+<i>\u041A\u043E\u043C\u0435\u043D\u0442\u0430\u0440: ${h5(String(o.comment).slice(0, 200))}</i>` : ""}${done ? "" : "\n\n\u21A9\uFE0F \u041D\u0430\u0434\u0456\u0448\u043B\u0456\u0442\u044C \u0440\u0430\u0445\u0443\u043D\u043E\u043A <b>\u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0434\u044E \u043D\u0430 \u0446\u0435 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F</b>"}`;
+  }
+  async function finRequest(orderId, mode = "") {
+    const chat = await finChat();
+    if (!chat) return;
+    const o = await orderFull(orderId);
+    if (!o || o.kind !== "supply" || o.status !== "invoice_wait") return;
+    const text = await reqText(o, { mode });
     if (o.fin_req_msg) {
       const ok = await tgApi("editMessageText", { chat_id: chat, message_id: o.fin_req_msg, text, parse_mode: "HTML" }).catch(() => null);
       if (ok) {
@@ -7253,16 +7256,7 @@ ${h5(firstLine(o.entity))} \xB7 ${m22(o.total)} \u0433\u0440\u043D`
     const o = await orderFull(orderId);
     if (!chat || !o) return;
     if (o.fin_req_msg && o.invoice_no) {
-      if (await tgApi("deleteMessage", { chat_id: chat, message_id: o.fin_req_msg }).catch(() => null)) await db.run(`UPDATE b2b_orders SET fin_req_msg = NULL WHERE id = ?`, [o.id]);
-      else {
-        await tgApi("editMessageText", {
-          chat_id: chat,
-          message_id: o.fin_req_msg,
-          parse_mode: "HTML",
-          text: `\u2705 <b>\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h5(o.invoice_no)} \xB7 ${orderNo(o.id)}</b> \u2014 \u0434\u043E\u0434\u0430\u043D\u043E
-\xAB${h5(o.partner)}\xBB \xB7 ${h5(firstLine(o.entity))} \xB7 ${m22(o.total)} \u0433\u0440\u043D`
-        }).catch(() => 0);
-      }
+      await tgApi("editMessageText", { chat_id: chat, message_id: o.fin_req_msg, parse_mode: "HTML", text: await reqText(o, { done: true }) }).catch(() => 0);
     }
     if (o.fin_pay_msg && o.waybill_no) {
       if (await tgApi("deleteMessage", { chat_id: chat, message_id: o.fin_pay_msg }).catch(() => null)) await db.run(`UPDATE b2b_orders SET fin_pay_msg = NULL WHERE id = ?`, [o.id]);
