@@ -49,7 +49,7 @@ function toB64(bytes) {
 const fromB64 = (s) => Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0));
 const userName = (u) => u?.name || u?.login || '';
 
-export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup }) {
+export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup, hooks = {} }) {
   // Файли старші за 30 днів видаляються (номери рахунків і накладних у замовленні лишаються).
   onCleanup(async () => {
     const border = new Date(Date.now() - KEEP_FILES_DAYS * 86400000).toISOString();
@@ -78,7 +78,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       + `<b>Товари:</b>\n${lines.join('\n')}\n\n<b>Разом: ${uah(o.total)}</b> (з ПДВ)`
       + `${o.comment ? `\n\n<i>Коментар: ${h(String(o.comment).slice(0, 300))}</i>` : ''}`;
   };
-  const link = (c, hash) => `${new URL(c.req.url).origin}/#/${hash}`;
+  const link = (c, hash) => `${typeof c === 'string' ? c : new URL(c.req.url).origin}/#/${hash}`;
 
   // ================================================================ ЮРОСОБИ ПАРТНЕРА
   function entityFields(b) {
@@ -317,6 +317,12 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const o = await orderOf(c.req.param('id'));
     if (o.status === 'cancelled') throw fail(400, 'Замовлення скасовано.');
     const b = await c.req.json();
+    const status = await applyNumbers(o, b, c.get('user'), c);
+    return c.json({ ok: true, status });
+  });
+
+  // № і дата рахунку, № накладної (з сайту або з Telegram-бота): статус закупівлі, історія, сповіщення партнеру.
+  async function applyNumbers(o, b, user, c, how = '') {
     const next = {
       invoice_no: b.invoice_no !== undefined ? String(b.invoice_no).trim().slice(0, 40) : o.invoice_no,
       invoice_date: b.invoice_date !== undefined ? String(b.invoice_date).trim().slice(0, 10) : o.invoice_date,
@@ -331,12 +337,12 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const changes = [];
     if (next.invoice_no !== o.invoice_no) changes.push(`рахунок № ${next.invoice_no || '—'}${next.invoice_date ? ` від ${next.invoice_date}` : ''}`);
     if (next.waybill_no !== o.waybill_no) changes.push(`накладна № ${next.waybill_no || '—'}`);
-    if (changes.length) await log(o.id, c.get('user'), changes.join('; '));
+    if (changes.length) await log(o.id, user, `${changes.join('; ')}${how}`);
     if (next.invoice_no && next.invoice_no !== o.invoice_no) {
       await tgPartner(o.partner_id, `🧾 <b>Рахунок № ${h(next.invoice_no)}</b> на ${o.kind === 'client' ? 'замовлення' : 'закупівлю'} ${orderNo(o.id)} — <b>${uah(o.total)}</b>\nОчікує оплату. Файл рахунку — у кабінеті партнера.\n${link(c, `${o.kind === 'client' ? 'pclients' : 'porders'}/${o.id}`)}`);
     }
-    return c.json({ ok: true, status });
-  });
+    return status;
+  }
 
   // Ручна зміна статусу: «Оплачено» (якщо Opendatabot не побачив оплату), «Завершено», «Скасовано», повернути «Очікує оплату».
   app.post('/api/b2b/orders/:id/status', async (c) => {
@@ -368,6 +374,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const o = await orderOf(c.req.param('id'));
     const kind = FILE_KIND[c.req.query('kind')] ? c.req.query('kind') : 'other';
     const f = await saveFile(c, o, kind);
+    if (kind === 'label') { const r = await hooks.afterLabel?.(o, f, c.get('user')); return c.json({ id: f.id, warnings: r?.warnings || [] }); }
     // Рахунок і накладну бот дублює файлом у Telegram-групу партнера.
     const g = ['invoice', 'waybill'].includes(kind) ? await groupOf(o.partner_id) : '';
     let toGroup = 0;
@@ -381,21 +388,28 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
 
   async function saveFile(c, o, kind) {
     const bytes = new Uint8Array(await c.req.arrayBuffer());
-    if (!bytes.length) throw fail(400, 'Порожній файл.');
-    if (bytes.length > MAX_FILE) throw fail(400, 'Файл завеликий (до 5 МБ).');
     let name = 'file';
     try { name = decodeURIComponent(c.req.header('x-file-name') || 'file'); } catch { /* */ }
-    name = name.replace(/[\\/:*?"<>|\r\n]+/g, '_').slice(0, 150) || 'file';
-    const mime = String(c.req.header('content-type') || 'application/octet-stream').slice(0, 100);
+    return storeFile(o, kind, { bytes, name, mime: c.req.header('content-type') }, c.get('user'));
+  }
+
+  // Зберегти файл у замовленні (частинами в D1). user — користувач сайту або { name } для Telegram.
+  async function storeFile(o, kind, { bytes, name, mime }, u, how = '') {
+    if (!bytes?.length) throw fail(400, 'Порожній файл.');
+    if (bytes.length > MAX_FILE) throw fail(400, 'Файл завеликий (до 5 МБ).');
+    name = String(name || 'file').replace(/[\\/:*?"<>|\r\n]+/g, '_').slice(0, 150) || 'file';
+    mime = String(mime || 'application/octet-stream').slice(0, 100);
     const parts = Math.ceil(bytes.length / PART);
-    const u = c.get('user');
     const r = await db.run(`INSERT INTO b2b_files (order_id, kind, name, mime, size, parts, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [o.id, kind, name, mime, bytes.length, parts, userName(u), nowIso()]);
     const st = [];
     for (let n = 0; n < parts; n++) st.push([`INSERT INTO b2b_file_parts (file_id, n, data) VALUES (?, ?, ?)`, [r.lastId, n, toB64(bytes.subarray(n * PART, (n + 1) * PART))]]);
     await db.batch(st);
-    await log(o.id, u, `додано файл: ${FILE_KIND[kind]} «${name}»`);
+    await log(o.id, u, `додано файл: ${FILE_KIND[kind]} «${name}»${how}`);
     return { id: r.lastId, bytes, name, mime };
+  }
+  async function deleteFile(fileId) {
+    await db.batch([[`DELETE FROM b2b_file_parts WHERE file_id = ?`, [fileId]], [`DELETE FROM b2b_files WHERE id = ?`, [fileId]]]);
   }
 
   async function sendFile(f) {
@@ -457,5 +471,5 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return c.json({ ok: true, inCrm: o.crm_id || '' });
   });
 
-  return { ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
+  return { applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
 }

@@ -381,7 +381,7 @@ export function createB2bPages(ctx = {}) {
       api('GET', `/api/b2b/clients${qs ? `?${qs}` : ''}`), api('GET', '/api/b2b/partners'), api('GET', '/api/b2b/crm-settings'),
     ]);
     main.innerHTML = `
-      <div class="head-row"><h2>Замовлення клієнтів</h2><button class="btn" id="clCfg">Налаштування CRM</button></div>
+      <div class="head-row"><h2>Замовлення клієнтів</h2><div class="btn-row"><button class="btn" id="clLabels">Група маркувань</button><button class="btn" id="clCfg">Налаштування CRM</button></div></div>
       <div class="alert ${crm ? 'info' : 'warn'}" style="margin-bottom:12px">${crm
         ? `Кнопка «Додати в CRM» створює замовлення в LP-CRM (відділ ID ${esc(cfg.office)}, ціни партнера, вкладка «Нові»).`
         : 'Передача в LP-CRM вимкнена: поки ключ не має дозволу на addNewOrder, створюйте замовлення в CRM вручну і вписуйте його номер — партнер бачитиме статус. Увімкнути — «Налаштування CRM».'}</div>
@@ -414,6 +414,7 @@ export function createB2bPages(ctx = {}) {
     $$('[data-v]').forEach((b) => (b.onclick = () => { clFilter.view = b.dataset.v; viewClients(); }));
     $('#clPartner').onchange = (e) => { clFilter.partner = e.target.value; viewClients(); };
     $$('[data-o]').forEach((tr) => (tr.onclick = () => { location.hash = `#/b2bclients/${tr.dataset.o}`; }));
+    $('#clLabels').onclick = () => labelsGroup();
     $('#clCfg').onclick = () => {
       const TTN_F = { '': 'лише в коментарі', additional_2: 'Додаткове поле 2', additional_3: 'Додаткове поле 3', additional_4: 'Додаткове поле 4', delivery_adress: 'Адреса доставки' };
       const m = modal('Передача замовлень у LP-CRM', `<form id="crmF" class="form-stack">
@@ -438,6 +439,28 @@ export function createB2bPages(ctx = {}) {
         catch (e) { toast(e.message, true); }
       };
     };
+  }
+
+  // Telegram-група для маркувань (напр. «накладні розетка»): бот пересилає туди маркування з ПІБ клієнта і № у CRM.
+  async function labelsGroup() {
+    const g = await api('GET', '/api/b2b/labels-group');
+    const m = modal('Група маркувань у Telegram', `<div class="form-stack">
+        ${g.chat ? `<div>✅ Прив’язано: <b>${esc(g.title || g.chat)}</b></div>` : '<div class="small muted">Групу ще не прив’язано.</div>'}
+        <div class="small">Сюди бот надсилає кожне маркування замовлення клієнта (з сайту або з групи партнера) з підписом:
+          <b>ПІБ клієнта · CRM № … (або «ще не в CRM») · B2B-… · ТТН</b>; коли замовлення отримує № у CRM — окремий рядок із номером.
+          З маркування Нової пошти бот читає ТТН і телефон: порожню ТТН у замовленні заповнює, розбіжності показує.</div>
+        <div id="lgCode"></div>
+      </div>`, { footer: `${g.chat ? '<button class="btn danger" id="lgOff" style="margin-right:auto">Відв’язати</button>' : ''}<button class="btn" data-close>Закрити</button><button class="btn primary" id="lgLink">${g.chat ? 'Прив’язати іншу' : 'Прив’язати групу'}</button>` });
+    $('#lgLink', m.el).onclick = async () => {
+      try {
+        const { code, bot } = await api('POST', '/api/b2b/labels-group');
+        $('#lgCode', m.el).innerHTML = `<ol class="form-stack" style="padding-left:18px;margin:0">
+          <li>Додайте <b>@${esc(bot)}</b> у групу (наприклад, «накладні розетка»).</li>
+          <li>Надішліть у групі: <code style="font-size:16px">/link ${esc(code)}</code></li>
+          <li>Бот відповість «Групу прив’язано для маркувань». Код діє 30 хвилин.</li></ol>`;
+      } catch (e) { toast(e.message, true); }
+    };
+    $('#lgOff', m.el) && ($('#lgOff', m.el).onclick = async () => { try { await api('DELETE', '/api/b2b/labels-group'); m.close(); toast('Відв’язано'); } catch (e) { toast(e.message, true); } });
   }
 
   async function viewClient(id) {
@@ -510,7 +533,7 @@ export function createB2bPages(ctx = {}) {
     $$('[data-up]').forEach((inp) => (inp.onchange = async () => {
       const file = inp.files[0];
       if (!file) return;
-      try { const r = await uploadFile(`/api/b2b/orders/${o.id}/files?kind=${inp.dataset.up}`, file); toast(r.toGroup ? 'Файл додано й надіслано в Telegram-групу партнера' : 'Файл додано'); re(); } catch (er) { toast(er.message, true); }
+      try { const r = await uploadFile(`/api/b2b/orders/${o.id}/files?kind=${inp.dataset.up}`, file); toast(r.warnings?.length ? `Додано. ⚠️ ${r.warnings.join('; ')}` : r.toGroup ? 'Файл додано й надіслано в Telegram-групу партнера' : 'Файл додано', !!r.warnings?.length); re(); } catch (er) { toast(er.message, true); }
     }));
     $$('[data-fdel]').forEach((b) => (b.onclick = async () => {
       if (!(await confirmDanger('Видалити файл?', 'Партнер більше не зможе його завантажити.', 'Видалити'))) return;

@@ -13,6 +13,7 @@ import { mountB2bOrders } from './orders.js';
 import { mountB2bClients } from './clients.js';
 import { mountB2bStats } from './stats.js';
 import { mountB2bPrices } from './prices.js';
+import { mountB2bTgDocs } from './tgdocs.js';
 
 export const partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 
@@ -416,8 +417,12 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     });
   });
 
-  const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup });
-  mountB2bClients(app, { db, fetchFn, myPartner, orders });
+  // hooks — зв'язки між частинами модуля, що підключаються пізніше (маркування → Telegram, № у CRM → група маркувань).
+  const hooks = {};
+  const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup, hooks });
+  mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks });
+  const tgdocs = mountB2bTgDocs(app, { db, services, orders, hooks });
+  onCleanup(() => hooks.cleanup?.());
   mountB2bStats(app, { db, myPartner });
   mountB2bPrices(app, { db, services, partnerPrice });
 
@@ -441,7 +446,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   });
   const tgGroupLink = async (code, chat, title) => {
     const p = await db.get(`SELECT id, name, tg_group_code FROM b2b_partners WHERE tg_group_code LIKE ? AND COALESCE(deleted_at, '') = ''`, [`${code}|%`]);
-    if (!p || (Number(p.tg_group_code.split('|')[1]) || 0) < Date.now()) return '';
+    if (!p || (Number(p.tg_group_code.split('|')[1]) || 0) < Date.now()) return tgdocs.linkLabelsGroup(code, chat, title);
     await db.run(`UPDATE b2b_partners SET tg_group = ?, tg_group_title = ?, tg_group_code = '' WHERE id = ?`, [chat, String(title).slice(0, 120), p.id]);
     await logAudit(db, { user: null, kind: 'b2b', refId: p.id, action: `прив'язано Telegram-групу «${title}»`, changes: [] }).catch(() => 0);
     return `✅ Групу прив'язано до партнера <b>${String(p.name).replace(/[<>&]/g, '')}</b>. Сюди надходитимуть закупівлі, рахунки й накладні (файлами) та оплати.`;
@@ -449,5 +454,5 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   const tgGroupMoved = (from, to) => db.run(`UPDATE b2b_partners SET tg_group = ? WHERE tg_group = ?`, [to, from]);
   const tgGroupLeft = (chat) => db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '' WHERE tg_group = ?`, [chat]);
 
-  return { partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft };
+  return { partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupFile: tgdocs.tgGroupFile };
 }

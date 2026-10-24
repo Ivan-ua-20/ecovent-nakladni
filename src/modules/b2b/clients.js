@@ -21,7 +21,7 @@ const TTN_FIELDS = ['', 'additional_2', 'additional_3', 'additional_4', 'deliver
 // Код нового замовлення — як у прикладі LP-CRM: microtime×10 (11 цифр) + 5 випадкових.
 const newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(10000 + Math.random() * 90000))}`;
 
-export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
+export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {} }) {
   const { priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h } = orders;
   const userName = (u) => u?.name || u?.login || '';
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files
@@ -109,6 +109,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     else { where.push('crm_checked_at < ?', 'created_at > ?'); params.push(border, since); }
     if (partnerId) { where.push('partner_id = ?'); params.push(partnerId); }
     const rows = await db.all(`SELECT id, crm_id, crm_ext FROM b2b_orders WHERE ${where.join(' AND ')} ORDER BY crm_checked_at LIMIT 100`, params);
+    const linked = []; // замовлення, що щойно отримали номер у CRM
     if (!rows.length) return;
     const { creds } = await crmConfig();
     if (!creds.subdomain || !creds.key) return;
@@ -129,10 +130,12 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
           const name = o ? String((names[s]?.name ?? names[s]) || s || '—').trim() : 'Не знайдено в CRM';
           const num = o && /^\d+$/.test(String(o.id ?? '')) ? String(o.id) : r.crm_id;
           st.push([`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ?, crm_ext = ?, crm_id = ? WHERE id = ?`, [name, now, r.crm_ext, num || '', r.id]]);
+          if (num && !r.crm_id) linked.push([r.id, num]);
         }
       }
     } catch { /* CRM недоступна — покажемо останній відомий статус */ }
     if (st.length) await db.batch(st);
+    for (const [id, num] of linked) await hooks.crmLinked?.(id, num).catch(() => 0);
   }
 
   // ---------------------------------------------------------------- дані клієнта й позиції
@@ -287,7 +290,9 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     const o = await myClientOrder(c, p);
     if (o.status !== 'new') throw fail(400, 'Замовлення вже в роботі — новий файл маркування надішліть менеджеру.');
     if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_files WHERE order_id = ?`, [o.id])).n >= 10) throw fail(400, 'Не більше 10 файлів у замовленні.');
-    return c.json({ id: (await saveFile(c, o, 'label')).id });
+    const f = await saveFile(c, o, 'label');
+    const r = await hooks.afterLabel?.(o, f, c.get('user'));
+    return c.json({ id: f.id, warnings: r?.warnings || [] });
   });
   app.delete('/api/b2b/p/clients/:id/files/:fid', async (c) => {
     const p = await myPartner(c);
@@ -413,6 +418,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders }) {
     if (val && val !== o.crm_id && val !== o.crm_ext) {
       await refreshCrm({ ids: [o.id] });
       const num = (await db.get(`SELECT crm_id FROM b2b_orders WHERE id = ?`, [o.id]))?.crm_id || '';
+      if (!isCode && num) await hooks.crmLinked?.(o.id, num).catch(() => 0);
       await tgPartner(o.partner_id, `🚚 Замовлення ${orderNo(o.id)} (${h(o.client_name)}) передано в роботу${num ? `, № у CRM ${num}` : ''}.\n${link(c, `pclients/${o.id}`)}`);
     }
     return c.json({ ok: true });

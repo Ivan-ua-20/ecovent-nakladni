@@ -3,6 +3,9 @@ import { randomToken } from '../../core/auth.js';
 import { fail, need, loadSettings, putSetting as putSettingDb } from '../../core/common.js';
 
 const TG = 'https://api.telegram.org';
+// Які оновлення приймає бот: повідомлення і натискання кнопок (документи до закупівель). Зміна — новий HOOK_V.
+const ALLOWED_UPDATES = ['message', 'callback_query'];
+const HOOK_V = '2';
 const h = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const nf = new Intl.NumberFormat('uk-UA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const uah = (n) => `${nf.format(Number(n) || 0)} ₴`;
@@ -34,7 +37,8 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
     const me = await tg(token, 'getMe');
     const secret = randomToken(16);
     const url = `${new URL(c.req.url).origin}/api/tg/hook`;
-    await tg(token, 'setWebhook', { url, secret_token: secret, allowed_updates: ['message'] });
+    await tg(token, 'setWebhook', { url, secret_token: secret, allowed_updates: ALLOWED_UPDATES });
+    await putSetting('tg_hook_v', HOOK_V);
     await putSetting('tg_token', token);
     await putSetting('tg_bot', me.username || '');
     await putSetting('tg_secret', secret);
@@ -73,6 +77,21 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
     const s = await settings();
     if (!s.tg_token || !s.tg_secret || c.req.header('x-telegram-bot-api-secret-token') !== s.tg_secret) return c.json({ ok: false }, 401);
     const upd = await c.req.json().catch(() => ({}));
+    const base = new URL(c.req.url).origin;
+    // Вебхук, налаштований до появи кнопок, — оновлюємо один раз (тепер ще й натискання кнопок).
+    if (s.tg_hook_v !== HOOK_V) {
+      await tg(s.tg_token, 'setWebhook', { url: `${base}/api/tg/hook`, secret_token: s.tg_secret, allowed_updates: ALLOWED_UPDATES }).catch(() => {});
+      await putSetting('tg_hook_v', HOOK_V);
+    }
+    // Натискання кнопки під повідомленням бота (документи до закупівель).
+    if (upd.callback_query) {
+      const cq = upd.callback_query;
+      const u = await db.get(`SELECT * FROM users WHERE tg_chat_id = ? AND active = 1`, [String(cq.from?.id || '')]);
+      let note = '';
+      try { note = (u && await services.b2b?.tgCallback?.(cq, u, base)) || ''; } catch (e) { note = String(e.message || e).slice(0, 150); }
+      await tg(s.tg_token, 'answerCallbackQuery', { callback_query_id: cq.id, text: typeof note === 'string' ? note : '' }).catch(() => {});
+      return c.json({ ok: true });
+    }
     const msg = upd.message;
     const chat = msg?.chat?.id;
     if (!chat) return c.json({ ok: true });
@@ -81,6 +100,11 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
       const b2b = services.b2b;
       if (msg.migrate_to_chat_id) { await b2b?.tgGroupMoved?.(String(chat), String(msg.migrate_to_chat_id)); return c.json({ ok: true }); }
       if (msg.left_chat_member?.is_bot && msg.left_chat_member.username === s.tg_bot) { await b2b?.tgGroupLeft?.(String(chat)); return c.json({ ok: true }); }
+      // Файл у відповідь на повідомлення бота (маркування до замовлення клієнта).
+      if ((msg.document || msg.photo) && msg.reply_to_message?.from?.is_bot && msg.reply_to_message.from.username === s.tg_bot) {
+        await services.b2b?.tgGroupFile?.(msg, base);
+        return c.json({ ok: true });
+      }
       const g = /^\/(?:link|start)(?:@\w+)?\s+([0-9a-f]{12,24})\b/i.exec(String(msg.text || ''));
       if (!g) return c.json({ ok: true }); // звичайні повідомлення в групі бот ігнорує
       const reply = (await b2b?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || '')) || 'Код не підійшов. Візьміть новий код у картці партнера на сайті.';
@@ -88,6 +112,11 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
       return c.json({ ok: true });
     }
     const m = /^\/start(?:@\w+)?\s+([0-9a-f]{24})\b/.exec(String(msg.text || ''));
+    // Особисто боту: файл (рахунок, накладна) або відповідь на питання бота — від підключеного користувача.
+    if (!m && msg.chat.type === 'private') {
+      const u = await db.get(`SELECT * FROM users WHERE tg_chat_id = ? AND active = 1`, [String(chat)]);
+      if (u && await services.b2b?.tgPrivate?.(msg, u, base)) return c.json({ ok: true });
+    }
     let reply = 'Щоб отримувати сповіщення, відкрийте сайт, натисніть «Telegram» угорі і потім «Підключити Telegram».';
     if (m) {
       const u = await db.get(`SELECT id, name, login, tg_code FROM users WHERE tg_code LIKE ? AND active = 1`, [`${m[1]}|%`]);
@@ -158,11 +187,19 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
   }
 
   // Файл (рахунок, накладна) у чати/групи — sendDocument; підпис — HTML.
-  async function sendFile({ chatIds = [] }, { bytes, name, mime }, caption = '') {
+  let lastMessage = null; // останнє надіслане повідомлення з файлом (щоб можна було видалити при «Скасувати»)
+  async function sendFile({ chatIds = [] }, { bytes, name, mime, fileId }, caption = '') {
     const s = await settings();
+    lastMessage = null;
     if (!s.tg_token || !chatIds.length) return 0;
     let sent = 0;
     for (const chat of chatIds.slice(0, 5)) {
+      if (fileId) {
+        // файл уже в Telegram — пересилаємо за file_id, без повторного завантаження
+        const r = await tg(s.tg_token, 'sendDocument', { chat_id: chat, document: fileId, ...(caption ? { caption: caption.slice(0, 1000), parse_mode: 'HTML' } : {}) }).catch(() => null);
+        if (r) { sent++; lastMessage = { chat: String(chat), id: r.message_id }; }
+        continue;
+      }
       const fd = new FormData();
       fd.append('chat_id', String(chat));
       if (caption) { fd.append('caption', caption.slice(0, 1000)); fd.append('parse_mode', 'HTML'); }
@@ -170,11 +207,25 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
       try {
         const r = await fetchFn(`${TG}/bot${s.tg_token}/sendDocument`, { method: 'POST', body: fd });
         const j = await r.json().catch(() => null);
-        if (j?.ok) sent++;
+        if (j?.ok) { sent++; lastMessage = { chat: String(chat), id: j.result?.message_id }; }
       } catch { /* бота прибрали з групи */ }
     }
     return sent;
   }
 
-  return { notify, sendText, sendFile };
+  // Прямий виклик Bot API (кнопки, редагування повідомлень) і завантаження файлу з Telegram.
+  async function api(method, body) {
+    const s = await settings();
+    if (!s.tg_token) throw fail(400, 'Telegram-бота не підключено.');
+    return tg(s.tg_token, method, body);
+  }
+  async function download(fileId) {
+    const s = await settings();
+    const f = await tg(s.tg_token, 'getFile', { file_id: fileId });
+    const r = await fetchFn(`${TG}/file/bot${s.tg_token}/${f.file_path}`);
+    if (!r.ok) throw fail(502, 'Telegram: не вдалося завантажити файл.');
+    return new Uint8Array(await r.arrayBuffer());
+  }
+
+  return { notify, sendText, sendFile, api, download, lastFileMessage: () => lastMessage };
 }

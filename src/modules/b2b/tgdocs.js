@@ -1,0 +1,398 @@
+// B2B у Telegram: документи й маркування.
+//
+// 1) Рахунок / накладна ОСОБИСТО боту (власник, адміни): відповіддю на повідомлення про закупівлю, з підписом «B2B-9»
+//    або просто файлом. Бот читає PDF (BAS): тип, №, дату, покупця, суму, товари — знаходить закупівлю, звіряє
+//    покупця, суму, кожен товар (кількість і ціну) і ЗАВЖДИ просить підтвердити: [Зберегти] / [Зберегти все одно].
+//    Після збереження — файл і № у закупівлі, статус, сповіщення партнеру, файл у групу партнера; 15 хв — «Скасувати».
+// 2) Маркування в групі партнера: відповідь файлом на повідомлення бота про замовлення клієнта. Бот зберігає його,
+//    звіряє ТТН і телефон з маркування НП (порожню ТТН заповнює) і пересилає в групу маркувань («накладні розетка»)
+//    з ПІБ клієнта і № замовлення в CRM (або «ще не в CRM»). Маркування, додані на сайті, — так само.
+// 3) Коли замовлення з маркуванням отримує № у CRM — бот пише це в групу маркувань.
+import { fail, need, nowIso, loadSettings } from '../../core/common.js';
+import { can, randomToken } from '../../core/auth.js';
+import { pdfText, parseBasDoc, parseNpLabel, hintsOf, sameName, modelTokens } from '../../integrations/pdftext.js';
+import { orderNo } from './orders.js';
+
+const KIND_NAME = { invoice: 'Рахунок', waybill: 'Накладна' };
+const h = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const nf = new Intl.NumberFormat('uk-UA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const m2 = (n) => nf.format(Number(n) || 0);
+const UNDO_MIN = 15;
+const MAX_FILE = 5 * 1024 * 1024;
+const PAGE = 8;
+const kyivToday = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Kyiv' });
+const fmtDate = (d) => (d ? d.split('-').reverse().join('.') : '');
+const phoneFmt = (p) => (/^380\d{9}$/.test(p || '') ? `+${p.slice(0, 2)} ${p.slice(2, 5)} ${p.slice(5, 8)} ${p.slice(8, 10)} ${p.slice(10)}` : (p || ''));
+
+export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
+  const notify = () => services.notify;
+  const tgApi = (method, body) => notify()?.api(method, body);
+  const set = (key, value) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]);
+  const isPdf = (bytes) => bytes?.[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
+
+  // ================================================================ група маркувань
+  app.get('/api/b2b/labels-group', async (c) => {
+    need(c, 'b2b.admin');
+    const s = await loadSettings(db);
+    return c.json({ chat: s.b2b_labels_chat || '', title: s.b2b_labels_title || '', bot: s.tg_bot || '' });
+  });
+  app.post('/api/b2b/labels-group', async (c) => {
+    need(c, 'b2b.admin');
+    const s = await loadSettings(db);
+    if (!s.tg_token || !s.tg_bot) throw fail(400, 'Telegram-бота ще не підключено (Налаштування → Telegram).');
+    const code = randomToken(6);
+    await set('b2b_labels_code', `${code}|${Date.now() + 30 * 60000}`);
+    return c.json({ code, bot: s.tg_bot });
+  });
+  app.delete('/api/b2b/labels-group', async (c) => {
+    need(c, 'b2b.admin');
+    await db.batch([[`DELETE FROM settings WHERE key IN ('b2b_labels_chat', 'b2b_labels_title', 'b2b_labels_code')`, []]]);
+    return c.json({ ok: true });
+  });
+  // /link КОД у групі: спершу перевіряє партнерів (index.js), потім — код групи маркувань.
+  async function linkLabelsGroup(code, chat, title) {
+    const s = await loadSettings(db);
+    const [want, exp] = String(s.b2b_labels_code || '').split('|');
+    if (!want || want !== code || (Number(exp) || 0) < Date.now()) return '';
+    await db.batch([
+      [`INSERT INTO settings (key, value) VALUES ('b2b_labels_chat', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [chat]],
+      [`INSERT INTO settings (key, value) VALUES ('b2b_labels_title', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(title).slice(0, 120)]],
+      [`DELETE FROM settings WHERE key = 'b2b_labels_code'`, []],
+    ]);
+    return '✅ Групу прив\'язано для <b>маркувань</b>: сюди надходитимуть маркування замовлень клієнтів B2B з ПІБ клієнта і № замовлення в CRM.';
+  }
+  const labelsChat = async () => (await db.get(`SELECT value FROM settings WHERE key = 'b2b_labels_chat'`))?.value || '';
+
+  // ================================================================ маркування
+  const labelCaption = (o, extra = '') => `🏷 <b>${h(o.client_name)}</b> · ${o.crm_id ? `CRM № <b>${h(o.crm_id)}</b>` : '<i>ще не в CRM</i>'} · ${orderNo(o.id)}`
+    + `${o.ttn ? ` · ТТН ${h(o.ttn)}` : ''}${extra}`;
+
+  // Після збереження маркування (сайт або група партнера): звірка з маркуванням НП, ТТН у замовлення, пересилання.
+  async function afterLabel(o, f, _user, { fileId = '', replaced = false } = {}) {
+    const warnings = [];
+    let np = null;
+    if (f.bytes && isPdf(f.bytes)) np = parseNpLabel(await pdfText(f.bytes));
+    if (np?.ttn) {
+      if (!o.ttn) {
+        await db.run(`UPDATE b2b_orders SET ttn = ?, updated_at = ? WHERE id = ?`, [np.ttn, nowIso(), o.id]);
+        await orders.log(o.id, { name: 'Telegram' }, `ТТН ${np.ttn} — з маркування`);
+        o = { ...o, ttn: np.ttn };
+      } else if (np.ttn !== o.ttn) warnings.push(`ТТН у маркуванні ${np.ttn} не збігається із замовленням (${o.ttn})`);
+      if (np.phone && o.client_phone && np.phone !== o.client_phone) warnings.push(`телефон одержувача ${phoneFmt(np.phone)} ≠ телефон клієнта ${phoneFmt(o.client_phone)}`);
+    }
+    const chat = await labelsChat();
+    if (chat) {
+      const extra = `${replaced ? ' · <b>оновлено</b>' : ''}${np?.rozetka ? ` · Розетка ${h(np.rozetka)}` : ''}${warnings.length ? `\n⚠️ ${h(warnings.join('; '))}` : ''}`;
+      const sent = await notify()?.sendFile({ chatIds: [chat] }, fileId ? { fileId } : f, labelCaption(o, extra)).catch(() => 0);
+      if (sent) await orders.log(o.id, { name: 'Telegram' }, 'маркування надіслано в групу маркувань');
+    }
+    return { warnings, ttn: np?.ttn || '' };
+  }
+
+  // Номер у CRM з'явився — у групу маркувань (якщо в замовлення є маркування).
+  async function crmLinked(orderId, num) {
+    const chat = await labelsChat();
+    if (!chat) return;
+    const o = await db.get(`SELECT id, client_name, ttn, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = b2b_orders.id AND f.kind = 'label') AS labels FROM b2b_orders WHERE id = ?`, [orderId]);
+    if (!o?.labels) return;
+    await notify()?.sendText({ chatIds: [chat] }, `🔗 ${orderNo(o.id)} · <b>${h(o.client_name)}</b> → CRM № <b>${h(num)}</b>${o.ttn ? ` · ТТН ${h(o.ttn)}` : ''}`).catch(() => 0);
+  }
+
+  // Файл у відповідь на повідомлення бота в групі партнера → маркування замовлення клієнта.
+  async function tgGroupFile(msg, base) {
+    const chat = String(msg.chat.id);
+    const reply = (text) => tgApi('sendMessage', { chat_id: chat, text, parse_mode: 'HTML', reply_to_message_id: msg.message_id }).catch(() => 0);
+    const p = await db.get(`SELECT id, name FROM b2b_partners WHERE tg_group = ? AND COALESCE(deleted_at, '') = ''`, [chat]);
+    if (!p) return;
+    const replied = String(msg.reply_to_message?.text || msg.reply_to_message?.caption || '');
+    const id = /B2B-(\d+)/.exec(replied)?.[1];
+    if (!id || !/замовлення клієнта/i.test(replied)) {
+      await reply('Маркування додається <b>відповіддю на повідомлення про замовлення клієнта</b> (📦 Нове замовлення клієнта B2B-…).');
+      return;
+    }
+    const o = await db.get(`SELECT * FROM b2b_orders WHERE id = ? AND partner_id = ? AND kind = 'client'`, [Number(id), p.id]);
+    if (!o) { await reply('Замовлення не знайдено.'); return; }
+    if (o.status === 'cancelled') { await reply(`Замовлення ${orderNo(o.id)} скасовано — маркування не додано.`); return; }
+    const file = fileOf(msg);
+    if (file.size > MAX_FILE) { await reply('Файл завеликий (до 5 МБ).'); return; }
+    const bytes = await notify().download(file.id);
+    const replaced = !!(await db.get(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = 'label' LIMIT 1`, [o.id]));
+    const who = { name: `${[msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ') || 'партнер'} (Telegram)` };
+    const f = await orders.storeFile(o, 'label', { bytes, name: file.name, mime: file.mime }, who, ' через групу Telegram');
+    const r = await afterLabel(o, f, who, { fileId: file.id, replaced });
+    await reply(`✅ Маркування додано до <b>${orderNo(o.id)}</b> (${h(o.client_name)})${r.ttn && !o.ttn ? `\nТТН ${r.ttn} записано в замовлення.` : ''}${r.warnings.length ? `\n⚠️ ${h(r.warnings.join('; '))}` : ''}`);
+  }
+
+  // ================================================================ документи особисто боту
+  const fileOf = (msg) => {
+    if (msg.document) return { id: msg.document.file_id, uid: msg.document.file_unique_id, name: msg.document.file_name || 'document', mime: msg.document.mime_type || 'application/octet-stream', size: msg.document.file_size || 0 };
+    const ph = [...(msg.photo || [])].sort((a, b) => (b.file_size || 0) - (a.file_size || 0))[0];
+    return { id: ph.file_id, uid: ph.file_unique_id, name: `фото_${kyivToday()}.jpg`, mime: 'image/jpeg', size: ph.file_size || 0, photo: true };
+  };
+  const docOf = (id) => db.get(`SELECT * FROM b2b_tg_docs WHERE id = ?`, [id]);
+  const saveDoc = (d, fields) => db.run(`UPDATE b2b_tg_docs SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [...Object.values(fields), d.id]);
+  const parsedOf = (d) => { try { return JSON.parse(d.parsed || 'null'); } catch { return null; } };
+
+  // Закупівлі й замовлення «без закупівлі», до яких можна прикріпити документ (найсвіжіші 200 за 120 днів).
+  async function candidates() {
+    const since = new Date(Date.now() - 120 * 86400000).toISOString();
+    const rows = await db.all(
+      `SELECT o.id, o.kind, o.status, o.partner_id, o.total, o.entity, o.invoice_no, o.waybill_no, o.client_name, o.created_at, p.name AS partner
+       FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id
+       WHERE o.status != 'cancelled' AND o.created_at > ? AND (o.kind = 'supply' OR o.supply_id IS NULL) ORDER BY o.id DESC LIMIT 200`, [since],
+    );
+    const ents = await db.all(`SELECT partner_id, name FROM b2b_entities`);
+    const byPartner = new Map();
+    for (const e of ents) byPartner.set(e.partner_id, [...(byPartner.get(e.partner_id) || []), e.name]);
+    return rows.map((r) => ({ ...r, names: r.kind === 'supply' ? [String(r.entity || '').split('\n')[0].split(',')[0]] : (byPartner.get(r.partner_id) || []) }));
+  }
+  const needs = (o, kind) => (kind === 'waybill' ? !o.waybill_no : !o.invoice_no);
+  function score(o, doc, kind) {
+    let s = 0;
+    if (doc?.total != null && Math.abs(doc.total - o.total) < 0.01) s += 100;
+    if (doc?.buyer && o.names.some((n) => sameName(n, doc.buyer))) s += 50;
+    if (kind && needs(o, kind)) s += 20;
+    if (kind === 'waybill' && o.invoice_no) s += 5;
+    return s;
+  }
+  async function ranked(doc, kind) {
+    const list = await candidates();
+    return list.map((o) => ({ o, s: score(o, doc, kind) })).sort((a, b) => b.s - a.s || b.o.id - a.o.id).map((x) => x.o);
+  }
+  // Автоматичний вибір: лише один кандидат, у якого збігаються і сума, і покупець.
+  async function autoPick(doc, kind) {
+    if (!doc) return null;
+    const list = await candidates();
+    const best = list.filter((o) => score(o, doc, kind) >= 150);
+    if (best.length === 1) return best[0].id;
+    const needy = best.filter((o) => needs(o, kind));
+    return needy.length === 1 ? needy[0].id : null;
+  }
+
+  // Звірка товарів документа із замовленням: спершу за ціною й кількістю, далі за моделлю в назві.
+  function compareItems(docItems, orderItems) {
+    const left = orderItems.map((i) => ({ ...i, tokens: modelTokens(i.name), used: false }));
+    const lines = [];
+    let bad = 0;
+    for (const d of docItems) {
+      let hit = left.find((i) => !i.used && Math.abs(i.price - d.price) < 0.01 && i.qty === d.qty);
+      if (!hit) {
+        const dt = modelTokens(d.name);
+        let best = null;
+        let bestN = 0;
+        for (const i of left) {
+          if (i.used) continue;
+          const n = [...dt].filter((t) => i.tokens.has(t)).length;
+          if (n > bestN) { best = i; bestN = n; }
+        }
+        hit = bestN >= 1 ? best : null;
+      }
+      const short = h(d.name.length > 60 ? `${d.name.slice(0, 58)}…` : d.name);
+      if (!hit) { bad++; lines.push(`❌ ${short} — ${d.qty} шт × ${m2(d.price)} — <b>немає в замовленні</b>`); continue; }
+      hit.used = true;
+      if (hit.qty === d.qty && Math.abs(hit.price - d.price) < 0.01) lines.push(`✅ ${short} — ${d.qty} шт × ${m2(d.price)}`);
+      else { bad++; lines.push(`⚠️ ${short} — у документі <b>${d.qty} шт × ${m2(d.price)}</b>, у замовленні <b>${hit.qty} шт × ${m2(hit.price)}</b>`); }
+    }
+    for (const i of left.filter((x) => !x.used)) { bad++; lines.push(`❌ ${h(i.name.slice(0, 60))} — ${i.qty} шт × ${m2(i.price)} — <b>немає в документі</b>`); }
+    return { lines, bad };
+  }
+
+  const kbd = (rows) => ({ inline_keyboard: rows.filter((r) => r.length) });
+  const btn = (text, d, act, arg = '') => ({ text, callback_data: `bd:${d.id}:${act}${arg !== '' ? `:${arg}` : ''}` });
+
+  // Повідомлення-перевірка (або список, якщо замовлення ще не обрано).
+  async function render(d, { page = 0 } = {}) {
+    const doc = parsedOf(d);
+    const kind = d.kind;
+    const head = `${kind ? `${kind === 'invoice' ? '🧾' : '📦'} <b>${KIND_NAME[kind]}</b>` : '📄 <b>Документ</b>'}${d.number ? ` № <b>${h(d.number)}</b>` : ''}`
+      + `${d.doc_date ? ` від ${fmtDate(d.doc_date)}` : ''}${doc?.total != null ? ` · <b>${m2(doc.total)} грн</b>` : ''}`
+      + `${doc?.buyer ? `\nПокупець: ${h(doc.buyer)}` : ''}\n<i>${h(d.name)}</i>${doc ? '' : (d.mime === 'application/pdf' ? '\n<i>Текст у PDF не прочитано — № введіть вручну.</i>' : '')}`;
+    if (!d.order_id) {
+      const list = await ranked(doc, kind);
+      const slice = list.slice(page * PAGE, page * PAGE + PAGE);
+      const rows = slice.map((o) => [btn(`${o.kind === 'client' ? '🔴 ' : ''}${orderNo(o.id)} · ${o.partner} · ${m2(o.total)} ₴${score(o, doc, kind) >= 150 ? ' ✅' : ''}${needs(o, kind || 'invoice') ? (kind === 'waybill' ? ' · без накладної' : ' · без рахунку') : ''}`.slice(0, 64), d, 'o', o.id)]);
+      const nav = [];
+      if (page > 0) nav.push(btn('◀️ Назад', d, 'pg', page - 1));
+      if (list.length > (page + 1) * PAGE) nav.push(btn('Ще ▶️', d, 'pg', page + 1));
+      return {
+        text: `${head}\n\n<b>До якого замовлення прикріпити?</b>${list.length ? '\n✅ — збігаються сума і покупець · 🔴 — замовлення клієнта без закупівлі' : '\nНемає відкритих закупівель.'}`,
+        keyboard: kbd([...rows, nav, [btn('Скасувати', d, 'cancel')]]),
+      };
+    }
+    const o = await db.get(`SELECT o.*, p.name AS partner FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id WHERE o.id = ?`, [d.order_id]);
+    if (!o || o.status === 'cancelled') {
+      await saveDoc(d, { order_id: null });
+      return render({ ...d, order_id: null });
+    }
+    const items = await db.all(`SELECT name, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
+    const names = o.kind === 'supply' ? [String(o.entity || '').split('\n')[0].split(',')[0]] : (await db.all(`SELECT name FROM b2b_entities WHERE partner_id = ?`, [o.partner_id])).map((x) => x.name);
+    const checks = [];
+    let bad = 0;
+    if (doc?.buyer) { const ok = names.some((n) => sameName(n, doc.buyer)); bad += ok ? 0 : 1; checks.push(ok ? '✅ Покупець збігається' : `⚠️ Покупець у документі не збігається з юрособою (${h(names[0] || '—')})`); }
+    if (doc?.total != null) { const ok = Math.abs(doc.total - o.total) < 0.01; bad += ok ? 0 : 1; checks.push(ok ? '✅ Сума збігається' : `⚠️ Сума: у документі <b>${m2(doc.total)}</b>, у замовленні <b>${m2(o.total)}</b>`); }
+    let itemLines = [];
+    if (doc?.items?.length) { const r = compareItems(doc.items, items); bad += r.bad; itemLines = r.lines; }
+    if (kind === 'invoice' && o.invoice_no && o.invoice_no !== d.number) checks.push(`⚠️ У замовленні вже є рахунок № ${h(o.invoice_no)} — буде замінено`);
+    if (kind === 'waybill' && o.waybill_no && o.waybill_no !== d.number) checks.push(`⚠️ У замовленні вже є накладна № ${h(o.waybill_no)} — буде замінено`);
+    if (d.number && kind) {
+      const dup = await db.get(`SELECT id FROM b2b_orders WHERE id != ? AND ${kind === 'invoice' ? 'invoice_no' : 'waybill_no'} = ? AND status != 'cancelled' LIMIT 1`, [o.id, d.number]);
+      if (dup) { bad++; checks.push(`⚠️ ${KIND_NAME[kind]} № ${h(d.number)} уже є в ${orderNo(dup.id)}`); }
+    }
+    const target = `→ <b>${orderNo(o.id)}</b> · ${h(o.partner)}${o.kind === 'client' ? ` · клієнт ${h(o.client_name)} · 🔴 <b>без закупівлі</b>` : ` · ${h(names[0] || '')}`} · ${m2(o.total)} ₴`;
+    const more = itemLines.length > 20 ? [`…ще ${itemLines.length - 20}`] : [];
+    const text = `${head}\n\n${target}\n${[...checks, ...itemLines.slice(0, 20), ...more].join('\n')}${!kind ? '\n\n<b>Що це за документ?</b>' : ''}${kind === 'invoice' && !d.number ? '\n\n⚠️ Немає № рахунку — натисніть «Вказати №».' : ''}`;
+    const rows = [];
+    if (!kind) rows.push([btn('🧾 Рахунок', d, 'k', 'invoice'), btn('📦 Накладна', d, 'k', 'waybill')]);
+    else rows.push([btn(bad ? '⚠️ Зберегти все одно' : '✅ Зберегти', d, 'save')]);
+    rows.push([btn(d.number ? 'Змінити №' : 'Вказати №', d, 'num'), ...(kind ? [btn(kind === 'invoice' ? 'Це накладна' : 'Це рахунок', d, 'k', kind === 'invoice' ? 'waybill' : 'invoice')] : [])]);
+    rows.push([btn('Інше замовлення', d, 'other'), btn('Скасувати', d, 'cancel')]);
+    return { text, keyboard: kbd(rows) };
+  }
+  async function show(d, { page = 0, fresh = false } = {}) {
+    const r = await render(d, { page });
+    if (d.msg_id && !fresh) {
+      await tgApi('editMessageText', { chat_id: d.chat_id, message_id: d.msg_id, text: r.text, parse_mode: 'HTML', reply_markup: r.keyboard, disable_web_page_preview: true }).catch(() => 0);
+    } else {
+      const m = await tgApi('sendMessage', { chat_id: d.chat_id, text: r.text, parse_mode: 'HTML', reply_markup: r.keyboard, disable_web_page_preview: true });
+      await saveDoc(d, { msg_id: m?.message_id || 0 });
+    }
+  }
+
+  async function tgPrivate(msg, user, base) {
+    if (!can(user, 'b2b.admin')) return false;
+    const chat = String(msg.chat.id);
+    // відповідь на «Напишіть №…»
+    if (msg.text && !msg.text.startsWith('/')) {
+      const d = await db.get(`SELECT * FROM b2b_tg_docs WHERE chat_id = ? AND state = 'await_number' ORDER BY id DESC LIMIT 1`, [chat]);
+      if (!d) return false;
+      const num = String(msg.text).trim().replace(/^№\s*/, '').slice(0, 40);
+      await saveDoc(d, { number: num, state: 'pending' });
+      await show({ ...(await docOf(d.id)) }, { fresh: true });
+      return true;
+    }
+    if (!msg.document && !msg.photo) return false;
+    const file = fileOf(msg);
+    if (file.size > MAX_FILE) {
+      await tgApi('sendMessage', { chat_id: chat, text: 'Файл завеликий: на сайті зберігаються файли до 5 МБ. Стисніть PDF або надішліть менший файл.' }).catch(() => 0);
+      return true;
+    }
+    const bytes = await notify().download(file.id);
+    const doc = isPdf(bytes) ? parseBasDoc(await pdfText(bytes)) : null;
+    const hints = hintsOf(`${msg.caption || ''} ${file.name}`);
+    const replyId = Number(/B2B-(\d+)/.exec(String(msg.reply_to_message?.text || msg.reply_to_message?.caption || ''))?.[1]) || null;
+    const kind = doc?.kind || hints.kind || '';
+    const orderId = replyId || hints.order || await autoPick(doc, kind);
+    const r = await db.run(
+      `INSERT INTO b2b_tg_docs (chat_id, user_id, file_id, file_uid, name, mime, size, parsed, order_id, kind, number, doc_date, state, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+      [chat, user.id, file.id, file.uid || '', file.name, file.mime, file.size || bytes.length, doc ? JSON.stringify(doc) : '', orderId, kind,
+        doc?.number || hints.number || '', doc?.date || kyivToday(), nowIso()],
+    );
+    await show(await docOf(r.lastId), { fresh: true });
+    return true;
+  }
+
+  async function tgCallback(cq, user, base) {
+    const m = /^bd:(\d+):(\w+)(?::(.+))?$/.exec(String(cq.data || ''));
+    if (!m) return '';
+    if (!can(user, 'b2b.admin')) return 'Немає доступу.';
+    const d = await docOf(Number(m[1]));
+    if (!d || d.chat_id !== String(cq.message?.chat?.id)) return 'Застаріла кнопка.';
+    const act = m[2];
+    const arg = m[3];
+    if (d.state === 'cancelled') return 'Уже скасовано.';
+    if (act === 'undo') return undo(d, user, base);
+    if (d.state === 'saved' || d.state === 'undone') return 'Уже збережено.';
+    if (act === 'cancel') {
+      await saveDoc(d, { state: 'cancelled' });
+      await tgApi('editMessageText', { chat_id: d.chat_id, message_id: d.msg_id, text: `✖️ Скасовано — «${h(d.name)}» нікуди не збережено.`, parse_mode: 'HTML' }).catch(() => 0);
+      return '';
+    }
+    if (act === 'pg') { await show(d, { page: Number(arg) || 0 }); return ''; }
+    if (act === 'other') { await saveDoc(d, { order_id: null }); await show({ ...d, order_id: null }); return ''; }
+    if (act === 'o') { await saveDoc(d, { order_id: Number(arg) }); await show({ ...d, order_id: Number(arg) }); return ''; }
+    if (act === 'k' && KIND_NAME[arg]) { await saveDoc(d, { kind: arg }); await show({ ...d, kind: arg }); return ''; }
+    if (act === 'num') {
+      await saveDoc(d, { state: 'await_number' });
+      await tgApi('sendMessage', { chat_id: d.chat_id, text: `Напишіть № ${d.kind === 'waybill' ? 'накладної' : 'рахунку'} одним повідомленням (наприклад: 125).`, reply_markup: { force_reply: true } }).catch(() => 0);
+      return '';
+    }
+    if (act === 'save') return save(d, user, base);
+    return '';
+  }
+
+  async function save(d, user, base) {
+    if (!d.order_id) return 'Спершу оберіть замовлення.';
+    if (!d.kind) return 'Оберіть: рахунок чи накладна.';
+    if (d.kind === 'invoice' && !d.number) {
+      await saveDoc(d, { state: 'await_number' });
+      await tgApi('sendMessage', { chat_id: d.chat_id, text: 'Напишіть № рахунку одним повідомленням — і натисніть «Зберегти» ще раз.', reply_markup: { force_reply: true } }).catch(() => 0);
+      return 'Потрібен № рахунку';
+    }
+    const o = await orders.orderOf(d.order_id);
+    if (o.status === 'cancelled') return 'Замовлення скасовано.';
+    // «бронюємо» збереження від подвійного натискання
+    const claim = await db.run(`UPDATE b2b_tg_docs SET state = 'saving' WHERE id = ? AND state = 'pending'`, [d.id]);
+    if (!claim.changes) return 'Уже зберігається…';
+    try {
+      const bytes = await notify().download(d.file_id);
+      const who = { id: user.id, name: user.name || user.login };
+      const f = await orders.storeFile(o, d.kind, { bytes, name: d.name, mime: d.mime }, who, ' через Telegram');
+      const prev = { invoice_no: o.invoice_no, invoice_date: o.invoice_date, waybill_no: o.waybill_no, status: o.status };
+      const next = d.kind === 'invoice' ? { invoice_no: d.number, invoice_date: d.doc_date || kyivToday() } : (d.number ? { waybill_no: d.number } : {});
+      await orders.applyNumbers(o, next, who, base, ' (через Telegram)');
+      // розбіжності — в історію
+      const r = await render({ ...d, state: 'saving' });
+      const issues = r.text.split('\n').filter((l) => l.startsWith('⚠️') || l.startsWith('❌')).map((l) => l.replace(/<[^>]+>/g, ''));
+      if (issues.length) await orders.log(o.id, who, `збережено з розбіжностями: ${issues.join('; ').slice(0, 900)}`);
+      // у групу партнера
+      let group = null;
+      const g = await orders.groupOf(o.partner_id);
+      if (g) {
+        const cap = `${d.kind === 'invoice' ? '🧾 Рахунок' : '📦 Накладна'}${d.number ? ` № ${h(d.number)}` : ''} — ${o.kind === 'client' ? 'замовлення' : 'закупівля'} <b>${orderNo(o.id)}</b> на ${m2(o.total)} грн`;
+        if (await notify().sendFile({ chatIds: [g] }, { fileId: d.file_id }, cap).catch(() => 0)) group = notify().lastFileMessage?.() || null;
+      }
+      await saveDoc(d, { state: 'saved', saved_at: nowIso(), file_row: f.id, prev: JSON.stringify(prev), group_msg: group ? JSON.stringify(group) : '' });
+      const url = `${base}/#/${o.kind === 'client' ? 'b2bclients' : 'b2borders'}/${o.id}`;
+      await tgApi('editMessageText', {
+        chat_id: d.chat_id, message_id: d.msg_id, parse_mode: 'HTML', disable_web_page_preview: true,
+        text: `✅ <b>Збережено:</b> ${KIND_NAME[d.kind]}${d.number ? ` № ${h(d.number)}` : ''} → <b>${orderNo(o.id)}</b> (${h(o.client_name || o.entity.split('\n')[0].split(',')[0])}, ${m2(o.total)} ₴)`
+          + `${issues.length ? `\n⚠️ з розбіжностями (${issues.length}) — записано в історію` : ''}${group ? '\n📤 Надіслано в групу партнера' : ''}`,
+        reply_markup: kbd([[{ text: 'Відкрити на сайті', url }, btn(`↩️ Скасувати (${UNDO_MIN} хв)`, d, 'undo')]]),
+      }).catch(() => 0);
+      return 'Збережено';
+    } catch (e) {
+      await saveDoc(d, { state: 'pending' });
+      throw e;
+    }
+  }
+
+  async function undo(d, user, base) {
+    if (d.state !== 'saved') return 'Нічого скасовувати.';
+    if (Date.now() - Date.parse(d.saved_at) > UNDO_MIN * 60000) return `Скасувати можна лише ${UNDO_MIN} хв — змініть на сайті.`;
+    const prev = JSON.parse(d.prev || '{}');
+    const o = await orders.orderOf(d.order_id).catch(() => null);
+    if (o) {
+      await orders.deleteFile(d.file_row);
+      await db.run(`UPDATE b2b_orders SET invoice_no = ?, invoice_date = ?, waybill_no = ?, status = ?, updated_at = ? WHERE id = ?`,
+        [prev.invoice_no ?? o.invoice_no, prev.invoice_date ?? o.invoice_date, prev.waybill_no ?? o.waybill_no, prev.status ?? o.status, nowIso(), o.id]);
+      await orders.log(o.id, { name: user.name || user.login }, `скасовано через Telegram: ${KIND_NAME[d.kind]}${d.number ? ` № ${d.number}` : ''}`);
+      if (d.kind === 'invoice' && d.number && d.number !== prev.invoice_no) {
+        await orders.tgPartner(o.partner_id, `↩️ Рахунок № ${h(d.number)} до ${orderNo(o.id)} відкликано — менеджер надішле правильний.`);
+      }
+    }
+    const g = d.group_msg ? JSON.parse(d.group_msg) : null;
+    if (g?.id) await tgApi('deleteMessage', { chat_id: g.chat, message_id: g.id }).catch(() => 0);
+    await saveDoc(d, { state: 'undone' });
+    await tgApi('editMessageText', { chat_id: d.chat_id, message_id: d.msg_id, text: `↩️ Скасовано: ${KIND_NAME[d.kind]}${d.number ? ` № ${h(d.number)}` : ''} прибрано з ${orderNo(d.order_id)}.`, parse_mode: 'HTML' }).catch(() => 0);
+    return 'Скасовано';
+  }
+
+  // Старі незавершені завантаження — прибрати.
+  hooks.cleanup = () => db.run(`DELETE FROM b2b_tg_docs WHERE created_at < ?`, [new Date(Date.now() - 3 * 86400000).toISOString()]);
+  hooks.afterLabel = afterLabel;
+  hooks.crmLinked = crmLinked;
+
+  return { tgPrivate, tgCallback, tgGroupFile, linkLabelsGroup };
+}
+

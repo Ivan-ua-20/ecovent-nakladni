@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 7,
+  version: 8,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,6 +127,31 @@ export const schema = {
   )`,
   `CREATE INDEX IF NOT EXISTS b2b_files_o ON b2b_files (order_id)`,
   `CREATE INDEX IF NOT EXISTS b2b_files_at ON b2b_files (created_at)`,
+  // Документи, надіслані боту особисто (рахунок / накладна): стан підтвердження, що збережено, як скасувати.
+  `CREATE TABLE IF NOT EXISTS b2b_tg_docs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id TEXT NOT NULL,
+    user_id INTEGER,
+    msg_id INTEGER DEFAULT 0,
+    file_id TEXT NOT NULL,
+    file_uid TEXT DEFAULT '',
+    name TEXT DEFAULT '',
+    mime TEXT DEFAULT '',
+    size INTEGER DEFAULT 0,
+    parsed TEXT DEFAULT '',
+    order_id INTEGER,
+    kind TEXT DEFAULT '',
+    number TEXT DEFAULT '',
+    doc_date TEXT DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'pending',
+    file_row INTEGER,
+    prev TEXT DEFAULT '',
+    group_msg TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    saved_at TEXT DEFAULT ''
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_tg_docs_chat ON b2b_tg_docs (chat_id, state)`,
+  `CREATE INDEX IF NOT EXISTS b2b_tg_docs_at ON b2b_tg_docs (created_at)`,
   `CREATE TABLE IF NOT EXISTS b2b_file_parts (
     file_id INTEGER NOT NULL,
     n INTEGER NOT NULL,
