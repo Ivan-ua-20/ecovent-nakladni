@@ -10,39 +10,89 @@ export function createPartnerPages(ctx = {}) {
   const canEdit = () => !ctx.can || ctx.can('b2b.order');
   const supFilter = { status: '', q: '', from: '', to: '' };
   const cliFilter = { status: '', q: '', from: '', to: '', pay: '' };
-  let filter = { brand: '', q: '' };
+  const filter = { brand: '', q: '', cat: '', sort: 'brand' };
 
   // ---------------------------------------------------------------- каталог
+  // Фільтри: бренд (зі знижкою від РРЦ), категорія (з кількістю, у межах бренду), пошук, сортування.
+  // Список згрупований за брендами. Вибір запам'ятовується в браузері.
+  const FKEY = 'b2b_cat_filter';
+  try { Object.assign(filter, JSON.parse(localStorage.getItem(FKEY) || '{}')); } catch { /* приватний режим */ }
+  const saveFilter = () => { try { localStorage.setItem(FKEY, JSON.stringify(filter)); } catch { /* */ } };
+  const SORTS = { brand: 'За брендом', name: 'За назвою', cheap: 'Дешевші спочатку', dear: 'Дорожчі спочатку', profit: 'Найбільша вигода' };
+  const pct = (v) => `${String(Math.round((Number(v) || 0) * 100) / 100).replace('.', ',')}%`;
+
   async function viewPartnerCatalog() {
-    const { partner, brands, products } = await api('GET', '/api/b2b/p/catalog');
-    const draw = () => {
+    const { partner, brands, categories = [], products } = await api('GET', '/api/b2b/p/catalog');
+    if (filter.brand && !brands.some((b) => String(b.id) === String(filter.brand))) filter.brand = '';
+    filter.cat = filter.cat ?? '';
+    filter.sort = SORTS[filter.sort] ? filter.sort : 'brand';
+    const catName = new Map(categories.map((c) => [String(c.id), c.name]));
+    const byBrand = (p) => !filter.brand || String(p.brand_id) === String(filter.brand);
+    const matchQ = (p) => {
       const q = filter.q.toLowerCase();
-      const list = products.filter((p) => (!filter.brand || String(p.brand_id) === String(filter.brand))
-        && (!q || p.name.toLowerCase().includes(q) || String(p.article || '').toLowerCase().includes(q)));
-      $('#pcList').innerHTML = list.length ? `<table class="list"><thead><tr><th></th><th>Товар</th><th class="hide-m">Бренд</th><th class="r">РРЦ</th><th class="r">Ваша ціна</th></tr></thead><tbody>
-        ${list.map((p) => `<tr>
+      return !q || p.name.toLowerCase().includes(q) || String(p.article || '').toLowerCase().includes(q);
+    };
+    const draw = () => {
+      // категорії — лише ті, що є в обраному бренді, з кількістю
+      const inBrand = products.filter(byBrand);
+      const counts = inBrand.reduce((m, p) => m.set(String(p.cat), (m.get(String(p.cat)) || 0) + 1), new Map());
+      if (filter.cat !== '' && !counts.has(String(filter.cat))) filter.cat = '';
+      $('#pcCats').innerHTML = counts.size > 1 ? `<button class="chip ${filter.cat === '' ? 'on' : ''}" data-cat="">Усі категорії · ${inBrand.length}</button>
+        ${[...counts].sort((a, b) => (catName.get(a[0]) || '').localeCompare(catName.get(b[0]) || '', 'uk'))
+          .map(([id, n]) => `<button class="chip ${String(filter.cat) === id ? 'on' : ''}" data-cat="${esc(id)}">${esc(catName.get(id) || 'Інше')} · ${n}</button>`).join('')}` : '';
+      $$('[data-cat]').forEach((b) => (b.onclick = () => { filter.cat = b.dataset.cat; saveFilter(); draw(); }));
+      let list = inBrand.filter((p) => (filter.cat === '' || String(p.cat) === String(filter.cat)) && matchQ(p));
+      const by = {
+        brand: (a, b) => a.brand.localeCompare(b.brand, 'uk') || a.name.localeCompare(b.name, 'uk'),
+        name: (a, b) => a.name.localeCompare(b.name, 'uk'),
+        cheap: (a, b) => a.price - b.price,
+        dear: (a, b) => b.price - a.price,
+        profit: (a, b) => (b.rrp - b.price) - (a.rrp - a.price),
+      }[filter.sort];
+      list = [...list].sort(by);
+      const grouped = filter.sort === 'brand';
+      let lastBrand = null;
+      const rowsHtml = list.map((p) => {
+        const head = grouped && p.brand_id !== lastBrand
+          ? `<tr class="grp"><td colspan="6"><b>${esc(p.brand)}</b> <span class="badge ok">ваша знижка ${pct(p.margin)} від РРЦ</span></td></tr>` : '';
+        lastBrand = p.brand_id;
+        return `${head}<tr>
           <td style="width:56px">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" style="width:48px;height:48px;object-fit:contain">` : ''}</td>
-          <td><b>${esc(p.name)}</b>${p.article ? `<div class="small muted">${esc(p.article)}</div>` : ''}</td>
+          <td><b>${esc(p.name)}</b><div class="small muted">${[p.article, catName.get(String(p.cat))].filter(Boolean).map(esc).join(' · ')}</div></td>
           <td class="small hide-m">${esc(p.brand)}</td>
           <td class="r small muted">${money(p.rrp)} грн</td>
+          <td class="r small hide-m">${pct(p.margin)}<div class="muted">−${money(p.rrp - p.price)}</div></td>
           <td class="r"><b>${money(p.price)} грн</b></td>
-        </tr>`).join('')}</tbody></table>`
-        : '<div class="card empty"><div class="big">Нічого не знайдено</div>Спробуйте інший пошук або бренд.</div>';
+        </tr>`;
+      }).join('');
+      $('#pcCount').textContent = `Знайдено: ${list.length} з ${products.length}`;
+      $('#pcList').innerHTML = list.length ? `<table class="list"><thead><tr><th></th><th>Товар</th><th class="hide-m">Бренд</th><th class="r">РРЦ</th><th class="r hide-m">Знижка від РРЦ</th><th class="r">Ваша ціна</th></tr></thead>
+        <tbody>${rowsHtml}</tbody></table>`
+        : `<div class="card empty"><div class="big">Нічого не знайдено</div>Змініть пошук, бренд чи категорію.
+          <div class="btn-row" style="justify-content:center;margin-top:10px"><button class="btn" id="pcReset">Скинути фільтри</button></div></div>`;
+      $('#pcReset') && ($('#pcReset').onclick = () => { Object.assign(filter, { brand: '', cat: '', q: '' }); saveFilter(); viewPartnerCatalog(); });
     };
     main.innerHTML = `
       <div class="head-row"><h2>Каталог — ${esc(partner.name)}</h2>${products.length && canEdit() ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div>
       ${products.length ? `
-        <div class="btn-row" style="margin-bottom:12px;flex-wrap:wrap">
-          <button class="chip ${filter.brand ? '' : 'on'}" data-br="">Усі бренди</button>
-          ${brands.map((b) => `<button class="chip ${String(filter.brand) === String(b.id) ? 'on' : ''}" data-br="${b.id}">${esc(b.name)}</button>`).join('')}
-          <input id="pcQ" placeholder="Пошук за назвою або артикулом" value="${esc(filter.q)}" style="max-width:280px">
+        <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap">
+          ${brands.length > 1 ? `<button class="chip ${filter.brand ? '' : 'on'}" data-br="">Усі бренди</button>` : ''}
+          ${brands.map((b) => `<button class="chip ${String(filter.brand) === String(b.id) || brands.length === 1 ? 'on' : ''}" data-br="${b.id}">${esc(b.name)} <span class="small">−${pct(b.margin)}</span></button>`).join('')}
         </div>
-        <div class="small muted" style="margin-bottom:8px">Ціни з ПДВ. «Ваша ціна» — ціна для вас як партнера; РРЦ — рекомендована роздрібна ціна.</div>
+        <div class="btn-row" id="pcCats" style="margin-bottom:8px;flex-wrap:wrap"></div>
+        <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap;align-items:center">
+          <input id="pcQ" type="search" placeholder="Пошук за назвою або артикулом" value="${esc(filter.q)}" style="max-width:300px" aria-label="Пошук товару">
+          <select id="pcSort" aria-label="Сортування" style="max-width:220px">${Object.entries(SORTS).map(([k, v]) => `<option value="${k}" ${filter.sort === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+          <span class="small muted" id="pcCount"></span>
+        </div>
+        <div class="small muted" style="margin-bottom:8px">Ціни з ПДВ. «Ваша ціна» = РРЦ − ваша знижка на бренд; РРЦ — рекомендована роздрібна ціна.</div>
         <div id="pcList"></div>`
         : '<div class="card empty"><div class="big">Каталог ще порожній</div>Ваш менеджер ще не відкрив вам бренди. Зверніться до нього — після цього товари з’являться тут.</div>'}`;
     if (!products.length) return;
-    $$('[data-br]').forEach((b) => (b.onclick = () => { filter.brand = b.dataset.br; viewPartnerCatalog(); }));
-    $('#pcQ').oninput = (e) => { filter.q = e.target.value.trim(); draw(); };
+    $$('[data-br]').forEach((b) => (b.onclick = () => { filter.brand = b.dataset.br; filter.cat = ''; saveFilter(); viewPartnerCatalog(); }));
+    let t;
+    $('#pcQ').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { filter.q = e.target.value.trim(); saveFilter(); draw(); }, 200); };
+    $('#pcSort').onchange = (e) => { filter.sort = e.target.value; saveFilter(); draw(); };
     draw();
   }
 

@@ -169,6 +169,34 @@ export function createB2bPages(ctx = {}) {
     $$('[data-ue]').forEach((b) => (b.onclick = () => userForm(users.find((x) => String(x.id) === b.dataset.ue))));
   }
 
+  // ---------------------------------------------------------------- розсилка змін цін
+  // Перегляд: хто що отримає і куди (група партнера або його користувачі), потім «Надіслати».
+  async function sendPrices() {
+    const rows = await api('GET', '/api/b2b/price-changes');
+    const withCh = rows.filter((r) => !r.empty);
+    const dest = (r) => (r.group ? `група «${esc(r.group)}»` : r.tgUsers ? `особисто: ${r.tgUsers} корист.` : '<span class="badge bad">нікому — немає Telegram</span>');
+    const m = modal('Надіслати зміни цін партнерам', withCh.length ? `<div class="form-stack">
+        <div class="small muted">Зміни РРЦ і знижок з минулої розсилки кожному партнеру. Оновіть каталог з LP-CRM перед розсилкою, щоб РРЦ були свіжі.</div>
+        ${withCh.map((r) => `<div class="card form-stack" style="padding:10px 12px">
+          <label class="check"><input type="checkbox" data-pp="${r.id}" ${r.group || r.tgUsers ? 'checked' : 'disabled'}> <b>${esc(r.name)}</b> — товарів: ${r.products}${r.brands ? `, брендів: ${r.brands}` : ''} → ${dest(r)}</label>
+          <details><summary class="small">Переглянути повідомлення</summary>${r.preview.map((t) => `<pre class="small" style="white-space:pre-wrap;margin:6px 0">${t}</pre>`).join('')}</details>
+        </div>`).join('')}
+        ${rows.length > withCh.length ? `<div class="small muted">Без змін: ${rows.filter((r) => r.empty).map((r) => esc(r.name)).join(', ')}</div>` : ''}
+      </div>` : '<div class="small">Змін цін і знижок з минулої розсилки немає.</div>',
+    { wide: true, footer: `<button class="btn" data-close>Закрити</button>${withCh.length ? '<button class="btn primary" id="ppSend">Надіслати</button>' : ''}` });
+    $('#ppSend', m.el) && ($('#ppSend', m.el).onclick = async (e) => {
+      const ids = $$('[data-pp]', m.el).filter((x) => x.checked).map((x) => Number(x.dataset.pp));
+      if (!ids.length) { toast('Оберіть партнерів', true); return; }
+      e.currentTarget.disabled = true;
+      try {
+        const { results } = await api('POST', '/api/b2b/price-changes/send', { partner_ids: ids });
+        const ok = results.filter((r) => r.sent).length;
+        toast(`Надіслано: ${ok} з ${results.length}`, ok < results.length);
+        m.close();
+      } catch (er) { toast(er.message, true); e.currentTarget.disabled = false; }
+    });
+  }
+
   // ---------------------------------------------------------------- каталог
   let catFilter = { brand: '', q: '' };
   async function syncCatalog(btn, done = viewCatalog) {
@@ -188,7 +216,7 @@ export function createB2bPages(ctx = {}) {
     const qs = new URLSearchParams(Object.entries(catFilter).filter(([, v]) => v !== '')).toString();
     const [{ rows, state }, brands] = await Promise.all([api('GET', `/api/b2b/catalog${qs ? `?${qs}` : ''}`), api('GET', '/api/b2b/brands')]);
     main.innerHTML = `
-      <div class="head-row"><h2>Каталог і ціни</h2><div class="btn-row"><button class="btn" id="cAdd">+ Товари за ID</button><button class="btn primary" id="cSync">Оновити з LP-CRM</button></div></div>
+      <div class="head-row"><h2>Каталог і ціни</h2><div class="btn-row"><button class="btn" id="cAdd">+ Товари за ID</button><button class="btn" id="cSend">Надіслати зміни цін</button><button class="btn primary" id="cSync">Оновити з LP-CRM</button></div></div>
       <div class="alert info" style="margin-bottom:14px">Товари — з аналітики (усе, що продавалося) і додані вручну за ID з LP-CRM. Назва, РРЦ і фото оновлюються з LP-CRM
         для брендів, увімкнених хоча б одному партнеру. ${state.lastSync ? `Останнє оновлення: ${esc(fmtDateTime(state.lastSync))}.` : 'Ще не оновлювався.'}
         ${state.stale ? `<b>Чекають оновлення: ${state.stale}.</b>` : ''}</div>
@@ -209,6 +237,7 @@ export function createB2bPages(ctx = {}) {
     let t;
     $('#cQ').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { catFilter.q = e.target.value.trim(); viewCatalog(); }, 400); };
     $('#cSync').onclick = (e) => syncCatalog(e.currentTarget);
+    $('#cSend').onclick = () => sendPrices();
     $$('[data-vis]').forEach((cb) => (cb.onchange = async () => {
       try { await api('PUT', `/api/b2b/catalog/${cb.dataset.vis}`, { hidden: !cb.checked }); toast(cb.checked ? 'Товар показується партнерам' : 'Товар приховано від партнерів'); }
       catch (e) { toast(e.message, true); cb.checked = !cb.checked; }
