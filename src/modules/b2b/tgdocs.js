@@ -464,17 +464,23 @@ export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
   const firstLine = (e) => String(e || '').split('\n')[0];
 
   // Запит рахунку на закупівлю (нову або змінену) — у гілку General.
+  // Текст запиту рахунку; done — рахунок уже є: те саме замовлення, лише з позначкою (повідомлення лишається в групі).
+  async function reqText(o, { mode = '', done = false } = {}) {
+    const items = await db.all(`SELECT name, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
+    const lines = items.slice(0, 50).map((i) => `${h(i.name)} — ${i.qty} шт — ${m2(i.price)}`);
+    if (items.length > 50) lines.push(`…і ще ${items.length - 50} поз.`);
+    const head = done ? `🧾 <b>Закупівля ${orderNo(o.id)}</b> · ✅ рахунок № ${h(o.invoice_no)} додано`
+      : `🧾 <b>Потрібен рахунок · ${orderNo(o.id)}</b>${mode === 'changed' ? ' <i>(закупівлю змінено)</i>' : ''}`;
+    return `${head}\nПартнер: «${h(o.partner)}»\n\n`
+      + `<b>Рахунок на:</b>\n${h(o.entity)}\n\n<b>Товари:</b>\n${lines.join('\n')}\n\n<b>Разом: ${m2(o.total)} грн</b> (з ПДВ)`
+      + `${o.comment ? `\n<i>Коментар: ${h(String(o.comment).slice(0, 200))}</i>` : ''}${done ? '' : '\n\n↩️ Надішліть рахунок <b>відповіддю на це повідомлення</b>'}`;
+  }
   async function finRequest(orderId, mode = '') {
     const chat = await finChat();
     if (!chat) return;
     const o = await orderFull(orderId);
     if (!o || o.kind !== 'supply' || o.status !== 'invoice_wait') return;
-    const items = await db.all(`SELECT name, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
-    const lines = items.slice(0, 50).map((i) => `${h(i.name)} — ${i.qty} шт — ${m2(i.price)}`);
-    if (items.length > 50) lines.push(`…і ще ${items.length - 50} поз.`);
-    const text = `🧾 <b>Потрібен рахунок · ${orderNo(o.id)}</b>${mode === 'changed' ? ' <i>(закупівлю змінено)</i>' : ''}\nПартнер: «${h(o.partner)}»\n\n`
-      + `<b>Рахунок на:</b>\n${h(o.entity)}\n\n<b>Товари:</b>\n${lines.join('\n')}\n\n<b>Разом: ${m2(o.total)} грн</b> (з ПДВ)`
-      + `${o.comment ? `\n<i>Коментар: ${h(String(o.comment).slice(0, 200))}</i>` : ''}\n\n↩️ Надішліть рахунок <b>відповіддю на це повідомлення</b>`;
+    const text = await reqText(o, { mode });
     if (o.fin_req_msg) {
       const ok = await tgApi('editMessageText', { chat_id: chat, message_id: o.fin_req_msg, text, parse_mode: 'HTML' }).catch(() => null);
       if (ok) { await tgApi('sendMessage', { chat_id: chat, text: `✏️ Закупівлю ${orderNo(o.id)} змінено — рахунок на оновлений список.`, reply_to_message_id: o.fin_req_msg, allow_sending_without_reply: true }).catch(() => 0); return; }
@@ -496,12 +502,9 @@ export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
     const o = await orderFull(orderId);
     if (!chat || !o) return;
     // Виконаний запит прибираємо з групи (менше повідомлень). Старше 48 год Telegram видалити не дасть — тоді позначаємо.
+    // Запит рахунку (саме замовлення) лишається в групі — лише позначка, що рахунок додано.
     if (o.fin_req_msg && o.invoice_no) {
-      if (await tgApi('deleteMessage', { chat_id: chat, message_id: o.fin_req_msg }).catch(() => null)) await db.run(`UPDATE b2b_orders SET fin_req_msg = NULL WHERE id = ?`, [o.id]);
-      else {
-        await tgApi('editMessageText', { chat_id: chat, message_id: o.fin_req_msg, parse_mode: 'HTML',
-          text: `✅ <b>Рахунок № ${h(o.invoice_no)} · ${orderNo(o.id)}</b> — додано\n«${h(o.partner)}» · ${h(firstLine(o.entity))} · ${m2(o.total)} грн` }).catch(() => 0);
-      }
+      await tgApi('editMessageText', { chat_id: chat, message_id: o.fin_req_msg, parse_mode: 'HTML', text: await reqText(o, { done: true }) }).catch(() => 0);
     }
     if (o.fin_pay_msg && o.waybill_no) {
       if (await tgApi('deleteMessage', { chat_id: chat, message_id: o.fin_pay_msg }).catch(() => null)) await db.run(`UPDATE b2b_orders SET fin_pay_msg = NULL WHERE id = ?`, [o.id]);
