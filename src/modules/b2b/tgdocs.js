@@ -380,6 +380,13 @@ export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
       await saveDoc(d, { state: 'saved', saved_at: nowIso(), file_row: f.id, prev: JSON.stringify(prev), group_msg: group ? JSON.stringify(group) : '' });
       // у «Фінансових питаннях» — запам'ятати повідомлення з рахунком (на нього бот відповість після оплати)
       if (d.source === 'fin' && d.kind === 'invoice' && d.reply_to) await db.run(`UPDATE b2b_orders SET fin_inv_msg = ? WHERE id = ?`, [d.reply_to, o.id]);
+      // «Фінансові питання» — без повідомлень «Збережено»: реакція 👌 на документ, підказку з кнопками прибрати.
+      // Скасувати — на сайті (файл і № у закупівлі).
+      if (d.source === 'fin') {
+        if (d.reply_to) await tgApi('setMessageReaction', { chat_id: d.chat_id, message_id: d.reply_to, reaction: [{ type: 'emoji', emoji: '👌' }] }).catch(() => 0);
+        if (d.msg_id) await tgApi('deleteMessage', { chat_id: d.chat_id, message_id: d.msg_id }).catch(() => 0);
+        return 'Збережено';
+      }
       const url = `${base}/#/${o.kind === 'client' ? 'b2bclients' : 'b2borders'}/${o.id}`;
       const done = {
         chat_id: d.chat_id, parse_mode: 'HTML', disable_web_page_preview: true,
@@ -488,13 +495,28 @@ export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
     const chat = await finChat();
     const o = await orderFull(orderId);
     if (!chat || !o) return;
+    // Виконаний запит прибираємо з групи (менше повідомлень). Старше 48 год Telegram видалити не дасть — тоді позначаємо.
     if (o.fin_req_msg && o.invoice_no) {
-      await tgApi('editMessageText', { chat_id: chat, message_id: o.fin_req_msg, parse_mode: 'HTML',
-        text: `✅ <b>Рахунок № ${h(o.invoice_no)} · ${orderNo(o.id)}</b> — додано\n«${h(o.partner)}» · ${h(firstLine(o.entity))} · ${m2(o.total)} грн` }).catch(() => 0);
+      if (await tgApi('deleteMessage', { chat_id: chat, message_id: o.fin_req_msg }).catch(() => null)) await db.run(`UPDATE b2b_orders SET fin_req_msg = NULL WHERE id = ?`, [o.id]);
+      else {
+        await tgApi('editMessageText', { chat_id: chat, message_id: o.fin_req_msg, parse_mode: 'HTML',
+          text: `✅ <b>Рахунок № ${h(o.invoice_no)} · ${orderNo(o.id)}</b> — додано\n«${h(o.partner)}» · ${h(firstLine(o.entity))} · ${m2(o.total)} грн` }).catch(() => 0);
+      }
     }
     if (o.fin_pay_msg && o.waybill_no) {
-      await tgApi('editMessageText', { chat_id: chat, message_id: o.fin_pay_msg, parse_mode: 'HTML',
-        text: `✅ <b>Накладна № ${h(o.waybill_no)} · ${orderNo(o.id)}</b> — додано (рахунок № ${h(o.invoice_no)}, ${m2(o.total)} грн)` }).catch(() => 0);
+      if (await tgApi('deleteMessage', { chat_id: chat, message_id: o.fin_pay_msg }).catch(() => null)) await db.run(`UPDATE b2b_orders SET fin_pay_msg = NULL WHERE id = ?`, [o.id]);
+      else {
+        await tgApi('editMessageText', { chat_id: chat, message_id: o.fin_pay_msg, parse_mode: 'HTML',
+          text: `✅ <b>Накладна № ${h(o.waybill_no)} · ${orderNo(o.id)}</b> — додано (рахунок № ${h(o.invoice_no)}, ${m2(o.total)} грн)` }).catch(() => 0);
+      }
+    }
+    // Підсумок — одне повідомлення, коли в закупівлі є і рахунок, і накладна.
+    if (o.kind === 'supply' && o.invoice_no && o.waybill_no && !o.fin_done) {
+      const claim = await db.run(`UPDATE b2b_orders SET fin_done = 1 WHERE id = ? AND COALESCE(fin_done, 0) = 0`, [o.id]);
+      if (claim.changes) {
+        await tgApi('sendMessage', { chat_id: chat, parse_mode: 'HTML',
+          text: `✅ <b>Закупівлю ${orderNo(o.id)} закрито</b> — «${h(o.partner)}»\n${h(firstLine(o.entity))}\nРахунок № ${h(o.invoice_no)} · накладна № ${h(o.waybill_no)} · ${m2(o.total)} грн` }).catch(() => 0);
+      }
     }
   }
   // Оплачено — відповіддю на повідомлення з рахунком: зробіть накладну.

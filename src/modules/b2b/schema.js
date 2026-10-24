@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 11,
+  version: 12,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -204,6 +204,7 @@ export const schema = {
     ['b2b_orders', 'fin_req_msg', 'INTEGER'],
     ['b2b_orders', 'fin_inv_msg', 'INTEGER'],
     ['b2b_orders', 'fin_pay_msg', 'INTEGER'],
+    ['b2b_orders', 'fin_done', 'INTEGER DEFAULT 0'], // підсумок «закупівлю закрито» вже надіслано
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ['b2b_tg_docs', 'source', "TEXT DEFAULT 'private'"],
     ['b2b_tg_docs', 'reply_to', 'INTEGER'],

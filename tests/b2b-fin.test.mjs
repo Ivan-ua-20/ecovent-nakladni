@@ -93,9 +93,10 @@ let o = (await req('GET', `/api/b2b/orders/${s1.id}`)).order;
 assert.deepEqual([o.invoice_no, o.status], ['110', 'pay_wait']);
 assert.equal((await db.get(`SELECT fin_inv_msg FROM b2b_orders WHERE id = ?`, [s1.id])).fin_inv_msg, invMsg);
 assert.ok(calls.some(([m, b]) => m === 'sendDocument' && b.chat_id === '-500' && b.document === 'inv1'), 'рахунок — у групу партнера');
-const ok1 = sent((b) => String(b.chat_id) === String(FIN) && /Збережено/.test(b.text))[0];
-assert.ok(ok1 && ok1.reply_to_message_id === invMsg, 'відповідь на повідомлення з рахунком');
-assert.ok(calls.some(([m, b]) => m === 'editMessageText' && b.message_id === reqId && /✅ <b>Рахунок № 110 · B2B-/.test(b.text)), 'запит позначено виконаним');
+assert.ok(!sent((b) => String(b.chat_id) === String(FIN) && /Збережено/.test(b.text)).length, 'у групі — без «Збережено»');
+assert.ok(calls.some(([m, b]) => m === 'setMessageReaction' && b.message_id === invMsg && b.reaction[0].emoji === '👌'), 'реакція на рахунок');
+assert.ok(calls.some(([m, b]) => m === 'deleteMessage' && b.message_id === reqId), 'виконаний запит прибрано');
+assert.equal((await db.get(`SELECT fin_req_msg FROM b2b_orders WHERE id = ?`, [s1.id])).fin_req_msg, null);
 assert.match((await req('GET', `/api/b2b/orders/${s1.id}`)).history.map((x) => x.action).join('\n'), /Фінансові питання/);
 
 // ---------- 4. Оплачено → запит накладної відповіддю на рахунок → накладна ----------
@@ -109,7 +110,13 @@ await postPdf(miniPdf(basDoc({ kind: 'waybill', number: '2459', buyer: BUYER, it
 o = (await req('GET', `/api/b2b/orders/${s1.id}`)).order;
 assert.equal(o.waybill_no, '2459');
 assert.ok(calls.some(([m, b]) => m === 'sendDocument' && b.chat_id === '-500' && b.document === 'wb1'), 'накладна — у групу партнера');
-assert.ok(calls.some(([m, b]) => m === 'editMessageText' && b.message_id === payId && /Накладна № 2459/.test(b.text)));
+assert.ok(calls.some(([m, b]) => m === 'deleteMessage' && b.message_id === payId), 'запит накладної прибрано');
+assert.ok(!sent((b) => /Збережено/.test(b.text)).length);
+const fin1 = sent((b) => String(b.chat_id) === String(FIN) && /закрито/.test(b.text));
+assert.equal(fin1.length, 1, 'одне підсумкове повідомлення');
+assert.match(fin1[0].text, new RegExp(`Закупівлю B2B-${s1.id} закрито.*Рахунок № 110 · накладна № 2459`, 's'));
+await req('PUT', `/api/b2b/orders/${s1.id}`, { waybill_no: '2460' });
+assert.equal(sent((b) => /закрито/.test(b.text)).length, 1, 'повторно — ні');
 
 // ---------- 5. Розбіжність → кнопки лише для адмінів ----------
 const s2 = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, items: [{ product_id: 11, qty: 1 }] }, A); // 900
