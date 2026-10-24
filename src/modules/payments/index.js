@@ -94,7 +94,7 @@ const BANKS = { 305299: 'Приват', 322001: 'моно', 300465: 'Ощад', 
 export const bankOf = (iban) => BANKS[String(iban || '').replace(/\s/g, '').slice(4, 10)] || '';
 const ACC = `COALESCE(NULLIF(a.name, ''), NULLIF(a.alias, ''), a.iban)`;
 
-export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () => 0 }) {
+export function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, notify = async () => 0, onTx = async () => 0 }) {
   const settings = () => loadSettings(db);
   const putSetting = (key, value) => putSettingDb(db, key, value);
   async function creds() {
@@ -456,6 +456,7 @@ export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () 
     const paid = await relink({ txIds: changedIds });
     await putSetting('odb_hook_at', nowIso());
     await notify({ linkIds: paid, freshRows }).catch(() => 0);
+    await onTx(freshRows.map((r) => r.id), new URL(c.req.url).origin).catch(() => 0); // оплати закупівель B2B
     return c.json({ ok: true, fresh, paid: paid.length });
   });
 
@@ -523,6 +524,7 @@ export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () 
     const paid = await relink({ txIds: changedIds, linkIds });
     // сповіщення: лише якщо історію вже завантажено (інакше це старі платежі)
     await notify({ linkIds: paid, freshRows: hist.done ? newRows : [] }).catch(() => 0);
+    if (hist.done && newRows.length) await onTx(newRows.map((r) => r.id), new URL(c.req.url).origin).catch(() => 0);
     const me = c.get('user');
     const minePaid = paid.length
       ? await db.all(`SELECT id, number, amount, client FROM pay_links WHERE created_by_id = ? AND id IN (SELECT value FROM json_each(?))`, [me.id, JSON.stringify(paid)])
@@ -556,6 +558,11 @@ export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () 
       db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN t.currency = 'UAH' THEN t.amount END), 0) AS sum FROM odb_tx t LEFT JOIN pay_links l ON l.id = t.link_id ${w}`, params),
       db.all(`SELECT id, ${ACC} AS alias, kind FROM odb_accounts a ORDER BY seen, sort, alias`),
     ]);
+    // Оплати закупівель B2B (для тих, хто працює з B2B): зараховано в закупівлю або треба перевірити.
+    if (can(c.get('user'), 'b2b.admin') && services.b2b?.payInfo) {
+      const info = await services.b2b.payInfo(rows.filter((r) => !r.link_id).map((r) => r.id));
+      for (const r of rows) if (info.has(r.id)) r.b2b = info.get(r.id);
+    }
     const s = await settings();
     let hist = {};
     try { hist = JSON.parse(s.odb_hist || '{}'); } catch { /* */ }
@@ -665,5 +672,13 @@ export function mountOdb(app, { db, fetchFn, base = ODB_BASE, notify = async () 
     return c.json({ ok: true });
   });
 
-  return { linkForRahunok };
+  // Для B2B: платежі за id (лише не прив'язані до наших посилань на оплату) і платежі одного платника за останні дні.
+  const TX_COLS = `id, date, amount, currency, purpose, payer_name, payer_code`;
+  const txs = (ids) => db.all(`SELECT ${TX_COLS} FROM odb_tx WHERE id IN (SELECT value FROM json_each(?)) AND link_id IS NULL`, [JSON.stringify(ids)]);
+  const txByPayer = (code, days = 120) => db.all(
+    `SELECT ${TX_COLS} FROM odb_tx WHERE payer_code = ? AND link_id IS NULL AND currency = 'UAH' AND date >= ? ORDER BY date DESC LIMIT 50`,
+    [code, new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)],
+  );
+
+  return { linkForRahunok, txs, txByPayer };
 }

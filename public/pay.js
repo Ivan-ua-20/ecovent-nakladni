@@ -297,6 +297,8 @@ export function createPayUI(ctx) {
             <td class="small">${esc(r.payer_name)}${r.payer_code ? `<div class="muted">${esc(r.payer_code)}</div>` : ''}</td>
             <td class="small pay-purpose">${esc(r.purpose)}</td>
             <td>${r.link_id ? `<button class="linkbtn" data-open="${r.link_id}">№ ${esc(r.link_number)}</button> ${badge(r.link_status)}${r.link_author ? `<div class="small muted">${esc(r.link_author)}</div>` : ''}`
+              : r.b2b?.order_id ? `<a class="linkbtn" href="#/b2borders/${r.b2b.order_id}">Закупівля ${esc(r.b2b.number)}</a> <span class="badge ok">B2B</span>`
+              : r.b2b?.check ? `<div class="small"><span class="badge warn">B2B: перевірити</span> ${r.b2b.candidates.map((id) => `<a href="#/b2borders/${id}">B2B-${id}</a>`).join(', ')}</div>`
               : check ? `<button class="btn sm" data-check="${esc(r.id)}" data-amount="${r.amount}">Перевірити</button>` : ''}</td></tr>`;
         }).join('')}</tbody></table></div>` : '<div class="card empty">За цей період надходжень немає.</div>'}`;
       $$('[data-open]', box).forEach((b) => (b.onclick = () => openLink(b.dataset.open)));

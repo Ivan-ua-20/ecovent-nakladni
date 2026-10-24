@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'payments',
-  version: 2,
+  version: 3,
   tables: [
   `CREATE TABLE IF NOT EXISTS odb_accounts (
     id TEXT PRIMARY KEY,
@@ -76,6 +76,7 @@ export const schema = {
   async seed(db) {
     await db.batch([
       [`UPDATE odb_tx SET possible = '[]' WHERE possible LIKE '%object Object%'`, []],
+      [`CREATE INDEX IF NOT EXISTS odb_tx_payer ON odb_tx (payer_code, date)`, []], // оплати закупівель B2B за кодом платника
       [`INSERT OR IGNORE INTO odb_tx_possible (tx_id, odb_id)
         SELECT t.id, j.value FROM odb_tx t, json_each(t.possible) j WHERE t.possible != '[]' AND typeof(j.value) = 'text' AND j.value != ''`, []],
     ]);
