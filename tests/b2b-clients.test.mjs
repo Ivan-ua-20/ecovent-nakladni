@@ -230,7 +230,7 @@ crm.length = 0;
 const s3 = await req('POST', `/api/b2b/clients/${c3.id}/crm`);
 assert.equal(s3.crm_id, '');
 const add3 = crm.find((x) => x.method === 'addNewOrder').p;
-assert.match(add3.comment, new RegExp(`⏳ ОЧІКУЄМО ОПЛАТУ: закупівля B2B-${sup2.id}, рахунок ще не виставлено.*рахунок на ФОП А, від «Партнер А»`, 's'));
+assert.match(add3.comment, new RegExp(`⏳ ОЧІКУЄМО ОПЛАТУ: закупівля B2B-${sup2.id}, рахунок ще не виставлено.*рахунок на ФОП А, ІПН 1234567890, від «Партнер А»`, 's'));
 assert.ok(!('payment' in add3), 'неоплачена — без виду оплати');
 d = await req('GET', `/api/b2b/orders/${c3.id}`);
 assert.equal(d.order.status, 'crm');
