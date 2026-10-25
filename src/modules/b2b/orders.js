@@ -396,7 +396,8 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     );
     const [counts, closed] = await Promise.all([
       db.all(`SELECT status, COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' GROUP BY status`),
-      db.get(`SELECT COUNT(*) AS n FROM b2b_orders o WHERE o.kind = 'supply' AND ${CLOSED_SQL}`),
+      // «Закрито» — лише серед закупівель за пів року (щоб лічильник не переглядав усю історію при кожному відкритті списку).
+      db.get(`SELECT COUNT(*) AS n FROM b2b_orders o WHERE o.kind = 'supply' AND o.created_at > ? AND ${CLOSED_SQL}`, [new Date(Date.now() - 183 * 86400000).toISOString()]),
     ]);
     return c.json({ rows: rows.map(publicOrder), statuses: LIST_STATUSES, counts: { ...Object.fromEntries(counts.map((r) => [r.status, r.n])), closed: closed?.n || 0 } });
   });
@@ -511,11 +512,16 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return { hash, ttn: np?.ttn || '', np };
   }
   // Інше (не скасоване) замовлення клієнта з цим маркуванням: той самий файл, ТТН у файлі маркування або ТТН замовлення.
+  // Лише за індексами (відбиток файлу, ТТН у файлі, ТТН замовлення) — без перегляду всіх замовлень.
   async function labelDup({ hash, ttn }, exceptId = 0) {
+    if (!hash && !ttn) return null;
     const row = await db.get(
-      `SELECT o.id, o.client_name FROM b2b_orders o WHERE o.kind = 'client' AND o.status != 'cancelled' AND o.id != ? AND (
-         EXISTS (SELECT 1 FROM b2b_files f WHERE f.order_id = o.id AND f.kind = 'label' AND ((? != '' AND f.hash = ?) OR (? != '' AND f.ttn = ?)))
-         OR (? != '' AND o.ttn = ?)) ORDER BY o.id LIMIT 1`, [exceptId, hash || '', hash || '', ttn || '', ttn || '', ttn || '', ttn || ''],
+      `SELECT o.id, o.client_name FROM b2b_orders o WHERE o.id IN (
+         SELECT f.order_id FROM b2b_files f WHERE ? != '' AND f.hash = ? AND f.kind = 'label'
+         UNION SELECT f.order_id FROM b2b_files f WHERE ? != '' AND f.ttn = ? AND f.kind = 'label'
+         UNION SELECT x.id FROM b2b_orders x WHERE ? != '' AND x.ttn = ?)
+       AND +o.kind = 'client' AND o.status != 'cancelled' AND o.id != ? ORDER BY o.id LIMIT 1`,
+      [hash || '', hash || '', ttn || '', ttn || '', ttn || '', ttn || '', exceptId],
     );
     return row ? { id: row.id, number: orderNo(row.id), client_name: row.client_name } : null;
   }

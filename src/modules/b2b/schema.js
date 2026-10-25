@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 15,
+  version: 16,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -230,6 +230,7 @@ export const schema = {
       [`CREATE INDEX IF NOT EXISTS b2b_files_hash ON b2b_files (hash)`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_files_ttn ON b2b_files (ttn)`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_orders_ttn ON b2b_orders (ttn)`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_payments_payer ON b2b_payments (payer_code)`, []],
     ]);
   },
 };
