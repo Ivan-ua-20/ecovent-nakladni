@@ -287,7 +287,7 @@ export function createB2bPages(ctx = {}) {
       ${rows.length ? `<table class="list"><thead><tr>${selHead()}<th>№</th><th>Партнер</th><th class="hide-m">Дата</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Рахунок</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click" data-o="${o.id}">
           ${selCell(o.id)}
-          <td><b>${esc(o.number)}</b></td>
+          <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? '<div><span class="badge info">🚗 самовивіз</span></div>' : ''}</td>
           <td>${esc(o.partner)}<div class="small muted">${esc(o.entity.split('\n')[0].split(',')[0])}</div></td>
           <td class="small hide-m">${esc(fmtDateTime(o.created_at))}</td>
           <td class="r"><b>${uah(o.total)}</b></td>
@@ -323,6 +323,8 @@ export function createB2bPages(ctx = {}) {
           <div class="card form-stack">
             <h3>Платник (юрособа партнера)</h3>
             <div class="small" style="white-space:pre-line" id="oEnt">${esc(o.entity)}</div>
+            ${closed || o.status === 'open' ? `<div class="small"><b>Отримання:</b> ${esc(o.delivery_name || '')}</div>` : `<label class="f"><span>Отримання</span>
+              <select id="oDel">${[['np', 'Відправка клієнтам (Нова пошта)'], ['pickup', '🚗 Самовивіз — партнер забирає всю закупівлю']].map(([k, v]) => `<option value="${k}" ${o.delivery === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>`}
             <div class="btn-row"><button class="btn sm" id="oCopy">Скопіювати реквізити</button></div>
           </div>
           ${clients.length ? `<div class="card form-stack"><h3>Замовлення клієнтів із цієї закупівлі</h3>
@@ -385,6 +387,10 @@ export function createB2bPages(ctx = {}) {
       try { await api('DELETE', `/api/b2b/files/${b.dataset.fdel}`); toast('Видалено'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
     }));
     if ($('#oPays')) loadPays(o);
+    if ($('#oDel')) $('#oDel').onchange = async (e) => {
+      try { await api('POST', `/api/b2b/orders/${o.id}/delivery`, { delivery: e.target.value }); toast('Спосіб отримання змінено — партнеру надіслано повідомлення'); viewOrder(o.id); }
+      catch (er) { toast(er.message, true); e.target.value = o.delivery; }
+    };
     if ($('#oCheckPay')) $('#oCheckPay').onclick = () => checkPay(o);
     $$('[data-set]').forEach((b) => (b.onclick = async () => {
       const st = b.dataset.set;

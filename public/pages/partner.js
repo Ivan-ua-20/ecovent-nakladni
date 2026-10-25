@@ -220,7 +220,7 @@ export function createPartnerPages(ctx = {}) {
       ${filterBar(supFilter, { placeholder: '№, юрособа, № рахунку…' })}
       ${rows.length ? `<table class="list"><thead><tr><th>№</th><th class="hide-m">Дата</th><th>Сума</th><th>Статус</th><th class="hide-m">Рахунок</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click" data-o="${o.id}">
-          <td><b>${esc(o.number)}</b><div class="small muted">${esc(o.entity.split('\n')[0].split(',')[0])}</div></td>
+          <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? ' <span class="badge info">🚗 самовивіз</span>' : ''}<div class="small muted">${esc(o.entity.split('\n')[0].split(',')[0])}</div></td>
           <td class="small hide-m">${esc(fmtDateTime(o.created_at))}</td>
           <td><b>${uah(o.total)}</b></td>
           <td>${statusBadge(o)}</td>
@@ -235,7 +235,8 @@ export function createPartnerPages(ctx = {}) {
   async function viewOrder(id) {
     const { order: o, items, files, history, clients = [], left = [] } = await api('GET', `/api/b2b/p/orders/${id}`);
     const editable = o.status === 'invoice_wait' && canEdit();
-    const hasLeft = !['cancelled', 'open'].includes(o.status) && left.some((r) => r.left > 0);
+    const pickup = o.delivery === 'pickup';
+    const hasLeft = !pickup && !['cancelled', 'open'].includes(o.status) && left.some((r) => r.left > 0);
     const ob = o.status === 'open' ? await openBanner() : { html: '', wire: () => {} };
     main.innerHTML = `
       ${ob.html}
@@ -246,7 +247,8 @@ export function createPartnerPages(ctx = {}) {
         <div class="form-stack">
           <div class="card">${itemsTable(items)}</div>
           ${o.comment ? `<div class="card small"><b>Коментар:</b> ${esc(o.comment)}</div>` : ''}
-          ${o.status !== 'cancelled' ? `<div class="card form-stack">
+          ${pickup ? '<div class="alert info">🚗 <b>Самовивіз</b> — усю закупівлю ви забираєте зі складу самі; замовлення клієнтів з неї не оформлюються.</div>' : ''}
+          ${o.status !== 'cancelled' && !pickup ? `<div class="card form-stack">
             <div class="head-row"><h3>Замовлення клієнтів із цієї закупівлі</h3>${hasLeft && canEdit() ? `<a class="btn sm primary" href="#/pclients/new/${o.id}">+ Замовлення клієнта</a>` : ''}</div>
             <table class="list"><thead><tr><th>Товар</th><th class="r">Закуплено</th><th class="r">Розписано</th><th class="r">Залишок</th></tr></thead><tbody>
               ${left.map((r) => `<tr><td>${esc(r.name)}</td><td class="r">${r.qty}</td><td class="r">${r.used}</td><td class="r"><b>${r.left}</b></td></tr>`).join('')}</tbody></table>
@@ -257,6 +259,7 @@ export function createPartnerPages(ctx = {}) {
           <div class="card form-stack">
             <h3>Рахунок</h3>
             <div class="small" style="white-space:pre-line"><b>Платник:</b> ${esc(o.entity)}</div>
+            <div class="small"><b>Отримання:</b> ${esc(o.delivery_name || '')}</div>
             ${o.invoice_no ? `<div><b>Рахунок № ${esc(o.invoice_no)}</b>${o.invoice_date ? ` від ${esc(fmtDay(o.invoice_date))}` : ''}</div>` : '<div class="muted small">Рахунок ще готується — сповістимо в Telegram.</div>'}
             ${o.waybill_no ? `<div>Накладна № ${esc(o.waybill_no)}</div>` : ''}
             ${o.status === 'paid' || o.status === 'done' ? `<div class="badge ok">Оплачено ${esc(fmtDateTime(o.paid_at))}</div>` : ''}
@@ -302,6 +305,9 @@ export function createPartnerPages(ctx = {}) {
           <div class="card form-stack" style="position:sticky;top:12px">
             <h3>Ваше замовлення</h3>
             <div id="ofSum"></div>
+            <div class="f"><span>Як отримуєте товар</span>
+              <label class="check"><input type="radio" name="ofDel" value="np" ${cur?.order.delivery === 'pickup' ? '' : 'checked'}> Відправка клієнтам Новою поштою (оформлюю замовлення на клієнтів)</label>
+              <label class="check"><input type="radio" name="ofDel" value="pickup" ${cur?.order.delivery === 'pickup' ? 'checked' : ''}> Самовивіз — забираю всю закупівлю зі складу</label></div>
             <label class="f"><span>Рахунок виставити на</span><select id="ofEnt">${entities.map((e) => `<option value="${e.id}" ${String(cur?.order.entity_id) === String(e.id) ? 'selected' : ''}>${esc(e.name)} (${esc(e.code)})</option>`).join('')}</select></label>
             <label class="f"><span>Коментар</span><textarea id="ofComment" rows="2">${esc(cur?.order.comment || '')}</textarea></label>
             <button class="btn primary" id="ofSave">${id ? 'Зберегти зміни' : 'Оформити закупівлю'}</button>
@@ -335,7 +341,7 @@ export function createPartnerPages(ctx = {}) {
     $('#ofSave').onclick = async () => {
       const items = [...qty].filter(([, q]) => q > 0).map(([product_id, q]) => ({ product_id, qty: q }));
       if (!items.length) { toast('Вкажіть кількість хоча б одного товару', true); return; }
-      const body = { entity_id: Number($('#ofEnt').value), items, comment: $('#ofComment').value };
+      const body = { entity_id: Number($('#ofEnt').value), items, comment: $('#ofComment').value, delivery: $('input[name="ofDel"]:checked')?.value || 'np' };
       $('#ofSave').disabled = true;
       try {
         if (id) { await api('PUT', `/api/b2b/p/orders/${id}`, body); toast('Зміни збережено'); location.hash = `#/porders/${id}`; }

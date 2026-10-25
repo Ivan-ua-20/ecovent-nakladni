@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 17,
+  version: 18,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -214,6 +214,8 @@ export const schema = {
     ['b2b_orders', 'group_done', 'INTEGER DEFAULT 0'],
     // Юрособа партнера за замовчуванням для закупівель.
     ['b2b_partners', 'default_entity', 'INTEGER'],
+    // Спосіб отримання закупівлі: np — відправка клієнтам (замовлення клієнтів), pickup — самовивіз усієї закупівлі.
+    ['b2b_orders', 'delivery', "TEXT DEFAULT 'np'"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ['b2b_tg_docs', 'source', "TEXT DEFAULT 'private'"],
     ['b2b_tg_docs', 'reply_to', 'INTEGER'],

@@ -476,7 +476,7 @@ export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
     const head = done ? `🧾 <b>Закупівля ${orderNo(o.id)}</b> · ✅ рахунок № ${h(o.invoice_no)} додано`
       : `🧾 <b>Потрібен рахунок · ${orderNo(o.id)}</b>${mode === 'changed' ? ' <i>(закупівлю змінено)</i>' : ''}`;
     return `${head}\nПартнер: «${h(o.partner)}»\n\n`
-      + `<b>Рахунок на:</b>\n${h(o.entity)}\n\n<b>Товари:</b>\n${lines.join('\n')}\n\n<b>Разом: ${m2(o.total)} грн</b> (з ПДВ)`
+      + `<b>Рахунок на:</b>\n${h(o.entity)}\n${o.delivery === 'pickup' ? '🚗 <b>Самовивіз</b> — партнер забирає всю закупівлю зі складу\n' : ''}\n<b>Товари:</b>\n${lines.join('\n')}\n\n<b>Разом: ${m2(o.total)} грн</b> (з ПДВ)`
       + `${o.comment ? `\n<i>Коментар: ${h(String(o.comment).slice(0, 200))}</i>` : ''}${done ? '' : '\n\n↩️ Надішліть рахунок <b>відповіддю на це повідомлення</b>'}`;
   }
   async function finRequest(orderId, mode = '') {

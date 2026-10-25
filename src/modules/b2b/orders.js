@@ -46,6 +46,9 @@ export const CLOSED_SQL = `(o.kind = 'supply' AND o.status NOT IN ('open', 'canc
   AND EXISTS (SELECT 1 FROM b2b_order_items i WHERE i.order_id = o.id)
   AND NOT EXISTS (SELECT 1 FROM b2b_order_items i WHERE i.order_id = o.id AND i.qty > COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci
     JOIN b2b_orders co ON co.id = ci.order_id WHERE co.supply_id = o.id AND co.kind = 'client' AND co.status != 'cancelled' AND ci.product_id = i.product_id), 0)))`;
+// Спосіб отримання закупівлі: товари розписуються на замовлення клієнтів (Нова пошта) або партнер забирає все сам.
+export const DELIVERY = { np: 'Відправка клієнтам (Нова пошта)', pickup: 'Самовивіз — партнер забирає всю закупівлю зі складу' };
+const deliveryOf = (v) => (DELIVERY[v] ? v : 'np');
 const LIST_STATUSES = { ...ORDER_STATUS, closed: 'Закрито (усе розписано)' };
 const ENTITY_KIND = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 const FILE_KIND = { invoice: 'Рахунок', waybill: 'Накладна', label: 'Маркування', other: 'Файл' };
@@ -92,7 +95,8 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const lines = items.slice(0, 60).map((i) => `${h(i.name)}${i.article ? ` (${h(i.article)})` : ''} — ${i.qty} шт — ${uah(i.price)}`);
     if (items.length > 60) lines.push(`…і ще ${items.length - 60} поз.`);
     return `${title} <b>${orderNo(o.id)}</b> від «${h(p.name)}»\n\n`
-      + `<b>Рахунок і накладна на:</b>\n${h(o.entity || '—')}\n\n`
+      + `<b>Рахунок і накладна на:</b>\n${h(o.entity || '—')}\n`
+      + `<b>Доставка:</b> ${o.delivery === 'pickup' ? '🚗 <b>САМОВИВІЗ</b> — партнер забирає всю закупівлю зі складу' : 'відправка клієнтам (Нова пошта)'}\n\n`
       + `<b>Товари:</b>\n${lines.join('\n')}\n\n<b>Разом: ${uah(o.total)}</b> (з ПДВ)`
       + `${o.comment ? `\n\n<i>Коментар: ${h(String(o.comment).slice(0, 300))}</i>` : ''}`;
   };
@@ -206,11 +210,12 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     await checkUnpaid(p, total);
     const now = nowIso();
     const r = await db.run(
-      `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?)`,
-      [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now],
+      `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery)],
     );
-    await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r.lastId, now, userName(c.get('user')), `оформлено закупівлю на ${uah(total)}`]]]);
-    const full = orderText('🆕 Нова закупівля', { id: r.lastId, entity: entityText(e), total, comment: b.comment }, p, items);
+    await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
+      [r.lastId, now, userName(c.get('user')), `оформлено закупівлю на ${uah(total)}${deliveryOf(b.delivery) === 'pickup' ? ' (самовивіз)' : ''}`]]]);
+    const full = orderText('🆕 Нова закупівля', { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery) }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${r.lastId}`)}`);
     await tgGroup(p.id, full);
     await hooks.finRequest?.(r.lastId).catch(() => 0); // запит рахунку в групу «Фінансові питання»
@@ -291,6 +296,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   }
   const publicOrder = (o) => {
     const out = { ...o, number: orderNo(o.id), status_name: ANY_STATUS[o.status] || o.status };
+    if (o.kind === 'supply') { out.delivery = deliveryOf(o.delivery); out.delivery_name = DELIVERY[out.delivery]; }
     if (o.kind === 'supply' && ['partial', 'pay_wait'].includes(o.status)) out.due = round2(o.total - (o.paid_amount || 0));
     if (o.kind === 'supply' && o.status === 'partial') out.status_name = `Частково оплачено · ще ${uah(out.due)}`;
     if (o.kind === 'supply' && o.closed) { out.closed = true; out.status_name = `${out.status_name} · Закрито`; }
@@ -358,17 +364,20 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     await checkUnpaid(p, total, o.id);
     // Не менше, ніж уже розписано на замовлення клієнтів.
     const want = new Map(items.map((i) => [i.product_id, i.qty]));
-    for (const r of await supplyLeft(o.id)) {
+    const left = await supplyLeft(o.id);
+    for (const r of left) {
       if (r.used > (want.get(r.product_id) || 0)) throw fail(400, `«${r.name}»: на замовлення клієнтів уже розписано ${r.used} шт. — менше зменшити не можна.`);
     }
+    const delivery = b.delivery === undefined ? deliveryOf(o.delivery) : deliveryOf(b.delivery);
+    if (delivery === 'pickup' && left.some((r) => r.used > 0)) throw fail(400, 'З цієї закупівлі вже є замовлення клієнтів — самовивіз неможливий.');
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, items),
-      [`UPDATE b2b_orders SET entity_id = ?, entity = ?, total = ?, comment = ?, updated_at = ? WHERE id = ?`,
-        [e.id, entityText(e), total, String(b.comment ?? o.comment ?? '').trim().slice(0, 1000), nowIso(), o.id]],
+      [`UPDATE b2b_orders SET entity_id = ?, entity = ?, total = ?, comment = ?, delivery = ?, updated_at = ? WHERE id = ?`,
+        [e.id, entityText(e), total, String(b.comment ?? o.comment ?? '').trim().slice(0, 1000), delivery, nowIso(), o.id]],
     ]);
     await log(o.id, c.get('user'), `змінено замовлення: ${items.length} поз., ${uah(total)}`);
-    const full = orderText('✏️ Змінено закупівлю', { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment }, p, items);
+    const full = orderText('✏️ Змінено закупівлю', { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment, delivery }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${o.id}`)}`);
     await hooks.finRequest?.(o.id, 'changed').catch(() => 0);
     return c.json({ ok: true, total });
@@ -452,6 +461,23 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     }
     return status;
   }
+
+  // Адмін змінює спосіб отримання (партнер помилився): самовивіз — лише якщо з закупівлі ще немає замовлень клієнтів.
+  app.post('/api/b2b/orders/:id/delivery', async (c) => {
+    need(c, 'b2b.admin');
+    const o = await orderOf(c.req.param('id'));
+    if (o.kind !== 'supply' || o.status === 'open') throw fail(400, 'Спосіб отримання — лише для звичайної закупівлі.');
+    const { delivery } = await c.req.json();
+    if (!DELIVERY[delivery]) throw fail(400, 'Невідомий спосіб отримання.');
+    if (delivery === deliveryOf(o.delivery)) return c.json({ ok: true });
+    if (delivery === 'pickup' && await db.get(`SELECT id FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled' LIMIT 1`, [o.id])) {
+      throw fail(400, 'З цієї закупівлі вже є замовлення клієнтів — спершу скасуйте їх, потім ставте самовивіз.');
+    }
+    await db.run(`UPDATE b2b_orders SET delivery = ?, updated_at = ? WHERE id = ?`, [delivery, nowIso(), o.id]);
+    await log(o.id, c.get('user'), `спосіб отримання: «${DELIVERY[delivery]}» (змінив менеджер)`);
+    await tgPartner(o.partner_id, `🔁 Закупівля ${orderNo(o.id)}: спосіб отримання змінено на «${DELIVERY[delivery]}».\n${link(c, `porders/${o.id}`)}`);
+    return c.json({ ok: true });
+  });
 
   // Ручна зміна статусу: «Оплачено» (якщо Opendatabot не побачив оплату), «Завершено», «Скасовано», повернути «Очікує оплату».
   app.post('/api/b2b/orders/:id/status', async (c) => {
