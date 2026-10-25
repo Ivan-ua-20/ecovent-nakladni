@@ -5344,6 +5344,11 @@ var limitsOf = (p) => ({
   unpaid: Number(p?.unpaid_limit) > 0 ? Number(p.unpaid_limit) : DEFAULT_LIMITS.unpaid
 });
 var UNPAID = `('open', 'invoice_wait', 'pay_wait', 'partial')`;
+var CLOSED_SQL = `(o.kind = 'supply' AND o.status NOT IN ('open', 'cancelled')
+  AND EXISTS (SELECT 1 FROM b2b_order_items i WHERE i.order_id = o.id)
+  AND NOT EXISTS (SELECT 1 FROM b2b_order_items i WHERE i.order_id = o.id AND i.qty > COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci
+    JOIN b2b_orders co ON co.id = ci.order_id WHERE co.supply_id = o.id AND co.kind = 'client' AND co.status != 'cancelled' AND ci.product_id = i.product_id), 0)))`;
+var LIST_STATUSES = { ...ORDER_STATUS, closed: "\u0417\u0430\u043A\u0440\u0438\u0442\u043E (\u0443\u0441\u0435 \u0440\u043E\u0437\u043F\u0438\u0441\u0430\u043D\u043E)" };
 var ENTITY_KIND = { fop: "\u0424\u041E\u041F", tov: "\u0422\u041E\u0412", other: "\u0406\u043D\u0448\u0430 \u044E\u0440\u043E\u0441\u043E\u0431\u0430" };
 var FILE_KIND = { invoice: "\u0420\u0430\u0445\u0443\u043D\u043E\u043A", waybill: "\u041D\u0430\u043A\u043B\u0430\u0434\u043D\u0430", label: "\u041C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F", other: "\u0424\u0430\u0439\u043B" };
 var MAX_FILE = 5 * 1024 * 1024;
@@ -5577,6 +5582,10 @@ ${link(c, `b2borders/${open.id}`)}`);
     const out = { ...o, number: orderNo(o.id), status_name: ANY_STATUS[o.status] || o.status };
     if (o.kind === "supply" && ["partial", "pay_wait"].includes(o.status)) out.due = round2(o.total - (o.paid_amount || 0));
     if (o.kind === "supply" && o.status === "partial") out.status_name = `\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E \xB7 \u0449\u0435 ${uah2(out.due)}`;
+    if (o.kind === "supply" && o.closed) {
+      out.closed = true;
+      out.status_name = `${out.status_name} \xB7 \u0417\u0430\u043A\u0440\u0438\u0442\u043E`;
+    }
     if (o.kind === "client") Object.assign(out, { no_supply: !o.supply_id || o.supply_status === "open", open_supply: o.supply_status === "open", pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : "" });
     return out;
   };
@@ -5603,6 +5612,7 @@ ${link(c, `b2borders/${open.id}`)}`);
     if (o.kind === "supply") {
       out.clients = clients.map((x) => ({ ...x, number: orderNo(x.id), status_name: CLIENT_STATUS[x.status] || x.status }));
       out.left = clients.length ? await supplyLeft(o.id) : items.map((i) => ({ ...i, used: 0, left: i.qty }));
+      if (!["open", "cancelled"].includes(o.status) && out.left.length && out.left.every((l) => l.left <= 0)) out.order = publicOrder({ ...o, closed: 1 });
     }
     return out;
   }
@@ -5610,16 +5620,17 @@ ${link(c, `b2borders/${open.id}`)}`);
     const p = await myPartner(c);
     const f = listFilter(c);
     const st = c.req.query("status");
-    if (st && ORDER_STATUS[st]) {
+    if (st === "closed") f.where.push(CLOSED_SQL);
+    else if (st && ORDER_STATUS[st]) {
       f.where.push("o.status = ?");
       f.params.push(st);
     }
     const rows = await db.all(
-      `SELECT o.*, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files FROM b2b_orders o
+      `SELECT o.*, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files, ${CLOSED_SQL} AS closed FROM b2b_orders o
        WHERE o.partner_id = ? AND o.kind = 'supply' ${f.where.map((w) => `AND ${w}`).join(" ")} ORDER BY o.id DESC LIMIT 300`,
       [p.id, ...f.params]
     );
-    return c.json({ rows: rows.map(publicOrder), statuses: ORDER_STATUS });
+    return c.json({ rows: rows.map(publicOrder), statuses: LIST_STATUSES });
   });
   app.get("/api/b2b/p/orders/:id", async (c) => {
     const p = await myPartner(c);
@@ -5681,7 +5692,8 @@ ${link(c, `b2borders/${o.id}`)}`);
     const params = [...f.params];
     const st = c.req.query("status");
     const pid = parseInt(c.req.query("partner"), 10);
-    if (st && ORDER_STATUS[st]) {
+    if (st === "closed") where.push(CLOSED_SQL);
+    else if (st && ORDER_STATUS[st]) {
       where.push("o.status = ?");
       params.push(st);
     }
@@ -5690,12 +5702,15 @@ ${link(c, `b2borders/${o.id}`)}`);
       params.push(pid);
     }
     const rows = await db.all(
-      `SELECT o.*, p.name AS partner, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files
+      `SELECT o.*, p.name AS partner, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files, ${CLOSED_SQL} AS closed
        FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id WHERE ${where.join(" AND ")} ORDER BY o.id DESC LIMIT 300`,
       params
     );
-    const counts = await db.all(`SELECT status, COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' GROUP BY status`);
-    return c.json({ rows: rows.map(publicOrder), statuses: ORDER_STATUS, counts: Object.fromEntries(counts.map((r) => [r.status, r.n])) });
+    const [counts, closed] = await Promise.all([
+      db.all(`SELECT status, COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' GROUP BY status`),
+      db.get(`SELECT COUNT(*) AS n FROM b2b_orders o WHERE o.kind = 'supply' AND ${CLOSED_SQL}`)
+    ]);
+    return c.json({ rows: rows.map(publicOrder), statuses: LIST_STATUSES, counts: { ...Object.fromEntries(counts.map((r) => [r.status, r.n])), closed: closed?.n || 0 } });
   });
   app.get("/api/b2b/orders/:id", async (c) => {
     need(c, "b2b.admin");
@@ -6391,8 +6406,9 @@ ${link(c, `b2bclients/${o.id}`)}`);
         delivery: k.delivery,
         payment: paid ? k.paymentPaid : k.payment,
         notification: k.notification,
-        ttn: o.ttn,
-        delivery_adress: address,
+        // ТТН — у поле адреси доставки (окремого поля ТТН addNewOrder не має): менеджер переносить її в поле ТТН;
+        // без ТТН — відділення з маркування.
+        delivery_adress: o.ttn || address,
         ...k.ttnField && o.ttn ? { [k.ttnField]: o.ttn } : {},
         // Сайт-джерело: LP-CRM бере його з sender (serialize($_SERVER) у прикладі) — без нього «Не указан сайт-лендинг».
         sender: senderOf(c, k.site),
