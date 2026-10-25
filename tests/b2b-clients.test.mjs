@@ -209,8 +209,10 @@ assert.equal(add.bayer_name, 'Петренко Олена');
 assert.equal(add.phone, '380501112233');
 assert.ok(/^\d{16}$/.test(add.order_id), 'код замовлення — як у прикладі LP-CRM');
 assert.equal(decodeURIComponent(add.products.replace(/\+/g, ' ')), 'a:1:{i:0;a:3:{s:10:"product_id";s:2:"11";s:5:"price";s:3:"900";s:5:"count";s:1:"3";}}', 'ціни партнера');
-assert.match(add.comment, new RegExp(`B2B-${c1.id}.*Партнер А.*ТТН партнера: 20450000000001.*Закупівля B2B-${sup.id}`, 's'));
-assert.doesNotMatch(add.comment, /НЕ ОПЛАЧЕНА/, 'закупівля вже оплачена');
+assert.match(add.comment, new RegExp(`B2B-${c1.id}.*Партнер А.*ТТН партнера: 20450000000001.*✅ ОПЛАЧЕНО: закупівля B2B-${sup.id}, .*Позначено «Оплачено» вручну`, 's'));
+assert.doesNotMatch(add.comment, /ОЧІКУЄМО ОПЛАТУ/, 'закупівля вже оплачена');
+assert.equal(add.payment, '1', 'вид оплати «Оплачено»');
+assert.equal(add.ttn, '20450000000001', 'ТТН — у поле ТТН');
 assert.ok(!('additional_1' in add), '«Поле 1» не заповнюємо');
 d = await req('GET', `/api/b2b/p/clients/${c1.id}`, null, A);
 assert.equal(d.order.status, 'crm');
@@ -227,7 +229,9 @@ addReply = { status: 'ok', data: { order_id: 'x' } };
 crm.length = 0;
 const s3 = await req('POST', `/api/b2b/clients/${c3.id}/crm`);
 assert.equal(s3.crm_id, '');
-assert.match(crm.find((x) => x.method === 'addNewOrder').p.comment, /НЕ ОПЛАЧЕНА/);
+const add3 = crm.find((x) => x.method === 'addNewOrder').p;
+assert.match(add3.comment, new RegExp(`⏳ ОЧІКУЄМО ОПЛАТУ: закупівля B2B-${sup2.id}, рахунок ще не виставлено.*рахунок на ФОП А, від «Партнер А»`, 's'));
+assert.ok(!('payment' in add3), 'неоплачена — без виду оплати');
 d = await req('GET', `/api/b2b/orders/${c3.id}`);
 assert.equal(d.order.status, 'crm');
 assert.equal(d.order.crm_ext, s3.code);
@@ -237,6 +241,13 @@ assert.equal((await req('GET', `/api/b2b/p/clients`, null, A)).rows.find((r) => 
 // ручне прив'язування кодом
 await req('PUT', `/api/b2b/clients/${c3.id}`, { crm_id: '17614000000012345' });
 assert.equal((await req('GET', `/api/b2b/orders/${c3.id}`)).order.crm_id, '77001', 'код → номер');
+// оплата прийшла вже після передачі в CRM → адмінам номер у CRM і готовий коментар
+tg.length = 0;
+await req('PUT', `/api/b2b/orders/${sup2.id}`, { invoice_no: 'СФ-77', invoice_date: '2026-10-25' });
+await req('POST', `/api/b2b/orders/${sup2.id}/status`, { status: 'paid' });
+const late = tg.find((m) => /Оплату отримано<\/b>, а замовлення вже в LP-CRM/.test(m.text));
+assert.ok(late && String(late.chat_id) === '100', 'адмінам особисто');
+assert.match(late.text, new RegExp(`B2B-${c3.id}.*CRM № <b>77001.*✅ ОПЛАЧЕНО: закупівля B2B-${sup2.id}, рахунок № СФ-77 від 25.10.2026`, 's'));
 
 // ---------- 7. Скасування повертає залишок ----------
 await req('POST', `/api/b2b/clients/${c1.id}/cancel`);

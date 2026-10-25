@@ -496,19 +496,22 @@ export function createB2bPages(ctx = {}) {
     $$('[data-o]').forEach((tr) => (tr.onclick = () => { location.hash = `#/b2bclients/${tr.dataset.o}`; }));
     $('#clLabels').onclick = () => labelsGroup();
     $('#clCfg').onclick = () => {
-      const TTN_F = { '': 'лише в коментарі', additional_2: 'Додаткове поле 2', additional_3: 'Додаткове поле 3', additional_4: 'Додаткове поле 4', delivery_adress: 'Адреса доставки' };
+      const TTN_F = { '': 'ніде більше', additional_2: 'Додаткове поле 2', additional_3: 'Додаткове поле 3', additional_4: 'Додаткове поле 4' };
       const m = modal('Передача замовлень у LP-CRM', `<form id="crmF" class="form-stack">
           <label class="f"><span>Вхідний ключ API (LP-CRM → Інтеграції → Landing page, рядок 'key')</span>
             <input name="in_key" value="${esc(cfg.in_key)}" autocomplete="off" placeholder="${cfg.in_key ? '' : 'порожньо — використовується основний ключ'}"></label>
           <div class="grid2"><label class="f"><span>ID відділу B2B *</span><input name="office" value="${esc(cfg.office)}" inputmode="numeric"></label>
             <label class="f"><span>ID позначки (необов’язково)</span><input name="notification" value="${esc(cfg.notification)}" inputmode="numeric"></label></div>
-          <div class="grid2"><label class="f"><span>ID виду доставки (необов’язково)</span><input name="delivery" value="${esc(cfg.delivery)}" inputmode="numeric"></label>
-            <label class="f"><span>ID виду оплати (необов’язково)</span><input name="payment" value="${esc(cfg.payment)}" inputmode="numeric"></label></div>
+          <label class="f"><span>ID виду доставки (Нова пошта — 1)</span><input name="delivery" value="${esc(cfg.delivery)}" inputmode="numeric"></label>
+          <div class="grid2"><label class="f"><span>ID виду оплати, якщо закупівлю оплачено («Оплачено» — 1)</span><input name="payment_paid" value="${esc(cfg.payment_paid)}" inputmode="numeric"></label>
+            <label class="f"><span>ID виду оплати, якщо не оплачено (порожньо — без значка)</span><input name="payment" value="${esc(cfg.payment)}" inputmode="numeric"></label></div>
           <label class="f"><span>Сайт-джерело замовлень (як буде видно в LP-CRM)</span><input name="site" value="${esc(cfg.site || '')}" placeholder="${esc(location.host)}"></label>
-          <label class="f"><span>ТТН партнера також записувати в</span><select name="ttn_field">${Object.entries(TTN_F).map(([k, v]) => `<option value="${k}" ${cfg.ttn_field === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
+          <label class="f"><span>ТТН іде в поле ТТН; додатково записувати ще в</span><select name="ttn_field">${Object.entries(TTN_F).map(([k, v]) => `<option value="${k}" ${cfg.ttn_field === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
           <label class="check"><input type="checkbox" name="on" ${cfg.on ? 'checked' : ''}> Увімкнути кнопку «Додати в CRM»</label>
           <div class="small muted">Замовлення потрапляє у вкладку «Нові» вибраного відділу, ціни — партнерські, «Поле 1» лишається порожнім.
-            У коментарі — № замовлення B2B, партнер, ТТН, № закупівлі і позначка «НЕ ОПЛАЧЕНА». Номер замовлення в CRM і статус підтягуються автоматично.</div>
+            Адреса доставки — відділення з маркування Нової пошти. У коментарі — № B2B, партнер, ТТН і оплата: «ОПЛАЧЕНО» (рахунок, коли, скільки, від кого й на який рахунок — з Opendatabot)
+            або «ОЧІКУЄМО ОПЛАТУ» (рахунок, на кого, від кого). Якщо оплата прийде вже після передачі — бот надішле адмінам номер у CRM і готовий текст коментаря
+            (змінювати створене замовлення API LP-CRM не дає). Номер замовлення в CRM і статус підтягуються автоматично.</div>
           ${cfg.ready ? '' : '<div class="alert bad">Не вказано піддомен або основний API-ключ LP-CRM у «Налаштуваннях» — без нього не оновлюються статуси.</div>'}
         </form>`, { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="crmSave">Зберегти</button>' });
       $('#crmSave', m.el).onclick = async () => {

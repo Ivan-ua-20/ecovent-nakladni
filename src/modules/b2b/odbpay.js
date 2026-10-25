@@ -57,7 +57,10 @@ export function mountB2bPay(app, { db, services, orders, hooks }) {
       await log(o.id, user, `оплачено: ${uah(sum)}${user ? '' : ' — Opendatabot'}`);
       await tgPartner(o.partner_id, `✅ <b>Оплату отримано</b>: закупівля ${orderNo(o.id)}${o.invoice_no ? `, рахунок № ${h(o.invoice_no)}` : ''} — ${uah(o.total)}${url(`porders/${o.id}`)}`);
       await tgAdmins(`✅ <b>Оплачено</b>${who}: закупівля ${orderNo(o.id)} — ${uah(sum)}${url(`b2borders/${o.id}`)}`);
-      if (o.status !== 'paid') await hooks.finPaid?.(o.id).catch(() => 0);
+      if (o.status !== 'paid') {
+        await hooks.finPaid?.(o.id).catch(() => 0);
+        await hooks.crmPaid?.(o.id, typeof base === 'string' ? base : base ? new URL(base.req.url).origin : '').catch(() => 0);
+      }
     } else if (status === 'partial') {
       const left = round2(o.total - sum);
       await log(o.id, user, `частково оплачено: ${uah(sum)} з ${uah(o.total)}, залишок ${uah(left)}`);
@@ -90,8 +93,8 @@ export function mountB2bPay(app, { db, services, orders, hooks }) {
       }
       const hit = pool.length === 1 && t.amount <= due(pool[0]) + DUE_EPS ? pool[0] : null;
       await db.run(
-        `INSERT OR IGNORE INTO b2b_payments (tx_id, order_id, candidates, amount, date, payer_name, payer_code, purpose, auto, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
-        [t.id, hit?.id ?? null, JSON.stringify(hit ? [] : pool.map((o) => o.id)), t.amount, t.date, t.payer_name, t.payer_code, t.purpose, nowIso()],
+        `INSERT OR IGNORE INTO b2b_payments (tx_id, order_id, candidates, amount, date, payer_name, payer_code, purpose, auto, created_at, account) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+        [t.id, hit?.id ?? null, JSON.stringify(hit ? [] : pool.map((o) => o.id)), t.amount, t.date, t.payer_name, t.payer_code, t.purpose, nowIso(), t.account || ''],
       );
       if (hit) { hit.paid_amount = round2(hit.paid_amount + t.amount); await recalc(hit.id, base); }
       else {
@@ -147,7 +150,7 @@ export function mountB2bPay(app, { db, services, orders, hooks }) {
     const txId = String((await c.req.json()).tx_id || '');
     const ex = await db.get(`SELECT tx_id, order_id FROM b2b_payments WHERE tx_id = ?`, [txId]);
     if (ex?.order_id && ex.order_id !== o.id) throw fail(400, `Цей платіж уже зараховано в ${orderNo(ex.order_id)} — спершу відв'яжіть його там.`);
-    const [tx] = ex ? [ex] : (services.payments?.txs ? await services.payments.txs([txId]) : []);
+    const [tx] = services.payments?.txs ? await services.payments.txs([txId]) : [];
     const purpose = ex ? (await db.get(`SELECT purpose FROM b2b_payments WHERE tx_id = ?`, [txId]))?.purpose : tx?.purpose;
     if (foreignInvoice(purpose, o.invoice_no)) {
       throw fail(400, `Це оплата за інший рахунок (№ ${purposeNos(purpose).join(', ')} у призначенні), а в закупівлі — № ${o.invoice_no || '—'}.`);
@@ -156,12 +159,15 @@ export function mountB2bPay(app, { db, services, orders, hooks }) {
     if (o.status === 'paid' && o.paid_by !== 'Opendatabot') {
       await db.run(`UPDATE b2b_orders SET status = 'pay_wait', paid_amount = 0, paid_at = '', paid_by = '' WHERE id = ?`, [o.id]);
     }
-    if (ex) await db.run(`UPDATE b2b_payments SET order_id = ?, dismissed = 0, auto = 0, created_by = ? WHERE tx_id = ?`, [o.id, userName(c.get('user')), txId]);
+    if (ex) {
+      await db.run(`UPDATE b2b_payments SET order_id = ?, dismissed = 0, auto = 0, created_by = ?, account = COALESCE(NULLIF(account, ''), ?) WHERE tx_id = ?`,
+        [o.id, userName(c.get('user')), tx?.account || '', txId]);
+    }
     else {
       const [t] = services.payments?.txs ? await services.payments.txs([txId]) : [];
       if (!t) throw fail(404, 'Платіж не знайдено (або він уже прив’язаний до посилання на оплату).');
-      await db.run(`INSERT INTO b2b_payments (tx_id, order_id, candidates, amount, date, payer_name, payer_code, purpose, auto, created_at, created_by) VALUES (?, ?, '[]', ?, ?, ?, ?, ?, 0, ?, ?)`,
-        [t.id, o.id, t.amount, t.date, t.payer_name, t.payer_code, t.purpose, nowIso(), userName(c.get('user'))]);
+      await db.run(`INSERT INTO b2b_payments (tx_id, order_id, candidates, amount, date, payer_name, payer_code, purpose, auto, created_at, created_by, account) VALUES (?, ?, '[]', ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+        [t.id, o.id, t.amount, t.date, t.payer_name, t.payer_code, t.purpose, nowIso(), userName(c.get('user')), t.account || '']);
     }
     await log(o.id, c.get('user'), 'зараховано платіж вручну');
     await recalc(o.id, c, c.get('user'));

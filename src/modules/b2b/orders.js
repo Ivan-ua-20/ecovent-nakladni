@@ -447,6 +447,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       await log(o.id, u, 'позначено «Оплачено» вручну');
       await tgPartner(o.partner_id, `✅ <b>Оплату отримано</b>: закупівля ${orderNo(o.id)}${o.invoice_no ? `, рахунок № ${h(o.invoice_no)}` : ''} — ${uah(o.total)}`);
       await hooks.finPaid?.(o.id).catch(() => 0); // запит накладної в «Фінансові питання»
+      await hooks.crmPaid?.(o.id, new URL(c.req.url).origin).catch(() => 0); // замовлення вже в CRM — підказка адмінам
     } else if (status === 'pay_wait') {
       // Повернути «Очікує оплату» (або зняти часткову оплату): платежі Opendatabot відв'язуються.
       if (!['paid', 'partial'].includes(o.status)) throw fail(400, 'Закупівля й так очікує оплату.');

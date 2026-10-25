@@ -35,10 +35,13 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     return {
       on: s.b2b_crm_on === '1',
       office: s.b2b_crm_office ?? DEFAULT_OFFICE,
-      delivery: s.b2b_crm_delivery || '',
+      // Типово: доставка «Нова пошта» (ID 1), оплачена закупівля — вид оплати «Оплачено» (ID 1), неоплачена — порожньо.
+      delivery: s.b2b_crm_delivery ?? '1',
       payment: s.b2b_crm_payment || '',
+      paymentPaid: s.b2b_crm_payment_paid ?? '1',
       notification: s.b2b_crm_notification || '',
-      ttnField: TTN_FIELDS.includes(s.b2b_crm_ttn_field) ? s.b2b_crm_ttn_field : '',
+      // ТТН іде в поле ТТН (ttn); адреса доставки — відділення з маркування, тож «адреса» як копія ТТН більше не потрібна.
+      ttnField: TTN_FIELDS.includes(s.b2b_crm_ttn_field) && s.b2b_crm_ttn_field !== 'delivery_adress' ? s.b2b_crm_ttn_field : '',
       site: s.b2b_crm_site || '',
       hasInKey: !!s.lpcrm_in_key,
       creds,
@@ -49,7 +52,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     need(c, 'b2b.admin');
     const k = await crmConfig();
     return c.json({
-      on: k.on, office: k.office, delivery: k.delivery, payment: k.payment, notification: k.notification, ttn_field: k.ttnField, site: k.site,
+      on: k.on, office: k.office, delivery: k.delivery, payment: k.payment, payment_paid: k.paymentPaid, notification: k.notification, ttn_field: k.ttnField, site: k.site,
       in_key: k.hasInKey ? MASK : '', ready: !!(k.creds.subdomain && k.creds.key),
     });
   });
@@ -60,14 +63,14 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     if (office && !ID_RE.test(office)) throw fail(400, 'ID відділу — число з LP-CRM (Налаштування → Відділи).');
     if (b.on && !office) throw fail(400, 'Спершу вкажіть ID відділу B2B.');
     const opt = {};
-    for (const [f, name] of [['delivery', 'виду доставки'], ['payment', 'виду оплати'], ['notification', 'позначки']]) {
+    for (const [f, name] of [['delivery', 'виду доставки'], ['payment', 'виду оплати'], ['payment_paid', 'виду оплати «Оплачено»'], ['notification', 'позначки']]) {
       opt[f] = String(b[f] ?? '').trim();
       if (!OPT_ID_RE.test(opt[f])) throw fail(400, `ID ${name} — число з LP-CRM або порожньо.`);
     }
     const ttnField = TTN_FIELDS.includes(b.ttn_field) ? b.ttn_field : '';
     const set = (key, value) => [`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]];
     const st = [set('b2b_crm_office', office), set('b2b_crm_on', b.on ? '1' : '0'), set('b2b_crm_delivery', opt.delivery),
-      set('b2b_crm_payment', opt.payment), set('b2b_crm_notification', opt.notification), set('b2b_crm_ttn_field', ttnField)];
+      set('b2b_crm_payment', opt.payment), set('b2b_crm_payment_paid', opt.payment_paid), set('b2b_crm_notification', opt.notification), set('b2b_crm_ttn_field', ttnField)];
     if (b.site !== undefined) {
       const site = String(b.site).trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
       if (site && !/^[a-z0-9.-]{3,100}$/.test(site)) throw fail(400, 'Сайт — домен без https://, напр. b2b.ecovent.ua');
@@ -227,6 +230,44 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
       REMOTE_ADDR: ip, HTTP_USER_AGENT: 'Ecovent B2B', REQUEST_SCHEME: 'https', HTTPS: 'on',
     }));
   }
+  // Оплата для коментаря в LP-CRM: оплачено (коли, скільки, від кого, куди — з Opendatabot) або очікуємо (рахунок, на кого, від кого).
+  const dt = (iso) => (iso ? new Date(iso).toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
+  const ukDate = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d || '') ? d.split('-').reverse().join('.') : '');
+  const num = (n) => new Intl.NumberFormat('uk-UA', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n).replace(/\s/g, ' ');
+  async function payText(o, partnerName) {
+    if (!o.supply_id) return { paid: !!o.paid_at, text: o.paid_at ? `✅ ОПЛАЧЕНО (без закупівлі, позначено ${dt(o.paid_at)})` : '⏳ БЕЗ ЗАКУПІВЛІ — ОЧІКУЄМО ОПЛАТУ' };
+    const s = await db.get(`SELECT * FROM b2b_orders WHERE id = ?`, [o.supply_id]);
+    if (!s) return { paid: false, text: '' };
+    if (s.status === 'open') return { paid: false, text: `⏳ БЕЗ ЗАКУПІВЛІ (відкрита закупівля ${orderNo(s.id)}, рахунок ще не сформовано) — ОЧІКУЄМО ОПЛАТУ` };
+    const ent = String(s.entity || '').split('\n')[0];
+    const inv = s.invoice_no ? `рахунок № ${s.invoice_no}${s.invoice_date ? ` від ${ukDate(s.invoice_date)}` : ''} на ${num(s.total)} грн` : `рахунок ще не виставлено (${num(s.total)} грн)`;
+    const pays = await db.all(`SELECT amount, date, payer_name, payer_code, account FROM b2b_payments WHERE order_id = ? ORDER BY date`, [s.id]).catch(() => []);
+    const lines = pays.map((t) => `Оплата ${dt(t.date)} — ${num(t.amount)} грн від ${t.payer_name || '—'}${t.payer_code ? ` (${t.payer_code})` : ''}${t.account ? ` на ${t.account}` : ''}`);
+    if (['paid', 'done'].includes(s.status)) {
+      return { paid: true, text: [`✅ ОПЛАЧЕНО: закупівля ${orderNo(s.id)}, ${inv}, платник ${ent}`,
+        ...(lines.length ? lines : [`Позначено «Оплачено» вручну${s.paid_by && s.paid_by !== 'Opendatabot' ? ` (${s.paid_by})` : ''}${s.paid_at ? ` ${dt(s.paid_at)}` : ''}`])].join('\n') };
+    }
+    if (s.status === 'partial') {
+      return { paid: false, text: [`⏳ ЧАСТКОВО ОПЛАЧЕНО: закупівля ${orderNo(s.id)}, ${inv} — отримано ${num(s.paid_amount)}, залишок ${num(s.total - s.paid_amount)} грн`, ...lines].join('\n') };
+    }
+    return { paid: false, text: `⏳ ОЧІКУЄМО ОПЛАТУ: закупівля ${orderNo(s.id)}, ${inv}; рахунок на ${ent}, від «${partnerName}»` };
+  }
+  async function crmComment(o, partnerName) {
+    const pay = await payText(o, partnerName);
+    const comment = [`${orderNo(o.id)} · B2B «${partnerName}»`, o.ttn ? `ТТН партнера: ${o.ttn}` : '', pay.text, o.comment || ''].filter(Boolean).join('\n');
+    return { paid: pay.paid, comment };
+  }
+  // Закупівлю оплачено, а замовлення з неї вже в CRM без позначки оплати — LP-CRM не дає змінити замовлення через API,
+  // тож адмінам: номер у CRM і готовий текст коментаря, щоб поставити «Оплачено» вручну.
+  hooks.crmPaid = async (supplyId, base = '') => {
+    const rows = await db.all(`SELECT o.*, p.name AS partner FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id
+      WHERE o.supply_id = ? AND o.kind = 'client' AND o.status = 'crm'`, [supplyId]);
+    for (const o of rows) {
+      const { comment } = await crmComment(o, o.partner);
+      await tgAdmins(`💰 <b>Оплату отримано</b>, а замовлення вже в LP-CRM: <b>${orderNo(o.id)}</b>${o.crm_id ? ` · CRM № <b>${h(o.crm_id)}</b>` : ''} (${h(o.client_name)})\n`
+        + `Поставте в CRM вид оплати «Оплачено» і замініть коментар на:\n<pre>${h(comment)}</pre>${base ? `\n${link(base, `b2bclients/${o.id}`)}` : ''}`);
+    }
+  };
   const tgNew = async (c, p, id, f, it, verb = 'Нове замовлення клієнта') => {
     const lines = it.items.slice(0, 60).map((i) => `${h(i.name)} — ${i.qty} шт — ${uah(i.price)}`).join('\n');
     const text = `📦 <b>${verb} ${orderNo(id)}</b> від «${h(p.name)}»\n\n<b>Клієнт:</b> ${h(f.client_name)}, ${h(f.client_phone)}${f.ttn ? `\n<b>ТТН:</b> ${h(f.ttn)}` : ''}\n`
@@ -433,20 +474,14 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
       db.all(`SELECT product_id, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]),
       db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [o.partner_id]),
     ]);
-    const supply = o.supply_id ? await db.get(`SELECT status FROM b2b_orders WHERE id = ?`, [o.supply_id]) : null;
-    const pay = payState({ ...o, supply_status: supply?.status });
-    const comment = [
-      `${orderNo(o.id)} · B2B «${p?.name || ''}»`,
-      o.ttn ? `ТТН партнера: ${o.ttn}` : '',
-      !o.supply_id ? 'БЕЗ ЗАКУПІВЛІ' : supply?.status === 'open' ? `БЕЗ ЗАКУПІВЛІ (відкрита закупівля ${orderNo(o.supply_id)}, рахунок не сформовано)`
-        : `Закупівля ${orderNo(o.supply_id)}${pay === 'paid' ? '' : ' — НЕ ОПЛАЧЕНА'}`,
-      o.comment || '',
-    ].filter(Boolean).join('\n');
+    const { paid, comment } = await crmComment(o, p?.name || '');
+    const address = /НП:\s*([^\n]+)/.exec(o.comment || '')?.[1]?.trim() || '';
     let res;
     try {
       res = await addNewOrder(fetchFn, k.addCreds, {
         code, office: k.office, bayer_name: o.client_name, phone: o.client_phone, comment,
-        delivery: k.delivery, payment: k.payment, notification: k.notification,
+        delivery: k.delivery, payment: paid ? k.paymentPaid : k.payment, notification: k.notification,
+        ttn: o.ttn, delivery_adress: address,
         ...(k.ttnField && o.ttn ? { [k.ttnField]: o.ttn } : {}),
         // Сайт-джерело: LP-CRM бере його з sender (serialize($_SERVER) у прикладі) — без нього «Не указан сайт-лендинг».
         sender: senderOf(c, k.site),
