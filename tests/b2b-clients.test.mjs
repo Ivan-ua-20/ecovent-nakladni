@@ -212,7 +212,8 @@ assert.equal(decodeURIComponent(add.products.replace(/\+/g, ' ')), 'a:1:{i:0;a:3
 assert.match(add.comment, new RegExp(`B2B-${c1.id}.*Партнер А.*ТТН партнера: 20450000000001.*✅ ОПЛАЧЕНО: закупівля B2B-${sup.id}, .*Позначено «Оплачено» вручну`, 's'));
 assert.doesNotMatch(add.comment, /ОЧІКУЄМО ОПЛАТУ/, 'закупівля вже оплачена');
 assert.equal(add.payment, '1', 'вид оплати «Оплачено»');
-assert.equal(add.ttn, '20450000000001', 'ТТН — у поле ТТН');
+assert.equal(add.delivery_adress, '20450000000001', 'ТТН — у поле адреси доставки');
+assert.ok(!('ttn' in add));
 assert.ok(!('additional_1' in add), '«Поле 1» не заповнюємо');
 d = await req('GET', `/api/b2b/p/clients/${c1.id}`, null, A);
 assert.equal(d.order.status, 'crm');
