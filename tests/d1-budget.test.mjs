@@ -53,6 +53,7 @@ await measure('потребує уваги', 'GET', '/api/an/attention');
 await measure('товари', 'GET', '/api/an/products');
 await measure('ручна прив\'язка товарів', 'PUT', '/api/an/products', [{ id: 1, brand_manual: 1, cat_manual: '' }]);
 await measure('налаштування: пріоритет', 'PUT', '/api/an/settings', { deptPriority: 'office' });
+await raw.run(`UPDATE settings SET value = json_set(value, '$.refreshGapMin', 0) WHERE key = 'an_settings'`);
 await measure('синхронізація: сьогодні', 'POST', '/api/an/sync/start', { mode: 'today', force: true });
 for (;;) { const r = await measure('синхронізація сьогодні: крок', 'POST', '/api/an/sync/step', {}); if (r.state.done || r.state.error) { assert.ok(!r.state.error, r.state.error); break; } }
 const cfg = await (await app.request('/api/an/config', { headers: H })).json();

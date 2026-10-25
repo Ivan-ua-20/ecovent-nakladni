@@ -85,6 +85,7 @@ const realSetTimeout = globalThis.setTimeout;
 globalThis.setTimeout = (fn, ms, ...a) => realSetTimeout(fn, 0, ...a);
 
 async function runSync(mode) {
+  await db.run(`UPDATE settings SET value = json_set(value, '$.refreshGapMin', 0) WHERE key = 'an_settings'`); // тести: без паузи між оновленнями
   let s = (await req('POST', '/api/an/sync/start', { mode, force: true })).state;
   let steps = 0;
   while (!s.done) {
@@ -332,6 +333,22 @@ for (const [m, pth, body] of [['GET', '/api/an/config'], ['GET', '/api/an/target
   assert.equal((await mreq(m, pth, body)).status, 403, `менеджеру заборонено ${m} ${pth}`);
 }
 assert.equal((await mreq('GET', '/api/an/sync')).status, 200);
+assert.equal((await mreq('POST', '/api/an/sync/start', { mode: 'today', force: true })).status, 403, 'менеджер вручну не оновлює');
+// Ліміт ручних оновлень задає власник: пауза між оновленнями і кількість на добу.
+await req('PUT', '/api/an/settings', { refreshPerDay: 3, refreshGapMin: 30 });
+let stt = (await req('GET', '/api/an/config')).settings || (await req('GET', '/api/an/config')).st;
+await db.run(`UPDATE settings SET value = ? WHERE key = 'an_last_sync'`, [new Date().toISOString()]);
+let lim = await app.request('/api/an/sync/start', { method: 'POST', headers: H, body: JSON.stringify({ mode: 'today', force: true }) });
+assert.equal(lim.status, 429);
+assert.match((await lim.json()).error, /наступне оновлення можна о/);
+await db.run(`UPDATE settings SET value = ? WHERE key = 'an_last_sync'`, [new Date(Date.now() - 3600e3).toISOString()]);
+await db.run(`INSERT INTO settings (key, value) VALUES ('an_today_cnt', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify({ day: new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Kyiv' }), n: 3 })]);
+lim = await app.request('/api/an/sync/start', { method: 'POST', headers: H, body: JSON.stringify({ mode: 'today', force: true }) });
+assert.equal(lim.status, 429);
+assert.match((await lim.json()).error, /Ліміт оновлень на сьогодні вичерпано \(3\)/);
+const rs = (await req('GET', '/api/an/sync')).refresh;
+assert.deepEqual([rs.perDay, rs.used, rs.left], [3, 3, 0]);
+void stt;
 
 // ---------- 10. Передача прав власника ----------
 assert.equal((await app.request('/api/users/transfer-owner', { method: 'POST', headers: MH, body: JSON.stringify({ userId: 1, myRole: 'viewer', password: 'pass1234' }) })).status, 403, 'лише власник');
