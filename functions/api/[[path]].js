@@ -5421,7 +5421,16 @@ ${lines.join("\n")}
   }
   app.get("/api/b2b/p/entities", async (c) => {
     const p = await myPartner(c);
-    return c.json(await db.all(`SELECT * FROM b2b_entities WHERE partner_id = ? AND active = 1 ORDER BY name`, [p.id]));
+    const rows = await db.all(`SELECT * FROM b2b_entities WHERE partner_id = ? AND active = 1 ORDER BY name`, [p.id]);
+    const def = Number(p.default_entity) || 0;
+    return c.json(rows.map((e) => ({ ...e, is_default: e.id === def })).sort((a, b) => Number(b.is_default) - Number(a.is_default)));
+  });
+  app.post("/api/b2b/p/entities/:id/default", async (c) => {
+    const p = await myPartner(c);
+    const e = await myEntity(p, c.req.param("id"));
+    const on = (await c.req.json().catch(() => ({}))).on !== false;
+    await db.run(`UPDATE b2b_partners SET default_entity = ? WHERE id = ?`, [on ? e.id : null, p.id]);
+    return c.json({ ok: true });
   });
   app.post("/api/b2b/p/entities", async (c) => {
     const p = await myPartner(c);
@@ -9643,7 +9652,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 16,
+  version: 17,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -9853,6 +9862,8 @@ var schema11 = {
     ["b2b_payments", "account", "TEXT DEFAULT ''"],
     // У групу партнера вже надіслано «усі замовлення закупівлі взято в роботу складом».
     ["b2b_orders", "group_done", "INTEGER DEFAULT 0"],
+    // Юрособа партнера за замовчуванням для закупівель.
+    ["b2b_partners", "default_entity", "INTEGER"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ["b2b_tg_docs", "source", "TEXT DEFAULT 'private'"],
     ["b2b_tg_docs", "reply_to", "INTEGER"],

@@ -159,11 +159,13 @@ export function createPartnerPages(ctx = {}) {
       <div class="head-row"><h2>Мої юрособи</h2>${canEdit() ? '<button class="btn primary" id="eNew">+ Додати юрособу</button>' : ''}</div>
       <div class="alert info" style="margin-bottom:14px">На ці юрособи виставляються рахунки за закупівлі. Оплату ми бачимо за кодом (ЄДРПОУ / ІПН) —
         платіть, будь ласка, з рахунку тієї юрособи, на яку виставлено рахунок.</div>
-      ${rows.length ? `<div class="fop-cards">${rows.map((e) => `<div class="card fop-card">
-          <div class="name">${esc(e.name)}</div>
+      ${rows.length ? `<div class="fop-cards">${rows.map((e) => `<div class="card fop-card" ${e.is_default ? 'style="border-color:var(--accent, #0f766e);border-width:2px"' : ''}>
+          <div class="name">${esc(e.name)}${e.is_default ? ' <span class="badge ok">за замовчуванням</span>' : ''}</div>
           <div class="muted small">${esc(KINDS[e.kind] || '')} · ${e.code.length === 8 ? 'ЄДРПОУ' : 'ІПН'} ${esc(e.code)}${e.vat ? ' · платник ПДВ' : ''}</div>
           ${e.iban ? `<div class="small">${esc(e.iban)}</div>` : ''}${e.address ? `<div class="small muted">${esc(e.address)}</div>` : ''}
-          ${canEdit() ? `<div class="btn-row" style="margin-top:8px"><button class="btn sm" data-ee="${e.id}">Змінити</button><button class="btn sm danger" data-ed="${e.id}">Видалити</button></div>` : ''}
+          ${canEdit() ? `<div class="btn-row" style="margin-top:8px;flex-wrap:wrap"><button class="btn sm" data-ee="${e.id}">Змінити</button>
+            ${e.is_default ? `<button class="btn sm" data-edef="${e.id}" data-on="0">Зняти «за замовчуванням»</button>` : `<button class="btn sm" data-edef="${e.id}" data-on="1">★ За замовчуванням</button>`}
+            <button class="btn sm danger" data-ed="${e.id}">Видалити</button></div>` : ''}
         </div>`).join('')}</div>`
         : '<div class="card empty"><div class="big">Юросіб ще немає</div>Додайте ФОП або ТОВ, на який виставляти рахунки.</div>'}`;
     const form = (e) => {
@@ -190,6 +192,13 @@ export function createPartnerPages(ctx = {}) {
     };
     $('#eNew') && ($('#eNew').onclick = () => form(null));
     $$('[data-ee]').forEach((b) => (b.onclick = () => form(rows.find((x) => String(x.id) === b.dataset.ee))));
+    $$('[data-edef]').forEach((b) => (b.onclick = async () => {
+      try {
+        await api('POST', `/api/b2b/p/entities/${b.dataset.edef}/default`, { on: b.dataset.on === '1' });
+        toast(b.dataset.on === '1' ? 'Тепер ця юрособа обирається в нових закупівлях першою' : 'Знято');
+        viewEntities();
+      } catch (er) { toast(er.message, true); }
+    }));
     $$('[data-ed]').forEach((b) => (b.onclick = async () => {
       const e = rows.find((x) => String(x.id) === b.dataset.ed);
       if (!(await confirmDanger(`Видалити «${e.name}»?`, 'Нові рахунки на неї виставити не вийде. Уже оформлені замовлення не зміняться.', 'Видалити'))) return;

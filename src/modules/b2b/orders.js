@@ -117,9 +117,19 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return f;
   }
 
+  // Юрособа за замовчуванням (b2b_partners.default_entity) — першою в списку й вибрана в нових закупівлях.
   app.get('/api/b2b/p/entities', async (c) => {
     const p = await myPartner(c);
-    return c.json(await db.all(`SELECT * FROM b2b_entities WHERE partner_id = ? AND active = 1 ORDER BY name`, [p.id]));
+    const rows = await db.all(`SELECT * FROM b2b_entities WHERE partner_id = ? AND active = 1 ORDER BY name`, [p.id]);
+    const def = Number(p.default_entity) || 0;
+    return c.json(rows.map((e) => ({ ...e, is_default: e.id === def })).sort((a, b) => Number(b.is_default) - Number(a.is_default)));
+  });
+  app.post('/api/b2b/p/entities/:id/default', async (c) => {
+    const p = await myPartner(c);
+    const e = await myEntity(p, c.req.param('id'));
+    const on = (await c.req.json().catch(() => ({}))).on !== false;
+    await db.run(`UPDATE b2b_partners SET default_entity = ? WHERE id = ?`, [on ? e.id : null, p.id]);
+    return c.json({ ok: true });
   });
 
   app.post('/api/b2b/p/entities', async (c) => {
