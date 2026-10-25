@@ -127,10 +127,13 @@ export function mountB2bPay(app, { db, services, orders, hooks }) {
     const o = await supplyOf(c);
     const linked = await db.all(`SELECT tx_id, amount, date, payer_name, payer_code, purpose, auto FROM b2b_payments WHERE order_id = ? ORDER BY date`, [o.id]);
     // Можливі: не зараховані нікуди платежі цього платника (за кодом юрособи) і ті, де ця закупівля серед кандидатів.
-    const used = new Set((await db.all(`SELECT tx_id FROM b2b_payments WHERE order_id IS NOT NULL`)).map((r) => r.tx_id));
     const fromOdb = o.entity_code && services.payments?.txByPayer ? await services.payments.txByPayer(o.entity_code, 120) : [];
-    const checks = await db.all(`SELECT tx_id AS id, amount, date, payer_name, payer_code, purpose FROM b2b_payments
-      WHERE order_id IS NULL AND dismissed = 0 AND EXISTS (SELECT 1 FROM json_each(candidates) j WHERE j.value = ?)`, [o.id]);
+    // «перевірити» цього платника (за кодом — індекс), а не всі такі платежі
+    const checks = o.entity_code ? (await db.all(`SELECT tx_id AS id, amount, date, payer_name, payer_code, purpose, candidates FROM b2b_payments
+      WHERE payer_code = ? AND order_id IS NULL AND dismissed = 0`, [o.entity_code])).filter((t) => JSON.parse(t.candidates || '[]').includes(o.id)) : [];
+    // зараховані будь-куди — лише серед цих платежів (за ключем), без перегляду всіх
+    const used = new Set((await db.all(`SELECT tx_id FROM b2b_payments WHERE tx_id IN (SELECT value FROM json_each(?)) AND order_id IS NOT NULL`,
+      [JSON.stringify([...checks, ...fromOdb].map((t) => t.id))])).map((r) => r.tx_id));
     const seen = new Set();
     const since = o.invoice_date || o.created_at.slice(0, 10);
     // Не показуємо: уже зараховані в будь-яку закупівлю; за інший рахунок (інший № у призначенні); раніші за цю закупівлю.
