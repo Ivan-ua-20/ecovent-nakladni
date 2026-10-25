@@ -1,6 +1,7 @@
 // Кабінет партнера (B2B): каталог, юрособи, закупівлі (оформлення, зміна до рахунку, файли), замовлення клієнтів, інструкція.
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
+import { downloadXlsx } from '../core/xlsx.js';
 import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
@@ -109,7 +110,7 @@ export function createPartnerPages(ctx = {}) {
       $('#pcReset') && ($('#pcReset').onclick = () => { Object.assign(filter, { brand: '', cat: '', q: '' }); saveFilter(); viewPartnerCatalog(); });
     };
     main.innerHTML = `
-      <div class="head-row"><h2>Каталог — ${esc(partner.name)}</h2>${products.length && canEdit() ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div>
+      <div class="head-row"><h2>Каталог — ${esc(partner.name)}</h2><div class="btn-row">${products.length ? '<button class="btn" id="pcXlsx">⬇ Excel</button>' : ''}${products.length && canEdit() ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div></div>
       ${products.length ? `
         <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap">
           ${brands.length > 1 ? `<button class="chip ${filter.brand ? '' : 'on'}" data-br="">Усі бренди</button>` : ''}
@@ -129,6 +130,25 @@ export function createPartnerPages(ctx = {}) {
     let t;
     $('#pcQ').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { filter.q = e.target.value.trim(); saveFilter(); draw(); }, 200); };
     $('#pcSort').onchange = (e) => { filter.sort = e.target.value; saveFilter(); draw(); };
+    // Excel: кожна категорія — окремий аркуш; назва, артикул, бренд, РРЦ, ваша ціна, знижка (маржа) від РРЦ у %.
+    $('#pcXlsx').onclick = () => {
+      const byCat = new Map();
+      for (const p of products) {
+        const k = String(p.cat);
+        if (!byCat.has(k)) byCat.set(k, []);
+        byCat.get(k).push(p);
+      }
+      const cols = [{ title: 'Товар', width: 60 }, { title: 'Артикул', width: 18 }, { title: 'Бренд', width: 16 },
+        { title: 'РРЦ, грн', width: 13, fmt: 'money' }, { title: 'Ваша ціна, грн', width: 15, fmt: 'money' }, { title: 'Маржа від РРЦ', width: 14, fmt: 'pct' }];
+      const sheets = [...byCat].map(([k, list]) => ({
+        name: catName.get(k) || 'Інше',
+        cols,
+        rows: [...list].sort((a, b) => a.brand.localeCompare(b.brand, 'uk') || a.name.localeCompare(b.name, 'uk'))
+          .map((p) => [p.name, p.article || '', p.brand, Number(p.rrp), Number(p.price), Math.round((p.rrp ? ((p.rrp - p.price) / p.rrp) * 100 : 0) * 100) / 100]),
+      })).sort((a, b) => a.name.localeCompare(b.name, 'uk'));
+      downloadXlsx(`Каталог ${partner.name} ${new Date().toLocaleDateString('uk-UA')}.xlsx`.replace(/[\\/:*?"<>|]+/g, '_'), sheets);
+      toast(`Завантажено: ${products.length} товарів, ${sheets.length} ${sheets.length === 1 ? 'аркуш' : 'аркушів'}`);
+    };
     draw();
   }
 
