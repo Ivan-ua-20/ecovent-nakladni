@@ -214,7 +214,7 @@ async function upgradeV10(db) {
 
 export const schema = {
   name: 'analytics',
-  version: 2,
+  version: 3,
   tables: [
   // ---------- Аналітика ----------
   // Замовлення: id = короткий номер LP-CRM (зростає з часом), code = довгий код для API.
@@ -263,6 +263,9 @@ export const schema = {
   // Нова база: засіяти й позначити старі оновлення виконаними; стара — догнати оновлення v9–v12.
   async seed(db, { fresh }) {
     await seedAnalytics(db);
+    // Звірка статусів при оновленні читає замовлення одного статусу за період — з індексом лише їх, а не всі замовлення
+    // періоду для кожного статусу (у 6 разів менше прочитаних рядків; плюс один запис індексу на зміну статусу).
+    await db.run(`CREATE INDEX IF NOT EXISTS an_orders_status ON an_orders(status, id)`);
     if (fresh) {
       await db.batch(['an_v9', 'an_v10', 'an_v11', 'an_v12'].map((k) => [`INSERT INTO settings (key, value) VALUES (?, '1') ON CONFLICT(key) DO NOTHING`, [k]]));
       return;

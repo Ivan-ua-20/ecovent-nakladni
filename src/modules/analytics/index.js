@@ -905,7 +905,7 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {} })
     if (hit) return c.body(hit.value, 200, { 'content-type': 'application/json; charset=UTF-8' });
 
     function base(range, { items = itemLevel, skipCats = false } = {}) {
-      const where = [`o.id BETWEEN ? AND ?`, `o.day BETWEEN ? AND ?`, `o.status IN (${tracked.join(',')})`];
+      const where = [`o.id BETWEEN ? AND ?`, `o.day BETWEEN ? AND ?`, `+o.status IN (${tracked.join(',')})`];
       const params = [range.lo, range.hi, range.from, range.to];
       if (f.depts.length) { where.push(`o.dept IN (${ph(f.depts)})`); params.push(...f.depts); }
       if (f.sources.length) { where.push(`o.src IN (${ph(f.sources)})`); params.push(...f.sources); }
@@ -930,7 +930,41 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {} })
       const range = { lo: r[0], hi: r[1], from: p.from, to: p.to };
       const q = base(range);
       const qi = base(range, { items: true });
-      const jobs = [
+      const topJob = full ? db.all(`SELECT i.product_id AS id, MAX(p.name) AS name, MAX(p.brand_id) AS brand, SUM(i.amount) AS rev,
+                SUM(i.qty) AS qty, SUM(CASE WHEN ${rfExpr} = 1 THEN i.qty ELSE 0 END) AS rqty
+                ${qi.from} GROUP BY i.product_id ORDER BY rev DESC LIMIT 20`, qi.params) : Promise.resolve([]);
+      // До ~3 місяців: замовлення читаються ОДИН раз (по днях і розрізах разом), товари — один раз (по замовленню, бренду
+      // й категорії), підсумки — у коді. Ліміт D1 рахує прочитані рядки, тож це вдвічі менше читань. Довші періоди —
+      // окремими запитами (інакше забагато рядків у відповіді для ліміту процесорного часу).
+      if (daysBetween(p.from, p.to) <= 92) {
+        const [rows, oi, top] = await Promise.all([
+          db.all(`SELECT o.day AS day, o.dept AS dept, o.src AS src, o.user AS user, o.status AS status, o.deliv AS deliv, ${orderMeasures(itemLevel)} ${q.from}
+                  GROUP BY o.day, o.dept, o.src, o.user, o.status, o.deliv`, q.params),
+          db.all(`SELECT o.id AS oid, COALESCE(p.brand_id, 0) AS b, COALESCE(p.cat_manual, p.category_id, 0) AS c, MAX(${rfExpr}) AS rf,
+                  SUM(i.amount) AS rev, SUM(i.qty) AS qty ${qi.from} GROUP BY o.id, COALESCE(p.brand_id, 0), COALESCE(p.cat_manual, p.category_id, 0)`, qi.params),
+          topJob,
+        ]);
+        const add = (m, k, init) => { let x = m.get(k); if (!x) { x = init(); m.set(k, x); } return x; };
+        const dm = new Map();
+        const gm = new Map();
+        for (const r of rows) {
+          const d = add(dm, r.day, () => ({ day: r.day, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
+          const g = add(gm, `${r.dept}|${r.src}|${r.user}|${r.status}|${r.deliv}`, () => ({ dept: r.dept, src: r.src, user: r.user, status: r.status, deliv: r.deliv, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
+          for (const x of [d, g]) { x.rev += r.rev || 0; x.net += r.net || 0; x.cnt += r.cnt || 0; x.rcnt += r.rcnt || 0; }
+        }
+        const bm = new Map();
+        const cm = new Map();
+        for (const r of oi) {
+          for (const [m, k] of [[bm, r.b], [cm, r.c]]) {
+            const x = add(m, k, () => ({ id: k, rev: 0, net: 0, qty: 0, orders: new Set(), rorders: new Set() }));
+            x.rev += r.rev || 0; x.qty += r.qty || 0; if (!r.rf) x.net += r.rev || 0;
+            x.orders.add(r.oid); if (r.rf) x.rorders.add(r.oid);
+          }
+        }
+        const fin = (m) => [...m.values()].map(({ orders, rorders, ...x }) => ({ ...x, cnt: orders.size, rcnt: rorders.size }));
+        return { daily: [...dm.values()], groups: [...gm.values()], brands: fin(bm), cats: fin(cm), top };
+      }
+      const [daily, groups, brands, cats, top] = await Promise.all([
         db.all(`SELECT o.day AS day, ${orderMeasures(itemLevel)} ${q.from} GROUP BY o.day`, q.params),
         db.all(`SELECT o.dept AS dept, o.src AS src, o.user AS user, o.status AS status, o.deliv AS deliv, ${orderMeasures(itemLevel)} ${q.from} GROUP BY o.dept, o.src, o.user, o.status, o.deliv`, q.params),
         db.all(`SELECT COALESCE(p.brand_id, 0) AS id, SUM(i.amount) AS rev, SUM(CASE WHEN ${rfExpr} = 0 THEN i.amount ELSE 0 END) AS net,
@@ -939,13 +973,8 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {} })
         db.all(`SELECT COALESCE(p.cat_manual, p.category_id, 0) AS id, SUM(i.amount) AS rev, SUM(CASE WHEN ${rfExpr} = 0 THEN i.amount ELSE 0 END) AS net,
                 SUM(i.qty) AS qty, COUNT(DISTINCT o.id) AS cnt
                 ${qi.from} GROUP BY COALESCE(p.cat_manual, p.category_id, 0)`, qi.params),
-      ];
-      if (full) {
-        jobs.push(db.all(`SELECT i.product_id AS id, MAX(p.name) AS name, MAX(p.brand_id) AS brand, SUM(i.amount) AS rev,
-                SUM(i.qty) AS qty, SUM(CASE WHEN ${rfExpr} = 1 THEN i.qty ELSE 0 END) AS rqty
-                ${qi.from} GROUP BY i.product_id ORDER BY rev DESC LIMIT 20`, qi.params));
-      }
-      const [daily, groups, brands, cats, top = []] = await Promise.all(jobs);
+        topJob,
+      ]);
       return { daily, groups, brands, cats, top };
     }
 
