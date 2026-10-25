@@ -136,4 +136,25 @@ assert.equal((await errOf(() => req('POST', `/api/b2b/p/entities/${ent.id}/defau
 await req('POST', `/api/b2b/p/entities/${ent.id}/default`, { on: false }, A);
 assert.ok(!(await req('GET', '/api/b2b/p/entities', null, A)).some((e) => e.is_default));
 
+// ---------- 6. Самовивіз закупівлі ----------
+tg.length = 0;
+const sp = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, delivery: 'pickup', items: [{ product_id: 11, qty: 1 }] }, A);
+let so = (await req('GET', `/api/b2b/orders/${sp.id}`)).order;
+assert.deepEqual([so.delivery, so.delivery_name], ['pickup', 'Самовивіз — партнер забирає всю закупівлю зі складу']);
+assert.ok(!(await req('GET', '/api/b2b/p/supplies', null, A)).some((x) => x.id === sp.id), 'самовивіз — не джерело для замовлень клієнтів');
+assert.match(await errOf(() => req('POST', '/api/b2b/p/clients', { client_name: 'X', client_phone: '0501112233', supply_id: sp.id, items: [{ product_id: 11, qty: 1 }] }, A)), /самовивіз/);
+// адмін виправляє: відправка клієнтам → можна оформлювати замовлення клієнтів
+await req('POST', `/api/b2b/orders/${sp.id}/delivery`, { delivery: 'np' });
+assert.equal((await req('GET', `/api/b2b/orders/${sp.id}`)).order.delivery, 'np');
+assert.ok(tg.some((m) => /спосіб отримання змінено/.test(m.text)), 'партнеру — повідомлення');
+const kx = await req('POST', '/api/b2b/p/clients', { client_name: 'X', client_phone: '0501112233', supply_id: sp.id, items: [{ product_id: 11, qty: 1 }] }, A);
+assert.match(await errOf(() => req('POST', `/api/b2b/orders/${sp.id}/delivery`, { delivery: 'pickup' })), /вже є замовлення клієнтів/);
+await req('POST', `/api/b2b/p/clients/${kx.id}/cancel`, {}, A);
+await req('POST', `/api/b2b/orders/${sp.id}/delivery`, { delivery: 'pickup' });
+assert.equal((await req('GET', `/api/b2b/p/orders/${sp.id}`, null, A)).order.delivery, 'pickup');
+assert.equal((await errOf(() => req('POST', `/api/b2b/orders/${sp.id}/delivery`, { delivery: 'np' }, A))) !== '', true, 'партнер — лише через «Змінити»');
+// партнер змінює сам, поки рахунку немає
+await req('PUT', `/api/b2b/p/orders/${sp.id}`, { entity_id: ent.id, delivery: 'np', items: [{ product_id: 11, qty: 1 }] }, A);
+assert.equal((await req('GET', `/api/b2b/p/orders/${sp.id}`, null, A)).order.delivery, 'np');
+
 console.log('OK — B2B: часті товари, маркування без дублів, заміна номера LP-CRM, «Закрито»');
