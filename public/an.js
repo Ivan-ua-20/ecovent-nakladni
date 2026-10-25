@@ -153,7 +153,7 @@ export function createAnalyticsUI(ctx) {
     el.innerHTML = `
       <div class="head-row an-head">
         <div><h2>Аналітика продажів</h2><div class="small muted" id="anFresh"></div></div>
-        <div class="btn-row"><button class="btn" id="anRefresh" title="Нові замовлення за сьогодні і статуси замовлень за 30 днів">Оновити сьогодні</button></div>
+        ${full() ? '<div class="btn-row"><button class="btn" id="anRefresh" title="Нові замовлення за сьогодні і статуси замовлень за 30 днів">Оновити сьогодні</button></div>' : ''}
       </div>
       <div id="anSync"></div>
       <div id="anAttn"></div>
@@ -162,11 +162,29 @@ export function createAnalyticsUI(ctx) {
       <div class="card an-filters" id="anFilters" data-col="filters"><span class="spinner"></span></div>
       <div id="anBody"></div>`;
     renderPeriods();
-    $('#anRefresh').onclick = () => startSync('today');
+    if ($('#anRefresh')) $('#anRefresh').onclick = () => startSync('today');
 
     const [sync, attn] = await Promise.all([api('GET', '/api/an/sync').catch(() => ({})), full() ? api('GET', '/api/an/attention').catch(() => null) : null]);
     showAttention(attn);
     $('#anFresh').textContent = sync.lastSync ? `Дані з LP-CRM оновлено ${ctx.fmtDateTime(sync.lastSync)}` : 'Дані ще не завантажено';
+    // Менеджер: аналітика оновлюється автоматично раз на добу — коли було останнє і коли наступне.
+    if (!full()) {
+      const lastD = sync.lastDaily || sync.lastSync;
+      const fmt = (ms) => new Date(ms).toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      $('#anFresh').textContent = lastD
+        ? `Аналітика оновлюється автоматично раз на добу · останнє оновлення ${fmt(Date.parse(lastD))} · наступне — після ${fmt(Date.parse(lastD) + 20 * 3600e3)}`
+        : 'Аналітика оновлюється автоматично раз на добу';
+    }
+    // Ліміт ручних оновлень: скільки залишилось сьогодні і коли можна наступне.
+    const rf = sync.refresh;
+    if (rf && $('#anRefresh')) {
+      const btn = $('#anRefresh');
+      const t = (iso) => new Date(iso).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+      const out = rf.left === 0;
+      btn.disabled = out || !!rf.nextAt;
+      btn.title = out ? `Ліміт оновлень на сьогодні (${rf.perDay}) вичерпано` : rf.nextAt ? `Наступне оновлення — о ${t(rf.nextAt)}` : (rf.left != null ? `Сьогодні залишилось оновлень: ${rf.left} з ${rf.perDay}` : '');
+      $('#anFresh').textContent += out ? ` · ліміт оновлень на сьогодні вичерпано` : rf.nextAt ? ` · наступне оновлення о ${t(rf.nextAt)}` : rf.left != null ? ` · сьогодні ще ${rf.left} з ${rf.perDay}` : '';
+    }
     const running = sync.state && !sync.state.done && !sync.state.error;
     if (running || syncLoop) startSync(null);
     else if (!sync.lastSync) {
@@ -774,6 +792,10 @@ export function createAnalyticsUI(ctx) {
             <option value="net" ${st.targetBase === 'net' ? 'selected' : ''}>обороту без відмов і повернень</option>
             <option value="all" ${st.targetBase === 'all' ? 'selected' : ''}>суми всіх замовлень</option></select></label>
           <label class="f" style="max-width:220px"><span>Глибина даних, місяців</span><input name="months" type="number" min="1" max="18" value="${st.months}"></label>
+          ${ctx.boot.user?.role === 'owner' ? `<div class="grid2"><label class="f"><span>«Оновити сьогодні» — не більше разів на добу (0 — без ліміту)</span><input name="refreshPerDay" type="number" min="0" max="200" value="${st.refreshPerDay ?? 10}"></label>
+            <label class="f"><span>…і не частіше, ніж раз на, хв</span><input name="refreshGapMin" type="number" min="0" max="720" value="${st.refreshGapMin ?? 15}"></label></div>`
+            : `<div class="small">«Оновити сьогодні»: до ${st.refreshPerDay ?? 10} разів на добу, не частіше ніж раз на ${st.refreshGapMin ?? 15} хв (змінює власник).</div>`}
+          <div class="small muted">Вручну оновлюють лише адміністратори (менеджери — ні). Кожне оновлення — ~20 звернень до LP-CRM і тисячі рядків бази; автоматичне щоденне оновлення ліміт не рахує.</div>
           <div class="btn-row"><button class="btn primary">Зберегти</button></div>
         </form>
 
@@ -959,7 +981,7 @@ export function createAnalyticsUI(ctx) {
       e.preventDefault();
       const f = e.target;
       try {
-        await api('PUT', '/api/an/settings', { compare: f.compare.checked, deptPriority: f.deptPriority.value, targetBase: f.targetBase.value, months: f.months.value });
+        await api('PUT', '/api/an/settings', { compare: f.compare.checked, deptPriority: f.deptPriority.value, targetBase: f.targetBase.value, months: f.months.value, refreshPerDay: f.refreshPerDay?.value, refreshGapMin: f.refreshGapMin?.value });
         lastData = null;
         toast('Збережено');
       } catch (er) { toast(er.message, true); }

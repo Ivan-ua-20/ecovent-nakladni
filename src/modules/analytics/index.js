@@ -37,6 +37,9 @@ export const AN_DEFAULTS = {
   deptPriority: 'manager',
   targetBase: 'net',
   months: 6,
+  // «Оновити сьогодні»: не більше стількох разів на добу (0 — без ліміту) і не частіше, ніж раз на стільки хвилин.
+  refreshPerDay: 10,
+  refreshGapMin: 15,
   okStatuses: [11, 14, 53, 18],
   refuseStatuses: [54, 58],
 };
@@ -451,9 +454,15 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {} })
     if (['manager', 'office'].includes(b.deptPriority)) next.deptPriority = b.deptPriority;
     if (['net', 'all'].includes(b.targetBase)) next.targetBase = b.targetBase;
     if (b.months !== undefined) next.months = Math.min(18, Math.max(1, parseInt(b.months, 10) || 6));
+    // Ліміт ручних оновлень задає лише власник.
+    const isOwner = c.get('user')?.role === 'owner';
+    if (isOwner && b.refreshPerDay !== undefined) next.refreshPerDay = Math.min(200, Math.max(0, parseInt(b.refreshPerDay, 10) || 0));
+    if (isOwner && b.refreshGapMin !== undefined) next.refreshGapMin = Math.min(720, Math.max(0, parseInt(b.refreshGapMin, 10) || 0));
     await putSetting('an_settings', JSON.stringify(next));
     if (next.deptPriority !== cur.deptPriority) await remap(db, next, { src: false });
-    await bump();
+    // Ліміти оновлень на дані не впливають — збережені відповіді дашборду лишаються дійсними.
+    const dataKeys = ['compare', 'deptPriority', 'targetBase', 'months'];
+    if (dataKeys.some((k) => next[k] !== cur[k])) await bump();
     return c.json({ ok: true, settings: next });
   });
 
@@ -606,8 +615,19 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {} })
     const running = state && state.phase !== 'done' && !state.error;
     // Щодобове оновлення за 30 днів: запускається автоматично, якщо минуло понад 20 годин.
     const dailyDue = !running && !!last?.value && (!lastDaily || Date.now() - Date.parse(lastDaily) > 20 * 3600e3);
-    return c.json({ state: state ? summary(state) : null, lastSync: last?.value || '', lastDaily, dailyDue });
+    return c.json({ state: state ? summary(state) : null, lastSync: last?.value || '', lastDaily, dailyDue, refresh: await refreshInfo(await getSt(), last?.value) });
   });
+
+  // Ліміт «Оновити сьогодні»: скільки разів сьогодні (за Києвом) уже оновлювали і коли можна наступного разу.
+  async function refreshInfo(st, lastSync) {
+    const perDay = Number(st.refreshPerDay ?? AN_DEFAULTS.refreshPerDay) || 0;
+    const gapMin = Number(st.refreshGapMin ?? AN_DEFAULTS.refreshGapMin) || 0;
+    const cnt = await getJson('an_today_cnt');
+    const used = cnt?.day === kyivDay() ? cnt.n || 0 : 0;
+    const nextAt = gapMin && lastSync ? new Date(Date.parse(lastSync) + gapMin * 60000).toISOString() : '';
+    return { perDay, gapMin, used, left: perDay ? Math.max(0, perDay - used) : null, nextAt: nextAt && Date.parse(nextAt) > Date.now() ? nextAt : '' };
+  }
+  const hhmm = (iso) => new Date(iso).toLocaleTimeString('uk-UA', { timeZone: 'Europe/Kyiv', hour: '2-digit', minute: '2-digit' });
 
   function summary(s) {
     const left = s.units?.length || 0;
@@ -632,10 +652,25 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {} })
   app.post('/api/an/sync/start', async (c) => {
     const b = await c.req.json().catch(() => ({}));
     const mode = ['today', 'full', 'reset'].includes(b.mode) ? b.mode : 'daily';
-    if (c.get('anOwn') && !['today', 'daily'].includes(mode)) throw fail(403, 'Недостатньо прав для цієї дії.');
+    // Менеджери (бачать лише свої замовлення) вручну не оновлюють — лише автоматичне оновлення раз на добу.
+    if (c.get('anOwn') && mode !== 'daily') throw fail(403, 'Оновлювати аналітику вручну можуть лише адміністратори.');
     const cur = await getJson('an_sync');
     if (cur && cur.phase !== 'done' && !cur.error && !b.force) return c.json({ state: summary(cur), already: true });
+    // Менеджер запускає лише автоматичне щоденне оновлення — і тільки коли воно справді настало (раз на добу).
+    if (c.get('anOwn')) {
+      const lastDaily = (await db.get(`SELECT value FROM settings WHERE key = 'an_last_daily'`))?.value || '';
+      if (lastDaily && Date.now() - Date.parse(lastDaily) <= 20 * 3600e3) throw fail(429, `Аналітика оновлюється автоматично раз на добу; останнє оновлення — ${hhmm(lastDaily)}.`);
+    }
     const st = await getSt();
+    if (mode === 'today') {
+      const last = (await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`))?.value || '';
+      const r = await refreshInfo(st, last);
+      if (r.perDay && r.used >= r.perDay) {
+        throw fail(429, `Ліміт оновлень на сьогодні вичерпано (${r.perDay}). Дані за 30 днів оновляться автоматично завтра; ліміт задає власник у налаштуваннях аналітики.`);
+      }
+      if (r.nextAt) throw fail(429, `Дані оновлювались о ${hhmm(last)} — наступне оновлення можна о ${hhmm(r.nextAt)}.`);
+      await putSetting('an_today_cnt', JSON.stringify({ day: kyivDay(), n: r.used + 1 }));
+    }
     const cr = await creds();
     const statusNames = await lp(cr, 'getStatuses', {}).then((j) => (j.status === 'ok' ? j.data || {} : {})).catch(() => ({}));
     if (Object.keys(statusNames).length) await putSetting('an_status_names', JSON.stringify(statusNames));
