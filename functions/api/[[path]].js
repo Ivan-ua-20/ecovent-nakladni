@@ -5706,7 +5706,8 @@ ${link(c, `b2borders/${o.id}`)}`);
     );
     const [counts, closed] = await Promise.all([
       db.all(`SELECT status, COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' GROUP BY status`),
-      db.get(`SELECT COUNT(*) AS n FROM b2b_orders o WHERE o.kind = 'supply' AND ${CLOSED_SQL}`)
+      // «Закрито» — лише серед закупівель за пів року (щоб лічильник не переглядав усю історію при кожному відкритті списку).
+      db.get(`SELECT COUNT(*) AS n FROM b2b_orders o WHERE o.kind = 'supply' AND o.created_at > ? AND ${CLOSED_SQL}`, [new Date(Date.now() - 183 * 864e5).toISOString()])
     ]);
     return c.json({ rows: rows.map(publicOrder), statuses: LIST_STATUSES, counts: { ...Object.fromEntries(counts.map((r) => [r.status, r.n])), closed: closed?.n || 0 } });
   });
@@ -5816,11 +5817,14 @@ ${link(c, `${o.kind === "client" ? "pclients" : "porders"}/${o.id}`)}`);
     return { hash: hash2, ttn: np?.ttn || "", np };
   }
   async function labelDup({ hash: hash2, ttn }, exceptId = 0) {
+    if (!hash2 && !ttn) return null;
     const row = await db.get(
-      `SELECT o.id, o.client_name FROM b2b_orders o WHERE o.kind = 'client' AND o.status != 'cancelled' AND o.id != ? AND (
-         EXISTS (SELECT 1 FROM b2b_files f WHERE f.order_id = o.id AND f.kind = 'label' AND ((? != '' AND f.hash = ?) OR (? != '' AND f.ttn = ?)))
-         OR (? != '' AND o.ttn = ?)) ORDER BY o.id LIMIT 1`,
-      [exceptId, hash2 || "", hash2 || "", ttn || "", ttn || "", ttn || "", ttn || ""]
+      `SELECT o.id, o.client_name FROM b2b_orders o WHERE o.id IN (
+         SELECT f.order_id FROM b2b_files f WHERE ? != '' AND f.hash = ? AND f.kind = 'label'
+         UNION SELECT f.order_id FROM b2b_files f WHERE ? != '' AND f.ttn = ? AND f.kind = 'label'
+         UNION SELECT x.id FROM b2b_orders x WHERE ? != '' AND x.ttn = ?)
+       AND +o.kind = 'client' AND o.status != 'cancelled' AND o.id != ? ORDER BY o.id LIMIT 1`,
+      [hash2 || "", hash2 || "", ttn || "", ttn || "", ttn || "", ttn || "", exceptId]
     );
     return row ? { id: row.id, number: orderNo(row.id), client_name: row.client_name } : null;
   }
@@ -7622,10 +7626,13 @@ ${link(base, `b2borders/${pool[0].id}`)}` : ""}`);
   app.get("/api/b2b/orders/:id/payments", async (c) => {
     const o = await supplyOf(c);
     const linked = await db.all(`SELECT tx_id, amount, date, payer_name, payer_code, purpose, auto FROM b2b_payments WHERE order_id = ? ORDER BY date`, [o.id]);
-    const used = new Set((await db.all(`SELECT tx_id FROM b2b_payments WHERE order_id IS NOT NULL`)).map((r) => r.tx_id));
     const fromOdb = o.entity_code && services.payments?.txByPayer ? await services.payments.txByPayer(o.entity_code, 120) : [];
-    const checks = await db.all(`SELECT tx_id AS id, amount, date, payer_name, payer_code, purpose FROM b2b_payments
-      WHERE order_id IS NULL AND dismissed = 0 AND EXISTS (SELECT 1 FROM json_each(candidates) j WHERE j.value = ?)`, [o.id]);
+    const checks = o.entity_code ? (await db.all(`SELECT tx_id AS id, amount, date, payer_name, payer_code, purpose, candidates FROM b2b_payments
+      WHERE payer_code = ? AND order_id IS NULL AND dismissed = 0`, [o.entity_code])).filter((t) => JSON.parse(t.candidates || "[]").includes(o.id)) : [];
+    const used = new Set((await db.all(
+      `SELECT tx_id FROM b2b_payments WHERE tx_id IN (SELECT value FROM json_each(?)) AND order_id IS NOT NULL`,
+      [JSON.stringify([...checks, ...fromOdb].map((t) => t.id))]
+    )).map((r) => r.tx_id));
     const seen = /* @__PURE__ */ new Set();
     const since = o.invoice_date || o.created_at.slice(0, 10);
     const possible = [...checks, ...fromOdb].filter((t) => !used.has(t.id) && !seen.has(t.id) && seen.add(t.id) && !foreignInvoice(t.purpose, o.invoice_no) && (t.date.slice(0, 10) >= since || purposeHasNo(t.purpose, o.invoice_no))).map((t) => ({ tx_id: t.id, amount: t.amount, date: t.date, payer_name: t.payer_name, payer_code: t.payer_code, purpose: t.purpose, hint: purposeHasNo(t.purpose, o.invoice_no) })).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 30);
@@ -9636,7 +9643,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 15,
+  version: 16,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -9863,7 +9870,8 @@ var schema11 = {
       [`CREATE INDEX IF NOT EXISTS b2b_orders_created ON b2b_orders (created_at)`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_files_hash ON b2b_files (hash)`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_files_ttn ON b2b_files (ttn)`, []],
-      [`CREATE INDEX IF NOT EXISTS b2b_orders_ttn ON b2b_orders (ttn)`, []]
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_ttn ON b2b_orders (ttn)`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_payments_payer ON b2b_payments (payer_code)`, []]
     ]);
   }
 };
