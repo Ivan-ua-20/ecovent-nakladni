@@ -80,7 +80,7 @@ assert.match(pr.dup_text, /вже є в замовленні/);
 assert.equal((await parse(lbl, c1.id)).dup, null, 'у своєму ж замовленні — не дубль');
 // інший файл, той самий ТТН
 const lbl2 = miniPdf(npLabel({ ttn: '20451111222233', name: 'Петренко Іван', phone: '067 000 00 00' }));
-assert.match(await errOf(() => up(c2.id, lbl2, A, 'інший.pdf')), /вже є в замовленні/);
+assert.match(await errOf(() => up(c2.id, lbl2, A, 'other.pdf')), /вже є в замовленні/);
 // ТТН вписано вручну
 assert.match(await errOf(() => cl('Ще один', { ttn: '20451111222233' })), new RegExp(`ТТН 20451111222233 уже є в замовленні B2B-${c1.id}`));
 // інший партнер — без чужих даних

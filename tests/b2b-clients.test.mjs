@@ -117,7 +117,7 @@ assert.equal(await status(() => req('GET', `/api/b2b/p/orders/${c1.id}`, null, A
 
 // ---------- 2. Без закупівлі ----------
 tg.length = 0;
-const c2 = await req('POST', '/api/b2b/p/clients', { ...client, client_name: 'Без закупівлі', items: [{ product_id: 12, qty: 1 }] }, A);
+const c2 = await req('POST', '/api/b2b/p/clients', { ...client, ttn: '', client_name: 'Без закупівлі', items: [{ product_id: 12, qty: 1 }] }, A);
 assert.equal(c2.total, 450, 'ціна з каталогу');
 assert.match(tg[0].text, /Без закупівлі/);
 let list = await req('GET', '/api/b2b/clients?view=nosupply');
@@ -221,7 +221,7 @@ assert.match(await errOf(() => req('POST', `/api/b2b/clients/${c1.id}/crm`)), /�
 
 // неоплачена закупівля → позначка в коментарі CRM; CRM не повернула номер → вписують вручну
 const sup2 = await req('POST', '/api/b2b/p/orders', { entity_id: ea.id, items: [{ product_id: 12, qty: 4 }] }, A);
-const c3 = await req('POST', '/api/b2b/p/clients', { ...client, supply_id: sup2.id, items: [{ product_id: 12, qty: 1 }] }, A);
+const c3 = await req('POST', '/api/b2b/p/clients', { ...client, ttn: '20450000000003', supply_id: sup2.id, items: [{ product_id: 12, qty: 1 }] }, A);
 // CRM прийняла, але замовлення ще не знаходиться за кодом → номер підтягнеться пізніше
 addReply = { status: 'ok', data: { order_id: 'x' } };
 crm.length = 0;
