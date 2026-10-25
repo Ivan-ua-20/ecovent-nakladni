@@ -4315,7 +4315,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
     const hit = await db.get(`SELECT value FROM an_cache WHERE key = ?`, [cacheKey]);
     if (hit) return c.body(hit.value, 200, { "content-type": "application/json; charset=UTF-8" });
     function base(range, { items = itemLevel, skipCats = false } = {}) {
-      const where = [`o.id BETWEEN ? AND ?`, `o.day BETWEEN ? AND ?`, `o.status IN (${tracked.join(",")})`];
+      const where = [`o.id BETWEEN ? AND ?`, `o.day BETWEEN ? AND ?`, `+o.status IN (${tracked.join(",")})`];
       const params = [range.lo, range.hi, range.from, range.to];
       if (f.depts.length) {
         where.push(`o.dept IN (${ph(f.depts)})`);
@@ -4352,7 +4352,53 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
       const range = { lo: r[0], hi: r[1], from: p.from, to: p.to };
       const q = base(range);
       const qi = base(range, { items: true });
-      const jobs = [
+      const topJob = full ? db.all(`SELECT i.product_id AS id, MAX(p.name) AS name, MAX(p.brand_id) AS brand, SUM(i.amount) AS rev,
+                SUM(i.qty) AS qty, SUM(CASE WHEN ${rfExpr} = 1 THEN i.qty ELSE 0 END) AS rqty
+                ${qi.from} GROUP BY i.product_id ORDER BY rev DESC LIMIT 20`, qi.params) : Promise.resolve([]);
+      if (daysBetween(p.from, p.to) <= 92) {
+        const [rows, oi, top3] = await Promise.all([
+          db.all(`SELECT o.day AS day, o.dept AS dept, o.src AS src, o.user AS user, o.status AS status, o.deliv AS deliv, ${orderMeasures(itemLevel)} ${q.from}
+                  GROUP BY o.day, o.dept, o.src, o.user, o.status, o.deliv`, q.params),
+          db.all(`SELECT o.id AS oid, COALESCE(p.brand_id, 0) AS b, COALESCE(p.cat_manual, p.category_id, 0) AS c, MAX(${rfExpr}) AS rf,
+                  SUM(i.amount) AS rev, SUM(i.qty) AS qty ${qi.from} GROUP BY o.id, COALESCE(p.brand_id, 0), COALESCE(p.cat_manual, p.category_id, 0)`, qi.params),
+          topJob
+        ]);
+        const add = (m, k, init) => {
+          let x = m.get(k);
+          if (!x) {
+            x = init();
+            m.set(k, x);
+          }
+          return x;
+        };
+        const dm = /* @__PURE__ */ new Map();
+        const gm = /* @__PURE__ */ new Map();
+        for (const r2 of rows) {
+          const d = add(dm, r2.day, () => ({ day: r2.day, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
+          const g = add(gm, `${r2.dept}|${r2.src}|${r2.user}|${r2.status}|${r2.deliv}`, () => ({ dept: r2.dept, src: r2.src, user: r2.user, status: r2.status, deliv: r2.deliv, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
+          for (const x of [d, g]) {
+            x.rev += r2.rev || 0;
+            x.net += r2.net || 0;
+            x.cnt += r2.cnt || 0;
+            x.rcnt += r2.rcnt || 0;
+          }
+        }
+        const bm = /* @__PURE__ */ new Map();
+        const cm = /* @__PURE__ */ new Map();
+        for (const r2 of oi) {
+          for (const [m, k] of [[bm, r2.b], [cm, r2.c]]) {
+            const x = add(m, k, () => ({ id: k, rev: 0, net: 0, qty: 0, orders: /* @__PURE__ */ new Set(), rorders: /* @__PURE__ */ new Set() }));
+            x.rev += r2.rev || 0;
+            x.qty += r2.qty || 0;
+            if (!r2.rf) x.net += r2.rev || 0;
+            x.orders.add(r2.oid);
+            if (r2.rf) x.rorders.add(r2.oid);
+          }
+        }
+        const fin = (m) => [...m.values()].map(({ orders, rorders, ...x }) => ({ ...x, cnt: orders.size, rcnt: rorders.size }));
+        return { daily: [...dm.values()], groups: [...gm.values()], brands: fin(bm), cats: fin(cm), top: top3 };
+      }
+      const [daily, groups, brands2, cats, top2] = await Promise.all([
         db.all(`SELECT o.day AS day, ${orderMeasures(itemLevel)} ${q.from} GROUP BY o.day`, q.params),
         db.all(`SELECT o.dept AS dept, o.src AS src, o.user AS user, o.status AS status, o.deliv AS deliv, ${orderMeasures(itemLevel)} ${q.from} GROUP BY o.dept, o.src, o.user, o.status, o.deliv`, q.params),
         db.all(`SELECT COALESCE(p.brand_id, 0) AS id, SUM(i.amount) AS rev, SUM(CASE WHEN ${rfExpr} = 0 THEN i.amount ELSE 0 END) AS net,
@@ -4360,14 +4406,9 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
                 ${qi.from} GROUP BY COALESCE(p.brand_id, 0)`, qi.params),
         db.all(`SELECT COALESCE(p.cat_manual, p.category_id, 0) AS id, SUM(i.amount) AS rev, SUM(CASE WHEN ${rfExpr} = 0 THEN i.amount ELSE 0 END) AS net,
                 SUM(i.qty) AS qty, COUNT(DISTINCT o.id) AS cnt
-                ${qi.from} GROUP BY COALESCE(p.cat_manual, p.category_id, 0)`, qi.params)
-      ];
-      if (full) {
-        jobs.push(db.all(`SELECT i.product_id AS id, MAX(p.name) AS name, MAX(p.brand_id) AS brand, SUM(i.amount) AS rev,
-                SUM(i.qty) AS qty, SUM(CASE WHEN ${rfExpr} = 1 THEN i.qty ELSE 0 END) AS rqty
-                ${qi.from} GROUP BY i.product_id ORDER BY rev DESC LIMIT 20`, qi.params));
-      }
-      const [daily, groups, brands2, cats, top2 = []] = await Promise.all(jobs);
+                ${qi.from} GROUP BY COALESCE(p.cat_manual, p.category_id, 0)`, qi.params),
+        topJob
+      ]);
       return { daily, groups, brands: brands2, cats, top: top2 };
     }
     const [cur, prev, depts, sources, managers, brands, categories, targets, catOptions] = await Promise.all([
@@ -9580,7 +9621,7 @@ async function upgradeV10(db) {
 }
 var schema8 = {
   name: "analytics",
-  version: 2,
+  version: 3,
   tables: [
     // ---------- Аналітика ----------
     // Замовлення: id = короткий номер LP-CRM (зростає з часом), code = довгий код для API.
@@ -9629,6 +9670,7 @@ var schema8 = {
   // Нова база: засіяти й позначити старі оновлення виконаними; стара — догнати оновлення v9–v12.
   async seed(db, { fresh }) {
     await seedAnalytics(db);
+    await db.run(`CREATE INDEX IF NOT EXISTS an_orders_status ON an_orders(status, id)`);
     if (fresh) {
       await db.batch(["an_v9", "an_v10", "an_v11", "an_v12"].map((k) => [`INSERT INTO settings (key, value) VALUES (?, '1') ON CONFLICT(key) DO NOTHING`, [k]]));
       return;
