@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 13,
+  version: 14,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -208,6 +208,8 @@ export const schema = {
     // Маркування: відбиток файлу й ТТН з етикетки — те саме маркування не можна додати у два замовлення.
     ['b2b_files', 'hash', "TEXT DEFAULT ''"],
     ['b2b_files', 'ttn', "TEXT DEFAULT ''"],
+    // На який наш рахунок прийшла оплата (для коментаря в LP-CRM).
+    ['b2b_payments', 'account', "TEXT DEFAULT ''"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ['b2b_tg_docs', 'source', "TEXT DEFAULT 'private'"],
     ['b2b_tg_docs', 'reply_to', 'INTEGER'],

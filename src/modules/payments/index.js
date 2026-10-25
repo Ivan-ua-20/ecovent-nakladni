@@ -690,7 +690,8 @@ export function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, not
   });
 
   // Для B2B: платежі за id (лише не прив'язані до наших посилань на оплату) і платежі одного платника за останні дні.
-  const TX_COLS = `id, date, amount, currency, purpose, payer_name, payer_code`;
+  // account — на який наш рахунок прийшла оплата (назва з налаштувань IBAN або сам IBAN).
+  const TX_COLS = `id, date, amount, currency, purpose, payer_name, payer_code, iban, (SELECT ${ACC} FROM odb_accounts a WHERE a.iban = odb_tx.iban LIMIT 1) AS account`;
   const txs = (ids) => db.all(`SELECT ${TX_COLS} FROM odb_tx WHERE id IN (SELECT value FROM json_each(?)) AND +link_id IS NULL`, [JSON.stringify(ids)]);
   const txByPayer = (code, days = 120) => db.all(
     `SELECT ${TX_COLS} FROM odb_tx WHERE payer_code = ? AND link_id IS NULL AND currency = 'UAH' AND date >= ? ORDER BY date DESC LIMIT 50`,
