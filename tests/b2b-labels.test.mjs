@@ -124,4 +124,16 @@ await req('POST', `/api/b2b/p/clients/${k2.id}/cancel`, {}, A);
 assert.equal(await isClosed(), false, 'скасоване замовлення повертає залишок');
 void k1;
 
+// ---------- 5. Юрособа за замовчуванням ----------
+const ent2 = await req('POST', '/api/b2b/p/entities', { name: 'ААА ТОВ', code: '12345678' }, A);
+let ents = await req('GET', '/api/b2b/p/entities', null, A);
+assert.equal(ents[0].id, ent2.id, 'без вибору — за назвою');
+await req('POST', `/api/b2b/p/entities/${ent.id}/default`, { on: true }, A);
+ents = await req('GET', '/api/b2b/p/entities', null, A);
+assert.deepEqual([ents[0].id, ents[0].is_default, ents[1].is_default], [ent.id, true, false], 'за замовчуванням — першою');
+assert.equal((await req('GET', '/api/b2b/p/entities', null, B)).length, 0, 'в іншого партнера — свої');
+assert.equal((await errOf(() => req('POST', `/api/b2b/p/entities/${ent.id}/default`, {}, B))) !== '', true, 'чужу — ні');
+await req('POST', `/api/b2b/p/entities/${ent.id}/default`, { on: false }, A);
+assert.ok(!(await req('GET', '/api/b2b/p/entities', null, A)).some((e) => e.is_default));
+
 console.log('OK — B2B: часті товари, маркування без дублів, заміна номера LP-CRM, «Закрито»');
