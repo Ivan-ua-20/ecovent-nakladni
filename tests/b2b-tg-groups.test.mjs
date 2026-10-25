@@ -89,7 +89,7 @@ assert.match(toAdmin.text, /#\/b2borders\/\d+/);
 // ---------- 3. Рахунок — номером і файлом у групу ----------
 msgs.length = 0;
 await req('PUT', `/api/b2b/orders/${o.id}`, { invoice_no: 'СФ-7' });
-assert.ok(msgs.some((m) => m.chat_id === '-100777' && /Рахунок № СФ-7/.test(m.text)));
+assert.ok(!msgs.some((m) => m.chat_id === '-100777'), 'номер рахунку текстом — не в групу (туди йде файл)');
 const up = await mk().request(`/api/b2b/orders/${o.id}/files?kind=invoice`, { method: 'POST', headers: { Cookie: H.Cookie, 'Content-Type': 'application/pdf', 'X-File-Name': encodeURIComponent('Рахунок СФ-7.pdf') }, body: new Uint8Array(2048) });
 const uj = await up.json();
 assert.equal(uj.toGroup, true);
@@ -101,7 +101,7 @@ await mk().request(`/api/b2b/orders/${o.id}/files?kind=other`, { method: 'POST',
 assert.equal(docs.length, 1);
 msgs.length = 0;
 await req('POST', `/api/b2b/orders/${o.id}/status`, { status: 'paid' });
-assert.ok(msgs.some((m) => m.chat_id === '-100777' && /Оплату отримано/.test(m.text)), 'оплата — і в групу');
+assert.ok(!msgs.some((m) => m.chat_id === '-100777'), 'оплата — не в групу (лише особисто)');
 
 // ---------- 4. Видалення замовлень ----------
 const cl = await req('POST', '/api/b2b/p/clients', { client_name: 'Клієнт', client_phone: '0501112233', supply_id: o.id, items: [{ product_id: 11, qty: 1 }] }, A);
@@ -113,6 +113,21 @@ for (const t of ['b2b_orders', 'b2b_order_items', 'b2b_order_log', 'b2b_files', 
   assert.equal((await db.get(`SELECT COUNT(*) AS n FROM ${t}`)).n, 0, `${t} порожня`);
 }
 assert.ok((await db.get(`SELECT COUNT(*) AS n FROM audit_log WHERE action LIKE 'видалено закупівлю%'`)).n === 1, 'видалення — у журналі змін');
+
+// ---------- 4а. Усі замовлення закупівлі в роботі (у CRM з номерами) — один підсумок у групу ----------
+const o2 = await req('POST', '/api/b2b/p/orders', { entity_id: ea.id, items: [{ product_id: 11, qty: 2 }, { product_id: 12, qty: 1 }] }, A);
+msgs.length = 0;
+const k1 = await req('POST', '/api/b2b/p/clients', { client_name: 'Іваненко Петро', client_phone: '0501112233', supply_id: o2.id, items: [{ product_id: 11, qty: 2 }] }, A);
+const k2 = await req('POST', '/api/b2b/p/clients', { client_name: 'Сидоренко Анна', client_phone: '0501112244', supply_id: o2.id, items: [{ product_id: 12, qty: 1 }] }, A);
+assert.ok(!msgs.some((m) => m.chat_id === '-100777'), 'замовлення клієнтів — не в групу');
+await req('PUT', `/api/b2b/clients/${k1.id}`, { crm_id: '501' });
+assert.ok(!msgs.some((m) => m.chat_id === '-100777'), 'ще не всі в роботі');
+await req('PUT', `/api/b2b/clients/${k2.id}`, { crm_id: '502' });
+const done = msgs.filter((m) => m.chat_id === '-100777');
+assert.equal(done.length, 1);
+assert.match(done[0].text, new RegExp(`Закупівля B2B-${o2.id}: усі замовлення взято в роботу складом.*CRM № <b>501</b> · Іваненко Петро — Товар 11 × 2.*CRM № <b>502</b> · Сидоренко Анна — Товар 12 × 1`, 's'));
+await req('PUT', `/api/b2b/clients/${k2.id}`, { crm_id: '503' });
+assert.equal(msgs.filter((m) => m.chat_id === '-100777').length, 1, 'лише раз');
 
 // ---------- 5. Бота прибрали з групи — відв'язується ----------
 await hook({ chat: { id: -100777, type: 'supergroup' }, left_chat_member: { is_bot: true, username: 'ecobot' } });

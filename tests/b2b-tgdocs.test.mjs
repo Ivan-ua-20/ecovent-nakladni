@@ -185,8 +185,9 @@ await hook({ message: { message_id: 1, chat: { id: -900, type: 'group', title: '
 assert.match(last('sendMessage').text, /для <b>маркувань<\/b>/);
 assert.equal((await req('GET', '/api/b2b/labels-group')).title, 'накладні розетка');
 const cl = await req('POST', '/api/b2b/p/clients', { client_name: 'Петренко Олена', client_phone: '0501112233', supply_id: s1.id, items: [{ product_id: 11, qty: 1 }] }, A);
-const clientMsg = calls.find(([mm, b]) => mm === 'sendMessage' && b.chat_id === '-500' && /Нове замовлення клієнта/.test(b.text))?.[1];
-assert.ok(clientMsg, 'у групі партнера є повідомлення про замовлення клієнта');
+assert.ok(!calls.some(([mm, b]) => mm === 'sendMessage' && b.chat_id === '-500' && /Нове замовлення клієнта/.test(b.text)), 'замовлення клієнтів у групу партнера не йдуть');
+// маркування відповіддю на старе повідомлення бота про замовлення клієнта — як і раніше
+const clientMsg = { text: `📦 Нове замовлення клієнта B2B-${cl.id} від «Партнер А»` };
 files.set('lab1', miniPdf(npLabel({ ttn: '20400556982593', phone: '050 111 22 33' })));
 calls.length = 0;
 await hook({ message: { message_id: 30, chat: { id: -500, type: 'supergroup' }, from: { id: 50, first_name: 'Олег' },

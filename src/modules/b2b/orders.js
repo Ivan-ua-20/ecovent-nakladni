@@ -79,9 +79,10 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   const log = (orderId, user, action) => db.run(`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
     [orderId, nowIso(), userName(user), action]);
   const tgAdmins = (text) => services.notify?.sendText({ admins: true }, text).catch(() => 0);
-  // Партнеру: особисто його користувачам і в Telegram-групу партнера (якщо прив'язана).
+  // Партнеру — лише особисто його користувачам. У Telegram-групу партнера (tgGroup) — тільки головне: нова закупівля,
+  // рахунок і накладна (файлами) і «усі замовлення закупівлі взято в роботу складом».
   const groupOf = async (partnerId) => (await db.get(`SELECT tg_group FROM b2b_partners WHERE id = ?`, [partnerId]))?.tg_group || '';
-  const tgPartner = async (partnerId, text) => services.notify?.sendText({ partnerId, chatIds: [await groupOf(partnerId)] }, text).catch(() => 0);
+  const tgPartner = async (partnerId, text) => services.notify?.sendText({ partnerId }, text).catch(() => 0);
   const tgGroup = async (partnerId, text) => {
     const g = await groupOf(partnerId);
     return g ? services.notify?.sendText({ chatIds: [g] }, text).catch(() => 0) : 0;
@@ -359,7 +360,6 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     await log(o.id, c.get('user'), `змінено замовлення: ${items.length} поз., ${uah(total)}`);
     const full = orderText('✏️ Змінено закупівлю', { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${o.id}`)}`);
-    await tgGroup(p.id, full);
     await hooks.finRequest?.(o.id, 'changed').catch(() => 0);
     return c.json({ ok: true, total });
   });
@@ -375,7 +375,6 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
     await log(o.id, c.get('user'), 'партнер скасував замовлення');
     await tgAdmins(`❌ <b>Скасовано закупівлю ${orderNo(o.id)}</b> («${h(p.name)}»)\n${link(c, `b2borders/${o.id}`)}`);
-    await tgGroup(p.id, `❌ Закупівлю <b>${orderNo(o.id)}</b> скасовано.`);
     await hooks.finClosed?.(o.id, '❌ скасовано партнером').catch(() => 0);
     return c.json({ ok: true });
   });
