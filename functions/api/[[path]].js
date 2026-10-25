@@ -5379,7 +5379,7 @@ function mountB2bOrders(app, { db, services, myPartner, partnerPrice: partnerPri
   );
   const tgAdmins = (text) => services.notify?.sendText({ admins: true }, text).catch(() => 0);
   const groupOf = async (partnerId) => (await db.get(`SELECT tg_group FROM b2b_partners WHERE id = ?`, [partnerId]))?.tg_group || "";
-  const tgPartner = async (partnerId, text) => services.notify?.sendText({ partnerId, chatIds: [await groupOf(partnerId)] }, text).catch(() => 0);
+  const tgPartner = async (partnerId, text) => services.notify?.sendText({ partnerId }, text).catch(() => 0);
   const tgGroup = async (partnerId, text) => {
     const g = await groupOf(partnerId);
     return g ? services.notify?.sendText({ chatIds: [g] }, text).catch(() => 0) : 0;
@@ -5665,7 +5665,6 @@ ${link(c, `b2borders/${open.id}`)}`);
     await tgAdmins(`${full}
 
 ${link(c, `b2borders/${o.id}`)}`);
-    await tgGroup(p.id, full);
     await hooks.finRequest?.(o.id, "changed").catch(() => 0);
     return c.json({ ok: true, total });
   });
@@ -5681,7 +5680,6 @@ ${link(c, `b2borders/${o.id}`)}`);
     await log(o.id, c.get("user"), "\u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F");
     await tgAdmins(`\u274C <b>\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)}</b> (\xAB${h3(p.name)}\xBB)
 ${link(c, `b2borders/${o.id}`)}`);
-    await tgGroup(p.id, `\u274C \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E <b>${orderNo(o.id)}</b> \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.`);
     await hooks.finClosed?.(o.id, "\u274C \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u043E\u043C").catch(() => 0);
     return c.json({ ok: true });
   });
@@ -6053,6 +6051,10 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {} }) {
     }
     if (st.length) await db.batch(st);
     for (const [id, num5] of linked) await hooks.crmLinked?.(id, num5).catch(() => 0);
+    if (linked.length) {
+      const sup = await db.all(`SELECT DISTINCT supply_id FROM b2b_orders WHERE id IN (SELECT value FROM json_each(?)) AND supply_id IS NOT NULL`, [JSON.stringify(linked.map(([id]) => id))]);
+      for (const r of sup) await supplyInWork(r.supply_id).catch(() => 0);
+    }
   }
   function clientFields(b) {
     const name = String(b.client_name ?? "").trim().replace(/\s+/g, " ").slice(0, 150);
@@ -6193,8 +6195,25 @@ ${lines}
     await tgAdmins(`${text}
 
 ${link(c, `b2bclients/${id}`)}`);
-    await tgGroup(p.id, text);
   };
+  async function supplyInWork(supplyId, base = "") {
+    if (!supplyId) return;
+    const s = await db.get(`SELECT o.id, o.partner_id, o.status, o.group_done, ${CLOSED_SQL} AS closed FROM b2b_orders o WHERE o.id = ?`, [supplyId]);
+    if (!s || !s.closed || s.group_done || s.status === "open") return;
+    const rows = await db.all(`SELECT id, client_name, status, crm_id FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled' ORDER BY id`, [s.id]);
+    if (!rows.length || rows.some((r) => r.status !== "crm" || !r.crm_id)) return;
+    const claim = await db.run(`UPDATE b2b_orders SET group_done = 1 WHERE id = ? AND COALESCE(group_done, 0) = 0`, [s.id]);
+    if (!claim.changes) return;
+    const items = await db.all(`SELECT order_id, name, qty FROM b2b_order_items WHERE order_id IN (SELECT value FROM json_each(?)) ORDER BY id`, [JSON.stringify(rows.map((r) => r.id))]);
+    const lines = rows.map((r) => `\u2022 CRM \u2116 <b>${h6(r.crm_id)}</b> \xB7 ${h6(r.client_name)} \u2014 ${items.filter((i) => i.order_id === r.id).map((i) => `${h6(i.name)} \xD7 ${i.qty}`).join(", ")}`);
+    await tgGroup(s.partner_id, `\u2705 <b>\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(s.id)}: \u0443\u0441\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0437\u044F\u0442\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443 \u0441\u043A\u043B\u0430\u0434\u043E\u043C</b>
+
+${lines.slice(0, 60).join("\n")}${lines.length > 60 ? `
+\u2026\u0456 \u0449\u0435 ${lines.length - 60}` : ""}${base ? `
+
+${link(base, `porders/${s.id}`)}` : ""}`);
+  }
+  hooks.supplyInWork = supplyInWork;
   app.get("/api/b2b/p/supplies", async (c) => {
     const p = await myPartner(c);
     const since = new Date(Date.now() - 180 * 864e5).toISOString();
@@ -6435,6 +6454,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
     await tgPartner(o.partner_id, `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h6(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${crmId ? `, \u2116 \u0443 CRM ${crmId}` : ""}.
 ${link(c, `pclients/${o.id}`)}`);
     await warnUnpaidShipped(c, o);
+    await supplyInWork(o.supply_id, c).catch(() => 0);
     return c.json({ ok: true, crm_id: crmId, code });
   });
   app.put("/api/b2b/clients/:id", async (c) => {
@@ -6463,6 +6483,7 @@ ${link(c, `pclients/${o.id}`)}`);
       await tgPartner(o.partner_id, relinked ? `\u{1F501} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h6(o.client_name)}): \u043D\u043E\u043C\u0435\u0440 \u0443 CRM \u0437\u043C\u0456\u043D\u0435\u043D\u043E${num5 ? ` \u043D\u0430 ${num5}` : ""}.
 ${link(c, `pclients/${o.id}`)}` : `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h6(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${num5 ? `, \u2116 \u0443 CRM ${num5}` : ""}.
 ${link(c, `pclients/${o.id}`)}`);
+      await supplyInWork(o.supply_id, c).catch(() => 0);
     }
     return c.json({ ok: true });
   });
@@ -9615,7 +9636,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 14,
+  version: 15,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -9823,6 +9844,8 @@ var schema11 = {
     ["b2b_files", "ttn", "TEXT DEFAULT ''"],
     // На який наш рахунок прийшла оплата (для коментаря в LP-CRM).
     ["b2b_payments", "account", "TEXT DEFAULT ''"],
+    // У групу партнера вже надіслано «усі замовлення закупівлі взято в роботу складом».
+    ["b2b_orders", "group_done", "INTEGER DEFAULT 0"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ["b2b_tg_docs", "source", "TEXT DEFAULT 'private'"],
     ["b2b_tg_docs", "reply_to", "INTEGER"],

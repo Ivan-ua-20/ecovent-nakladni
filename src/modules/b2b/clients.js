@@ -7,7 +7,7 @@
 // Передачу в CRM вмикає адмін у «Налаштуваннях CRM» (ID відділу + перемикач) — коли ключ LP-CRM отримає дозвіл на addNewOrder.
 import { fail, need, nowIso, loadSettings, MASK } from '../../core/common.js';
 import { addNewOrder, getOrdersBatch, getStatuses, phpSerialize, phpUrlencode } from '../../integrations/lpcrm.js';
-import { CLIENT_STATUS, ORDER_STATUS, payState, orderNo } from './orders.js';
+import { CLIENT_STATUS, ORDER_STATUS, CLOSED_SQL, payState, orderNo } from './orders.js';
 import { listFilter } from './filters.js';
 
 const CRM_REFRESH_MIN = 10;
@@ -140,6 +140,11 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     } catch { /* CRM недоступна — покажемо останній відомий статус */ }
     if (st.length) await db.batch(st);
     for (const [id, num] of linked) await hooks.crmLinked?.(id, num).catch(() => 0);
+    // номер з'явився — можливо, вся закупівля вже в роботі
+    if (linked.length) {
+      const sup = await db.all(`SELECT DISTINCT supply_id FROM b2b_orders WHERE id IN (SELECT value FROM json_each(?)) AND supply_id IS NOT NULL`, [JSON.stringify(linked.map(([id]) => id))]);
+      for (const r of sup) await supplyInWork(r.supply_id).catch(() => 0);
+    }
   }
 
   // ---------------------------------------------------------------- дані клієнта й позиції
@@ -274,8 +279,22 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     const text = `📦 <b>${verb} ${orderNo(id)}</b> від «${h(p.name)}»\n\n<b>Клієнт:</b> ${h(f.client_name)}, ${h(f.client_phone)}${f.ttn ? `\n<b>ТТН:</b> ${h(f.ttn)}` : ''}\n`
       + `${it.supplyId ? `Із закупівлі ${orderNo(it.supplyId)}` : `🔴 <b>Без закупівлі</b> — у відкриту закупівлю ${orderNo(it.openId)}`}\n\n<b>Товари:</b>\n${lines}\n\n<b>Разом: ${uah(it.total)}</b>`;
     await tgAdmins(`${text}\n\n${link(c, `b2bclients/${id}`)}`);
-    await tgGroup(p.id, text);
   };
+  // Закупівлю розписано повністю й усі її замовлення клієнтів уже в LP-CRM з номерами — один підсумок у групу партнера.
+  async function supplyInWork(supplyId, base = '') {
+    if (!supplyId) return;
+    const s = await db.get(`SELECT o.id, o.partner_id, o.status, o.group_done, ${CLOSED_SQL} AS closed FROM b2b_orders o WHERE o.id = ?`, [supplyId]);
+    if (!s || !s.closed || s.group_done || s.status === 'open') return;
+    const rows = await db.all(`SELECT id, client_name, status, crm_id FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled' ORDER BY id`, [s.id]);
+    if (!rows.length || rows.some((r) => r.status !== 'crm' || !r.crm_id)) return;
+    const claim = await db.run(`UPDATE b2b_orders SET group_done = 1 WHERE id = ? AND COALESCE(group_done, 0) = 0`, [s.id]);
+    if (!claim.changes) return;
+    const items = await db.all(`SELECT order_id, name, qty FROM b2b_order_items WHERE order_id IN (SELECT value FROM json_each(?)) ORDER BY id`, [JSON.stringify(rows.map((r) => r.id))]);
+    const lines = rows.map((r) => `• CRM № <b>${h(r.crm_id)}</b> · ${h(r.client_name)} — ${items.filter((i) => i.order_id === r.id).map((i) => `${h(i.name)} × ${i.qty}`).join(', ')}`);
+    await tgGroup(s.partner_id, `✅ <b>Закупівля ${orderNo(s.id)}: усі замовлення взято в роботу складом</b>\n\n${lines.slice(0, 60).join('\n')}${lines.length > 60 ? `\n…і ще ${lines.length - 60}` : ''}`
+      + `${base ? `\n\n${link(base, `porders/${s.id}`)}` : ''}`);
+  }
+  hooks.supplyInWork = supplyInWork;
 
 
   // ================================================================ ПАРТНЕР
@@ -509,6 +528,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     await log(o.id, c.get('user'), `додано в LP-CRM${crmId ? `: № ${crmId}` : ` (код ${code}; номер з’явиться після оновлення статусу)`}`);
     await tgPartner(o.partner_id, `🚚 Замовлення ${orderNo(o.id)} (${h(o.client_name)}) передано в роботу${crmId ? `, № у CRM ${crmId}` : ''}.\n${link(c, `pclients/${o.id}`)}`);
     await warnUnpaidShipped(c, o);
+    await supplyInWork(o.supply_id, c).catch(() => 0);
     return c.json({ ok: true, crm_id: crmId, code });
   });
 
@@ -538,6 +558,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
       await tgPartner(o.partner_id, relinked
         ? `🔁 Замовлення ${orderNo(o.id)} (${h(o.client_name)}): номер у CRM змінено${num ? ` на ${num}` : ''}.\n${link(c, `pclients/${o.id}`)}`
         : `🚚 Замовлення ${orderNo(o.id)} (${h(o.client_name)}) передано в роботу${num ? `, № у CRM ${num}` : ''}.\n${link(c, `pclients/${o.id}`)}`);
+      await supplyInWork(o.supply_id, c).catch(() => 0);
     }
     return c.json({ ok: true });
   });
