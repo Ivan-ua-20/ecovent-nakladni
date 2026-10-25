@@ -8,6 +8,7 @@
 import { fail, need, nowIso, round2 } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
 import { listFilter } from './filters.js';
+import { pdfText, parseNpLabel } from '../../integrations/pdftext.js';
 
 export const ORDER_STATUS = {
   open: 'Відкрита (рахунок не сформовано)',
@@ -482,22 +483,40 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return c.json({ id: f.id, toGroup: !!toGroup });
   });
 
-  async function saveFile(c, o, kind) {
-    const bytes = new Uint8Array(await c.req.arrayBuffer());
+  async function saveFile(c, o, kind, bytes = null, extra = {}) {
+    bytes = bytes || new Uint8Array(await c.req.arrayBuffer());
     let name = 'file';
     try { name = decodeURIComponent(c.req.header('x-file-name') || 'file'); } catch { /* */ }
-    return storeFile(o, kind, { bytes, name, mime: c.req.header('content-type') }, c.get('user'));
+    return storeFile(o, kind, { bytes, name, mime: c.req.header('content-type'), ...extra }, c.get('user'));
   }
 
+  // Маркування: відбиток файлу (SHA-256) і ТТН з етикетки Нової пошти — щоб те саме маркування не потрапило у два замовлення.
+  async function labelInfo(bytes) {
+    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((x) => x.toString(16).padStart(2, '0')).join('');
+    let np = null;
+    if (bytes[0] === 0x25 && bytes[1] === 0x50) np = parseNpLabel(await pdfText(bytes).catch(() => '')); // %P — PDF
+    return { hash, ttn: np?.ttn || '', np };
+  }
+  // Інше (не скасоване) замовлення клієнта з цим маркуванням: той самий файл, ТТН у файлі маркування або ТТН замовлення.
+  async function labelDup({ hash, ttn }, exceptId = 0) {
+    const row = await db.get(
+      `SELECT o.id, o.client_name FROM b2b_orders o WHERE o.kind = 'client' AND o.status != 'cancelled' AND o.id != ? AND (
+         EXISTS (SELECT 1 FROM b2b_files f WHERE f.order_id = o.id AND f.kind = 'label' AND ((? != '' AND f.hash = ?) OR (? != '' AND f.ttn = ?)))
+         OR (? != '' AND o.ttn = ?)) ORDER BY o.id LIMIT 1`, [exceptId, hash || '', hash || '', ttn || '', ttn || '', ttn || '', ttn || ''],
+    );
+    return row ? { id: row.id, number: orderNo(row.id), client_name: row.client_name } : null;
+  }
+  const dupText = (d) => `Таке маркування вже є в замовленні ${d.number} (${d.client_name}) — те саме маркування двічі додати не можна.`;
+
   // Зберегти файл у замовленні (частинами в D1). user — користувач сайту або { name } для Telegram.
-  async function storeFile(o, kind, { bytes, name, mime }, u, how = '') {
+  async function storeFile(o, kind, { bytes, name, mime, hash = '', ttn = '' }, u, how = '') {
     if (!bytes?.length) throw fail(400, 'Порожній файл.');
     if (bytes.length > MAX_FILE) throw fail(400, 'Файл завеликий (до 5 МБ).');
     name = String(name || 'file').replace(/[\\/:*?"<>|\r\n]+/g, '_').slice(0, 150) || 'file';
     mime = String(mime || 'application/octet-stream').slice(0, 100);
     const parts = Math.ceil(bytes.length / PART);
-    const r = await db.run(`INSERT INTO b2b_files (order_id, kind, name, mime, size, parts, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [o.id, kind, name, mime, bytes.length, parts, userName(u), nowIso()]);
+    const r = await db.run(`INSERT INTO b2b_files (order_id, kind, name, mime, size, parts, created_by, created_at, hash, ttn) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [o.id, kind, name, mime, bytes.length, parts, userName(u), nowIso(), hash, ttn]);
     const st = [];
     for (let n = 0; n < parts; n++) st.push([`INSERT INTO b2b_file_parts (file_id, n, data) VALUES (?, ?, ?)`, [r.lastId, n, toB64(bytes.subarray(n * PART, (n + 1) * PART))]]);
     await db.batch(st);
@@ -569,5 +588,5 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return c.json({ ok: true, inCrm: o.crm_id || '' });
   });
 
-  return { getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
+  return { labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
 }

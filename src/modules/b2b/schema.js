@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 12,
+  version: 13,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -205,6 +205,9 @@ export const schema = {
     ['b2b_orders', 'fin_inv_msg', 'INTEGER'],
     ['b2b_orders', 'fin_pay_msg', 'INTEGER'],
     ['b2b_orders', 'fin_done', 'INTEGER DEFAULT 0'], // підсумок «закупівлю закрито» вже надіслано
+    // Маркування: відбиток файлу й ТТН з етикетки — те саме маркування не можна додати у два замовлення.
+    ['b2b_files', 'hash', "TEXT DEFAULT ''"],
+    ['b2b_files', 'ttn', "TEXT DEFAULT ''"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ['b2b_tg_docs', 'source', "TEXT DEFAULT 'private'"],
     ['b2b_tg_docs', 'reply_to', 'INTEGER'],
@@ -220,6 +223,9 @@ export const schema = {
       [`CREATE INDEX IF NOT EXISTS b2b_orders_supply ON b2b_orders (supply_id)`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_orders_kind ON b2b_orders (kind, partner_id, id)`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_orders_created ON b2b_orders (created_at)`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_files_hash ON b2b_files (hash)`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_files_ttn ON b2b_files (ttn)`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_ttn ON b2b_orders (ttn)`, []],
     ]);
   },
 };

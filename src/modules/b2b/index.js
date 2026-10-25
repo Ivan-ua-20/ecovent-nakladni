@@ -416,6 +416,11 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
       brandNames(),
       db.all(`SELECT id, name FROM an_categories`).catch(() => []),
     ]);
+    // Як часто партнер замовляв товар: у скількох закупівлях і замовленнях клієнтів (без скасованих і відкритої).
+    const freq = new Map((await db.all(
+      `SELECT i.product_id, COUNT(DISTINCT o.id) AS n, SUM(i.qty) AS q FROM b2b_orders o JOIN b2b_order_items i ON i.order_id = o.id
+       WHERE o.partner_id = ? AND o.kind IN ('supply', 'client') AND o.status NOT IN ('cancelled', 'open') GROUP BY i.product_id`, [p.id],
+    )).map((r) => [r.product_id, r]));
     const catName = new Map(cats.map((x) => [x.id, x.name]));
     // Бренди з відсотком знижки від РРЦ (маржа партнера на бренд) і категорії з кількістю товарів.
     const brands = [...new Map(rows.map((r) => [r.brand_id, { id: r.brand_id, name: names.get(r.brand_id) || 'Інші', margin: r.margin }])).values()]
@@ -426,10 +431,12 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
       partner: { id: p.id, name: p.name },
       brands,
       categories,
+      // Спершу те, що партнер замовляє найчастіше (далі — за назвою).
       products: rows.map((r) => ({
         id: r.product_id, name: r.name, article: r.article, image: r.image, brand_id: r.brand_id, cat: r.cat,
         brand: names.get(r.brand_id) || 'Інші', rrp: r.rrp, price: partnerPrice(r.rrp, r.margin), margin: r.margin,
-      })),
+        ordered: freq.get(r.product_id)?.n || 0, ordered_qty: freq.get(r.product_id)?.q || 0,
+      })).sort((a, b) => b.ordered - a.ordered || b.ordered_qty - a.ordered_qty),
     });
   });
 

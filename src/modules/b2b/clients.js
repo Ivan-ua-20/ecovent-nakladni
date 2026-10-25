@@ -6,7 +6,6 @@
 // номер замовлення з CRM вручну. Статус замовлення в CRM партнер бачить у кабінеті (оновлюється не частіше ніж раз на 10 хв).
 // Передачу в CRM вмикає адмін у «Налаштуваннях CRM» (ID відділу + перемикач) — коли ключ LP-CRM отримає дозвіл на addNewOrder.
 import { fail, need, nowIso, loadSettings, MASK } from '../../core/common.js';
-import { pdfText, parseNpLabel } from '../../integrations/pdftext.js';
 import { addNewOrder, getOrdersBatch, getStatuses, phpSerialize, phpUrlencode } from '../../integrations/lpcrm.js';
 import { CLIENT_STATUS, ORDER_STATUS, payState, orderNo } from './orders.js';
 import { listFilter } from './filters.js';
@@ -23,7 +22,7 @@ const TTN_FIELDS = ['', 'additional_2', 'additional_3', 'additional_4', 'deliver
 const newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(10000 + Math.random() * 90000))}`;
 
 export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {} }) {
-  const { getOpen, rebuildOpen, unpaidTotal, limitsOf, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h } = orders;
+  const { labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h } = orders;
   const userName = (u) => u?.name || u?.login || '';
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files
     FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id`;
@@ -197,6 +196,9 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     }
     return { supplyId: null, toOpen: true, openId: open?.id || null, items, total };
   }
+  // ТТН уже є в іншому замовленні: своє — з номером і клієнтом, чуже — без подробиць.
+  const ttnDupMsg = async (ttn, dup, partnerId) => ((await db.get(`SELECT partner_id FROM b2b_orders WHERE id = ?`, [dup.id]))?.partner_id === partnerId
+    ? `ТТН ${ttn} уже є в замовленні ${dup.number} (${dup.client_name}).` : `ТТН ${ttn} уже використана в іншому замовленні.`);
   // Відкрита закупівля партнера (створюється за потреби).
   async function ensureOpen(p) {
     const open = await getOpen(p.id);
@@ -281,6 +283,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     const p = await myPartner(c);
     const b = await c.req.json();
     const f = clientFields(b);
+    if (f.ttn) { const dup = await labelDup({ ttn: f.ttn }); if (dup) throw fail(400, await ttnDupMsg(f.ttn, dup, p.id)); }
     const it = await buildItems(p, b);
     if (it.toOpen) { it.openId = await ensureOpen(p); it.supplyRef = it.openId; }
     const now = nowIso();
@@ -304,6 +307,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     if (o.status !== 'new') throw fail(400, 'Замовлення вже передане в роботу — змінити його може лише менеджер.');
     const b = await c.req.json();
     const f = clientFields(b);
+    if (f.ttn) { const dup = await labelDup({ ttn: f.ttn }, o.id); if (dup) throw fail(400, await ttnDupMsg(f.ttn, dup, p.id)); }
     const cur = await supplyOf(o.supply_id);
     const it = await buildItems(p, b, o.id, { openId: cur?.status === 'open' ? cur.id : null, total: o.total });
     if (it.toOpen) it.openId = await ensureOpen(p);
@@ -332,13 +336,19 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
   });
 
   // Дані клієнта з маркування Нової пошти (для автозаповнення форми): ПІБ і телефон одержувача, ТТН, адреса.
+  // Також перевірка: чи немає вже цього маркування (той самий файл або ТТН) в іншому замовленні (except — поточне).
   app.post('/api/b2b/p/parse-label', async (c) => {
-    await myPartner(c);
+    const p = await myPartner(c);
     const bytes = new Uint8Array(await c.req.arrayBuffer());
     if (!bytes.length || bytes.length > 5 * 1024 * 1024) throw fail(400, 'Файл маркування — до 5 МБ.');
-    const np = parseNpLabel(await pdfText(bytes));
-    if (!np) return c.json({ found: false });
-    return c.json({ found: true, client_name: np.recipient, client_phone: np.phone ? `0${np.phone.slice(3)}` : '', ttn: np.ttn, address: np.address });
+    const info = await labelInfo(bytes);
+    const exceptId = parseInt(c.req.query('except'), 10) || 0;
+    const dup = await labelDup(info, exceptId);
+    // інший партнер: лише факт, без даних чужого клієнта
+    const dupOut = dup ? ((await db.get(`SELECT partner_id FROM b2b_orders WHERE id = ?`, [dup.id]))?.partner_id === p.id ? dup : { id: 0, number: 'іншого партнера', client_name: '—' }) : null;
+    const np = info.np;
+    if (!np) return c.json({ found: false, dup: dupOut, dup_text: dupOut ? dupText(dupOut) : '' });
+    return c.json({ found: true, client_name: np.recipient, client_phone: np.phone ? `0${np.phone.slice(3)}` : '', ttn: np.ttn, address: np.address, dup: dupOut, dup_text: dupOut ? dupText(dupOut) : '' });
   });
 
   // Маркування (етикетка ТТН) — файл від партнера; доки замовлення не передане в CRM.
@@ -347,7 +357,13 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     const o = await myClientOrder(c, p);
     if (o.status !== 'new') throw fail(400, 'Замовлення вже в роботі — новий файл маркування надішліть менеджеру.');
     if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_files WHERE order_id = ?`, [o.id])).n >= 10) throw fail(400, 'Не більше 10 файлів у замовленні.');
-    const f = await saveFile(c, o, 'label');
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    if (!bytes.length) throw fail(400, 'Порожній файл.');
+    const info = await labelInfo(bytes);
+    const dup = await labelDup(info, o.id);
+    if (dup) throw fail(409, dup.id && (await db.get(`SELECT partner_id FROM b2b_orders WHERE id = ?`, [dup.id]))?.partner_id === p.id ? dupText(dup) : 'Таке маркування вже використане в іншому замовленні.');
+    if (await db.get(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = 'label' AND hash = ?`, [o.id, info.hash])) throw fail(409, 'Це маркування вже додано до цього замовлення.');
+    const f = await saveFile(c, o, 'label', bytes, { hash: info.hash, ttn: info.ttn });
     const r = await hooks.afterLabel?.(o, f, c.get('user'));
     return c.json({ id: f.id, warnings: r?.warnings || [] });
   });
@@ -473,13 +489,17 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     const status = val ? 'crm' : 'new';
     await db.run(`UPDATE b2b_orders SET crm_id = ?, crm_ext = ?, crm_sent_at = CASE WHEN ? = '' THEN '' ELSE crm_sent_at END, status = ?, crm_status = '', crm_checked_at = '', updated_at = ? WHERE id = ?`,
       [crmId, crmExt, val, status, nowIso(), o.id]);
-    await log(o.id, c.get('user'), val ? `прив'язано замовлення LP-CRM ${isCode ? `код ${val}` : `№ ${val}`}` : 'відв’язано номер LP-CRM');
+    const was = o.crm_id || o.crm_ext;
+    await log(o.id, c.get('user'), val ? `${was && was !== val ? `замінено замовлення LP-CRM (було ${was}) на` : 'прив\'язано замовлення LP-CRM'} ${isCode ? `код ${val}` : `№ ${val}`}` : 'відв’язано номер LP-CRM');
     if (val && val !== o.crm_id && val !== o.crm_ext) {
       await refreshCrm({ ids: [o.id] });
       const num = (await db.get(`SELECT crm_id FROM b2b_orders WHERE id = ?`, [o.id]))?.crm_id || '';
       if (!isCode && num) await hooks.crmLinked?.(o.id, num).catch(() => 0);
       if (o.status === 'new') await warnUnpaidShipped(c, o);
-      await tgPartner(o.partner_id, `🚚 Замовлення ${orderNo(o.id)} (${h(o.client_name)}) передано в роботу${num ? `, № у CRM ${num}` : ''}.\n${link(c, `pclients/${o.id}`)}`);
+      const relinked = Boolean(o.crm_id || o.crm_ext); // уже був номер — менеджер прив'язав інше замовлення CRM
+      await tgPartner(o.partner_id, relinked
+        ? `🔁 Замовлення ${orderNo(o.id)} (${h(o.client_name)}): номер у CRM змінено${num ? ` на ${num}` : ''}.\n${link(c, `pclients/${o.id}`)}`
+        : `🚚 Замовлення ${orderNo(o.id)} (${h(o.client_name)}) передано в роботу${num ? `, № у CRM ${num}` : ''}.\n${link(c, `pclients/${o.id}`)}`);
     }
     return c.json({ ok: true });
   });
