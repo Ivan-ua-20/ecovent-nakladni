@@ -48,15 +48,16 @@ export function createPartnerPages(ctx = {}) {
   // Список згрупований за брендами. Вибір запам'ятовується в браузері.
   const FKEY = 'b2b_cat_filter';
   try { Object.assign(filter, JSON.parse(localStorage.getItem(FKEY) || '{}')); } catch { /* приватний режим */ }
+  if (filter.sortV !== 2) { filter.sort = 'often'; filter.sortV = 2; } // один раз: спершу те, що партнер замовляє найчастіше
   const saveFilter = () => { try { localStorage.setItem(FKEY, JSON.stringify(filter)); } catch { /* */ } };
-  const SORTS = { brand: 'За брендом', name: 'За назвою', cheap: 'Дешевші спочатку', dear: 'Дорожчі спочатку', profit: 'Найбільша вигода' };
+  const SORTS = { often: 'Часто замовляю', brand: 'За брендом', name: 'За назвою', cheap: 'Дешевші спочатку', dear: 'Дорожчі спочатку', profit: 'Найбільша вигода' };
   const pct = (v) => `${String(Math.round((Number(v) || 0) * 100) / 100).replace('.', ',')}%`;
 
   async function viewPartnerCatalog() {
     const { partner, brands, categories = [], products } = await api('GET', '/api/b2b/p/catalog');
     if (filter.brand && !brands.some((b) => String(b.id) === String(filter.brand))) filter.brand = '';
     filter.cat = filter.cat ?? '';
-    filter.sort = SORTS[filter.sort] ? filter.sort : 'brand';
+    filter.sort = SORTS[filter.sort] ? filter.sort : 'often';
     const catName = new Map(categories.map((c) => [String(c.id), c.name]));
     const byBrand = (p) => !filter.brand || String(p.brand_id) === String(filter.brand);
     const matchQ = (p) => {
@@ -73,23 +74,27 @@ export function createPartnerPages(ctx = {}) {
           .map(([id, n]) => `<button class="chip ${String(filter.cat) === id ? 'on' : ''}" data-cat="${esc(id)}">${esc(catName.get(id) || 'Інше')} · ${n}</button>`).join('')}` : '';
       $$('[data-cat]').forEach((b) => (b.onclick = () => { filter.cat = b.dataset.cat; saveFilter(); draw(); }));
       let list = inBrand.filter((p) => (filter.cat === '' || String(p.cat) === String(filter.cat)) && matchQ(p));
+      const byBrandName = (a, b) => a.brand.localeCompare(b.brand, 'uk') || a.name.localeCompare(b.name, 'uk');
       const by = {
-        brand: (a, b) => a.brand.localeCompare(b.brand, 'uk') || a.name.localeCompare(b.name, 'uk'),
+        often: (a, b) => (b.ordered || 0) - (a.ordered || 0) || (b.ordered_qty || 0) - (a.ordered_qty || 0) || byBrandName(a, b),
+        brand: byBrandName,
         name: (a, b) => a.name.localeCompare(b.name, 'uk'),
         cheap: (a, b) => a.price - b.price,
         dear: (a, b) => b.price - a.price,
         profit: (a, b) => (b.rrp - b.price) - (a.rrp - a.price),
       }[filter.sort];
       list = [...list].sort(by);
-      const grouped = filter.sort === 'brand';
+      const grouped = filter.sort === 'brand' || filter.sort === 'often';
       let lastBrand = null;
       const rowsHtml = list.map((p) => {
-        const head = grouped && p.brand_id !== lastBrand
-          ? `<tr class="grp"><td colspan="6"><b>${esc(p.brand)}</b> <span class="badge ok">ваша знижка ${pct(p.margin)} від РРЦ</span></td></tr>` : '';
-        lastBrand = p.brand_id;
+        const gk = filter.sort === 'often' && p.ordered ? 'fav' : p.brand_id; // «часто» — окремою групою зверху
+        const head = grouped && gk !== lastBrand
+          ? (gk === 'fav' ? '<tr class="grp"><td colspan="6"><b>⭐ Часто замовляєте</b></td></tr>'
+            : `<tr class="grp"><td colspan="6"><b>${esc(p.brand)}</b> <span class="badge ok">ваша знижка ${pct(p.margin)} від РРЦ</span></td></tr>`) : '';
+        lastBrand = gk;
         return `${head}<tr>
           <td style="width:56px">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" style="width:48px;height:48px;object-fit:contain">` : ''}</td>
-          <td><b>${esc(p.name)}</b><div class="small muted">${[p.article, catName.get(String(p.cat))].filter(Boolean).map(esc).join(' · ')}</div></td>
+          <td><b>${esc(p.name)}</b><div class="small muted">${[p.article, catName.get(String(p.cat)), p.ordered ? `замовляли ${p.ordered} раз` : ''].filter(Boolean).map(esc).join(' · ')}</div></td>
           <td class="small hide-m">${esc(p.brand)}</td>
           <td class="r small muted">${money(p.rrp)} грн</td>
           <td class="r small hide-m">${pct(p.margin)}<div class="muted">−${money(p.rrp - p.price)}</div></td>
@@ -287,7 +292,7 @@ export function createPartnerPages(ctx = {}) {
       const q = fq.toLowerCase();
       const list = products.filter((p) => (!fb || String(p.brand_id) === fb) && (!q || p.name.toLowerCase().includes(q) || String(p.article || '').toLowerCase().includes(q)));
       $('#ofList').innerHTML = list.length ? `<table class="list"><thead><tr><th>Товар</th><th class="r">Ціна</th><th class="r">К-сть</th></tr></thead><tbody>
-        ${list.map((p) => `<tr><td>${esc(p.name)}${p.article ? `<div class="small muted">${esc(p.article)}</div>` : ''}</td><td class="r"><b>${money(p.price)}</b><div class="small muted">РРЦ ${money(p.rrp)}</div></td>
+        ${list.map((p) => `<tr><td>${p.ordered ? '<span title="Часто замовляєте">⭐</span> ' : ''}${esc(p.name)}${p.article || p.ordered ? `<div class="small muted">${[p.article, p.ordered ? `замовляли ${p.ordered} раз` : ''].filter(Boolean).map(esc).join(' · ')}</div>` : ''}</td><td class="r"><b>${money(p.price)}</b><div class="small muted">РРЦ ${money(p.rrp)}</div></td>
           <td class="r"><input type="number" min="0" step="1" inputmode="numeric" data-q="${p.id}" value="${qty.get(p.id) || ''}" style="width:80px;text-align:right" aria-label="Кількість: ${esc(p.name)}"></td></tr>`).join('')}</tbody></table>`
         : '<div class="small muted">Нічого не знайдено.</div>';
       $$('[data-q]').forEach((inp) => (inp.oninput = () => {
@@ -450,17 +455,20 @@ export function createPartnerPages(ctx = {}) {
             <label class="f"><span>Телефон *</span><input name="client_phone" value="${esc(o.client_phone || '')}" inputmode="tel" placeholder="0XXXXXXXXX" required></label>
             <label class="f"><span>ТТН (ваша)</span><input name="ttn" value="${esc(o.ttn || '')}" inputmode="numeric" placeholder="20450000000000"></label>
             <label class="f"><span>Коментар</span><textarea name="comment" rows="2">${esc(o.comment || '')}</textarea></label>
-            <label class="f"><span>Маркування (етикетка ТТН)${cur?.files?.length ? ` — вже додано: ${cur.files.length}` : ''}</span>
-              <input type="file" id="cfFiles" accept=".pdf,image/*" multiple></label>
-            <div class="small muted">PDF або фото до 5 МБ; можна кілька. Менеджер завантажить його зі свого боку.</div>
+            <div class="f"><span>Маркування (етикетка ТТН)</span>
+              <div id="cfFileList" class="form-stack" style="gap:6px"></div>
+              <label class="btn sm" style="align-self:flex-start">+ Додати маркування<input type="file" id="cfFiles" accept=".pdf,image/*" multiple hidden></label></div>
+            <div class="small muted">PDF або фото до 5 МБ; можна кілька, зайве — ✕. Те саме маркування двічі (в одне чи різні замовлення) додати не можна.</div>
             <div id="cfSum"></div>
             <button class="btn primary" id="cfSave">${id ? 'Зберегти зміни' : 'Оформити замовлення'}</button>
           </form>
         </div>
       </div>`;
+    const often = new Map(catalog.products.map((p, i) => [p.id, { n: p.ordered || 0, i }]));
+    const byOften = (a, b) => (often.get(b.product_id)?.n || 0) - (often.get(a.product_id)?.n || 0) || (often.get(a.product_id)?.i ?? 1e9) - (often.get(b.product_id)?.i ?? 1e9);
     const lines = () => {
       if (!source) return catalog.products.map((p) => ({ product_id: p.id, name: p.name, article: p.article, price: p.price, left: null }));
-      return (supplies.find((s) => String(s.id) === source)?.items || []);
+      return [...(supplies.find((s) => String(s.id) === source)?.items || [])].sort(byOften); // часті — першими
     };
     const sum = () => {
       const ls = lines().filter((l) => qty.get(l.product_id) > 0);
@@ -490,14 +498,43 @@ export function createPartnerPages(ctx = {}) {
       $$('.src-card').forEach((c) => c.classList.toggle('on', c.contains(r)));
       draw();
     }));
-    // Маркування Нової пошти → ПІБ, телефон і ТТН клієнта (порожні поля заповнюються, різницю показуємо).
+    // Маркування: уже збережені (при зміні замовлення) — з ✕ одразу на сайті; нові — у списку до збереження.
+    const saved = [...(cur?.files || []).filter((f) => f.kind === 'label')];
+    const pending = []; // { file, ttn }
+    const drawFiles = () => {
+      $('#cfFileList').innerHTML = [...saved.map((f) => ({ name: f.name, size: f.size, saved: f.id })), ...pending.map((x, i) => ({ name: x.file.name, size: x.file.size, idx: i, ttn: x.ttn }))]
+        .map((f) => `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="small">📎 ${esc(f.name)} <span class="muted">${fileSize(f.size)}${f.ttn ? ` · ТТН ${esc(f.ttn)}` : ''}${f.saved ? ' · збережено' : ''}</span></span>
+          <button type="button" class="btn sm danger" ${f.saved ? `data-fsaved="${f.saved}"` : `data-fpend="${f.idx}"`} aria-label="Прибрати маркування ${esc(f.name)}">✕</button></div>`).join('')
+        || '<div class="small muted">Ще не додано.</div>';
+      $$('[data-fpend]').forEach((b) => (b.onclick = () => { pending.splice(Number(b.dataset.fpend), 1); drawFiles(); }));
+      $$('[data-fsaved]').forEach((b) => (b.onclick = async () => {
+        if (!(await confirmDanger('Видалити маркування?', 'Файл буде видалено із замовлення.', 'Видалити'))) return;
+        try { await api('DELETE', `/api/b2b/p/clients/${id}/files/${b.dataset.fsaved}`); saved.splice(saved.findIndex((f) => String(f.id) === b.dataset.fsaved), 1); drawFiles(); toast('Маркування видалено'); } catch (er) { toast(er.message, true); }
+      }));
+    };
+    drawFiles();
+    // Новий файл: перевірка на дубль (той самий файл чи ТТН в іншому замовленні), і з маркування НП — ПІБ, телефон, ТТН.
     $('#cfFiles').onchange = async () => {
-      const pdf = [...$('#cfFiles').files].find((f) => /pdf/i.test(f.type) || /\.pdf$/i.test(f.name));
-      if (!pdf || pdf.size > 5 * 1024 * 1024) return;
-      try {
-        const res = await fetch('/api/b2b/p/parse-label', { method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: pdf });
-        const r = await res.json();
-        if (!r.found) { toast('У файлі не знайдено маркування Нової пошти — заповніть дані вручну.'); return; }
+      const files = [...$('#cfFiles').files];
+      $('#cfFiles').value = '';
+      for (const file of files) {
+        if (file.size > 5 * 1024 * 1024) { toast(`Файл «${file.name}» завеликий (до 5 МБ)`, true); continue; }
+        if (pending.some((x) => x.file.name === file.name && x.file.size === file.size)) { toast(`«${file.name}» уже додано`, true); continue; }
+        let r = {};
+        try {
+          const res = await fetch(`/api/b2b/p/parse-label${id ? `?except=${id}` : ''}`, { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file });
+          r = await res.json();
+        } catch { /* розбір не вдався — додаємо без перевірки, сервер перевірить при збереженні */ }
+        if (r.dup) { toast(`«${file.name}»: ${r.dup_text}`, true); continue; }
+        if (r.ttn && pending.some((x) => x.ttn === r.ttn)) { toast(`«${file.name}»: маркування з ТТН ${r.ttn} уже додано`, true); continue; }
+        pending.push({ file, ttn: r.ttn || '' });
+        drawFiles();
+        if (r.found) fillFromLabel(r);
+      }
+    };
+    // Маркування Нової пошти → ПІБ, телефон і ТТН клієнта (порожні поля заповнюються, різницю показуємо).
+    const fillFromLabel = (r) => {
+      {
         const fm = $('#cfForm');
         const diff = [];
         for (const [k, label] of [['client_name', 'ПІБ'], ['client_phone', 'телефон'], ['ttn', 'ТТН']]) {
@@ -509,7 +546,7 @@ export function createPartnerPages(ctx = {}) {
         }
         if (r.address && !fm.comment.value.trim()) fm.comment.value = `НП: ${r.address}`;
         toast(diff.length ? `⚠️ Дані відрізняються від маркування — ${diff.join('; ')}` : 'Дані клієнта підтягнуто з маркування', diff.length > 0);
-      } catch { /* розбір не вдався — нічого */ }
+      }
     };
     $('#cfForm').onsubmit = async (e) => {
       e.preventDefault();
@@ -517,9 +554,8 @@ export function createPartnerPages(ctx = {}) {
       const items = [...qty].filter(([pid, q]) => q > 0 && allowed.has(pid)).map(([product_id, q]) => ({ product_id, qty: q }));
       if (!items.length) { toast('Вкажіть кількість хоча б одного товару', true); return; }
       const body = { ...Object.fromEntries(new FormData(e.target)), supply_id: source ? Number(source) : null, items };
-      const files = [...$('#cfFiles').files];
-      const big = files.find((f) => f.size > 5 * 1024 * 1024);
-      if (big) { toast(`Файл «${big.name}» завеликий (до 5 МБ)`, true); return; }
+      const files = pending.map((x) => x.file);
+      if (!(await confirmOrder(body, items))) return;
       $('#cfSave').disabled = true;
       let orderId = id;
       try {
@@ -532,6 +568,33 @@ export function createPartnerPages(ctx = {}) {
       toast(id ? 'Зміни збережено' : 'Замовлення оформлено' + (files.length && !failed ? ' разом із маркуванням' : ''));
       location.hash = `#/pclients/${orderId}`;
     };
+    // Підтвердження перед збереженням: товари й кількість, звідки, клієнт, телефон, ТТН, маркування.
+    const confirmOrder = (body, items) => new Promise((resolve) => {
+      const byId = new Map(lines().map((l) => [l.product_id, l]));
+      const rows = items.map((x) => ({ ...byId.get(x.product_id), qty: x.qty }));
+      const total = rows.reduce((t, l) => t + Math.round(l.price * l.qty * 100) / 100, 0);
+      const s = supplies.find((x) => String(x.id) === source);
+      const labels = [...saved.map((f) => f.name), ...pending.map((x) => x.file.name)];
+      const m = modal('Перевірте замовлення', `<div class="form-stack">
+          <table class="list"><thead><tr><th>Товар</th><th class="r">К-сть</th><th class="r">Сума</th></tr></thead><tbody>
+            ${rows.map((l) => `<tr><td>${esc(l.name)}${l.article ? `<div class="small muted">${esc(l.article)}</div>` : ''}</td><td class="r"><b>${l.qty} шт</b></td><td class="r">${money(Math.round(l.price * l.qty * 100) / 100)}</td></tr>`).join('')}
+            <tr><td colspan="2"><b>Разом з ПДВ</b></td><td class="r"><b>${uah(total)}</b></td></tr></tbody></table>
+          <div>${source ? `Із закупівлі <b>${esc(s?.number || '')}</b>` : '<span class="badge bad">Без закупівлі</span> — у відкриту закупівлю'}</div>
+          <div class="card form-stack" style="gap:4px">
+            <div>Отримувач: <b>${esc(body.client_name)}</b></div>
+            <div>Телефон: <b>${esc(phoneFmt(body.client_phone))}</b></div>
+            <div>ТТН: ${body.ttn ? `<b>${esc(body.ttn)}</b>` : '<span class="badge warn">не вказано</span>'}</div>
+            <div>Маркування: ${labels.length ? labels.map(esc).join(', ') : '<span class="badge warn">не додано</span>'}</div>
+            ${body.comment ? `<div class="small">Коментар: ${esc(body.comment)}</div>` : ''}
+          </div>
+          <div class="small muted">Перевірте товари, кількість і дані отримувача — після передачі в роботу змінити їх зможе лише менеджер.</div></div>`,
+        { footer: '<button class="btn" id="coBack">← Виправити</button><button class="btn primary" id="coOk">Усе правильно — оформити</button>', wide: true });
+      let done = false;
+      const finish = (v) => { if (done) return; done = true; m.close(); resolve(v); };
+      $('#coBack', m.el).onclick = () => finish(false);
+      $('#coOk', m.el).onclick = () => finish(true);
+      $$('[data-close]', m.el).forEach((b) => b.addEventListener('click', () => finish(false)));
+    });
     draw();
   }
 

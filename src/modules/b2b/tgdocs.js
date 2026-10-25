@@ -120,9 +120,13 @@ export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
     const file = fileOf(msg);
     if (file.size > MAX_FILE) { await reply('Файл завеликий (до 5 МБ).'); return; }
     const bytes = await notify().download(file.id);
+    const info = await orders.labelInfo(bytes);
+    const dup = await orders.labelDup(info, o.id);
+    if (dup) { await reply(`⚠️ ${h(dup.id && (await db.get(`SELECT partner_id FROM b2b_orders WHERE id = ?`, [dup.id]))?.partner_id === p.id ? orders.dupText(dup) : 'Таке маркування вже використане в іншому замовленні.')}`); return; }
+    if (await db.get(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = 'label' AND hash = ?`, [o.id, info.hash])) { await reply(`Це маркування вже додано до ${orderNo(o.id)}.`); return; }
     const replaced = !!(await db.get(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = 'label' LIMIT 1`, [o.id]));
     const who = { name: `${[msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ') || 'партнер'} (Telegram)` };
-    const f = await orders.storeFile(o, 'label', { bytes, name: file.name, mime: file.mime }, who, ' через групу Telegram');
+    const f = await orders.storeFile(o, 'label', { bytes, name: file.name, mime: file.mime, hash: info.hash, ttn: info.ttn }, who, ' через групу Telegram');
     const r = await afterLabel(o, f, who, { fileId: file.id, replaced });
     await reply(`✅ Маркування додано до <b>${orderNo(o.id)}</b> (${h(o.client_name)})${r.ttn && !o.ttn ? `\nТТН ${r.ttn} записано в замовлення.` : ''}${r.warnings.length ? `\n⚠️ ${h(r.warnings.join('; '))}` : ''}`);
   }
