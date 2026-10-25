@@ -5045,6 +5045,275 @@ function listFilter(c, { client = false } = {}) {
   return { where, params };
 }
 
+// src/integrations/pdftext.js
+var dec1252 = new TextDecoder("latin1");
+var W1252 = new Map([...Array(32)].map((_, i) => [dec1252.decode(new Uint8Array([128 + i])).charCodeAt(0), 128 + i]));
+var latin1 = (u8) => dec1252.decode(u8);
+var byteAt = (ch) => {
+  const c = ch.charCodeAt(0);
+  return c < 256 ? c : W1252.get(c) ?? 63;
+};
+async function inflate(u8) {
+  const ds = new DecompressionStream("deflate");
+  const w = ds.writable.getWriter();
+  w.write(u8).catch(() => {
+  });
+  w.close().catch(() => {
+  });
+  const chunks = [];
+  let n = 0;
+  const r = ds.readable.getReader();
+  try {
+    for (; ; ) {
+      const { done, value } = await r.read();
+      if (done) break;
+      chunks.push(value);
+      n += value.length;
+    }
+  } catch {
+  }
+  const out = new Uint8Array(n);
+  let o = 0;
+  for (const c of chunks) {
+    out.set(c, o);
+    o += c.length;
+  }
+  return out;
+}
+function objects(bytes) {
+  const s = latin1(bytes);
+  const out = /* @__PURE__ */ new Map();
+  const re = /(\d+)\s+0\s+obj\b/g;
+  let m;
+  while (m = re.exec(s)) {
+    const start = m.index + m[0].length;
+    const end = s.indexOf("endobj", start);
+    if (end < 0) break;
+    const body = s.slice(start, end);
+    const si = body.indexOf("stream");
+    let dict = body;
+    let stream = null;
+    if (si >= 0) {
+      dict = body.slice(0, si);
+      let a = start + si + 6;
+      if (s[a] === "\r") a++;
+      if (s[a] === "\n") a++;
+      const lm = /\/Length\s+(\d+)(\s+\d+\s+R)?/.exec(dict);
+      const direct = lm && !lm[2];
+      let b = direct ? a + Number(lm[1]) : s.indexOf("endstream", a);
+      if (!direct) while (b > a && (s[b - 1] === "\n" || s[b - 1] === "\r")) b--;
+      stream = bytes.subarray(a, b);
+    }
+    out.set(Number(m[1]), { dict, stream });
+    re.lastIndex = end;
+  }
+  return out;
+}
+var hexToStr = (hex) => {
+  let r = "";
+  for (let i = 0; i + 4 <= hex.length; i += 4) {
+    const c = parseInt(hex.slice(i, i + 4), 16);
+    if (!Number.isNaN(c)) r += String.fromCodePoint(c);
+  }
+  return r;
+};
+function parseCMap(txt) {
+  const map = /* @__PURE__ */ new Map();
+  for (const blk of txt.matchAll(/beginbfchar([\s\S]*?)endbfchar/g)) {
+    for (const m of blk[1].matchAll(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g)) map.set(parseInt(m[1], 16), hexToStr(m[2]));
+  }
+  for (const blk of txt.matchAll(/beginbfrange([\s\S]*?)endbfrange/g)) {
+    for (const m of blk[1].matchAll(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(?:<([0-9A-Fa-f]+)>|\[([^\]]*)\])/g)) {
+      const a = parseInt(m[1], 16);
+      const b = parseInt(m[2], 16);
+      if (m[3]) {
+        const base = parseInt(m[3], 16);
+        for (let c = a; c <= b && c - a < 5e3; c++) map.set(c, String.fromCodePoint(base + c - a));
+      } else [...m[4].matchAll(/<([0-9A-Fa-f]+)>/g)].forEach((x, i) => map.set(a + i, hexToStr(x[1])));
+    }
+  }
+  return map;
+}
+function bytesOf(tokS) {
+  const out = [];
+  if (tokS[0] === "<") {
+    const hx = tokS.slice(1, -1).replace(/\s/g, "");
+    for (let i = 0; i < hx.length; i += 2) out.push(parseInt(hx.slice(i, i + 2).padEnd(2, "0"), 16));
+    return out;
+  }
+  const t = tokS.slice(1, -1);
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (ch !== "\\") {
+      out.push(byteAt(ch));
+      continue;
+    }
+    const nx = t[++i];
+    if (nx === void 0) break;
+    if (/[0-7]/.test(nx)) {
+      let o = nx;
+      while (o.length < 3 && /[0-7]/.test(t[i + 1])) o += t[++i];
+      out.push(parseInt(o, 8) & 255);
+    } else if (nx === "\n" || nx === "\r") continue;
+    else out.push({ n: 10, r: 13, t: 9, b: 8, f: 12 }[nx] ?? byteAt(nx));
+  }
+  return out;
+}
+var MAX_PDF = 6 * 1024 * 1024;
+async function pdfText(bytes) {
+  try {
+    if (!bytes?.length || bytes.length > MAX_PDF || latin1(bytes.subarray(0, 5)) !== "%PDF-") return "";
+    const objs = objects(bytes);
+    const dec = async (o) => o.stream ? /FlateDecode/.test(o.dict) ? await inflate(o.stream) : o.stream : null;
+    const fontCmap = /* @__PURE__ */ new Map();
+    for (const [n, o] of objs) {
+      if (!/\/Type\s*\/Font/.test(o.dict)) continue;
+      const tu = /\/ToUnicode\s+(\d+)\s+0\s+R/.exec(o.dict);
+      const cm = tu && objs.get(Number(tu[1]));
+      if (cm) fontCmap.set(n, parseCMap(latin1(await dec(cm))));
+    }
+    const resName = /* @__PURE__ */ new Map();
+    for (const [, o] of objs) {
+      const fm = /\/Font\s*<<([^>]*)>>/.exec(o.dict);
+      if (fm) for (const m of fm[1].matchAll(/\/(\S+?)\s+(\d+)\s+0\s+R/g)) resName.set(m[1], Number(m[2]));
+    }
+    const lines = [];
+    const tok = /\/(\S+)\s+[\d.]+\s+Tf|([\d.-]+)\s+([\d.-]+)\s+Td|[\d.-]+\s+[\d.-]+\s+[\d.-]+\s+[\d.-]+\s+([\d.-]+)\s+([\d.-]+)\s+Tm|(<[0-9A-Fa-f\s]*>|\((?:\\[\s\S]|[^\\)])*\))\s*Tj|\[((?:\\[\s\S]|[^\]\\])*)\]\s*TJ|\bT\*|\bET\b/g;
+    for (const [, o] of objs) {
+      if (!o.stream || /\/(Subtype\s*\/Image|Length1|FontFile|Type\s*\/Font|Type\s*\/XRef|Type\s*\/ObjStm)/.test(o.dict)) continue;
+      let content;
+      try {
+        content = latin1(await dec(o));
+      } catch {
+        continue;
+      }
+      if (!/\bTf\b/.test(content)) continue;
+      let cmap = null;
+      let line = "";
+      let lastY = null;
+      const flush = () => {
+        if (line.trim()) lines.push(line.replace(/\s+/g, " ").trim());
+        line = "";
+      };
+      const decode = (s) => {
+        if (!cmap) return "";
+        const b = bytesOf(s);
+        let r = "";
+        for (let i = 0; i + 1 < b.length; i += 2) r += cmap.get(b[i] << 8 | b[i + 1]) ?? "";
+        return r;
+      };
+      tok.lastIndex = 0;
+      let m;
+      while (m = tok.exec(content)) {
+        if (m[1]) cmap = fontCmap.get(resName.get(m[1])) || null;
+        else if (m[3] !== void 0) {
+          if (Math.abs(Number(m[3])) > 0.5) flush();
+          else line += " ";
+        } else if (m[5] !== void 0) {
+          const y = Number(m[5]);
+          if (lastY !== null && Math.abs(y - lastY) > 2) flush();
+          else line += " ";
+          lastY = y;
+        } else if (m[6] !== void 0) line += decode(m[6]);
+        else if (m[7] !== void 0) {
+          for (const p of m[7].matchAll(/(<[0-9A-Fa-f\s]*>|\((?:\\[\s\S]|[^\\)])*\))|(-?[\d.]+)/g)) {
+            if (p[1] !== void 0) line += decode(p[1]);
+            else if (Number(p[2]) < -200) line += " ";
+          }
+        } else flush();
+      }
+      flush();
+    }
+    return lines.join("\n");
+  } catch {
+    return "";
+  }
+}
+var MONTHS = { \u0441\u0456\u0447\u043D\u044F: 1, \u043B\u044E\u0442\u043E\u0433\u043E: 2, \u0431\u0435\u0440\u0435\u0437\u043D\u044F: 3, \u043A\u0432\u0456\u0442\u043D\u044F: 4, \u0442\u0440\u0430\u0432\u043D\u044F: 5, \u0447\u0435\u0440\u0432\u043D\u044F: 6, \u043B\u0438\u043F\u043D\u044F: 7, \u0441\u0435\u0440\u043F\u043D\u044F: 8, \u0432\u0435\u0440\u0435\u0441\u043D\u044F: 9, \u0436\u043E\u0432\u0442\u043D\u044F: 10, \u043B\u0438\u0441\u0442\u043E\u043F\u0430\u0434\u0430: 11, \u0433\u0440\u0443\u0434\u043D\u044F: 12 };
+var money = (s) => Number(String(s).replace(/[\s  ]/g, "").replace(",", "."));
+var MONEY_RE = /^\d{1,3}(?:[\s  ]\d{3})*,\d{2}$/;
+function parseBasDoc(text) {
+  const t = String(text || "").replace(/[  ]/g, " ");
+  const head = /(Рахунок на оплату|Рахунок-фактура|Рахунок|Видаткова накладна|Накладна)\s*№\s*([\w\-/.]+)\s*від\s*(\d{1,2})\s+([а-яіїєґ']+)\s+(\d{4})/i.exec(t);
+  if (!head) return null;
+  const total = /Всього:\s*([\d ]+,\d{2})/.exec(t) || /на суму\s*([\d ]+,\d{2})\s*UAH/.exec(t);
+  const buyer = /Покупець:\s*([^\n]+)/.exec(t);
+  const mon = MONTHS[head[4].toLowerCase()];
+  const items = [];
+  const lines = t.split("\n").map((x) => x.trim());
+  let i = lines.findIndex((x) => /^Сума з ПДВ$/i.test(x));
+  if (i >= 0) {
+    for (i += 1; i < lines.length; i++) {
+      if (/^Всього/.test(lines[i])) break;
+      if (!/^\d{1,3}$/.test(lines[i])) continue;
+      const name = [];
+      let j = i + 1;
+      while (j < lines.length && !(/^\d+(?:[.,]\d+)?$/.test(lines[j]) && /^[а-яіїєґa-z.]{1,6}$/i.test(lines[j + 1] || "") && MONEY_RE.test(lines[j + 2] || ""))) {
+        if (/^Всього/.test(lines[j])) break;
+        name.push(lines[j]);
+        j++;
+      }
+      if (j >= lines.length || /^Всього/.test(lines[j])) break;
+      items.push({ n: Number(lines[i]), name: name.join(" ").replace(/\s+/g, " ").trim(), qty: Number(lines[j].replace(",", ".")), price: money(lines[j + 2]), sum: MONEY_RE.test(lines[j + 3] || "") ? money(lines[j + 3]) : null });
+      i = j + 3;
+    }
+  }
+  return {
+    kind: /накладна/i.test(head[1]) ? "waybill" : "invoice",
+    number: head[2].replace(/[.]+$/, ""),
+    date: mon ? `${head[5]}-${String(mon).padStart(2, "0")}-${head[3].padStart(2, "0")}` : "",
+    total: total ? money(total[1]) : null,
+    buyer: buyer ? buyer[1].trim() : "",
+    items
+  };
+}
+function parseNpLabel(text) {
+  const t = String(text || "");
+  const ttn = (/(?<![\d ])((?:20|59)(?:[ \n]?\d){12})(?![ \n]?\d)/.exec(t)?.[1] || "").replace(/\D/g, "");
+  const phones = [...t.matchAll(/(?<!\d)(0\d{2})[ -]?(\d{3})[ -]?(\d{2})[ -]?(\d{2})(?!\d)/g)].map((m) => `38${m[1]}${m[2]}${m[3]}${m[4]}`);
+  const lines = t.split("\n").map((x) => x.trim());
+  let recipient = "";
+  let address = "";
+  const komu = lines.findIndex((x) => /^КОМУ:?$/i.test(x));
+  if (komu >= 0) {
+    const after = lines.slice(komu + 1);
+    const priv = after.findIndex((x) => /^Приватна особа$/i.test(x));
+    if (priv >= 0) {
+      const name = [];
+      for (const x of after.slice(priv + 1)) {
+        if (/Відділення|Поштомат|вул\.|\d{3} \d{3}/i.test(x)) {
+          if (/Відділення|Поштомат|вул\./i.test(x)) address = x;
+          break;
+        }
+        name.push(x);
+      }
+      recipient = name.join(" ").trim();
+    }
+  }
+  return ttn ? { ttn, phone: phones.at(-1) || "", recipient, address, rozetka: /РОЗ\s?(\d{6,})/.exec(t)?.[1] || "" } : null;
+}
+function hintsOf(str) {
+  const s = String(str || "");
+  const order2 = /B2B[\s-]*(\d{1,9})/i.exec(s)?.[1];
+  const kind = /накладн|\bрн\b|\bвн\b/i.test(s) ? "waybill" : /рахун|\bсф\b|invoice/i.test(s) ? "invoice" : "";
+  const number = /(?:№|N|#|номер)\s*([A-Za-zА-Яа-яІЇЄ]{0,4}-?\d{1,10})/i.exec(s)?.[1] || "";
+  return { order: order2 ? Number(order2) : null, kind, number };
+}
+function nameKey(s) {
+  return String(s || "").toLowerCase().replace(/товариство з обмеженою відповідальністю|приватне підприємство|фізична особа[\s-]*підприємець/g, " ").replace(/[«»"'’`.,()]/g, " ").split(/\s+/).filter((w) => w && !["\u0442\u043E\u0432", "\u0444\u043E\u043F", "\u043F\u043F", "\u0444\u043E-\u043F", "\u0444\u043E\u043F-"].includes(w)).sort().join(" ");
+}
+function sameName(a, b) {
+  const x = nameKey(a);
+  const y = nameKey(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const xs = new Set(x.split(" "));
+  const ys = y.split(" ");
+  const common = ys.filter((w) => xs.has(w)).length;
+  return common >= Math.min(2, Math.min(xs.size, ys.length)) && common >= Math.min(xs.size, ys.length) * 0.66;
+}
+var modelTokens = (s) => new Set(String(s || "").toLowerCase().replace(/\[\d+\]/g, " ").split(/[^a-z0-9а-яіїєґ]+/i).filter((w) => w.length >= 2 && (/[a-z]/.test(w) || /\d/.test(w)) && !["wi", "fi", "uv", "hepa", "smart", "true", "mod", "auto"].includes(w)));
+
 // src/modules/b2b/orders.js
 var ORDER_STATUS = {
   open: "\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0430 (\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0435 \u0441\u0444\u043E\u0440\u043C\u043E\u0432\u0430\u043D\u043E)",
@@ -5517,24 +5786,40 @@ ${link(c, `${o.kind === "client" ? "pclients" : "porders"}/${o.id}`)}`);
     }
     return c.json({ id: f.id, toGroup: !!toGroup });
   });
-  async function saveFile(c, o, kind) {
-    const bytes = new Uint8Array(await c.req.arrayBuffer());
+  async function saveFile(c, o, kind, bytes = null, extra = {}) {
+    bytes = bytes || new Uint8Array(await c.req.arrayBuffer());
     let name = "file";
     try {
       name = decodeURIComponent(c.req.header("x-file-name") || "file");
     } catch {
     }
-    return storeFile(o, kind, { bytes, name, mime: c.req.header("content-type") }, c.get("user"));
+    return storeFile(o, kind, { bytes, name, mime: c.req.header("content-type"), ...extra }, c.get("user"));
   }
-  async function storeFile(o, kind, { bytes, name, mime }, u, how = "") {
+  async function labelInfo(bytes) {
+    const hash2 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((x) => x.toString(16).padStart(2, "0")).join("");
+    let np = null;
+    if (bytes[0] === 37 && bytes[1] === 80) np = parseNpLabel(await pdfText(bytes).catch(() => ""));
+    return { hash: hash2, ttn: np?.ttn || "", np };
+  }
+  async function labelDup({ hash: hash2, ttn }, exceptId = 0) {
+    const row = await db.get(
+      `SELECT o.id, o.client_name FROM b2b_orders o WHERE o.kind = 'client' AND o.status != 'cancelled' AND o.id != ? AND (
+         EXISTS (SELECT 1 FROM b2b_files f WHERE f.order_id = o.id AND f.kind = 'label' AND ((? != '' AND f.hash = ?) OR (? != '' AND f.ttn = ?)))
+         OR (? != '' AND o.ttn = ?)) ORDER BY o.id LIMIT 1`,
+      [exceptId, hash2 || "", hash2 || "", ttn || "", ttn || "", ttn || "", ttn || ""]
+    );
+    return row ? { id: row.id, number: orderNo(row.id), client_name: row.client_name } : null;
+  }
+  const dupText = (d) => `\u0422\u0430\u043A\u0435 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u0432\u0436\u0435 \u0454 \u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 ${d.number} (${d.client_name}) \u2014 \u0442\u0435 \u0441\u0430\u043C\u0435 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u0434\u0432\u0456\u0447\u0456 \u0434\u043E\u0434\u0430\u0442\u0438 \u043D\u0435 \u043C\u043E\u0436\u043D\u0430.`;
+  async function storeFile(o, kind, { bytes, name, mime, hash: hash2 = "", ttn = "" }, u, how = "") {
     if (!bytes?.length) throw fail(400, "\u041F\u043E\u0440\u043E\u0436\u043D\u0456\u0439 \u0444\u0430\u0439\u043B.");
     if (bytes.length > MAX_FILE) throw fail(400, "\u0424\u0430\u0439\u043B \u0437\u0430\u0432\u0435\u043B\u0438\u043A\u0438\u0439 (\u0434\u043E 5 \u041C\u0411).");
     name = String(name || "file").replace(/[\\/:*?"<>|\r\n]+/g, "_").slice(0, 150) || "file";
     mime = String(mime || "application/octet-stream").slice(0, 100);
     const parts = Math.ceil(bytes.length / PART);
     const r = await db.run(
-      `INSERT INTO b2b_files (order_id, kind, name, mime, size, parts, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [o.id, kind, name, mime, bytes.length, parts, userName2(u), nowIso()]
+      `INSERT INTO b2b_files (order_id, kind, name, mime, size, parts, created_by, created_at, hash, ttn) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [o.id, kind, name, mime, bytes.length, parts, userName2(u), nowIso(), hash2, ttn]
     );
     const st = [];
     for (let n = 0; n < parts; n++) st.push([`INSERT INTO b2b_file_parts (file_id, n, data) VALUES (?, ?, ?)`, [r.lastId, n, toB64(bytes.subarray(n * PART, (n + 1) * PART))]]);
@@ -5602,277 +5887,8 @@ ${link(c, `${o.kind === "client" ? "pclients" : "porders"}/${o.id}`)}`);
     await logAudit(db, { user: c.get("user"), kind: "b2b", refId: o.partner_id, action: `\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E"} ${orderNo(o.id)} \u043D\u0430 ${uah2(o.total)}${o.crm_id ? ` (\u0443 LP-CRM \u2116 ${o.crm_id} \u2014 \u043D\u0435 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E)` : ""}` }).catch(() => 0);
     return c.json({ ok: true, inCrm: o.crm_id || "" });
   });
-  return { getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah2, h: h3 };
+  return { labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah2, h: h3 };
 }
-
-// src/integrations/pdftext.js
-var dec1252 = new TextDecoder("latin1");
-var W1252 = new Map([...Array(32)].map((_, i) => [dec1252.decode(new Uint8Array([128 + i])).charCodeAt(0), 128 + i]));
-var latin1 = (u8) => dec1252.decode(u8);
-var byteAt = (ch) => {
-  const c = ch.charCodeAt(0);
-  return c < 256 ? c : W1252.get(c) ?? 63;
-};
-async function inflate(u8) {
-  const ds = new DecompressionStream("deflate");
-  const w = ds.writable.getWriter();
-  w.write(u8).catch(() => {
-  });
-  w.close().catch(() => {
-  });
-  const chunks = [];
-  let n = 0;
-  const r = ds.readable.getReader();
-  try {
-    for (; ; ) {
-      const { done, value } = await r.read();
-      if (done) break;
-      chunks.push(value);
-      n += value.length;
-    }
-  } catch {
-  }
-  const out = new Uint8Array(n);
-  let o = 0;
-  for (const c of chunks) {
-    out.set(c, o);
-    o += c.length;
-  }
-  return out;
-}
-function objects(bytes) {
-  const s = latin1(bytes);
-  const out = /* @__PURE__ */ new Map();
-  const re = /(\d+)\s+0\s+obj\b/g;
-  let m;
-  while (m = re.exec(s)) {
-    const start = m.index + m[0].length;
-    const end = s.indexOf("endobj", start);
-    if (end < 0) break;
-    const body = s.slice(start, end);
-    const si = body.indexOf("stream");
-    let dict = body;
-    let stream = null;
-    if (si >= 0) {
-      dict = body.slice(0, si);
-      let a = start + si + 6;
-      if (s[a] === "\r") a++;
-      if (s[a] === "\n") a++;
-      const lm = /\/Length\s+(\d+)(\s+\d+\s+R)?/.exec(dict);
-      const direct = lm && !lm[2];
-      let b = direct ? a + Number(lm[1]) : s.indexOf("endstream", a);
-      if (!direct) while (b > a && (s[b - 1] === "\n" || s[b - 1] === "\r")) b--;
-      stream = bytes.subarray(a, b);
-    }
-    out.set(Number(m[1]), { dict, stream });
-    re.lastIndex = end;
-  }
-  return out;
-}
-var hexToStr = (hex) => {
-  let r = "";
-  for (let i = 0; i + 4 <= hex.length; i += 4) {
-    const c = parseInt(hex.slice(i, i + 4), 16);
-    if (!Number.isNaN(c)) r += String.fromCodePoint(c);
-  }
-  return r;
-};
-function parseCMap(txt) {
-  const map = /* @__PURE__ */ new Map();
-  for (const blk of txt.matchAll(/beginbfchar([\s\S]*?)endbfchar/g)) {
-    for (const m of blk[1].matchAll(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g)) map.set(parseInt(m[1], 16), hexToStr(m[2]));
-  }
-  for (const blk of txt.matchAll(/beginbfrange([\s\S]*?)endbfrange/g)) {
-    for (const m of blk[1].matchAll(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(?:<([0-9A-Fa-f]+)>|\[([^\]]*)\])/g)) {
-      const a = parseInt(m[1], 16);
-      const b = parseInt(m[2], 16);
-      if (m[3]) {
-        const base = parseInt(m[3], 16);
-        for (let c = a; c <= b && c - a < 5e3; c++) map.set(c, String.fromCodePoint(base + c - a));
-      } else [...m[4].matchAll(/<([0-9A-Fa-f]+)>/g)].forEach((x, i) => map.set(a + i, hexToStr(x[1])));
-    }
-  }
-  return map;
-}
-function bytesOf(tokS) {
-  const out = [];
-  if (tokS[0] === "<") {
-    const hx = tokS.slice(1, -1).replace(/\s/g, "");
-    for (let i = 0; i < hx.length; i += 2) out.push(parseInt(hx.slice(i, i + 2).padEnd(2, "0"), 16));
-    return out;
-  }
-  const t = tokS.slice(1, -1);
-  for (let i = 0; i < t.length; i++) {
-    const ch = t[i];
-    if (ch !== "\\") {
-      out.push(byteAt(ch));
-      continue;
-    }
-    const nx = t[++i];
-    if (nx === void 0) break;
-    if (/[0-7]/.test(nx)) {
-      let o = nx;
-      while (o.length < 3 && /[0-7]/.test(t[i + 1])) o += t[++i];
-      out.push(parseInt(o, 8) & 255);
-    } else if (nx === "\n" || nx === "\r") continue;
-    else out.push({ n: 10, r: 13, t: 9, b: 8, f: 12 }[nx] ?? byteAt(nx));
-  }
-  return out;
-}
-var MAX_PDF = 6 * 1024 * 1024;
-async function pdfText(bytes) {
-  try {
-    if (!bytes?.length || bytes.length > MAX_PDF || latin1(bytes.subarray(0, 5)) !== "%PDF-") return "";
-    const objs = objects(bytes);
-    const dec = async (o) => o.stream ? /FlateDecode/.test(o.dict) ? await inflate(o.stream) : o.stream : null;
-    const fontCmap = /* @__PURE__ */ new Map();
-    for (const [n, o] of objs) {
-      if (!/\/Type\s*\/Font/.test(o.dict)) continue;
-      const tu = /\/ToUnicode\s+(\d+)\s+0\s+R/.exec(o.dict);
-      const cm = tu && objs.get(Number(tu[1]));
-      if (cm) fontCmap.set(n, parseCMap(latin1(await dec(cm))));
-    }
-    const resName = /* @__PURE__ */ new Map();
-    for (const [, o] of objs) {
-      const fm = /\/Font\s*<<([^>]*)>>/.exec(o.dict);
-      if (fm) for (const m of fm[1].matchAll(/\/(\S+?)\s+(\d+)\s+0\s+R/g)) resName.set(m[1], Number(m[2]));
-    }
-    const lines = [];
-    const tok = /\/(\S+)\s+[\d.]+\s+Tf|([\d.-]+)\s+([\d.-]+)\s+Td|[\d.-]+\s+[\d.-]+\s+[\d.-]+\s+[\d.-]+\s+([\d.-]+)\s+([\d.-]+)\s+Tm|(<[0-9A-Fa-f\s]*>|\((?:\\[\s\S]|[^\\)])*\))\s*Tj|\[((?:\\[\s\S]|[^\]\\])*)\]\s*TJ|\bT\*|\bET\b/g;
-    for (const [, o] of objs) {
-      if (!o.stream || /\/(Subtype\s*\/Image|Length1|FontFile|Type\s*\/Font|Type\s*\/XRef|Type\s*\/ObjStm)/.test(o.dict)) continue;
-      let content;
-      try {
-        content = latin1(await dec(o));
-      } catch {
-        continue;
-      }
-      if (!/\bTf\b/.test(content)) continue;
-      let cmap = null;
-      let line = "";
-      let lastY = null;
-      const flush = () => {
-        if (line.trim()) lines.push(line.replace(/\s+/g, " ").trim());
-        line = "";
-      };
-      const decode = (s) => {
-        if (!cmap) return "";
-        const b = bytesOf(s);
-        let r = "";
-        for (let i = 0; i + 1 < b.length; i += 2) r += cmap.get(b[i] << 8 | b[i + 1]) ?? "";
-        return r;
-      };
-      tok.lastIndex = 0;
-      let m;
-      while (m = tok.exec(content)) {
-        if (m[1]) cmap = fontCmap.get(resName.get(m[1])) || null;
-        else if (m[3] !== void 0) {
-          if (Math.abs(Number(m[3])) > 0.5) flush();
-          else line += " ";
-        } else if (m[5] !== void 0) {
-          const y = Number(m[5]);
-          if (lastY !== null && Math.abs(y - lastY) > 2) flush();
-          else line += " ";
-          lastY = y;
-        } else if (m[6] !== void 0) line += decode(m[6]);
-        else if (m[7] !== void 0) {
-          for (const p of m[7].matchAll(/(<[0-9A-Fa-f\s]*>|\((?:\\[\s\S]|[^\\)])*\))|(-?[\d.]+)/g)) {
-            if (p[1] !== void 0) line += decode(p[1]);
-            else if (Number(p[2]) < -200) line += " ";
-          }
-        } else flush();
-      }
-      flush();
-    }
-    return lines.join("\n");
-  } catch {
-    return "";
-  }
-}
-var MONTHS = { \u0441\u0456\u0447\u043D\u044F: 1, \u043B\u044E\u0442\u043E\u0433\u043E: 2, \u0431\u0435\u0440\u0435\u0437\u043D\u044F: 3, \u043A\u0432\u0456\u0442\u043D\u044F: 4, \u0442\u0440\u0430\u0432\u043D\u044F: 5, \u0447\u0435\u0440\u0432\u043D\u044F: 6, \u043B\u0438\u043F\u043D\u044F: 7, \u0441\u0435\u0440\u043F\u043D\u044F: 8, \u0432\u0435\u0440\u0435\u0441\u043D\u044F: 9, \u0436\u043E\u0432\u0442\u043D\u044F: 10, \u043B\u0438\u0441\u0442\u043E\u043F\u0430\u0434\u0430: 11, \u0433\u0440\u0443\u0434\u043D\u044F: 12 };
-var money = (s) => Number(String(s).replace(/[\s  ]/g, "").replace(",", "."));
-var MONEY_RE = /^\d{1,3}(?:[\s  ]\d{3})*,\d{2}$/;
-function parseBasDoc(text) {
-  const t = String(text || "").replace(/[  ]/g, " ");
-  const head = /(Рахунок на оплату|Рахунок-фактура|Рахунок|Видаткова накладна|Накладна)\s*№\s*([\w\-/.]+)\s*від\s*(\d{1,2})\s+([а-яіїєґ']+)\s+(\d{4})/i.exec(t);
-  if (!head) return null;
-  const total = /Всього:\s*([\d ]+,\d{2})/.exec(t) || /на суму\s*([\d ]+,\d{2})\s*UAH/.exec(t);
-  const buyer = /Покупець:\s*([^\n]+)/.exec(t);
-  const mon = MONTHS[head[4].toLowerCase()];
-  const items = [];
-  const lines = t.split("\n").map((x) => x.trim());
-  let i = lines.findIndex((x) => /^Сума з ПДВ$/i.test(x));
-  if (i >= 0) {
-    for (i += 1; i < lines.length; i++) {
-      if (/^Всього/.test(lines[i])) break;
-      if (!/^\d{1,3}$/.test(lines[i])) continue;
-      const name = [];
-      let j = i + 1;
-      while (j < lines.length && !(/^\d+(?:[.,]\d+)?$/.test(lines[j]) && /^[а-яіїєґa-z.]{1,6}$/i.test(lines[j + 1] || "") && MONEY_RE.test(lines[j + 2] || ""))) {
-        if (/^Всього/.test(lines[j])) break;
-        name.push(lines[j]);
-        j++;
-      }
-      if (j >= lines.length || /^Всього/.test(lines[j])) break;
-      items.push({ n: Number(lines[i]), name: name.join(" ").replace(/\s+/g, " ").trim(), qty: Number(lines[j].replace(",", ".")), price: money(lines[j + 2]), sum: MONEY_RE.test(lines[j + 3] || "") ? money(lines[j + 3]) : null });
-      i = j + 3;
-    }
-  }
-  return {
-    kind: /накладна/i.test(head[1]) ? "waybill" : "invoice",
-    number: head[2].replace(/[.]+$/, ""),
-    date: mon ? `${head[5]}-${String(mon).padStart(2, "0")}-${head[3].padStart(2, "0")}` : "",
-    total: total ? money(total[1]) : null,
-    buyer: buyer ? buyer[1].trim() : "",
-    items
-  };
-}
-function parseNpLabel(text) {
-  const t = String(text || "");
-  const ttn = (/(?<![\d ])((?:20|59)(?:[ \n]?\d){12})(?![ \n]?\d)/.exec(t)?.[1] || "").replace(/\D/g, "");
-  const phones = [...t.matchAll(/(?<!\d)(0\d{2})[ -]?(\d{3})[ -]?(\d{2})[ -]?(\d{2})(?!\d)/g)].map((m) => `38${m[1]}${m[2]}${m[3]}${m[4]}`);
-  const lines = t.split("\n").map((x) => x.trim());
-  let recipient = "";
-  let address = "";
-  const komu = lines.findIndex((x) => /^КОМУ:?$/i.test(x));
-  if (komu >= 0) {
-    const after = lines.slice(komu + 1);
-    const priv = after.findIndex((x) => /^Приватна особа$/i.test(x));
-    if (priv >= 0) {
-      const name = [];
-      for (const x of after.slice(priv + 1)) {
-        if (/Відділення|Поштомат|вул\.|\d{3} \d{3}/i.test(x)) {
-          if (/Відділення|Поштомат|вул\./i.test(x)) address = x;
-          break;
-        }
-        name.push(x);
-      }
-      recipient = name.join(" ").trim();
-    }
-  }
-  return ttn ? { ttn, phone: phones.at(-1) || "", recipient, address, rozetka: /РОЗ\s?(\d{6,})/.exec(t)?.[1] || "" } : null;
-}
-function hintsOf(str) {
-  const s = String(str || "");
-  const order2 = /B2B[\s-]*(\d{1,9})/i.exec(s)?.[1];
-  const kind = /накладн|\bрн\b|\bвн\b/i.test(s) ? "waybill" : /рахун|\bсф\b|invoice/i.test(s) ? "invoice" : "";
-  const number = /(?:№|N|#|номер)\s*([A-Za-zА-Яа-яІЇЄ]{0,4}-?\d{1,10})/i.exec(s)?.[1] || "";
-  return { order: order2 ? Number(order2) : null, kind, number };
-}
-function nameKey(s) {
-  return String(s || "").toLowerCase().replace(/товариство з обмеженою відповідальністю|приватне підприємство|фізична особа[\s-]*підприємець/g, " ").replace(/[«»"'’`.,()]/g, " ").split(/\s+/).filter((w) => w && !["\u0442\u043E\u0432", "\u0444\u043E\u043F", "\u043F\u043F", "\u0444\u043E-\u043F", "\u0444\u043E\u043F-"].includes(w)).sort().join(" ");
-}
-function sameName(a, b) {
-  const x = nameKey(a);
-  const y = nameKey(b);
-  if (!x || !y) return false;
-  if (x === y) return true;
-  const xs = new Set(x.split(" "));
-  const ys = y.split(" ");
-  const common = ys.filter((w) => xs.has(w)).length;
-  return common >= Math.min(2, Math.min(xs.size, ys.length)) && common >= Math.min(xs.size, ys.length) * 0.66;
-}
-var modelTokens = (s) => new Set(String(s || "").toLowerCase().replace(/\[\d+\]/g, " ").split(/[^a-z0-9а-яіїєґ]+/i).filter((w) => w.length >= 2 && (/[a-z]/.test(w) || /\d/.test(w)) && !["wi", "fi", "uv", "hepa", "smart", "true", "mod", "auto"].includes(w)));
 
 // src/modules/b2b/clients.js
 var CRM_REFRESH_MIN = 10;
@@ -5885,7 +5901,7 @@ var OPT_ID_RE = /^\d{0,10}$/;
 var TTN_FIELDS = ["", "additional_2", "additional_3", "additional_4", "delivery_adress"];
 var newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Math.random() * 9e4))}`;
 function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {} }) {
-  const { getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h6 } = orders;
+  const { labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h6 } = orders;
   const userName4 = (u) => u?.name || u?.login || "";
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files
     FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id`;
@@ -6069,6 +6085,7 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {} }) {
     }
     return { supplyId: null, toOpen: true, openId: open?.id || null, items, total };
   }
+  const ttnDupMsg = async (ttn, dup, partnerId) => (await db.get(`SELECT partner_id FROM b2b_orders WHERE id = ?`, [dup.id]))?.partner_id === partnerId ? `\u0422\u0422\u041D ${ttn} \u0443\u0436\u0435 \u0454 \u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 ${dup.number} (${dup.client_name}).` : `\u0422\u0422\u041D ${ttn} \u0443\u0436\u0435 \u0432\u0438\u043A\u043E\u0440\u0438\u0441\u0442\u0430\u043D\u0430 \u0432 \u0456\u043D\u0448\u043E\u043C\u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.`;
   async function ensureOpen(p) {
     const open = await getOpen(p.id);
     if (open) return open.id;
@@ -6163,6 +6180,10 @@ ${link(c, `b2bclients/${id}`)}`);
     const p = await myPartner(c);
     const b = await c.req.json();
     const f = clientFields(b);
+    if (f.ttn) {
+      const dup = await labelDup({ ttn: f.ttn });
+      if (dup) throw fail(400, await ttnDupMsg(f.ttn, dup, p.id));
+    }
     const it = await buildItems(p, b);
     if (it.toOpen) {
       it.openId = await ensureOpen(p);
@@ -6189,6 +6210,10 @@ ${link(c, `b2bclients/${id}`)}`);
     if (o.status !== "new") throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u0435 \u0432 \u0440\u043E\u0431\u043E\u0442\u0443 \u2014 \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u0439\u043E\u0433\u043E \u043C\u043E\u0436\u0435 \u043B\u0438\u0448\u0435 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440.");
     const b = await c.req.json();
     const f = clientFields(b);
+    if (f.ttn) {
+      const dup = await labelDup({ ttn: f.ttn }, o.id);
+      if (dup) throw fail(400, await ttnDupMsg(f.ttn, dup, p.id));
+    }
     const cur = await supplyOf(o.supply_id);
     const it = await buildItems(p, b, o.id, { openId: cur?.status === "open" ? cur.id : null, total: o.total });
     if (it.toOpen) it.openId = await ensureOpen(p);
@@ -6218,19 +6243,29 @@ ${link(c, `b2bclients/${o.id}`)}`);
     return c.json({ ok: true });
   });
   app.post("/api/b2b/p/parse-label", async (c) => {
-    await myPartner(c);
+    const p = await myPartner(c);
     const bytes = new Uint8Array(await c.req.arrayBuffer());
     if (!bytes.length || bytes.length > 5 * 1024 * 1024) throw fail(400, "\u0424\u0430\u0439\u043B \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u2014 \u0434\u043E 5 \u041C\u0411.");
-    const np = parseNpLabel(await pdfText(bytes));
-    if (!np) return c.json({ found: false });
-    return c.json({ found: true, client_name: np.recipient, client_phone: np.phone ? `0${np.phone.slice(3)}` : "", ttn: np.ttn, address: np.address });
+    const info = await labelInfo(bytes);
+    const exceptId = parseInt(c.req.query("except"), 10) || 0;
+    const dup = await labelDup(info, exceptId);
+    const dupOut = dup ? (await db.get(`SELECT partner_id FROM b2b_orders WHERE id = ?`, [dup.id]))?.partner_id === p.id ? dup : { id: 0, number: "\u0456\u043D\u0448\u043E\u0433\u043E \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430", client_name: "\u2014" } : null;
+    const np = info.np;
+    if (!np) return c.json({ found: false, dup: dupOut, dup_text: dupOut ? dupText(dupOut) : "" });
+    return c.json({ found: true, client_name: np.recipient, client_phone: np.phone ? `0${np.phone.slice(3)}` : "", ttn: np.ttn, address: np.address, dup: dupOut, dup_text: dupOut ? dupText(dupOut) : "" });
   });
   app.post("/api/b2b/p/clients/:id/files", async (c) => {
     const p = await myPartner(c);
     const o = await myClientOrder(c, p);
     if (o.status !== "new") throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u0432 \u0440\u043E\u0431\u043E\u0442\u0456 \u2014 \u043D\u043E\u0432\u0438\u0439 \u0444\u0430\u0439\u043B \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u043D\u0430\u0434\u0456\u0448\u043B\u0456\u0442\u044C \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0443.");
     if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_files WHERE order_id = ?`, [o.id])).n >= 10) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 10 \u0444\u0430\u0439\u043B\u0456\u0432 \u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.");
-    const f = await saveFile(c, o, "label");
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    if (!bytes.length) throw fail(400, "\u041F\u043E\u0440\u043E\u0436\u043D\u0456\u0439 \u0444\u0430\u0439\u043B.");
+    const info = await labelInfo(bytes);
+    const dup = await labelDup(info, o.id);
+    if (dup) throw fail(409, dup.id && (await db.get(`SELECT partner_id FROM b2b_orders WHERE id = ?`, [dup.id]))?.partner_id === p.id ? dupText(dup) : "\u0422\u0430\u043A\u0435 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u0432\u0436\u0435 \u0432\u0438\u043A\u043E\u0440\u0438\u0441\u0442\u0430\u043D\u0435 \u0432 \u0456\u043D\u0448\u043E\u043C\u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.");
+    if (await db.get(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = 'label' AND hash = ?`, [o.id, info.hash])) throw fail(409, "\u0426\u0435 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u0432\u0436\u0435 \u0434\u043E\u0434\u0430\u043D\u043E \u0434\u043E \u0446\u044C\u043E\u0433\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
+    const f = await saveFile(c, o, "label", bytes, { hash: info.hash, ttn: info.ttn });
     const r = await hooks.afterLabel?.(o, f, c.get("user"));
     return c.json({ id: f.id, warnings: r?.warnings || [] });
   });
@@ -6360,13 +6395,16 @@ ${link(c, `pclients/${o.id}`)}`);
       `UPDATE b2b_orders SET crm_id = ?, crm_ext = ?, crm_sent_at = CASE WHEN ? = '' THEN '' ELSE crm_sent_at END, status = ?, crm_status = '', crm_checked_at = '', updated_at = ? WHERE id = ?`,
       [crmId, crmExt, val, status, nowIso(), o.id]
     );
-    await log(o.id, c.get("user"), val ? `\u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM ${isCode ? `\u043A\u043E\u0434 ${val}` : `\u2116 ${val}`}` : "\u0432\u0456\u0434\u0432\u2019\u044F\u0437\u0430\u043D\u043E \u043D\u043E\u043C\u0435\u0440 LP-CRM");
+    const was = o.crm_id || o.crm_ext;
+    await log(o.id, c.get("user"), val ? `${was && was !== val ? `\u0437\u0430\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM (\u0431\u0443\u043B\u043E ${was}) \u043D\u0430` : "\u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM"} ${isCode ? `\u043A\u043E\u0434 ${val}` : `\u2116 ${val}`}` : "\u0432\u0456\u0434\u0432\u2019\u044F\u0437\u0430\u043D\u043E \u043D\u043E\u043C\u0435\u0440 LP-CRM");
     if (val && val !== o.crm_id && val !== o.crm_ext) {
       await refreshCrm({ ids: [o.id] });
       const num4 = (await db.get(`SELECT crm_id FROM b2b_orders WHERE id = ?`, [o.id]))?.crm_id || "";
       if (!isCode && num4) await hooks.crmLinked?.(o.id, num4).catch(() => 0);
       if (o.status === "new") await warnUnpaidShipped(c, o);
-      await tgPartner(o.partner_id, `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h6(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${num4 ? `, \u2116 \u0443 CRM ${num4}` : ""}.
+      const relinked = Boolean(o.crm_id || o.crm_ext);
+      await tgPartner(o.partner_id, relinked ? `\u{1F501} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h6(o.client_name)}): \u043D\u043E\u043C\u0435\u0440 \u0443 CRM \u0437\u043C\u0456\u043D\u0435\u043D\u043E${num4 ? ` \u043D\u0430 ${num4}` : ""}.
+${link(c, `pclients/${o.id}`)}` : `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h6(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${num4 ? `, \u2116 \u0443 CRM ${num4}` : ""}.
 ${link(c, `pclients/${o.id}`)}`);
     }
     return c.json({ ok: true });
@@ -6807,9 +6845,19 @@ function mountB2bTgDocs(app, { db, services, orders, hooks }) {
       return;
     }
     const bytes = await notify().download(file.id);
+    const info = await orders.labelInfo(bytes);
+    const dup = await orders.labelDup(info, o.id);
+    if (dup) {
+      await reply(`\u26A0\uFE0F ${h5(dup.id && (await db.get(`SELECT partner_id FROM b2b_orders WHERE id = ?`, [dup.id]))?.partner_id === p.id ? orders.dupText(dup) : "\u0422\u0430\u043A\u0435 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u0432\u0436\u0435 \u0432\u0438\u043A\u043E\u0440\u0438\u0441\u0442\u0430\u043D\u0435 \u0432 \u0456\u043D\u0448\u043E\u043C\u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.")}`);
+      return;
+    }
+    if (await db.get(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = 'label' AND hash = ?`, [o.id, info.hash])) {
+      await reply(`\u0426\u0435 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u0432\u0436\u0435 \u0434\u043E\u0434\u0430\u043D\u043E \u0434\u043E ${orderNo(o.id)}.`);
+      return;
+    }
     const replaced = !!await db.get(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = 'label' LIMIT 1`, [o.id]);
     const who = { name: `${[msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || "\u043F\u0430\u0440\u0442\u043D\u0435\u0440"} (Telegram)` };
-    const f = await orders.storeFile(o, "label", { bytes, name: file.name, mime: file.mime }, who, " \u0447\u0435\u0440\u0435\u0437 \u0433\u0440\u0443\u043F\u0443 Telegram");
+    const f = await orders.storeFile(o, "label", { bytes, name: file.name, mime: file.mime, hash: info.hash, ttn: info.ttn }, who, " \u0447\u0435\u0440\u0435\u0437 \u0433\u0440\u0443\u043F\u0443 Telegram");
     const r = await afterLabel(o, f, who, { fileId: file.id, replaced });
     await reply(`\u2705 \u041C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u0434\u043E\u0434\u0430\u043D\u043E \u0434\u043E <b>${orderNo(o.id)}</b> (${h5(o.client_name)})${r.ttn && !o.ttn ? `
 \u0422\u0422\u041D ${r.ttn} \u0437\u0430\u043F\u0438\u0441\u0430\u043D\u043E \u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.` : ""}${r.warnings.length ? `
@@ -7969,6 +8017,11 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       brandNames(),
       db.all(`SELECT id, name FROM an_categories`).catch(() => [])
     ]);
+    const freq = new Map((await db.all(
+      `SELECT i.product_id, COUNT(DISTINCT o.id) AS n, SUM(i.qty) AS q FROM b2b_orders o JOIN b2b_order_items i ON i.order_id = o.id
+       WHERE o.partner_id = ? AND o.kind IN ('supply', 'client') AND o.status NOT IN ('cancelled', 'open') GROUP BY i.product_id`,
+      [p.id]
+    )).map((r) => [r.product_id, r]));
     const catName = new Map(cats.map((x) => [x.id, x.name]));
     const brands = [...new Map(rows.map((r) => [r.brand_id, { id: r.brand_id, name: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456", margin: r.margin }])).values()].sort((a, b) => a.name.localeCompare(b.name, "uk"));
     const categories = [...rows.reduce((m, r) => m.set(r.cat, (m.get(r.cat) || 0) + 1), /* @__PURE__ */ new Map())].map(([id, n]) => ({ id, name: catName.get(id) || "\u0406\u043D\u0448\u0435", n })).sort((a, b) => a.name.localeCompare(b.name, "uk"));
@@ -7976,6 +8029,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       partner: { id: p.id, name: p.name },
       brands,
       categories,
+      // Спершу те, що партнер замовляє найчастіше (далі — за назвою).
       products: rows.map((r) => ({
         id: r.product_id,
         name: r.name,
@@ -7986,8 +8040,10 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
         brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456",
         rrp: r.rrp,
         price: partnerPrice(r.rrp, r.margin),
-        margin: r.margin
-      }))
+        margin: r.margin,
+        ordered: freq.get(r.product_id)?.n || 0,
+        ordered_qty: freq.get(r.product_id)?.q || 0
+      })).sort((a, b) => b.ordered - a.ordered || b.ordered_qty - a.ordered_qty)
     });
   });
   const hooks = {};
@@ -9495,7 +9551,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 12,
+  version: 13,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -9698,6 +9754,9 @@ var schema11 = {
     ["b2b_orders", "fin_pay_msg", "INTEGER"],
     ["b2b_orders", "fin_done", "INTEGER DEFAULT 0"],
     // підсумок «закупівлю закрито» вже надіслано
+    // Маркування: відбиток файлу й ТТН з етикетки — те саме маркування не можна додати у два замовлення.
+    ["b2b_files", "hash", "TEXT DEFAULT ''"],
+    ["b2b_files", "ttn", "TEXT DEFAULT ''"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ["b2b_tg_docs", "source", "TEXT DEFAULT 'private'"],
     ["b2b_tg_docs", "reply_to", "INTEGER"],
@@ -9712,7 +9771,10 @@ var schema11 = {
     await db.batch([
       [`CREATE INDEX IF NOT EXISTS b2b_orders_supply ON b2b_orders (supply_id)`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_orders_kind ON b2b_orders (kind, partner_id, id)`, []],
-      [`CREATE INDEX IF NOT EXISTS b2b_orders_created ON b2b_orders (created_at)`, []]
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_created ON b2b_orders (created_at)`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_files_hash ON b2b_files (hash)`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_files_ttn ON b2b_files (ttn)`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_ttn ON b2b_orders (ttn)`, []]
     ]);
   }
 };
