@@ -41,6 +41,12 @@ export const limitsOf = (p) => ({
   unpaid: Number(p?.unpaid_limit) > 0 ? Number(p.unpaid_limit) : DEFAULT_LIMITS.unpaid,
 });
 const UNPAID = `('open', 'invoice_wait', 'pay_wait', 'partial')`;
+// «Закрито»: усі товари закупівлі розписано на замовлення клієнтів (не скасовані) — залишку немає.
+export const CLOSED_SQL = `(o.kind = 'supply' AND o.status NOT IN ('open', 'cancelled')
+  AND EXISTS (SELECT 1 FROM b2b_order_items i WHERE i.order_id = o.id)
+  AND NOT EXISTS (SELECT 1 FROM b2b_order_items i WHERE i.order_id = o.id AND i.qty > COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci
+    JOIN b2b_orders co ON co.id = ci.order_id WHERE co.supply_id = o.id AND co.kind = 'client' AND co.status != 'cancelled' AND ci.product_id = i.product_id), 0)))`;
+const LIST_STATUSES = { ...ORDER_STATUS, closed: 'Закрито (усе розписано)' };
 const ENTITY_KIND = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 const FILE_KIND = { invoice: 'Рахунок', waybill: 'Накладна', label: 'Маркування', other: 'Файл' };
 const MAX_FILE = 5 * 1024 * 1024;
@@ -276,6 +282,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const out = { ...o, number: orderNo(o.id), status_name: ANY_STATUS[o.status] || o.status };
     if (o.kind === 'supply' && ['partial', 'pay_wait'].includes(o.status)) out.due = round2(o.total - (o.paid_amount || 0));
     if (o.kind === 'supply' && o.status === 'partial') out.status_name = `Частково оплачено · ще ${uah(out.due)}`;
+    if (o.kind === 'supply' && o.closed) { out.closed = true; out.status_name = `${out.status_name} · Закрито`; }
     if (o.kind === 'client') Object.assign(out, { no_supply: !o.supply_id || o.supply_status === 'open', open_supply: o.supply_status === 'open', pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : '' });
     return out;
   };
@@ -302,6 +309,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (o.kind === 'supply') {
       out.clients = clients.map((x) => ({ ...x, number: orderNo(x.id), status_name: CLIENT_STATUS[x.status] || x.status }));
       out.left = clients.length ? await supplyLeft(o.id) : items.map((i) => ({ ...i, used: 0, left: i.qty }));
+      if (!['open', 'cancelled'].includes(o.status) && out.left.length && out.left.every((l) => l.left <= 0)) out.order = publicOrder({ ...o, closed: 1 });
     }
     return out;
   }
@@ -310,12 +318,13 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const p = await myPartner(c);
     const f = listFilter(c);
     const st = c.req.query('status');
-    if (st && ORDER_STATUS[st]) { f.where.push('o.status = ?'); f.params.push(st); }
+    if (st === 'closed') f.where.push(CLOSED_SQL);
+    else if (st && ORDER_STATUS[st]) { f.where.push('o.status = ?'); f.params.push(st); }
     const rows = await db.all(
-      `SELECT o.*, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files FROM b2b_orders o
+      `SELECT o.*, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files, ${CLOSED_SQL} AS closed FROM b2b_orders o
        WHERE o.partner_id = ? AND o.kind = 'supply' ${f.where.map((w) => `AND ${w}`).join(' ')} ORDER BY o.id DESC LIMIT 300`, [p.id, ...f.params],
     );
-    return c.json({ rows: rows.map(publicOrder), statuses: ORDER_STATUS });
+    return c.json({ rows: rows.map(publicOrder), statuses: LIST_STATUSES });
   });
 
   app.get('/api/b2b/p/orders/:id', async (c) => {
@@ -379,14 +388,18 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const params = [...f.params];
     const st = c.req.query('status');
     const pid = parseInt(c.req.query('partner'), 10);
-    if (st && ORDER_STATUS[st]) { where.push('o.status = ?'); params.push(st); }
+    if (st === 'closed') where.push(CLOSED_SQL);
+    else if (st && ORDER_STATUS[st]) { where.push('o.status = ?'); params.push(st); }
     if (pid) { where.push('o.partner_id = ?'); params.push(pid); }
     const rows = await db.all(
-      `SELECT o.*, p.name AS partner, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files
+      `SELECT o.*, p.name AS partner, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files, ${CLOSED_SQL} AS closed
        FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id WHERE ${where.join(' AND ')} ORDER BY o.id DESC LIMIT 300`, params,
     );
-    const counts = await db.all(`SELECT status, COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' GROUP BY status`);
-    return c.json({ rows: rows.map(publicOrder), statuses: ORDER_STATUS, counts: Object.fromEntries(counts.map((r) => [r.status, r.n])) });
+    const [counts, closed] = await Promise.all([
+      db.all(`SELECT status, COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' GROUP BY status`),
+      db.get(`SELECT COUNT(*) AS n FROM b2b_orders o WHERE o.kind = 'supply' AND ${CLOSED_SQL}`),
+    ]);
+    return c.json({ rows: rows.map(publicOrder), statuses: LIST_STATUSES, counts: { ...Object.fromEntries(counts.map((r) => [r.status, r.n])), closed: closed?.n || 0 } });
   });
 
   app.get('/api/b2b/orders/:id', async (c) => {

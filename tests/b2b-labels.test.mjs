@@ -49,7 +49,7 @@ const ent = await req('POST', '/api/b2b/p/entities', { name: 'ФОП Альфа'
 // ---------- 1. Часті товари — першими ----------
 let cat = await req('GET', '/api/b2b/p/catalog', null, A);
 assert.deepEqual(cat.products.map((p) => p.id), [11, 12, 13], 'без замовлень — за назвою');
-await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, items: [{ product_id: 13, qty: 1 }, { product_id: 12, qty: 1 }] }, A);
+const s0 = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, items: [{ product_id: 13, qty: 1 }, { product_id: 12, qty: 1 }] }, A);
 await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, items: [{ product_id: 13, qty: 2 }] }, A);
 const sx = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, items: [{ product_id: 11, qty: 5 }] }, A);
 await req('POST', `/api/b2b/p/orders/${sx.id}/cancel`, {}, A); // скасовані не рахуються
@@ -107,4 +107,21 @@ assert.ok(tg.some((m) => /номер у CRM змінено/.test(m.text)), 'па
 assert.match((await req('GET', `/api/b2b/orders/${c2.id}`)).history.map((x) => x.action).join('\n'), /замінено замовлення LP-CRM \(було 77001\) на № 77002/);
 assert.equal((await req('GET', `/api/b2b/p/clients/${c2.id}`, null, A)).order.crm_id, '77002', 'партнер бачить новий номер');
 
-console.log('OK — B2B: часті товари, маркування без дублів, заміна номера LP-CRM');
+// ---------- 4. «Закрито»: усі товари закупівлі розписано на замовлення клієнтів ----------
+const isClosed = async () => (await req('GET', `/api/b2b/orders/${s0.id}`)).order.closed === true;
+assert.equal(await isClosed(), false);
+const k1 = await req('POST', '/api/b2b/p/clients', { client_name: 'Закр 1', client_phone: '0501112233', supply_id: s0.id, items: [{ product_id: 13, qty: 1 }] }, A);
+assert.equal(await isClosed(), false, 'ще лишився товар');
+const k2 = await req('POST', '/api/b2b/p/clients', { client_name: 'Закр 2', client_phone: '0501112233', supply_id: s0.id, items: [{ product_id: 12, qty: 1 }] }, A);
+assert.equal(await isClosed(), true);
+assert.match((await req('GET', `/api/b2b/orders/${s0.id}`)).order.status_name, /· Закрито$/);
+let ol = await req('GET', '/api/b2b/orders?status=closed');
+assert.deepEqual(ol.rows.map((r) => r.id), [s0.id], 'фільтр «Закрито»');
+assert.equal(ol.counts.closed, 1);
+assert.ok(ol.statuses.closed);
+assert.deepEqual((await req('GET', '/api/b2b/p/orders?status=closed', null, A)).rows.map((r) => r.id), [s0.id], 'і в кабінеті партнера');
+await req('POST', `/api/b2b/p/clients/${k2.id}/cancel`, {}, A);
+assert.equal(await isClosed(), false, 'скасоване замовлення повертає залишок');
+void k1;
+
+console.log('OK — B2B: часті товари, маркування без дублів, заміна номера LP-CRM, «Закрито»');

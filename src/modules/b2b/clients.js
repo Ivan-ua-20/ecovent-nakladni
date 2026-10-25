@@ -482,7 +482,9 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
       res = await addNewOrder(fetchFn, k.addCreds, {
         code, office: k.office, bayer_name: o.client_name, phone: o.client_phone, comment,
         delivery: k.delivery, payment: paid ? k.paymentPaid : k.payment, notification: k.notification,
-        ttn: o.ttn, delivery_adress: address,
+        // ТТН — у поле адреси доставки (окремого поля ТТН addNewOrder не має): менеджер переносить її в поле ТТН;
+        // без ТТН — відділення з маркування.
+        delivery_adress: o.ttn || address,
         ...(k.ttnField && o.ttn ? { [k.ttnField]: o.ttn } : {}),
         // Сайт-джерело: LP-CRM бере його з sender (serialize($_SERVER) у прикладі) — без нього «Не указан сайт-лендинг».
         sender: senderOf(c, k.site),

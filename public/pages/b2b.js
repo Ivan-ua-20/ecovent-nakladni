@@ -506,10 +506,10 @@ export function createB2bPages(ctx = {}) {
           <div class="grid2"><label class="f"><span>ID виду оплати, якщо закупівлю оплачено («Оплачено» — 1)</span><input name="payment_paid" value="${esc(cfg.payment_paid)}" inputmode="numeric"></label>
             <label class="f"><span>ID виду оплати, якщо не оплачено (порожньо — без значка)</span><input name="payment" value="${esc(cfg.payment)}" inputmode="numeric"></label></div>
           <label class="f"><span>Сайт-джерело замовлень (як буде видно в LP-CRM)</span><input name="site" value="${esc(cfg.site || '')}" placeholder="${esc(location.host)}"></label>
-          <label class="f"><span>ТТН іде в поле ТТН; додатково записувати ще в</span><select name="ttn_field">${Object.entries(TTN_F).map(([k, v]) => `<option value="${k}" ${cfg.ttn_field === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
+          <label class="f"><span>ТТН іде в поле «Адреса доставки»; додатково записувати ще в</span><select name="ttn_field">${Object.entries(TTN_F).map(([k, v]) => `<option value="${k}" ${cfg.ttn_field === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
           <label class="check"><input type="checkbox" name="on" ${cfg.on ? 'checked' : ''}> Увімкнути кнопку «Додати в CRM»</label>
           <div class="small muted">Замовлення потрапляє у вкладку «Нові» вибраного відділу, ціни — партнерські, «Поле 1» лишається порожнім.
-            Адреса доставки — відділення з маркування Нової пошти. У коментарі — № B2B, партнер, ТТН і оплата: «ОПЛАЧЕНО» (рахунок, коли, скільки, від кого й на який рахунок — з Opendatabot)
+            ТТН — у полі «Адреса доставки» (окремого поля ТТН API не має; перенесіть її в поле ТТН у CRM), без ТТН — відділення з маркування. У коментарі — № B2B, партнер, ТТН і оплата: «ОПЛАЧЕНО» (рахунок, коли, скільки, від кого й на який рахунок — з Opendatabot)
             або «ОЧІКУЄМО ОПЛАТУ» (рахунок, на кого, від кого). Якщо оплата прийде вже після передачі — бот надішле адмінам номер у CRM і готовий текст коментаря
             (змінювати створене замовлення API LP-CRM не дає). Номер замовлення в CRM і статус підтягуються автоматично.</div>
           ${cfg.ready ? '' : '<div class="alert bad">Не вказано піддомен або основний API-ключ LP-CRM у «Налаштуваннях» — без нього не оновлюються статуси.</div>'}
