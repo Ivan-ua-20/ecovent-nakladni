@@ -70,7 +70,8 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     const ttnField = TTN_FIELDS.includes(b.ttn_field) ? b.ttn_field : '';
     const set = (key, value) => [`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]];
     const st = [set('b2b_crm_office', office), set('b2b_crm_on', b.on ? '1' : '0'), set('b2b_crm_delivery', opt.delivery),
-      set('b2b_crm_payment', opt.payment), set('b2b_crm_payment_paid', opt.payment_paid), set('b2b_crm_notification', opt.notification), set('b2b_crm_ttn_field', ttnField)];
+      set('b2b_crm_payment', opt.payment), set('b2b_crm_notification', opt.notification), set('b2b_crm_ttn_field', ttnField)];
+    if (b.payment_paid !== undefined) st.push(set('b2b_crm_payment_paid', opt.payment_paid)); // не передано — лишається як було (типово «Оплачено», ID 1)
     if (b.site !== undefined) {
       const site = String(b.site).trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
       if (site && !/^[a-z0-9.-]{3,100}$/.test(site)) throw fail(400, 'Сайт — домен без https://, напр. b2b.ecovent.ua');
