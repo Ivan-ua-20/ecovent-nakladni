@@ -537,3 +537,9 @@ tr.row-bad td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
 
 /* B2B: заголовок бренду в каталозі партнера */
 table.list tr.grp td { background: var(--accent-soft); padding-top: 7px; padding-bottom: 7px; }
+
+/* Зона перетягування файлів (маркування) */
+.drop-zone { border: 2px dashed var(--line); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; transition: border-color .15s, background-color .15s; }
+.drop-zone .drop-hint { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--muted, #6b7280); }
+.drop-zone.drop-on { border-color: var(--accent); background: var(--accent-soft); }
+@media (prefers-reduced-motion: reduce) { .drop-zone { transition: none; } }

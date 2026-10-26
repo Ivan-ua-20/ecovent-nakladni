@@ -9,6 +9,29 @@ const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' }
 export function createPartnerPages(ctx = {}) {
   // «Лише перегляд» — без кнопок створення й зміни (сервер теж не дасть).
   const canEdit = () => !ctx.can || ctx.can('b2b.order');
+  // Зона перетягування файлів: файл, кинутий на неї, — як вибраний кнопкою. onFiles(File[]).
+  let dropGuard = false;
+  function dropZone(el, onFiles) {
+    if (!el) return;
+    // Файл, кинутий повз зону, браузер відкрив би замість сторінки (і заповнена форма пропала б).
+    if (!dropGuard) {
+      dropGuard = true;
+      for (const ev of ['dragover', 'drop']) {
+        window.addEventListener(ev, (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files') && !e.target.closest?.('.drop-zone')) e.preventDefault(); });
+      }
+    }
+    let depth = 0;
+    const on = (v) => el.classList.toggle('drop-on', v);
+    el.addEventListener('dragenter', (e) => { if (![...(e.dataTransfer?.types || [])].includes('Files')) return; e.preventDefault(); depth++; on(true); });
+    el.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+    el.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); if (!depth) on(false); });
+    el.addEventListener('drop', (e) => {
+      e.preventDefault(); depth = 0; on(false);
+      const files = [...(e.dataTransfer?.files || [])].filter((f) => /pdf|image\//i.test(f.type) || /\.(pdf|jpe?g|png|webp|heic)$/i.test(f.name));
+      if (!files.length) { toast('Перетягніть PDF або фото маркування', true); return; }
+      onFiles(files);
+    });
+  }
   const supFilter = { status: '', q: '', from: '', to: '' };
   const cliFilter = { status: '', q: '', from: '', to: '', pay: '' };
   const filter = { brand: '', q: '', cat: '', sort: 'brand' };
@@ -443,7 +466,7 @@ export function createPartnerPages(ctx = {}) {
             ${files.length ? files.map((f) => `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
               <a class="btn sm" href="/api/b2b/p/files/${f.id}" target="_blank" rel="noopener">📎 ${esc(f.kind_name)}: ${esc(f.name)}</a><span class="small muted">${fileSize(f.size)}</span>
               ${editable && f.kind === 'label' ? `<button class="btn sm danger" data-fdel="${f.id}" aria-label="Видалити файл">✕</button>` : ''}</div>`).join('') : '<div class="small muted">Файлів ще немає.</div>'}
-            ${editable ? `<label class="btn sm">+ Файл маркування (етикетка ТТН)<input type="file" id="cUp" accept=".pdf,image/*" hidden></label>
+            ${editable ? `<div class="drop-zone" id="cDrop"><div class="drop-hint">Перетягніть файл маркування сюди або <label class="btn sm">+ Файл маркування (етикетка ТТН)<input type="file" id="cUp" accept=".pdf,image/*" hidden></label></div></div>
               <div class="small muted">PDF або фото до 5 МБ. Файли зберігаються 30 днів.</div>` : ''}
           </div>
           ${historyCard(history)}
@@ -453,11 +476,15 @@ export function createPartnerPages(ctx = {}) {
       if (!(await confirmDanger(`Скасувати замовлення ${o.number}?`, 'Товари повернуться в залишок закупівлі.', 'Скасувати замовлення'))) return;
       try { await api('POST', `/api/b2b/p/clients/${o.id}/cancel`); toast('Скасовано'); viewClient(o.id); } catch (e) { toast(e.message, true); }
     });
-    $('#cUp') && ($('#cUp').onchange = async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      try { const r = await uploadFile(`/api/b2b/p/clients/${o.id}/files`, file); toast(r.warnings?.length ? `Маркування додано. ⚠️ ${r.warnings.join('; ')}` : 'Маркування додано', !!r.warnings?.length); viewClient(o.id); } catch (er) { toast(er.message, true); }
-    });
+    const upLabels = async (files) => {
+      for (const file of files) {
+        if (file.size > 5 * 1024 * 1024) { toast(`Файл «${file.name}» завеликий (до 5 МБ)`, true); continue; }
+        try { const r = await uploadFile(`/api/b2b/p/clients/${o.id}/files`, file); toast(r.warnings?.length ? `Маркування додано. ⚠️ ${r.warnings.join('; ')}` : 'Маркування додано', !!r.warnings?.length); } catch (er) { toast(`${file.name}: ${er.message}`, true); }
+      }
+      viewClient(o.id);
+    };
+    $('#cUp') && ($('#cUp').onchange = (e) => { const f = [...e.target.files]; e.target.value = ''; if (f.length) upLabels(f); });
+    dropZone($('#cDrop'), upLabels);
     $$('[data-fdel]').forEach((b) => (b.onclick = async () => {
       if (!(await confirmDanger('Видалити файл?', '', 'Видалити'))) return;
       try { await api('DELETE', `/api/b2b/p/clients/${o.id}/files/${b.dataset.fdel}`); toast('Видалено'); viewClient(o.id); } catch (er) { toast(er.message, true); }
@@ -519,8 +546,10 @@ export function createPartnerPages(ctx = {}) {
             <label class="f"><span>ТТН (ваша)</span><input name="ttn" value="${esc(o.ttn || '')}" inputmode="numeric" placeholder="20450000000000"></label>
             <label class="f"><span>Коментар</span><textarea name="comment" rows="2">${esc(o.comment || '')}</textarea></label>
             <div class="f"><span>Маркування (етикетка ТТН)</span>
-              <div id="cfFileList" class="form-stack" style="gap:6px"></div>
-              <label class="btn sm" style="align-self:flex-start">+ Додати маркування<input type="file" id="cfFiles" accept=".pdf,image/*" multiple hidden></label></div>
+              <div class="drop-zone" id="cfDrop">
+                <div id="cfFileList" class="form-stack" style="gap:6px"></div>
+                <div class="drop-hint">Перетягніть файл сюди або <label class="btn sm">+ Додати маркування<input type="file" id="cfFiles" accept=".pdf,image/*" multiple hidden></label></div>
+              </div></div>
             <div class="small muted">PDF або фото до 5 МБ; можна кілька, зайве — ✕. Те саме маркування двічі (в одне чи різні замовлення) додати не можна.</div>
             <div id="cfSum"></div>
             <button class="btn primary" id="cfSave">${id ? 'Зберегти зміни' : 'Оформити замовлення'}</button>
@@ -577,9 +606,7 @@ export function createPartnerPages(ctx = {}) {
     };
     drawFiles();
     // Новий файл: перевірка на дубль (той самий файл чи ТТН в іншому замовленні), і з маркування НП — ПІБ, телефон, ТТН.
-    $('#cfFiles').onchange = async () => {
-      const files = [...$('#cfFiles').files];
-      $('#cfFiles').value = '';
+    const addLabels = async (files) => {
       for (const file of files) {
         if (file.size > 5 * 1024 * 1024) { toast(`Файл «${file.name}» завеликий (до 5 МБ)`, true); continue; }
         if (pending.some((x) => x.file.name === file.name && x.file.size === file.size)) { toast(`«${file.name}» уже додано`, true); continue; }
@@ -595,6 +622,8 @@ export function createPartnerPages(ctx = {}) {
         if (r.found) fillFromLabel(r);
       }
     };
+    $('#cfFiles').onchange = () => { const files = [...$('#cfFiles').files]; $('#cfFiles').value = ''; addLabels(files); };
+    dropZone($('#cfDrop'), addLabels);
     // Маркування Нової пошти → ПІБ, телефон і ТТН клієнта (порожні поля заповнюються, різницю показуємо).
     const fillFromLabel = (r) => {
       {
