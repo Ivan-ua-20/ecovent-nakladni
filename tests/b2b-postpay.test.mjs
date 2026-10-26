@@ -117,8 +117,9 @@ assert.equal(po.overdue, 3);
 assert.match(po.status_name, /прострочено 3 дн/);
 await pA({ postpay_limit: '' });
 assert.match(await errOf(() => supply([{ product_id: 12, qty: 1 }], { pay_terms: 'postpay' })), /прострочена оплата/);
+const c2 = await req('POST', '/api/b2b/p/clients', { client_name: 'Клієнт 2', client_phone: '0501112244', items: [{ product_id: 11, qty: 1 }], supply_id: s1.id }, A);
 tg.length = 0;
-await req('PUT', `/api/b2b/clients/${c1.id}`, { crm_id: '778' });
+await req('PUT', `/api/b2b/clients/${c2.id}`, { crm_id: '778' });
 assert.ok(tg.some((m) => /Відвантаження без оплати/.test(m.text)), 'прострочена — знову попереджає');
 
 // ---------- 7. Оплачено — борг зникає, відстрочка знову доступна ----------
