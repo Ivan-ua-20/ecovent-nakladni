@@ -107,4 +107,18 @@ r = await req('POST', '/api/b2b/price-changes/send', { partner_ids: [pa.id] });
 assert.equal(r.results[0].sent, false);
 assert.equal((await req('GET', '/api/b2b/price-changes')).find((x) => x.id === pa.id).empty, false);
 
+// ---------- Повторне «Оновити з LP-CRM» того ж дня підтягує нові РРЦ ----------
+const before = (await req('GET', '/api/b2b/p/catalog', null, A)).products.find((p) => p.id === 11).rrp;
+PRICES[11] = '1111.00';
+await req('POST', '/api/b2b/catalog/sync');
+assert.equal((await req('GET', '/api/b2b/p/catalog', null, A)).products.find((p) => p.id === 11).rrp, before, 'без run — товар уже перевірено сьогодні');
+const run = new Date().toISOString();
+const sr = await req('POST', '/api/b2b/catalog/sync', { run });
+assert.ok(sr.changed >= 1, 'зміну РРЦ записано для розсилки');
+assert.equal(sr.left, 0);
+const u2 = (await req('GET', '/api/b2b/p/catalog', null, A)).products.find((p) => p.id === 11);
+assert.equal(u2.rrp, 1111);
+assert.ok(u2.price > 0 && u2.price < 1111, 'ціна партнера перерахована від нової РРЦ');
+assert.equal((await req('POST', '/api/b2b/catalog/sync', { run })).checked, 0, 'той самий запуск — без повторів');
+
 console.log('OK — B2B: розсилка змін цін і каталог партнера з категоріями та знижкою');
