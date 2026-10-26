@@ -165,6 +165,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     if (!s) throw fail(404, 'Закупівлю не знайдено.');
     if (s.status === 'cancelled') throw fail(400, `Закупівлю ${orderNo(s.id)} скасовано — оберіть іншу.`);
     if (s.status === 'open') throw fail(400, 'Для відкритої закупівлі оберіть «Без закупівлі».');
+    if (s.status === 'draft') throw fail(400, `Закупівля ${orderNo(s.id)} ще чернетка — спершу керівник її відправляє.`);
     if (s.delivery === 'pickup') throw fail(400, `Закупівля ${orderNo(s.id)} — самовивіз: її товари партнер забирає сам, замовлення клієнтів з неї не оформлюються.`);
     const left = new Map((await supplyLeft(s.id, exceptId)).map((r) => [r.product_id, r]));
     const want = new Map();
@@ -308,7 +309,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
          COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci JOIN b2b_orders co ON co.id = ci.order_id
            WHERE co.supply_id = s.id AND co.kind = 'client' AND co.status != 'cancelled' AND ci.product_id = i.product_id), 0) AS used
        FROM b2b_orders s JOIN b2b_order_items i ON i.order_id = s.id
-       WHERE s.partner_id = ? AND s.kind = 'supply' AND s.status NOT IN ('cancelled', 'open') AND COALESCE(s.delivery, 'np') != 'pickup' AND s.created_at > ? ORDER BY s.id DESC, i.id`, [p.id, since],
+       WHERE s.partner_id = ? AND s.kind = 'supply' AND s.status NOT IN ('cancelled', 'open', 'draft') AND COALESCE(s.delivery, 'np') != 'pickup' AND s.created_at > ? ORDER BY s.id DESC, i.id`, [p.id, since],
     );
     const map = new Map();
     for (const r of rows) {

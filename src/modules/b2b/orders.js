@@ -9,8 +9,10 @@ import { fail, need, nowIso, round2 } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
 import { listFilter } from './filters.js';
 import { pdfText, parseNpLabel } from '../../integrations/pdftext.js';
+import { can } from '../../core/auth.js';
 
 export const ORDER_STATUS = {
+  draft: 'Чернетка',
   open: 'Відкрита (рахунок не сформовано)',
   invoice_wait: 'Очікує рахунок',
   pay_wait: 'Очікує оплату',
@@ -42,7 +44,7 @@ export const limitsOf = (p) => ({
 });
 const UNPAID = `('open', 'invoice_wait', 'pay_wait', 'partial')`;
 // «Закрито»: усі товари закупівлі розписано на замовлення клієнтів (не скасовані) — залишку немає.
-export const CLOSED_SQL = `(o.kind = 'supply' AND o.status NOT IN ('open', 'cancelled')
+export const CLOSED_SQL = `(o.kind = 'supply' AND o.status NOT IN ('open', 'cancelled', 'draft')
   AND EXISTS (SELECT 1 FROM b2b_order_items i WHERE i.order_id = o.id)
   AND NOT EXISTS (SELECT 1 FROM b2b_order_items i WHERE i.order_id = o.id AND i.qty > COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci
     JOIN b2b_orders co ON co.id = ci.order_id WHERE co.supply_id = o.id AND co.kind = 'client' AND co.status != 'cancelled' AND ci.product_id = i.product_id), 0)))`;
@@ -201,14 +203,43 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     [orderId, i.product_id, i.name, i.article, i.qty, i.price, i.rrp],
   ]);
 
+  // Чернетка закупівлі: менеджери партнера збирають товари (можна в одну спільну — товари додаються),
+  // керівник партнера відправляє її нам («Відправити закупівлю»). Чернетки бачить лише команда партнера.
+  const isHead = (c) => can(c.get('user'), 'b2b.team');
   app.post('/api/b2b/p/orders', async (c) => {
     const p = await myPartner(c);
     const b = await c.req.json();
+    const toDraft = parseInt(b.to_draft, 10) || 0;
+    if (toDraft) {
+      // Додати товари до наявної чернетки (кількості сумуються).
+      const d = await orderOf(toDraft, p.id);
+      if (d.kind !== 'supply' || d.status !== 'draft') throw fail(400, 'Чернетку вже відправлено або видалено — оновіть сторінку.');
+      const have = await db.all(`SELECT product_id, qty FROM b2b_order_items WHERE order_id = ?`, [d.id]);
+      const sum = new Map(have.map((i) => [i.product_id, i.qty]));
+      const add = (Array.isArray(b.items) ? b.items : []).filter((i) => Number(i.qty) > 0);
+      if (!add.length) throw fail(400, 'Вкажіть кількість хоча б одного товару.');
+      for (const i of add) sum.set(Number(i.product_id), (sum.get(Number(i.product_id)) || 0) + Math.floor(Number(i.qty)));
+      const items = await priceItems(p, [...sum].map(([product_id, qty]) => ({ product_id, qty })));
+      const total = totalOf(items);
+      await db.batch([[`DELETE FROM b2b_order_items WHERE order_id = ?`, [d.id]], ...itemRows(d.id, items),
+        [`UPDATE b2b_orders SET total = ?, updated_at = ? WHERE id = ?`, [total, nowIso(), d.id]]]);
+      await log(d.id, c.get('user'), `додано до чернетки: ${add.length} поз. (разом ${uah(total)})`);
+      return c.json({ id: d.id, number: orderNo(d.id), total, draft: true });
+    }
+    const draft = Boolean(b.draft) || !isHead(c); // менеджер партнера — лише чернетка
     const e = await myEntity(p, b.entity_id);
     const items = await priceItems(p, b.items);
     const total = totalOf(items);
-    await checkUnpaid(p, total);
+    if (!draft) await checkUnpaid(p, total);
     const now = nowIso();
+    if (draft) {
+      const r = await db.run(
+        `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery) VALUES (?, 'supply', 'draft', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery)],
+      );
+      await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r.lastId, now, userName(c.get('user')), `створено чернетку на ${uah(total)}`]]]);
+      return c.json({ id: r.lastId, number: orderNo(r.lastId), total, draft: true });
+    }
     const r = await db.run(
       `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?)`,
       [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery)],
@@ -356,12 +387,13 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const p = await myPartner(c);
     const o = await orderOf(c.req.param('id'), p.id);
     if (o.kind !== 'supply') throw fail(404, 'Замовлення не знайдено.');
-    if (o.status !== 'invoice_wait') throw fail(400, 'Рахунок уже виставлено — змінити замовлення може лише менеджер.');
+    if (!['invoice_wait', 'draft'].includes(o.status)) throw fail(400, 'Рахунок уже виставлено — змінити замовлення може лише менеджер.');
+    const isDraft = o.status === 'draft';
     const b = await c.req.json();
     const e = await myEntity(p, b.entity_id ?? o.entity_id);
     const items = await priceItems(p, b.items);
     const total = totalOf(items);
-    await checkUnpaid(p, total, o.id);
+    if (!isDraft) await checkUnpaid(p, total, o.id);
     // Не менше, ніж уже розписано на замовлення клієнтів.
     const want = new Map(items.map((i) => [i.product_id, i.qty]));
     const left = await supplyLeft(o.id);
@@ -376,17 +408,50 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       [`UPDATE b2b_orders SET entity_id = ?, entity = ?, total = ?, comment = ?, delivery = ?, updated_at = ? WHERE id = ?`,
         [e.id, entityText(e), total, String(b.comment ?? o.comment ?? '').trim().slice(0, 1000), delivery, nowIso(), o.id]],
     ]);
-    await log(o.id, c.get('user'), `змінено замовлення: ${items.length} поз., ${uah(total)}`);
+    await log(o.id, c.get('user'), `змінено ${isDraft ? 'чернетку' : 'замовлення'}: ${items.length} поз., ${uah(total)}`);
+    if (isDraft) return c.json({ ok: true, total });
     const full = orderText('✏️ Змінено закупівлю', { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment, delivery }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${o.id}`)}`);
     await hooks.finRequest?.(o.id, 'changed').catch(() => 0);
     return c.json({ ok: true, total });
   });
 
+  // Чернетку відправляє керівник партнера або наш адмін: тепер це звичайна закупівля («Очікує рахунок»), з усіма сповіщеннями.
+  app.post('/api/b2b/p/orders/:id/send', async (c) => {
+    const p = await myPartner(c);
+    if (!isHead(c)) throw fail(403, 'Відправити закупівлю може лише керівник вашої команди.');
+    return c.json(await sendDraft(c, p, await orderOf(c.req.param('id'), p.id)));
+  });
+  app.post('/api/b2b/orders/:id/send', async (c) => {
+    need(c, 'b2b.admin');
+    const o = await orderOf(c.req.param('id'));
+    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [o.partner_id]);
+    return c.json(await sendDraft(c, p, o));
+  });
+  async function sendDraft(c, p, o) {
+    if (o.kind !== 'supply' || o.status !== 'draft') throw fail(400, 'Це не чернетка — її вже відправлено.');
+    const items = await db.all(`SELECT product_id, name, article, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
+    if (!items.length) throw fail(400, 'Чернетка порожня — додайте товари.');
+    const e = await myEntity(p, o.entity_id).catch(() => { throw fail(400, 'Юрособу чернетки видалено — оберіть іншу («Змінити»).'); });
+    await checkUnpaid(p, o.total, o.id);
+    const claim = await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity = ?, created_at = ?, updated_at = ? WHERE id = ? AND status = 'draft'`, [entityText(e), nowIso(), nowIso(), o.id]);
+    if (!claim.changes) throw fail(409, 'Чернетку вже відправлено.');
+    await log(o.id, c.get('user'), `відправлено закупівлю: ${uah(o.total)}`);
+    const full = orderText('🆕 Нова закупівля', { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery }, p, items);
+    await tgAdmins(`${full}\n\n${link(c, `b2borders/${o.id}`)}`);
+    await tgGroup(p.id, full);
+    await hooks.finRequest?.(o.id).catch(() => 0);
+    return { ok: true, id: o.id, number: orderNo(o.id) };
+  }
+
   app.post('/api/b2b/p/orders/:id/cancel', async (c) => {
     const p = await myPartner(c);
     const o = await orderOf(c.req.param('id'), p.id);
     if (o.kind !== 'supply') throw fail(404, 'Замовлення не знайдено.');
+    if (o.status === 'draft') { // чернетку — просто видаляємо
+      await db.batch([[`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]], [`DELETE FROM b2b_order_log WHERE order_id = ?`, [o.id]], [`DELETE FROM b2b_orders WHERE id = ?`, [o.id]]]);
+      return c.json({ ok: true, deleted: true });
+    }
     if (o.status !== 'invoice_wait') throw fail(400, 'Рахунок уже виставлено — скасувати замовлення може лише менеджер.');
     if (await db.get(`SELECT id FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled' LIMIT 1`, [o.id])) {
       throw fail(400, 'З цієї закупівлі вже є замовлення клієнтів — спершу скасуйте їх.');
@@ -408,6 +473,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const pid = parseInt(c.req.query('partner'), 10);
     if (st === 'closed') where.push(CLOSED_SQL);
     else if (st && ORDER_STATUS[st]) { where.push('o.status = ?'); params.push(st); }
+    if (st !== 'draft') where.push(`o.status != 'draft'`); // чернетки партнерів — лише у фільтрі «Чернетка»
     if (pid) { where.push('o.partner_id = ?'); params.push(pid); }
     const rows = await db.all(
       `SELECT o.*, p.name AS partner, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files, ${CLOSED_SQL} AS closed

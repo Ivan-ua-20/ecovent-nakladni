@@ -157,4 +157,36 @@ assert.equal((await errOf(() => req('POST', `/api/b2b/orders/${sp.id}/delivery`,
 await req('PUT', `/api/b2b/p/orders/${sp.id}`, { entity_id: ent.id, delivery: 'np', items: [{ product_id: 11, qty: 1 }] }, A);
 assert.equal((await req('GET', `/api/b2b/p/orders/${sp.id}`, null, A)).order.delivery, 'np');
 
+// ---------- 7. Чернетки: менеджери збирають, керівник або наш адмін відправляє ----------
+await req('POST', '/api/b2b/p/team', { login: 'mgr1', name: 'Олена', password: 'pass1234', partner_role: 'staff' }, A);
+await req('POST', '/api/b2b/p/team', { login: 'mgr2', name: 'Ігор', password: 'pass1234', partner_role: 'staff' }, A);
+const M1 = await login('mgr1', 'pass1234');
+const M2 = await login('mgr2', 'pass1234');
+tg.length = 0;
+const dr = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, items: [{ product_id: 11, qty: 1 }] }, M1); // менеджер — лише чернетка
+assert.equal(dr.draft, true);
+let dd = (await req('GET', `/api/b2b/p/orders/${dr.id}`, null, A)).order;
+assert.equal(dd.status, 'draft');
+await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, to_draft: dr.id, items: [{ product_id: 11, qty: 2 }, { product_id: 12, qty: 1 }] }, M2);
+const di = (await req('GET', `/api/b2b/p/orders/${dr.id}`, null, A)).items;
+assert.deepEqual(di.map((i) => [i.product_id, i.qty]).sort(), [[11, 3], [12, 1]], 'кількості додались');
+assert.equal(tg.length, 0, 'чернетка — без сповіщень');
+assert.ok(!(await req('GET', '/api/b2b/orders')).rows.some((r) => r.id === dr.id), 'у нас у списку чернеток немає');
+assert.ok((await req('GET', '/api/b2b/orders?status=draft')).rows.some((r) => r.id === dr.id), '…лише у фільтрі «Чернетка»');
+assert.ok(!(await req('GET', '/api/b2b/p/supplies', null, A)).some((x) => x.id === dr.id), 'чернетка — не джерело для замовлень клієнтів');
+assert.match(await errOf(() => req('POST', `/api/b2b/p/orders/${dr.id}/send`, {}, M1)), /лише керівник/);
+await req('POST', `/api/b2b/p/orders/${dr.id}/send`, {}, A);
+dd = (await req('GET', `/api/b2b/orders/${dr.id}`)).order;
+assert.equal(dd.status, 'invoice_wait');
+assert.ok(tg.some((m) => /Нова закупівля/.test(m.text)), 'після відправки — як нова закупівля');
+assert.match(await errOf(() => req('POST', `/api/b2b/p/orders/${dr.id}/send`, {}, A)), /вже відправлено/);
+// наш адмін теж може відправити; порожню чернетку менеджер видаляє
+const dr2 = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, draft: true, items: [{ product_id: 12, qty: 1 }] }, A);
+assert.equal(dr2.draft, true, 'керівник може зберегти чернетку');
+await req('POST', `/api/b2b/orders/${dr2.id}/send`);
+assert.equal((await req('GET', `/api/b2b/orders/${dr2.id}`)).order.status, 'invoice_wait');
+const dr3 = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, items: [{ product_id: 12, qty: 1 }] }, M2);
+assert.equal((await req('POST', `/api/b2b/p/orders/${dr3.id}/cancel`, {}, M2)).deleted, true);
+assert.ok(!(await db.get(`SELECT id FROM b2b_orders WHERE id = ?`, [dr3.id])), 'чернетку видалено');
+
 console.log('OK — B2B: часті товари, маркування без дублів, заміна номера LP-CRM, «Закрито»');
