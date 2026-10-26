@@ -742,12 +742,14 @@ export function createPartnerPages(ctx = {}) {
 
 
   // ---------------------------------------------------------------- команда (керівник партнера)
-  async function viewTeam() {
+  // Команда — блок у «Налаштуваннях» (box) або окрема сторінка (старі посилання #/pteam ведуть у «Налаштування»).
+  async function viewTeam(box = null) {
+    if (!box) { location.hash = '#/psettings'; return; }
     const { users, roles, max, me } = await api('GET', '/api/b2b/p/team');
-    main.innerHTML = `
-      <div class="head-row"><h2>Команда</h2>${users.length < max ? '<button class="btn primary" id="uNew">+ Додати колегу</button>' : ''}</div>
-      <div class="alert info" style="margin-bottom:14px">Додавайте колег, щоб кожен входив під своїм логіном. Ролі:
-        <b>Керівник</b> — усе, включно з командою; <b>Менеджер</b> — каталог, закупівлі, замовлення клієнтів, юрособи;
+    box.innerHTML = `
+      <div class="head-row" style="margin:0"><h3 style="margin:0">Команда</h3>${users.length < max ? '<button class="btn primary sm" id="uNew">+ Додати колегу</button>' : ''}</div>
+      <div class="small muted">Додавайте колег, щоб кожен входив під своїм логіном. Ролі:
+        <b>Керівник</b> — усе, включно з командою, налаштуваннями й відправкою закупівель; <b>Менеджер</b> — каталог, чернетки закупівель, замовлення клієнтів, юрособи;
         <b>Лише перегляд</b> — бачить усе, але нічого не змінює. Ваш менеджер у Ековент бачить склад команди. До ${max} користувачів.</div>
       ${teamTable(users, { me, showAdded: false })}`;
     const form = (u) => {
@@ -758,12 +760,12 @@ export function createPartnerPages(ctx = {}) {
         try {
           const d = teamFormData($('#puF', m.el));
           if (u) await api('PUT', `/api/b2b/p/team/${u.id}`, d); else await api('POST', '/api/b2b/p/team', d);
-          m.close(); toast(u ? 'Збережено' : 'Колегу додано — передайте йому логін і пароль'); viewTeam();
+          m.close(); toast(u ? 'Збережено' : 'Колегу додано — передайте йому логін і пароль'); viewTeam(box);
         } catch (e) { toast(e.message, true); }
       };
     };
-    $('#uNew') && ($('#uNew').onclick = () => form(null));
-    $$('[data-ue]').forEach((b) => (b.onclick = () => form(users.find((x) => String(x.id) === b.dataset.ue))));
+    $('#uNew', box) && ($('#uNew', box).onclick = () => form(null));
+    $$('[data-ue]', box).forEach((b) => (b.onclick = () => form(users.find((x) => String(x.id) === b.dataset.ue))));
   }
 
   // ---------------------------------------------------------------- інструкція
@@ -791,7 +793,7 @@ export function createPartnerPages(ctx = {}) {
         <p><b>Маркування через Telegram:</b> у вашій групі з ботом натисніть «Відповісти» на повідомлення бота «📦 Нове замовлення клієнта B2B-…»
           і прикріпіть файл маркування (PDF Нової пошти або фото). Бот збереже його до цього замовлення, прочитає ТТН і перевірить телефон одержувача.</p>
         <h3>5. Команда</h3>
-        <p>Керівник у вкладці «Команда» додає колег із власним логіном і паролем і обирає роль: <b>Керівник</b> (усе, включно з командою),
+        <p>Керівник у «Налаштуваннях» → «Команда» додає колег із власним логіном і паролем і обирає роль: <b>Керівник</b> (усе, включно з командою),
           <b>Менеджер</b> (каталог, закупівлі, замовлення клієнтів, юрособи) або <b>Лише перегляд</b>. Вимкнений користувач більше не зможе увійти.</p>
         <h3>6. Сповіщення в Telegram</h3>
         <p>Натисніть «Telegram» угорі сторінки, потім «Підключити Telegram» і «Start» у боті. Приходитимуть повідомлення про рахунки, оплату й зміну цін.</p>
@@ -806,10 +808,13 @@ export function createPartnerPages(ctx = {}) {
   async function viewSettings() {
     let types = await api('GET', '/api/b2b/p/doc-types');
     const head = ctx.can ? ctx.can('b2b.team') : true;
+    main.innerHTML = `<div class="head-row"><h2>Налаштування</h2></div>
+      ${head ? '<div class="card form-stack" id="setTeam" style="max-width:980px;margin-bottom:14px"><span class="spinner"></span></div>' : ''}
+      <div id="setDocs"></div>`;
+    if (head) viewTeam($('#setTeam')).catch((e) => { $('#setTeam').innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; });
     const draw = () => {
-      main.innerHTML = `
-        <div class="head-row"><h2>Налаштування</h2></div>
-        <div class="card form-stack" style="max-width:760px">
+      $('#setDocs').innerHTML = `
+        <div class="card form-stack" style="max-width:980px">
           <h3>Документи до замовлень клієнтів</h3>
           <div class="small muted">Маркування (етикетка ТТН) потрібне завжди. Тут — ваші документи для клієнта: чек, накладна, гарантійний талон тощо (до 5).
             У замовленні для кожного буде окреме поле. <b>Обов’язковий</b> — без нього замовлення не оформити й не передати в роботу.
