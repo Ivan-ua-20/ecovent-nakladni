@@ -381,12 +381,17 @@ export function createB2bPages(ctx = {}) {
 
   // ---------------------------------------------------------------- розсилка змін цін
   // Перегляд: хто що отримає і куди (група партнера або його користувачі), потім «Надіслати».
+  // Спершу — свіжі РРЦ з LP-CRM: у Telegram іде рівно те, що одразу бачить партнер у кабінеті (ціни з одного каталогу).
   async function sendPrices(only = null) {
+    const wait = modal('Надіслати зміни цін партнерам', '<div class="form-stack"><div><span class="spinner"></span> <span id="spProg">Підтягую актуальні РРЦ з LP-CRM…</span></div></div>', { footer: '' });
+    try { await crmRefresh((n, left) => { const el = $('#spProg', wait.el); if (el) el.textContent = `Підтягую актуальні РРЦ з LP-CRM… ${n}${left ? ` / ${n + left}` : ''}`; }); }
+    catch (e) { wait.close(); toast(`Не вдалося оновити ціни з LP-CRM — розсилку не відкрито: ${e.message}`, true); return; }
+    wait.close();
     const rows = await api('GET', '/api/b2b/price-changes');
     const withCh = rows.filter((r) => !r.empty);
     const dest = (r) => (r.group ? `група «${esc(r.group)}»` : r.tgUsers ? `особисто: ${r.tgUsers} корист.` : '<span class="badge bad">нікому — немає Telegram</span>');
     const m = modal('Надіслати зміни цін партнерам', withCh.length ? `<div class="form-stack">
-        <div class="small muted">Зміни РРЦ і знижок з минулої розсилки кожному партнеру. Оновіть каталог з LP-CRM перед розсилкою, щоб РРЦ були свіжі.</div>
+        <div class="small muted">Зміни РРЦ і знижок з минулої розсилки кожному партнеру. РРЦ щойно оновлено з LP-CRM — у кабінеті партнера вже ці ціни.</div>
         ${withCh.map((r) => `<div class="card form-stack" style="padding:10px 12px">
           <label class="check"><input type="checkbox" data-pp="${r.id}" ${!(r.group || r.tgUsers) ? 'disabled' : !only || only.includes(r.id) ? 'checked' : ''}> <b>${esc(r.name)}</b> — товарів: ${r.products}${r.brands ? `, брендів: ${r.brands}` : ''} → ${dest(r)}</label>
           <details><summary class="small">Переглянути повідомлення</summary>${r.preview.map((t) => `<pre class="small" style="white-space:pre-wrap;margin:6px 0">${t}</pre>`).join('')}</details>
@@ -465,17 +470,26 @@ export function createB2bPages(ctx = {}) {
 
   // ---------------------------------------------------------------- каталог
   let catFilter = { brand: '', q: '' };
+  // Перечитати з LP-CRM усі товари каталогу (навіть якщо сьогодні вже оновлювали); повертає кількість змінених РРЦ.
+  async function crmRefresh(progress = () => {}) {
+    const run = new Date().toISOString();
+    let changed = 0;
+    let done = 0;
+    for (let i = 0; i < 100; i++) {
+      const r = await api('POST', '/api/b2b/catalog/sync', { run });
+      changed += r.changed || 0;
+      done += r.checked || 0;
+      progress(done, r.left || 0);
+      if (!r.left || !r.checked) break;
+    }
+    return changed;
+  }
   async function syncCatalog(btn, done = viewCatalog) {
     btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Оновлюю з LP-CRM…';
     try {
-      const run = new Date().toISOString(); // перечитати всі товари, навіть якщо сьогодні вже оновлювали
-      let changed = 0;
-      for (let i = 0; i < 100; i++) {
-        btn.innerHTML = `<span class="spinner"></span> Оновлюю з LP-CRM…`;
-        const r = await api('POST', '/api/b2b/catalog/sync', { run });
-        changed += r.changed || 0;
-        if (!r.left || !r.checked) { toast(`Каталог оновлено${changed ? ` · змінилися ціни: ${changed}` : ''}`); break; }
-      }
+      const changed = await crmRefresh((n, left) => { btn.innerHTML = `<span class="spinner"></span> Оновлюю з LP-CRM… ${n}${left ? ` / ${n + left}` : ''}`; });
+      toast(`Каталог оновлено${changed ? ` · змінилися ціни: ${changed}` : ''}`);
     } catch (e) { toast(e.message, true); }
     btn.disabled = false;
     done();
