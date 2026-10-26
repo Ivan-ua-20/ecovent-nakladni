@@ -8410,8 +8410,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     ]);
     return c.json({ rows: rows.map((r) => ({ ...r, brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456" })), state });
   });
-  async function catalogState() {
-    const today2 = kyivDay();
+  async function catalogState(today2 = kyivDay()) {
     const [last, left] = await Promise.all([
       db.get(`SELECT value FROM settings WHERE key = 'b2b_catalog_sync'`),
       db.get(`SELECT COUNT(*) AS n FROM b2b_catalog WHERE hidden = 0 AND checked_at < ? AND (manual = 1 OR brand_id IN (SELECT brand_id FROM b2b_margins))`, [today2])
@@ -8439,7 +8438,11 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     need(c, "b2b.admin");
     const s = await loadSettings(db);
     if (!s.lpcrm_subdomain || !s.lpcrm_key) throw fail(400, "\u041D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E LP-CRM: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u043F\u0456\u0434\u0434\u043E\u043C\u0435\u043D \u0456 API-\u043A\u043B\u044E\u0447 \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445\xBB.");
-    const today2 = kyivDay();
+    const b = await c.req.json().catch(() => ({}));
+    const run = String(b.run || "");
+    const fresh = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(run) && Math.abs(Date.now() - Date.parse(run)) < 3 * 3600 * 1e3;
+    const today2 = fresh ? run : kyivDay();
+    const stamp = nowIso();
     await db.batch([
       [`INSERT OR IGNORE INTO b2b_catalog (product_id, name, brand_id) SELECT product_id, COALESCE(name, ''), brand_id FROM an_products WHERE product_id > 0`, []],
       [`UPDATE b2b_catalog SET brand_id = (SELECT a.brand_id FROM an_products a WHERE a.product_id = b2b_catalog.product_id)
@@ -8461,14 +8464,14 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       for (const r of part) {
         const p = got.get(r.product_id);
         if (!p) {
-          st.push([`UPDATE b2b_catalog SET checked_at = ? WHERE product_id = ?`, [today2, r.product_id]]);
+          st.push([`UPDATE b2b_catalog SET checked_at = ? WHERE product_id = ?`, [stamp, r.product_id]]);
           continue;
         }
         const rrp = round2(num3(p.price));
         const vendor = p.vendor && p.vendor !== "\u0410\u0440\u0442\u0438\u043A\u0443\u043B" ? p.vendor : "";
         st.push([
           `UPDATE b2b_catalog SET name = ?, article = ?, rrp = ?, image = ?, checked_at = ? WHERE product_id = ?`,
-          [String(p.name || p.title || "").trim().slice(0, 300), String(p.article || vendor || p.model || "").slice(0, 60), rrp, findImage(p), today2, r.product_id]
+          [String(p.name || p.title || "").trim().slice(0, 300), String(p.article || vendor || p.model || "").slice(0, 60), rrp, findImage(p), stamp, r.product_id]
         ]);
         if (r.rrp > 0 && rrp > 0 && Math.abs(rrp - r.rrp) >= 5e-3) {
           st.push([`INSERT INTO b2b_price_log (at, product_id, old_rrp, new_rrp) VALUES (?, ?, ?, ?)`, [at, r.product_id, r.rrp, rrp]]);
@@ -8478,7 +8481,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       await db.batch(st);
     }
     await db.run(`INSERT INTO settings (key, value) VALUES ('b2b_catalog_sync', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [at]);
-    const state = await catalogState();
+    const state = await catalogState(today2);
     return c.json({ ok: true, checked: todo.length, changed, left: state.stale, lastSync: at });
   });
   app.get("/api/b2b/brands", async (c) => {
