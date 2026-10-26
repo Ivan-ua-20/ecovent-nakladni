@@ -107,4 +107,15 @@ r = await req('POST', '/api/b2b/price-changes/send', { partner_ids: [pa.id] });
 assert.equal(r.results[0].sent, false);
 assert.equal((await req('GET', '/api/b2b/price-changes')).find((x) => x.id === pa.id).empty, false);
 
+// ---------- Повторне «Оновити з LP-CRM» того ж дня підтягує нові РРЦ ----------
+PRICES[11] = '1111.00';
+await req('POST', '/api/b2b/catalog/sync');
+assert.equal((await req('GET', '/api/b2b/p/catalog', null, A)).products.find((p) => p.id === 11).rrp, 1000, 'без run — товар уже перевірено сьогодні');
+const sr = await req('POST', '/api/b2b/catalog/sync', { run: new Date().toISOString() });
+assert.equal(sr.changed, 1);
+assert.equal(sr.left, 0);
+const u2 = (await req('GET', '/api/b2b/p/catalog', null, A)).products.find((p) => p.id === 11);
+assert.deepEqual([u2.rrp, u2.price], [1111, 888.8]);
+assert.equal((await req('POST', '/api/b2b/catalog/sync', { run: new Date(Date.now() - 1000).toISOString() })).checked, 0, 'той самий запуск — без повторів');
+
 console.log('OK — B2B: розсилка змін цін і каталог партнера з категоріями та знижкою');

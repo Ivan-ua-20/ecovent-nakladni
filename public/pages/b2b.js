@@ -468,10 +468,13 @@ export function createB2bPages(ctx = {}) {
   async function syncCatalog(btn, done = viewCatalog) {
     btn.disabled = true;
     try {
+      const run = new Date().toISOString(); // перечитати всі товари, навіть якщо сьогодні вже оновлювали
+      let changed = 0;
       for (let i = 0; i < 100; i++) {
         btn.innerHTML = `<span class="spinner"></span> Оновлюю з LP-CRM…`;
-        const r = await api('POST', '/api/b2b/catalog/sync');
-        if (!r.left || !r.checked) { toast(`Каталог оновлено${r.changed ? ` · змінилися ціни: ${r.changed}` : ''}`); break; }
+        const r = await api('POST', '/api/b2b/catalog/sync', { run });
+        changed += r.changed || 0;
+        if (!r.left || !r.checked) { toast(`Каталог оновлено${changed ? ` · змінилися ціни: ${changed}` : ''}`); break; }
       }
     } catch (e) { toast(e.message, true); }
     btn.disabled = false;

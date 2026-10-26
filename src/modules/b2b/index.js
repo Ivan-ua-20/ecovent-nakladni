@@ -390,8 +390,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     return c.json({ rows: rows.map((r) => ({ ...r, brand: names.get(r.brand_id) || 'Інші' })), state });
   });
 
-  async function catalogState() {
-    const today = kyivDay();
+  async function catalogState(today = kyivDay()) {
     const [last, left] = await Promise.all([
       db.get(`SELECT value FROM settings WHERE key = 'b2b_catalog_sync'`),
       db.get(`SELECT COUNT(*) AS n FROM b2b_catalog WHERE hidden = 0 AND checked_at < ? AND (manual = 1 OR brand_id IN (SELECT brand_id FROM b2b_margins))`, [today]),
@@ -419,12 +418,17 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   });
 
   // Оновлення каталогу з LP-CRM: назва, РРЦ, фото — для товарів увімкнених брендів і доданих вручну.
-  // Частинами (≤ 12 запитів за звернення); браузер повторює, доки left > 0. Кожен товар — раз на добу.
+  // Частинами (≤ 12 запитів за звернення); браузер повторює, доки left > 0. run — час натискання «Оновити»:
+  // перечитуються всі товари, не перевірені після нього (раніше — раз на добу, і зміни РРЦ того ж дня не підтягувались).
   app.post('/api/b2b/catalog/sync', async (c) => {
     need(c, 'b2b.admin');
     const s = await loadSettings(db);
     if (!s.lpcrm_subdomain || !s.lpcrm_key) throw fail(400, 'Не налаштовано LP-CRM: вкажіть піддомен і API-ключ у «Налаштуваннях».');
-    const today = kyivDay();
+    const b = await c.req.json().catch(() => ({}));
+    const run = String(b.run || '');
+    const fresh = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(run) && Math.abs(Date.now() - Date.parse(run)) < 3 * 3600 * 1000;
+    const today = fresh ? run : kyivDay();
+    const stamp = nowIso();
     // Нові товари з аналітики й актуальні бренди (бренд визначає аналітика за ключовими словами).
     await db.batch([
       [`INSERT OR IGNORE INTO b2b_catalog (product_id, name, brand_id) SELECT product_id, COALESCE(name, ''), brand_id FROM an_products WHERE product_id > 0`, []],
@@ -445,11 +449,11 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
       const st = [];
       for (const r of part) {
         const p = got.get(r.product_id);
-        if (!p) { st.push([`UPDATE b2b_catalog SET checked_at = ? WHERE product_id = ?`, [today, r.product_id]]); continue; }
+        if (!p) { st.push([`UPDATE b2b_catalog SET checked_at = ? WHERE product_id = ?`, [stamp, r.product_id]]); continue; }
         const rrp = round2(num(p.price));
         const vendor = p.vendor && p.vendor !== 'Артикул' ? p.vendor : '';
         st.push([`UPDATE b2b_catalog SET name = ?, article = ?, rrp = ?, image = ?, checked_at = ? WHERE product_id = ?`,
-          [String(p.name || p.title || '').trim().slice(0, 300), String(p.article || vendor || p.model || '').slice(0, 60), rrp, findImage(p), today, r.product_id]]);
+          [String(p.name || p.title || '').trim().slice(0, 300), String(p.article || vendor || p.model || '').slice(0, 60), rrp, findImage(p), stamp, r.product_id]]);
         if (r.rrp > 0 && rrp > 0 && Math.abs(rrp - r.rrp) >= 0.005) {
           st.push([`INSERT INTO b2b_price_log (at, product_id, old_rrp, new_rrp) VALUES (?, ?, ?, ?)`, [at, r.product_id, r.rrp, rrp]]);
           changed++;
@@ -458,7 +462,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
       await db.batch(st);
     }
     await db.run(`INSERT INTO settings (key, value) VALUES ('b2b_catalog_sync', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [at]);
-    const state = await catalogState();
+    const state = await catalogState(today);
     return c.json({ ok: true, checked: todo.length, changed, left: state.stale, lastSync: at });
   });
 
