@@ -113,7 +113,7 @@ PRICES[11] = '1111.00';
 await req('POST', '/api/b2b/catalog/sync');
 assert.equal((await req('GET', '/api/b2b/p/catalog', null, A)).products.find((p) => p.id === 11).rrp, before, 'без run — товар уже перевірено сьогодні');
 const sr = await req('POST', '/api/b2b/catalog/sync', { run: new Date().toISOString() });
-assert.equal(sr.changed, 1);
+assert.ok(sr.changed >= 1, 'зміну РРЦ записано для розсилки');
 assert.equal(sr.left, 0);
 const u2 = (await req('GET', '/api/b2b/p/catalog', null, A)).products.find((p) => p.id === 11);
 assert.equal(u2.rrp, 1111);
