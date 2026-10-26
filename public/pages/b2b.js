@@ -14,7 +14,7 @@ export function createB2bPages(ctx = {}) {
     if (id) return viewPartner(id);
     const rows = await api('GET', '/api/b2b/partners');
     main.innerHTML = `
-      <div class="head-row"><h2>B2B партнери</h2><button class="btn primary" id="pNew">+ Новий партнер</button></div>
+      <div class="head-row"><h2>B2B партнери</h2><div class="btn-row"><button class="btn" id="pAnn">📢 Оголошення партнерам</button><button class="btn primary" id="pNew">+ Новий партнер</button></div></div>
       <div class="alert info" style="margin-bottom:14px">Партнер бачить лише свій кабінет: каталог увімкнених йому брендів з РРЦ і своєю ціною (РРЦ − маржа).
         За замовчуванням партнер не бачить жодного бренду — увімкніть бренди й задайте маржу в картці партнера.</div>
       ${rows.length ? `<table class="list"><thead><tr><th>Партнер</th><th class="hide-m">Контакти</th><th class="r">Борг</th><th class="r hide-m">Користувачі</th><th class="r hide-m">Бренди</th><th>Стан</th></tr></thead><tbody>
@@ -31,6 +31,7 @@ export function createB2bPages(ctx = {}) {
         : '<div class="card empty"><div class="big">Партнерів ще немає</div>Створіть першого партнера, додайте йому користувача і ввімкніть бренди.</div>'}`;
     $$('[data-p]').forEach((tr) => (tr.onclick = () => { location.hash = `#/b2bpartners/${tr.dataset.p}`; }));
     $('#pNew').onclick = () => partnerForm(null);
+    $('#pAnn').onclick = () => announce();
   }
 
   function partnerForm(p) {
@@ -234,6 +235,61 @@ export function createB2bPages(ctx = {}) {
     });
   }
 
+  // ---------------------------------------------------------------- оголошення партнерам
+  // Довільний текст обраним партнерам: у їхні Telegram-групи та/або особисто в бот.
+  async function announce() {
+    const rows = await api('GET', '/api/b2b/announce/targets');
+    if (!rows.length) { toast('Немає активних партнерів', true); return; }
+    const m = modal('Оголошення партнерам', `<div class="form-stack">
+        <label class="f"><span>Текст</span><textarea id="anText" rows="6" maxlength="3500" placeholder="Напр.: з 1 листопада знижка 5% на бренд …"></textarea></label>
+        <div class="small muted"><span id="anLen">0</span> / 3500 · надійде з позначкою 📢</div>
+        <div class="f"><span>Куди надсилати</span>
+          <label class="check"><input type="checkbox" id="anGroups" checked> У Telegram-групи партнерів</label>
+          <label class="check"><input type="checkbox" id="anUsers"> Особисто в бот (користувачам партнера)</label></div>
+        <div class="f"><span>Партнери</span>
+          <label class="check"><input type="checkbox" id="anAll" checked> <b>Усі</b></label>
+          ${rows.map((r) => `<label class="check"><input type="checkbox" data-an="${r.id}" checked> ${esc(r.name)} <span class="small muted">— ${r.group ? `група «${esc(r.group)}»` : 'групу не прив’язано'} · у боті: ${r.tgUsers}</span></label>`).join('')}</div>
+        <div class="small" id="anInfo"></div>
+      </div>`,
+    { wide: true, footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="anSend">Надіслати</button>' });
+    const boxes = () => $$('[data-an]', m.el);
+    const chosen = () => rows.filter((r) => boxes().some((x) => x.checked && Number(x.dataset.an) === r.id));
+    const info = () => {
+      const g = $('#anGroups', m.el).checked;
+      const u = $('#anUsers', m.el).checked;
+      const list = chosen();
+      const none = list.filter((r) => !(g && r.group) && !(u && r.tgUsers));
+      $('#anInfo', m.el).innerHTML = `Обрано: ${list.length} · груп: ${g ? list.filter((r) => r.group).length : 0} · людей у боті: ${u ? list.reduce((t, r) => t + r.tgUsers, 0) : 0}`
+        + (none.length ? `<div class="muted">Не отримають (немає куди): ${none.map((r) => esc(r.name)).join(', ')}</div>` : '');
+      $('#anLen', m.el).textContent = $('#anText', m.el).value.length;
+    };
+    $('#anAll', m.el).onchange = (e) => { boxes().forEach((x) => (x.checked = e.target.checked)); info(); };
+    boxes().forEach((x) => (x.onchange = () => { $('#anAll', m.el).checked = boxes().every((y) => y.checked); info(); }));
+    ['#anGroups', '#anUsers'].forEach((sel) => ($(sel, m.el).onchange = info));
+    $('#anText', m.el).oninput = info;
+    info();
+    $('#anSend', m.el).onclick = async (e) => {
+      const text = $('#anText', m.el).value.trim();
+      const groups = $('#anGroups', m.el).checked;
+      const users = $('#anUsers', m.el).checked;
+      const list = chosen().filter((r) => (groups && r.group) || (users && r.tgUsers));
+      if (!text) { toast('Напишіть текст оголошення', true); return; }
+      if (!groups && !users) { toast('Оберіть, куди надсилати', true); return; }
+      if (!list.length) { toast('Нікому надсилати — у обраних партнерів немає ні групи, ні бота', true); return; }
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      let ok = 0;
+      const failed = [];
+      for (const [i, r] of list.entries()) {
+        btn.innerHTML = `<span class="spinner"></span> ${i + 1} / ${list.length}`;
+        try { const x = await api('POST', '/api/b2b/announce', { partner_id: r.id, text, groups, users }); if (x.group || x.users) ok++; else failed.push(r.name); }
+        catch { failed.push(r.name); }
+      }
+      toast(`Надіслано партнерам: ${ok} з ${list.length}${failed.length ? ` · не вдалося: ${failed.join(', ')}` : ''}`, failed.length > 0);
+      m.close();
+    };
+  }
+
   // ---------------------------------------------------------------- каталог
   let catFilter = { brand: '', q: '' };
   async function syncCatalog(btn, done = viewCatalog) {
@@ -253,7 +309,7 @@ export function createB2bPages(ctx = {}) {
     const qs = new URLSearchParams(Object.entries(catFilter).filter(([, v]) => v !== '')).toString();
     const [{ rows, state }, brands] = await Promise.all([api('GET', `/api/b2b/catalog${qs ? `?${qs}` : ''}`), api('GET', '/api/b2b/brands')]);
     main.innerHTML = `
-      <div class="head-row"><h2>Каталог і ціни</h2><div class="btn-row"><button class="btn" id="cAdd">+ Товари за ID</button><button class="btn" id="cSend">Надіслати зміни цін</button><button class="btn primary" id="cSync">Оновити з LP-CRM</button></div></div>
+      <div class="head-row"><h2>Каталог і ціни</h2><div class="btn-row"><button class="btn" id="cAdd">+ Товари за ID</button><button class="btn" id="cSend">Надіслати зміни цін</button><button class="btn" id="cAnn">📢 Оголошення</button><button class="btn primary" id="cSync">Оновити з LP-CRM</button></div></div>
       <div class="alert info" style="margin-bottom:14px">Товари — з аналітики (усе, що продавалося) і додані вручну за ID з LP-CRM. Назва, РРЦ і фото оновлюються з LP-CRM
         для брендів, увімкнених хоча б одному партнеру. ${state.lastSync ? `Останнє оновлення: ${esc(fmtDateTime(state.lastSync))}.` : 'Ще не оновлювався.'}
         ${state.stale ? `<b>Чекають оновлення: ${state.stale}.</b>` : ''}</div>
@@ -275,6 +331,7 @@ export function createB2bPages(ctx = {}) {
     $('#cQ').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { catFilter.q = e.target.value.trim(); viewCatalog(); }, 400); };
     $('#cSync').onclick = (e) => syncCatalog(e.currentTarget);
     $('#cSend').onclick = () => sendPrices();
+    $('#cAnn').onclick = () => announce();
     $$('[data-vis]').forEach((cb) => (cb.onchange = async () => {
       try { await api('PUT', `/api/b2b/catalog/${cb.dataset.vis}`, { hidden: !cb.checked }); toast(cb.checked ? 'Товар показується партнерам' : 'Товар приховано від партнерів'); }
       catch (e) { toast(e.message, true); cb.checked = !cb.checked; }
