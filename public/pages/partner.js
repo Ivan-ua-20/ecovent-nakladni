@@ -234,7 +234,9 @@ export function createPartnerPages(ctx = {}) {
 
   async function viewOrder(id) {
     const { order: o, items, files, history, clients = [], left = [] } = await api('GET', `/api/b2b/p/orders/${id}`);
-    const editable = o.status === 'invoice_wait' && canEdit();
+    const isDraft = o.status === 'draft';
+    const editable = ['invoice_wait', 'draft'].includes(o.status) && canEdit();
+    const head = ctx.can ? ctx.can('b2b.team') : true;
     const pickup = o.delivery === 'pickup';
     const hasLeft = !pickup && !['cancelled', 'open'].includes(o.status) && left.some((r) => r.left > 0);
     const ob = o.status === 'open' ? await openBanner() : { html: '', wire: () => {} };
@@ -242,7 +244,10 @@ export function createPartnerPages(ctx = {}) {
       ${ob.html}
       <div class="head-row"><h2>Закупівля ${esc(o.number)} ${statusBadge(o)}</h2>
         <div class="btn-row"><a class="btn" href="#/porders">← До списку</a>
-          ${editable ? `<a class="btn" href="#/porders/${o.id}/edit">Змінити</a><button class="btn danger" id="oCancel">Скасувати</button>` : ''}</div></div>
+          ${isDraft && head ? '<button class="btn primary" id="oSend">Відправити закупівлю</button>' : ''}
+          ${editable ? `<a class="btn" href="#/porders/${o.id}/edit">Змінити</a><button class="btn danger" id="oCancel">${isDraft ? 'Видалити чернетку' : 'Скасувати'}</button>` : ''}</div></div>
+      ${isDraft ? `<div class="alert warn" style="margin-bottom:12px"><b>Чернетка</b> — її бачить лише ваша команда, нам вона ще не надійшла.
+        Менеджери додають товари (у «Нова закупівля» → «Додати до чернетки» або «Змінити»), ${head ? 'а ви натискаєте «Відправити закупівлю», коли все зібрано.' : 'а керівник вашої команди відправляє її нам.'}</div>` : ''}
       <div class="form-page">
         <div class="form-stack">
           <div class="card">${itemsTable(items)}</div>
@@ -271,8 +276,17 @@ export function createPartnerPages(ctx = {}) {
       </div>`;
     ob.wire(() => viewOrder(o.id));
     $('#oCancel') && ($('#oCancel').onclick = async () => {
+      if (isDraft) {
+        if (!(await confirmDanger(`Видалити чернетку ${o.number}?`, 'Товари з неї буде видалено; нам вона не надходила.', 'Видалити чернетку'))) return;
+        try { await api('POST', `/api/b2b/p/orders/${o.id}/cancel`); toast('Чернетку видалено'); location.hash = '#/porders'; } catch (e) { toast(e.message, true); }
+        return;
+      }
       if (!(await confirmDanger(`Скасувати закупівлю ${o.number}?`, 'Замовлення буде скасовано, менеджер отримає сповіщення.', 'Скасувати закупівлю'))) return;
       try { await api('POST', `/api/b2b/p/orders/${o.id}/cancel`); toast('Скасовано'); viewOrder(o.id); } catch (e) { toast(e.message, true); }
+    });
+    $('#oSend') && ($('#oSend').onclick = async () => {
+      if (!(await confirmDanger(`Відправити закупівлю ${o.number} на ${uah(o.total)}?`, 'Ми підготуємо рахунок на вибрану юрособу; змінити закупівлю можна, доки рахунку немає.', 'Відправити закупівлю'))) return;
+      try { await api('POST', `/api/b2b/p/orders/${o.id}/send`); toast(`Закупівлю ${o.number} відправлено`); viewOrder(o.id); } catch (e) { toast(e.message, true); }
     });
   }
 
@@ -281,7 +295,10 @@ export function createPartnerPages(ctx = {}) {
     const [{ products, brands }, entities, cur] = await Promise.all([
       api('GET', '/api/b2b/p/catalog'), api('GET', '/api/b2b/p/entities'), id ? api('GET', `/api/b2b/p/orders/${id}`) : null,
     ]);
-    if (cur && cur.order.status !== 'invoice_wait') { location.hash = `#/porders/${id}`; return; }
+    if (cur && !['invoice_wait', 'draft'].includes(cur.order.status)) { location.hash = `#/porders/${id}`; return; }
+    const head = ctx.can ? ctx.can('b2b.team') : true;
+    // Чернетки команди: нову закупівлю можна додати до наявної чернетки (кількості сумуються).
+    const drafts = id ? [] : (await api('GET', '/api/b2b/p/orders?status=draft').catch(() => ({ rows: [] }))).rows || [];
     const qty = new Map((cur?.items || []).map((i) => [i.product_id, i.qty]));
     let fb = '';
     let fq = '';
@@ -310,9 +327,12 @@ export function createPartnerPages(ctx = {}) {
               <label class="check"><input type="radio" name="ofDel" value="pickup" ${cur?.order.delivery === 'pickup' ? 'checked' : ''}> Самовивіз — забираю всю закупівлю зі складу</label></div>
             <label class="f"><span>Рахунок виставити на</span><select id="ofEnt">${entities.map((e) => `<option value="${e.id}" ${String(cur?.order.entity_id) === String(e.id) ? 'selected' : ''}>${esc(e.name)} (${esc(e.code)})</option>`).join('')}</select></label>
             <label class="f"><span>Коментар</span><textarea id="ofComment" rows="2">${esc(cur?.order.comment || '')}</textarea></label>
-            <button class="btn primary" id="ofSave">${id ? 'Зберегти зміни' : 'Оформити закупівлю'}</button>
-            <div class="small muted">Після оформлення бухгалтер підготує рахунок — він з’явиться в закупівлі, а вам прийде повідомлення в Telegram.
-              Доки рахунку немає, замовлення можна змінити або скасувати.</div>
+            ${drafts.length ? `<label class="f"><span>Чернетка</span><select id="ofDraft"><option value="">Нова закупівля</option>
+              ${drafts.map((d) => `<option value="${d.id}">Додати до чернетки ${esc(d.number)} (${uah(d.total)}, ${esc(d.created_by || '')})</option>`).join('')}</select></label>` : ''}
+            ${id ? `<button class="btn primary" id="ofSave">Зберегти зміни</button>`
+              : `${head ? '<button class="btn primary" id="ofSave">Оформити закупівлю</button>' : ''}<button class="btn ${head ? '' : 'primary'}" id="ofDraftSave">${head ? 'Зберегти як чернетку' : 'Зберегти в чернетку'}</button>`}
+            <div class="small muted">${head ? 'Після оформлення бухгалтер підготує рахунок — він з’явиться в закупівлі, а вам прийде повідомлення в Telegram. Доки рахунку немає, замовлення можна змінити або скасувати. Чернетку бачить лише ваша команда — її відправляєте ви.'
+              : 'Закупівля зберігається в чернетку вашої команди — її відправляє нам керівник. Кілька менеджерів можуть додавати товари в одну чернетку.'}</div>
           </div>
         </div>
       </div>`;
@@ -338,16 +358,24 @@ export function createPartnerPages(ctx = {}) {
     };
     $$('[data-fb]').forEach((b) => (b.onclick = () => { fb = b.dataset.fb; $$('[data-fb]').forEach((x) => x.classList.toggle('on', x === b)); draw(); }));
     $('#ofQ').oninput = (e) => { fq = e.target.value.trim(); draw(); };
-    $('#ofSave').onclick = async () => {
+    const submit = async (draft) => {
       const items = [...qty].filter(([, q]) => q > 0).map(([product_id, q]) => ({ product_id, qty: q }));
       if (!items.length) { toast('Вкажіть кількість хоча б одного товару', true); return; }
       const body = { entity_id: Number($('#ofEnt').value), items, comment: $('#ofComment').value, delivery: $('input[name="ofDel"]:checked')?.value || 'np' };
-      $('#ofSave').disabled = true;
+      const toDraft = draft && $('#ofDraft')?.value ? Number($('#ofDraft').value) : 0;
+      $$('#ofSave, #ofDraftSave').forEach((b) => { b.disabled = true; });
       try {
         if (id) { await api('PUT', `/api/b2b/p/orders/${id}`, body); toast('Зміни збережено'); location.hash = `#/porders/${id}`; }
-        else { const r = await api('POST', '/api/b2b/p/orders', body); toast(`Закупівлю ${r.number} оформлено`); location.hash = `#/porders/${r.id}`; }
-      } catch (e) { toast(e.message, true); $('#ofSave').disabled = false; }
+        else {
+          const r = await api('POST', '/api/b2b/p/orders', { ...body, draft, to_draft: toDraft || undefined });
+          toast(r.draft ? (toDraft ? `Товари додано до чернетки ${r.number}` : `Чернетку ${r.number} збережено`) : `Закупівлю ${r.number} оформлено`);
+          location.hash = `#/porders/${r.id}`;
+        }
+      } catch (e) { toast(e.message, true); $$('#ofSave, #ofDraftSave').forEach((b) => { b.disabled = false; }); }
     };
+    $('#ofSave') && ($('#ofSave').onclick = () => submit(false));
+    $('#ofDraftSave') && ($('#ofDraftSave').onclick = () => submit(true));
+    $('#ofDraft') && ($('#ofDraft').onchange = (e) => { if ($('#ofSave')) $('#ofSave').hidden = !!e.target.value; });
     draw();
     sum();
   }

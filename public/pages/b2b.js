@@ -315,7 +315,8 @@ export function createB2bPages(ctx = {}) {
     const { order: o, items, files, history, partner, clients = [] } = d;
     const closed = o.status === 'cancelled';
     main.innerHTML = `
-      <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2borders">← До списку</a><button class="btn danger" id="oDel">Видалити</button></div></div>
+      <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2borders">← До списку</a>${o.status === 'draft' ? '<button class="btn primary" id="oSendDraft">Відправити закупівлю</button>' : ''}<button class="btn danger" id="oDel">Видалити</button></div></div>
+      ${o.status === 'draft' ? '<div class="alert warn" style="margin-bottom:12px"><b>Чернетка партнера</b> — команда партнера ще збирає товари. Відправити її (як від партнера) може керівник партнера або ви.</div>' : ''}
       <div class="form-page">
         <div class="form-stack">
           <div class="card">${itemsTable(items, { rrp: true })}</div>
@@ -387,6 +388,10 @@ export function createB2bPages(ctx = {}) {
       try { await api('DELETE', `/api/b2b/files/${b.dataset.fdel}`); toast('Видалено'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
     }));
     if ($('#oPays')) loadPays(o);
+    if ($('#oSendDraft')) $('#oSendDraft').onclick = async () => {
+      if (!(await confirmDanger(`Відправити чернетку ${o.number}?`, 'Вона стане закупівлею «Очікує рахунок»: прийдуть сповіщення, у «Фінансових питаннях» — запит рахунку.', 'Відправити закупівлю'))) return;
+      try { await api('POST', `/api/b2b/orders/${o.id}/send`); toast('Закупівлю відправлено'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
+    };
     if ($('#oDel')) $('#oDel').onchange = async (e) => {
       try { await api('POST', `/api/b2b/orders/${o.id}/delivery`, { delivery: e.target.value }); toast('Спосіб отримання змінено — партнеру надіслано повідомлення'); viewOrder(o.id); }
       catch (er) { toast(er.message, true); e.target.value = o.delivery; }
