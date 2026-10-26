@@ -509,6 +509,7 @@ export function createB2bPages(ctx = {}) {
       progress(done, r.left || 0);
       if (!r.left || !r.checked) break;
     }
+    items.checked = done;
     return items;
   }
   // «Оновити з LP-CRM»: якщо РРЦ змінилися (або є неразіслані зміни знижок) — одразу вікно зі списком і розсилкою.
@@ -519,7 +520,11 @@ export function createB2bPages(ctx = {}) {
       const items = await crmRefresh((n, left) => { btn.innerHTML = `<span class="spinner"></span> Оновлюю з LP-CRM… ${n}${left ? ` / ${n + left}` : ''}`; });
       btn.disabled = false;
       done();
-      if (!(await priceModal({ items, quiet: true }))) toast('Каталог оновлено — ціни не змінились');
+      if (!(await priceModal({ items, quiet: true }))) {
+        modal('Оновлення з LP-CRM', `<div class="form-stack"><div style="font-size:16px"><b>✅ Змін цін не було</b></div>
+          <div class="small muted">Перевірено товарів: ${items.checked || 0}. РРЦ у LP-CRM ті самі, що й у каталозі; розсилати партнерам нічого.</div></div>`,
+        { footer: '<button class="btn primary" data-close>Зрозуміло</button>' });
+      }
       return;
     } catch (e) { toast(e.message, true); }
     btn.disabled = false;
