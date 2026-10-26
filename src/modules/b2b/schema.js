@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 20,
+  version: 21,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -237,6 +237,9 @@ export const schema = {
     ['b2b_orders', 'pay_days', 'INTEGER DEFAULT 0'],
     ['b2b_orders', 'due_date', "TEXT DEFAULT ''"],
     ['b2b_orders', 'due_notified', "TEXT DEFAULT ''"],
+    // Пауза партнера: кабінет доступний, нові закупівлі й замовлення — ні; причина показується партнеру.
+    ['b2b_partners', 'paused', 'INTEGER DEFAULT 0'],
+    ['b2b_partners', 'pause_note', "TEXT DEFAULT ''"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ['b2b_tg_docs', 'source', "TEXT DEFAULT 'private'"],
     ['b2b_tg_docs', 'reply_to', 'INTEGER'],

@@ -2,6 +2,7 @@
 // закупівлі (рахунок, накладна, файли), замовлення клієнтів партнерів (передача в LP-CRM).
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
+import { downloadXlsx } from '../core/xlsx.js';
 import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar } from './b2b-shared.js';
 
 const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
@@ -10,29 +11,195 @@ export function createB2bPages(ctx = {}) {
   // Додавати, змінювати й видаляти людей (користувачів партнерів) і партнерів — лише з правом «people».
   const people = () => !ctx.can || ctx.can('people');
   // ---------------------------------------------------------------- партнери
+  // Список партнерів: фільтри, пошук, галочки і групові дії (зміни цін, оголошення, пауза, ліміти, маржа, Excel, видалення).
+  const pFilter = { st: '', q: '' };
+  const P_ST = { '': 'Усі', active: 'Активні', paused: 'На паузі', debt: 'З боргом', overdue: 'Прострочено', postpay: 'З відстрочкою', off: 'Вимкнені' };
+  const pMatch = (p) => {
+    const st = pFilter.st;
+    if (st === 'active' && !(p.active && !p.paused)) return false;
+    if (st === 'paused' && !p.paused) return false;
+    if (st === 'debt' && !p.debt) return false;
+    if (st === 'overdue' && !p.debt_overdue) return false;
+    if (st === 'postpay' && !p.postpay_days) return false;
+    if (st === 'off' && p.active) return false;
+    const q = pFilter.q.trim().toLowerCase();
+    return !q || [p.name, p.phone, p.email, p.note].some((x) => String(x || '').toLowerCase().includes(q));
+  };
+  const pState = (p) => (!p.active ? '<span class="badge bad">вимкнений</span>' : p.paused ? `<span class="badge warn" title="${esc(p.pause_note || '')}">⏸ пауза</span>` : '<span class="badge ok">активний</span>');
+  const limTxt = (p) => [p.open_limit != null ? `відкр. ${money(p.open_limit)}` : '', p.unpaid_limit != null ? `неопл. ${money(p.unpaid_limit)}` : ''].filter(Boolean).join(' · ');
+
   async function viewPartners(id) {
     if (id) return viewPartner(id);
-    const rows = await api('GET', '/api/b2b/partners');
+    const all = await api('GET', '/api/b2b/partners');
+    const rows = all.filter(pMatch);
+    const cnt = (k) => { const f = pFilter.st; pFilter.st = k; const n = all.filter(pMatch).length; pFilter.st = f; return n; };
     main.innerHTML = `
       <div class="head-row"><h2>B2B партнери</h2><div class="btn-row"><button class="btn" id="pAnn">📢 Оголошення партнерам</button><button class="btn primary" id="pNew">+ Новий партнер</button></div></div>
       <div class="alert info" style="margin-bottom:14px">Партнер бачить лише свій кабінет: каталог увімкнених йому брендів з РРЦ і своєю ціною (РРЦ − маржа).
-        За замовчуванням партнер не бачить жодного бренду — увімкніть бренди й задайте маржу в картці партнера.</div>
-      ${rows.length ? `<table class="list"><thead><tr><th>Партнер</th><th class="hide-m">Контакти</th><th class="r">Борг</th><th class="r hide-m">Користувачі</th><th class="r hide-m">Бренди</th><th>Стан</th></tr></thead><tbody>
+        За замовчуванням партнер не бачить жодного бренду — увімкніть бренди й задайте маржу в картці партнера. Позначте кількох партнерів галочками — з'являться групові дії.</div>
+      ${all.length ? `<div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap">${Object.entries(P_ST).map(([k, v]) => {
+        const n = cnt(k);
+        return k && !n ? '' : `<button class="chip ${pFilter.st === k ? 'on' : ''}" data-pst="${k}">${esc(v)} <span class="muted">${n}</span></button>`;
+      }).join('')}</div>
+      <div class="btn-row" style="margin-bottom:10px"><input id="pQ" placeholder="Пошук: назва, телефон, email, примітка" value="${esc(pFilter.q)}" style="max-width:340px"></div>
+      <div id="pBulk" class="btn-row card" hidden style="position:sticky;top:8px;z-index:5;margin-bottom:10px;padding:8px 12px;flex-wrap:wrap;align-items:center"></div>` : ''}
+      ${rows.length ? `<table class="list"><thead><tr><th style="width:34px"><input type="checkbox" id="pSelAll" aria-label="Обрати всіх"></th><th>Партнер</th><th class="hide-m">Контакти</th><th class="r">Борг</th><th class="r hide-m">Користувачі</th><th class="r hide-m">Бренди</th><th>Стан</th></tr></thead><tbody>
         ${rows.map((p) => `<tr class="click" data-p="${p.id}">
-          <td><b>${esc(p.name)}</b></td>
+          <td data-nosel style="width:34px"><input type="checkbox" data-psel="${p.id}" aria-label="Обрати"></td>
+          <td><b>${esc(p.name)}</b>${limTxt(p) ? `<div class="small muted">ліміти: ${limTxt(p)}</div>` : ''}</td>
           <td class="small hide-m">${esc([p.phone, p.email].filter(Boolean).join(' · ') || '—')}</td>
           <td class="r nowrap">${p.debt ? `<b>${money(p.debt)} грн</b><div class="small muted">закупівель: ${p.debt_cnt}${p.postpay_days ? ` · відстрочка ${p.postpay_days} дн.` : ''}</div>` : `<span class="muted">—</span>${p.postpay_days ? `<div class="small muted">відстрочка ${p.postpay_days} дн.</div>` : ''}`}
             ${p.debt_overdue ? `<div><span class="badge bad">прострочено ${money(p.debt_overdue)}</span></div>` : ''}</td>
           <td class="r hide-m">${p.users}${p.users_by_partner ? `<div class="small muted">з них додав партнер: ${p.users_by_partner}</div>` : ''}</td><td class="r hide-m">${p.brands}</td>
-          <td>${p.active ? '<span class="badge ok">активний</span>' : '<span class="badge bad">вимкнений</span>'}</td>
+          <td>${pState(p)}</td>
         </tr>`).join('')}
-        <tr class="bk-total"><td><b>Усього борг</b></td><td class="hide-m"></td><td class="r nowrap"><b>${money(rows.reduce((t, p) => t + (p.debt || 0), 0))} грн</b>
+        <tr class="bk-total"><td></td><td><b>Усього борг</b></td><td class="hide-m"></td><td class="r nowrap"><b>${money(rows.reduce((t, p) => t + (p.debt || 0), 0))} грн</b>
           ${rows.some((p) => p.debt_overdue) ? `<div><span class="badge bad">прострочено ${money(rows.reduce((t, p) => t + (p.debt_overdue || 0), 0))}</span></div>` : ''}</td><td class="hide-m"></td><td class="hide-m"></td><td></td></tr></tbody></table>`
+        : all.length ? '<div class="card empty"><div class="big">Нікого не знайдено</div>Змініть фільтр або пошук.</div>'
         : '<div class="card empty"><div class="big">Партнерів ще немає</div>Створіть першого партнера, додайте йому користувача і ввімкніть бренди.</div>'}`;
     $$('[data-p]').forEach((tr) => (tr.onclick = () => { location.hash = `#/b2bpartners/${tr.dataset.p}`; }));
+    $$('[data-nosel]').forEach((td) => (td.onclick = (e) => e.stopPropagation()));
     $('#pNew').onclick = () => partnerForm(null);
     $('#pAnn').onclick = () => announce();
+    $$('[data-pst]').forEach((b) => (b.onclick = () => { pFilter.st = b.dataset.pst; viewPartners(); }));
+    let qt;
+    $('#pQ') && ($('#pQ').oninput = (e) => { clearTimeout(qt); qt = setTimeout(async () => { pFilter.q = e.target.value; await viewPartners(); const el = $('#pQ'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 300); });
+    wirePartnerBulk(rows);
   }
+
+  function wirePartnerBulk(rows) {
+    const bar = $('#pBulk');
+    if (!bar) return;
+    const sel = () => $$('[data-psel]').filter((x) => x.checked).map((x) => Number(x.dataset.psel));
+    const chosen = () => rows.filter((r) => sel().includes(r.id));
+    const actions = [
+      ['prices', '💲 Зміни цін'], ['ann', '📢 Оголошення'], ['margin', '％ Маржа'], ['limits', 'Ліміти й відстрочка'],
+      ['pause', '⏸ Пауза'], ['resume', '▶ Зняти паузу'], ['xlsx', '⬇ Excel'], ...(people() ? [['del', 'Видалити']] : []),
+    ];
+    const draw = () => {
+      const ids = sel();
+      bar.hidden = !ids.length;
+      bar.innerHTML = ids.length ? `<b>Обрано: ${ids.length}</b>${actions.map(([k, l]) => `<button class="btn sm ${k === 'del' ? 'danger' : ''}" data-pb="${k}">${esc(l)}</button>`).join('')}<button class="btn sm" data-pb="_clear">Зняти вибір</button>` : '';
+      $$('[data-pb]', bar).forEach((b) => (b.onclick = () => run(b.dataset.pb)));
+      const allBox = $('#pSelAll');
+      if (allBox) allBox.checked = ids.length && ids.length === $$('[data-psel]').length;
+    };
+    $$('[data-psel]').forEach((cb) => (cb.onchange = draw));
+    $('#pSelAll') && ($('#pSelAll').onchange = (e) => { $$('[data-psel]').forEach((x) => { x.checked = e.target.checked; }); draw(); });
+    const bulk = async (body, label) => {
+      const { results } = await api('POST', '/api/b2b/partners/bulk', { ids: sel(), ...body });
+      const bad = results.filter((r) => !r.ok);
+      const changed = results.filter((r) => r.ok && r.changed).length;
+      toast(`${label}: змінено ${changed} з ${results.length}${bad.length ? ` · помилки: ${bad.length}` : ''}`, bad.length > 0);
+      if (bad.length) modal('Не вдалося для частини партнерів', `<div class="form-stack small">${bad.map((r) => `<div><b>${esc(r.name)}</b>: ${esc(r.error)}</div>`).join('')}</div>`, { footer: '<button class="btn primary" data-close>Зрозуміло</button>' });
+      viewPartners();
+    };
+    async function run(k) {
+      const ids = sel();
+      if (k === '_clear') { $$('[data-psel]').forEach((x) => { x.checked = false; }); draw(); return; }
+      if (k === 'prices') return sendPrices(ids);
+      if (k === 'ann') return announce(ids);
+      if (k === 'xlsx') return partnersXlsx(chosen());
+      if (k === 'resume') return bulk({ action: 'resume' }, 'Паузу знято');
+      if (k === 'pause') return pauseForm(ids.length, (note) => bulk({ action: 'pause', note }, 'Пауза'));
+      if (k === 'limits') return bulkLimitsForm(ids.length, (body) => bulk({ action: 'limits', ...body }, 'Ліміти'));
+      if (k === 'margin') return bulkMarginForm(ids.length, (body) => bulk({ action: 'margin', ...body }, 'Маржа'));
+      if (k === 'del') {
+        const list = chosen();
+        if (!(await confirmDanger(`Видалити партнерів: ${list.length}?`, `${list.map((r) => r.name).join(', ')}. Їхні користувачі втратять доступ, бренди й маржа видаляться; замовлення лишаться в архіві.`, `Видалити ${list.length}`))) return;
+        const fails = [];
+        for (const r of list) { try { await api('DELETE', `/api/b2b/partners/${r.id}`); } catch (e) { fails.push(`${r.name}: ${e.message}`); } }
+        toast(`Видалено: ${list.length - fails.length} з ${list.length}`, fails.length > 0);
+        viewPartners();
+      }
+    }
+    draw();
+  }
+
+  function pauseForm(n, done, note = '') {
+    const m = modal(n === 1 ? 'Поставити партнера на паузу' : `Пауза для партнерів: ${n}`, `<div class="form-stack">
+        <div class="small muted">На паузі партнер бачить кабінет, свої закупівлі й замовлення, може завантажувати документи, але не може створювати нові закупівлі й замовлення клієнтів і відправляти чернетки.</div>
+        <label class="f"><span>Причина (бачить партнер, необов'язково)</span><input id="pzNote" maxlength="300" value="${esc(note)}" placeholder="Напр.: до оплати прострочених рахунків"></label></div>`,
+    { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="pzOk">Поставити на паузу</button>' });
+    $('#pzOk', m.el).onclick = async () => { m.close(); await done($('#pzNote', m.el).value.trim()); };
+  }
+
+  // Ліміти групою: порожнє поле — не змінювати; «типовий» — скинути до типового.
+  function bulkLimitsForm(n, done) {
+    const fld = (k, label, hint) => `<div class="f"><span>${label}</span><div class="btn-row" style="flex-wrap:nowrap">
+        <select data-lm="${k}" style="max-width:170px"><option value="keep">не змінювати</option><option value="set">задати</option><option value="default">${k === 'postpay_limit' ? 'без ліміту' : k === 'postpay_days' ? 'вимкнути' : 'типовий'}</option></select>
+        <input data-lv="${k}" inputmode="decimal" placeholder="${hint}" disabled></div></div>`;
+    const m = modal(`Ліміти й відстрочка — партнерів: ${n}`, `<div class="form-stack">
+        ${fld('open_limit', 'Ліміт відкритої закупівлі, грн', 'типово 20 000')}
+        ${fld('unpaid_limit', 'Ліміт неоплачених закупівель, грн', 'типово 100 000')}
+        ${fld('postpay_days', 'Відстрочка оплати, днів', '0–180')}
+        ${fld('postpay_limit', 'Ліміт відстрочки, грн', 'напр. 50 000')}
+        <div class="small muted">Змінюються лише поля з «задати» / «${'типовий'}». Кожна зміна записується в історію партнера.</div></div>`,
+    { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="lmOk">Застосувати</button>' });
+    $$('[data-lm]', m.el).forEach((s) => (s.onchange = () => { const i = $(`[data-lv="${s.dataset.lm}"]`, m.el); i.disabled = s.value !== 'set'; if (!i.disabled) i.focus(); }));
+    $('#lmOk', m.el).onclick = async () => {
+      const body = {};
+      for (const s of $$('[data-lm]', m.el)) {
+        const k = s.dataset.lm;
+        if (s.value === 'keep') continue;
+        const v = $(`[data-lv="${k}"]`, m.el).value.trim();
+        if (s.value === 'set' && !v) { toast('Вкажіть значення або оберіть «не змінювати»', true); return; }
+        body[k] = s.value === 'default' ? (k === 'postpay_days' ? 0 : '') : v;
+      }
+      if (!Object.keys(body).length) { toast('Нічого не обрано', true); return; }
+      m.close();
+      await done(body);
+    };
+  }
+
+  // Маржа групою: бренд (усі увімкнені або конкретний) і дія — задати %, додати/відняти п.п., вимкнути бренд.
+  async function bulkMarginForm(n, done) {
+    const brands = await api('GET', '/api/b2b/brands');
+    const m = modal(`Маржа — партнерів: ${n}`, `<div class="form-stack">
+        <label class="f"><span>Бренд</span><select id="mgBrand"><option value="all">Усі бренди, увімкнені партнеру</option>${brands.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select></label>
+        <div class="f"><span>Дія</span>
+          <label class="check"><input type="radio" name="mgMode" value="set" checked> Задати маржу, %</label>
+          <label class="check"><input type="radio" name="mgMode" value="add"> Змінити на ± п.п. (напр. 2 або -1,5)</label>
+          <label class="check"><input type="radio" name="mgMode" value="disable"> Вимкнути бренд</label></div>
+        <label class="f" id="mgValWrap"><span>Значення</span><input id="mgVal" inputmode="decimal" placeholder="напр. 20"></label>
+        <label class="check" id="mgEnWrap" hidden><input type="checkbox" id="mgEnable"> Увімкнути бренд тим, у кого він вимкнений</label>
+        <div class="small muted">Партнер отримає нові ціни, коли ви натиснете «Зміни цін» (усі зміни потрапляють у розсилку змін цін).</div></div>`,
+    { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="mgOk">Застосувати</button>' });
+    const sync = () => {
+      const mode = $('input[name="mgMode"]:checked', m.el).value;
+      const brand = $('#mgBrand', m.el).value;
+      $('#mgValWrap', m.el).hidden = mode === 'disable';
+      $('#mgEnWrap', m.el).hidden = !(mode === 'set' && brand !== 'all');
+      const dis = $('input[name="mgMode"][value="disable"]', m.el);
+      dis.disabled = brand === 'all';
+      if (dis.disabled && dis.checked) { $('input[name="mgMode"][value="set"]', m.el).checked = true; sync(); }
+    };
+    $('#mgBrand', m.el).onchange = sync;
+    $$('input[name="mgMode"]', m.el).forEach((r) => (r.onchange = sync));
+    sync();
+    $('#mgOk', m.el).onclick = async () => {
+      const mode = $('input[name="mgMode"]:checked', m.el).value;
+      const value = $('#mgVal', m.el).value.trim();
+      if (mode !== 'disable' && !value) { toast('Вкажіть значення', true); return; }
+      const brand = $('#mgBrand', m.el).value;
+      const bname = $('#mgBrand', m.el).selectedOptions[0].textContent;
+      const what = mode === 'disable' ? `вимкнути «${bname}»` : mode === 'set' ? `маржа ${value}% — ${brand === 'all' ? 'усі увімкнені бренди' : `«${bname}»`}` : `маржа ${Number(value.replace(',', '.')) > 0 ? '+' : ''}${value} п.п. — ${brand === 'all' ? 'усі увімкнені бренди' : `«${bname}»`}`;
+      if (!(await confirmDanger(`Застосувати для ${n} партнерів?`, what, 'Застосувати'))) return;
+      m.close();
+      await done({ brand, mode, value, enable: $('#mgEnable', m.el).checked });
+    };
+  }
+
+  function partnersXlsx(list) {
+    downloadXlsx(`partnery-${new Date().toISOString().slice(0, 10)}.xlsx`, [{ name: 'Партнери', cols: [
+      { title: 'Партнер', width: 28 }, { title: 'Телефон', width: 16 }, { title: 'Email', width: 24 }, { title: 'Стан', width: 12 },
+      { title: 'Борг, грн', width: 14, fmt: 'money' }, { title: 'Прострочено, грн', width: 16, fmt: 'money' }, { title: 'Закупівель у боргу', width: 12 },
+      { title: 'Відстрочка, дн.', width: 12 }, { title: 'Ліміт відстрочки', width: 14, fmt: 'money' }, { title: 'Ліміт відкритої', width: 14, fmt: 'money' },
+      { title: 'Ліміт неоплачених', width: 14, fmt: 'money' }, { title: 'Користувачі', width: 10 }, { title: 'Бренди', width: 10 }, { title: 'Примітка', width: 30 },
+    ], rows: list.map((p) => [p.name, p.phone || '', p.email || '', !p.active ? 'вимкнений' : p.paused ? 'пауза' : 'активний',
+      p.debt || 0, p.debt_overdue || 0, p.debt_cnt || 0, p.postpay_days || 0, p.postpay_limit ?? '', p.open_limit ?? '', p.unpaid_limit ?? '', p.users, p.brands, p.note || '']) }]);
+  }
+
 
   function partnerForm(p) {
     const isNew = !p;
@@ -74,8 +241,8 @@ export function createB2bPages(ctx = {}) {
     const { partner: p, users, brands, entities = [], roles = {}, limits, postpay, debt } = await api('GET', `/api/b2b/partners/${id}`);
     const byPartner = users.filter((u) => u.added_by_partner).length;
     main.innerHTML = `
-      <div class="head-row"><h2>${esc(p.name)} ${p.active ? '' : '<span class="badge bad">вимкнений</span>'}</h2>
-        <div class="btn-row"><a class="btn" href="#/b2bpartners">← До списку</a><button class="btn" id="pEdit">Змінити</button>${people() ? '<button class="btn danger" id="pDel">Видалити</button>' : ''}</div></div>
+      <div class="head-row"><h2>${esc(p.name)} ${p.active ? '' : '<span class="badge bad">вимкнений</span>'}${p.paused ? ' <span class="badge warn">⏸ пауза</span>' : ''}</h2>
+        <div class="btn-row"><a class="btn" href="#/b2bpartners">← До списку</a><button class="btn" id="pEdit">Змінити</button><button class="btn" id="pPause">${p.paused ? '▶ Зняти паузу' : '⏸ Пауза'}</button>${people() ? '<button class="btn danger" id="pDel">Видалити</button>' : ''}</div></div>
       <div class="form-page">
         <div class="form-stack">
           <div class="card form-stack">
@@ -197,6 +364,11 @@ export function createB2bPages(ctx = {}) {
       };
     };
     $('#uNew') && ($('#uNew').onclick = () => userForm(null));
+    $('#pPause').onclick = () => {
+      const save = async (body) => { try { await api('PUT', `/api/b2b/partners/${p.id}`, { name: p.name, ...body }); toast(body.paused ? 'Партнера поставлено на паузу' : 'Паузу знято'); viewPartner(p.id); } catch (e) { toast(e.message, true); } };
+      if (p.paused) save({ paused: 0 });
+      else pauseForm(1, (note) => save({ paused: 1, pause_note: note }));
+    };
     $('#pDel') && ($('#pDel').onclick = async () => {
       if (!(await confirmDanger(`Видалити партнера «${p.name}»?`,
         `Усі його користувачі (${users.length}) втратять доступ, бренди й маржа видаляться. Якщо в партнера є замовлення — вони залишаться в списках закупівель і замовлень клієнтів (архів).`,
@@ -209,14 +381,14 @@ export function createB2bPages(ctx = {}) {
 
   // ---------------------------------------------------------------- розсилка змін цін
   // Перегляд: хто що отримає і куди (група партнера або його користувачі), потім «Надіслати».
-  async function sendPrices() {
+  async function sendPrices(only = null) {
     const rows = await api('GET', '/api/b2b/price-changes');
     const withCh = rows.filter((r) => !r.empty);
     const dest = (r) => (r.group ? `група «${esc(r.group)}»` : r.tgUsers ? `особисто: ${r.tgUsers} корист.` : '<span class="badge bad">нікому — немає Telegram</span>');
     const m = modal('Надіслати зміни цін партнерам', withCh.length ? `<div class="form-stack">
         <div class="small muted">Зміни РРЦ і знижок з минулої розсилки кожному партнеру. Оновіть каталог з LP-CRM перед розсилкою, щоб РРЦ були свіжі.</div>
         ${withCh.map((r) => `<div class="card form-stack" style="padding:10px 12px">
-          <label class="check"><input type="checkbox" data-pp="${r.id}" ${r.group || r.tgUsers ? 'checked' : 'disabled'}> <b>${esc(r.name)}</b> — товарів: ${r.products}${r.brands ? `, брендів: ${r.brands}` : ''} → ${dest(r)}</label>
+          <label class="check"><input type="checkbox" data-pp="${r.id}" ${!(r.group || r.tgUsers) ? 'disabled' : !only || only.includes(r.id) ? 'checked' : ''}> <b>${esc(r.name)}</b> — товарів: ${r.products}${r.brands ? `, брендів: ${r.brands}` : ''} → ${dest(r)}</label>
           <details><summary class="small">Переглянути повідомлення</summary>${r.preview.map((t) => `<pre class="small" style="white-space:pre-wrap;margin:6px 0">${t}</pre>`).join('')}</details>
         </div>`).join('')}
         ${rows.length > withCh.length ? `<div class="small muted">Без змін: ${rows.filter((r) => r.empty).map((r) => esc(r.name)).join(', ')}</div>` : ''}
@@ -237,8 +409,9 @@ export function createB2bPages(ctx = {}) {
 
   // ---------------------------------------------------------------- оголошення партнерам
   // Довільний текст обраним партнерам: у їхні Telegram-групи та/або особисто в бот.
-  async function announce() {
+  async function announce(only = null) {
     const rows = await api('GET', '/api/b2b/announce/targets');
+    const on = (id) => !only || only.includes(id);
     if (!rows.length) { toast('Немає активних партнерів', true); return; }
     const m = modal('Оголошення партнерам', `<div class="form-stack">
         <label class="f"><span>Текст</span><textarea id="anText" rows="6" maxlength="3500" placeholder="Напр.: з 1 листопада знижка 5% на бренд …"></textarea></label>
@@ -247,8 +420,8 @@ export function createB2bPages(ctx = {}) {
           <label class="check"><input type="checkbox" id="anGroups" checked> У Telegram-групи партнерів</label>
           <label class="check"><input type="checkbox" id="anUsers"> Особисто в бот (користувачам партнера)</label></div>
         <div class="f"><span>Партнери</span>
-          <label class="check"><input type="checkbox" id="anAll" checked> <b>Усі</b></label>
-          ${rows.map((r) => `<label class="check"><input type="checkbox" data-an="${r.id}" checked> ${esc(r.name)} <span class="small muted">— ${r.group ? `група «${esc(r.group)}»` : 'групу не прив’язано'} · у боті: ${r.tgUsers}</span></label>`).join('')}</div>
+          <label class="check"><input type="checkbox" id="anAll" ${rows.every((r) => on(r.id)) ? 'checked' : ''}> <b>Усі</b></label>
+          ${rows.map((r) => `<label class="check"><input type="checkbox" data-an="${r.id}" ${on(r.id) ? 'checked' : ''}> ${esc(r.name)} <span class="small muted">— ${r.group ? `група «${esc(r.group)}»` : 'групу не прив’язано'} · у боті: ${r.tgUsers}</span></label>`).join('')}</div>
         <div class="small" id="anInfo"></div>
       </div>`,
     { wide: true, footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="anSend">Надіслати</button>' });

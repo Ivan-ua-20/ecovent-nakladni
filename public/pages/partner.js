@@ -36,15 +36,19 @@ export function createPartnerPages(ctx = {}) {
   const cliFilter = { status: '', q: '', from: '', to: '', pay: '' };
   const filter = { brand: '', q: '', cat: '', sort: 'brand' };
 
+  // Пауза: нові закупівлі й замовлення тимчасово недоступні (ставить менеджер).
+  const pauseHtml = (lim) => (lim?.paused ? `<div class="alert bad" style="margin-bottom:12px"><b>⏸ Нові закупівлі й замовлення тимчасово призупинено</b>${lim.paused.note ? ` — ${esc(lim.paused.note)}` : ''}. Зверніться до менеджера.</div>` : '');
+
   // ---------------------------------------------------------------- відкрита закупівля (замовлення без закупівлі)
   // Червоний банер на всю ширину: сума відкритої закупівлі, ліміт, вибір юрособи і «Сформувати рахунок».
   async function openBanner() {
     const [lim, entities] = await Promise.all([api('GET', '/api/b2b/p/limits'), canEdit() ? api('GET', '/api/b2b/p/entities') : []]);
     const o = lim.open;
+    const pz = pauseHtml(lim);
     const unpaidLine = `<div class="small" style="margin-top:6px">Неоплачені закупівлі: <b>${uah(lim.unpaid.total)}</b> з ліміту ${uah(lim.unpaid.limit)}</div>`;
-    if (!o.id) return { html: lim.unpaid.total ? `<div class="small muted" style="margin-bottom:10px">Неоплачені закупівлі: ${uah(lim.unpaid.total)} з ліміту ${uah(lim.unpaid.limit)}</div>` : '', wire: () => {} };
+    if (!o.id) return { html: pz + (lim.unpaid.total ? `<div class="small muted" style="margin-bottom:10px">Неоплачені закупівлі: ${uah(lim.unpaid.total)} з ліміту ${uah(lim.unpaid.limit)}</div>` : ''), wire: () => {} };
     const full = o.total >= o.limit - 0.01;
-    const html = `<div class="alert bad open-banner" style="margin-bottom:12px">
+    const html = `${pz}<div class="alert bad open-banner" style="margin-bottom:12px">
         <div style="font-size:17px"><b>🔴 Закупівля не оплачена</b> — відкрита закупівля <a href="#/porders/${o.id}">${esc(o.number)}</a>:
           <b>${uah(o.total)}</b> з ліміту ${uah(o.limit)} · замовлень без закупівлі: ${o.orders}</div>
         <div class="small" style="margin:4px 0 8px">${full ? '<b>Ліміт вичерпано — нові замовлення без закупівлі неможливі.</b> ' : ''}Оберіть, на кого виставити рахунок, і сформуйте його — після цього можна продовжувати.</div>
@@ -238,8 +242,8 @@ export function createPartnerPages(ctx = {}) {
     const [{ rows, statuses }, lim] = await Promise.all([api('GET', `/api/b2b/p/orders${qs ? `?${qs}` : ''}`), api('GET', '/api/b2b/p/limits').catch(() => null)]);
     const debt = lim?.debt;
     main.innerHTML = `
-      <div class="head-row"><h2>Закупівлі</h2>${canEdit() ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div>
-      ${debt?.total ? `<div class="alert ${debt.overdue ? 'bad' : 'info'}" style="margin-bottom:10px">До оплати: <b>${uah(debt.total)}</b> за ${debt.rows.length} ${debt.rows.length === 1 ? 'закупівлею' : 'закупівлями'}${debt.overdue ? ` · <b>прострочено ${uah(debt.overdue)}</b> — оплатіть, будь ласка` : ''}
+      <div class="head-row"><h2>Закупівлі</h2>${canEdit() && !lim?.paused ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div>
+      ${pauseHtml(lim)}${debt?.total ? `<div class="alert ${debt.overdue ? 'bad' : 'info'}" style="margin-bottom:10px">До оплати: <b>${uah(debt.total)}</b> за ${debt.rows.length} ${debt.rows.length === 1 ? 'закупівлею' : 'закупівлями'}${debt.overdue ? ` · <b>прострочено ${uah(debt.overdue)}</b> — оплатіть, будь ласка` : ''}
         ${lim.postpay?.days ? `<div class="small">Відстрочка оплати: ${lim.postpay.days} дн. від дати рахунку${lim.postpay.limit != null ? ` · використано ${uah(lim.postpay.used)} з ${uah(lim.postpay.limit)}` : ''}</div>` : ''}</div>` : ''}
       <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap"><button class="chip ${supFilter.status ? '' : 'on'}" data-pst="">Усі</button>
         ${Object.entries(statuses).map(([k, v]) => `<button class="chip ${supFilter.status === k ? 'on' : ''}" data-pst="${k}">${esc(v)}</button>`).join('')}</div>
