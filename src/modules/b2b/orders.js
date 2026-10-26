@@ -363,6 +363,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       unpaid: { total: await unpaidTotal(p.id), limit: lim.unpaid },
       postpay: await postpayInfo(p),
       debt: await debtOf(p.id),
+      paused: p.paused ? { note: p.pause_note || '' } : null,
     });
   });
 

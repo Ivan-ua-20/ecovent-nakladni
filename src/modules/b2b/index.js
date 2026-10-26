@@ -54,6 +54,11 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   app.use('/api/b2b/p/*', async (c, next) => {
     const u = c.get('user');
     if (u?.role === 'partner' && c.req.method !== 'GET' && !can(u, 'b2b.order')) throw fail(403, 'У вас доступ лише на перегляд. Зверніться до керівника вашої команди.');
+    // Пауза: нові закупівлі, замовлення клієнтів і відправлення чернеток заблоковані.
+    if (u?.role === 'partner' && c.req.method === 'POST' && /^\/api\/b2b\/p\/(orders|clients|orders\/\d+\/send)\/?$/.test(c.req.path)) {
+      const p = await db.get(`SELECT paused, pause_note FROM b2b_partners WHERE id = ?`, [u.partner_id]);
+      if (p?.paused) throw fail(403, `Нові закупівлі й замовлення тимчасово призупинено${p.pause_note ? `: ${p.pause_note}` : ''}. Зверніться до менеджера.`);
+    }
     await next();
   });
 
@@ -140,21 +145,17 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     return c.json({ ok: true, archived: !!hasOrders });
   });
 
-  app.put('/api/b2b/partners/:id', async (c) => {
-    need(c, 'b2b.admin');
-    const p = await getPartner(c.req.param('id'));
-    const b = await c.req.json();
-    const f = { ...partnerFields({ ...p, ...b }) };
-    if (!f.name) throw fail(400, 'Вкажіть назву партнера.');
-    const active = b.active === undefined ? p.active : (b.active ? 1 : 0);
-    // Ліміти: відкрита закупівля (замовлення без закупівлі) і всі неоплачені закупівлі; порожньо — типові 20 000 / 100 000.
-    // Відстрочка оплати: днів (0 — лише передоплата) і ліміт (порожньо — без окремого ліміту).
+  // Ліміти: відкрита закупівля (замовлення без закупівлі) і всі неоплачені закупівлі; порожньо — типові 20 000 / 100 000.
+  // Відстрочка оплати: днів (0 — лише передоплата) і ліміт (порожньо — без окремого ліміту). undefined — не змінювати.
+  async function applyLimits(c, p, b) {
+    const st = [];
+    const log = [];
     if (b.postpay_days !== undefined) {
       const v = parseInt(b.postpay_days, 10) || 0;
       if (v < 0 || v > 180) throw fail(400, 'Відстрочка — від 0 до 180 днів.');
       if (v !== (Number(p.postpay_days) || 0)) {
-        await db.run(`UPDATE b2b_partners SET postpay_days = ? WHERE id = ?`, [v, p.id]);
-        await audit(c, p.id, v ? `відстрочка оплати: ${v} дн.` : 'відстрочку оплати вимкнено');
+        st.push([`UPDATE b2b_partners SET postpay_days = ? WHERE id = ?`, [v, p.id]]);
+        log.push(v ? `відстрочка оплати: ${v} дн.` : 'відстрочку оплати вимкнено');
       }
     }
     for (const [k, label] of [['open_limit', 'відкритої закупівлі'], ['unpaid_limit', 'неоплачених закупівель'], ['postpay_limit', 'відстрочки']]) {
@@ -164,10 +165,34 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
       const v = raw ? round2(num(raw)) : null;
       if (v !== null && !(v >= 0 && v <= 100000000)) throw fail(400, `Ліміт ${label} — сума в гривнях.`);
       if (v !== (p[k] ?? null)) {
-        await db.run(`UPDATE b2b_partners SET ${k} = ? WHERE id = ?`, [v, p.id]);
-        await audit(c, p.id, `ліміт ${label}: ${p[k] ?? 'типовий'} → ${v ?? 'типовий'}`);
+        st.push([`UPDATE b2b_partners SET ${k} = ? WHERE id = ?`, [v, p.id]]);
+        log.push(`ліміт ${label}: ${p[k] ?? 'типовий'} → ${v ?? 'типовий'}`);
       }
     }
+    if (st.length) await db.batch(st);
+    for (const x of log) await audit(c, p.id, x);
+    return log.length;
+  }
+  // Пауза: партнер бачить кабінет, але не створює нових закупівель і замовлень клієнтів (причину бачить у кабінеті).
+  async function applyPause(c, p, b) {
+    if (b.paused === undefined) return 0;
+    const v = b.paused ? 1 : 0;
+    const note = v ? String(b.pause_note ?? p.pause_note ?? '').trim().slice(0, 300) : '';
+    if (v === (Number(p.paused) || 0) && note === (p.pause_note || '')) return 0;
+    await db.run(`UPDATE b2b_partners SET paused = ?, pause_note = ? WHERE id = ?`, [v, note, p.id]);
+    await audit(c, p.id, v ? `партнера поставлено на паузу${note ? `: ${note}` : ''}` : 'паузу знято');
+    return 1;
+  }
+
+  app.put('/api/b2b/partners/:id', async (c) => {
+    need(c, 'b2b.admin');
+    const p = await getPartner(c.req.param('id'));
+    const b = await c.req.json();
+    const f = { ...partnerFields({ ...p, ...b }) };
+    if (!f.name) throw fail(400, 'Вкажіть назву партнера.');
+    const active = b.active === undefined ? p.active : (b.active ? 1 : 0);
+    await applyLimits(c, p, b);
+    await applyPause(c, p, b);
     await db.run(`UPDATE b2b_partners SET name = ?, phone = ?, email = ?, note = ?, active = ? WHERE id = ?`, [f.name, f.phone, f.email, f.note, active, p.id]);
     // Вимкнений партнер не може входити (усі його користувачі вимикаються разом із ним; вмикаються окремо).
     if (!active && p.active) {
@@ -178,6 +203,83 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     }
     if (active !== p.active) await audit(c, p.id, active ? 'партнера увімкнено' : 'партнера вимкнено');
     return c.json({ ok: true });
+  });
+
+  // Записати бренди й маржу: build(cur) повертає нову Map brand → margin (відсутні — вимикаються). Журнал — для розсилки змін цін.
+  async function applyMargins(c, p, build, names = null) {
+    const cur = new Map((await db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id])).map((x) => [x.brand_id, x.margin]));
+    const next = build(cur);
+    names = names || await brandNames();
+    const at = nowIso();
+    const st = [];
+    const changes = [];
+    for (const [brand, margin] of next) {
+      if (cur.get(brand) === margin) continue;
+      st.push([`INSERT INTO b2b_margins (partner_id, brand_id, margin) VALUES (?, ?, ?) ON CONFLICT(partner_id, brand_id) DO UPDATE SET margin = excluded.margin`, [p.id, brand, margin]]);
+      st.push([`INSERT INTO b2b_margin_log (at, partner_id, brand_id, old_margin, new_margin) VALUES (?, ?, ?, ?, ?)`, [at, p.id, brand, cur.has(brand) ? cur.get(brand) : null, margin]]);
+      changes.push({ field: names.get(brand) || `бренд ${brand}`, from: cur.has(brand) ? `${cur.get(brand)}%` : 'вимкнено', to: `${margin}%` });
+    }
+    for (const [brand, margin] of cur) {
+      if (next.has(brand)) continue;
+      st.push([`DELETE FROM b2b_margins WHERE partner_id = ? AND brand_id = ?`, [p.id, brand]]);
+      st.push([`INSERT INTO b2b_margin_log (at, partner_id, brand_id, old_margin, new_margin) VALUES (?, ?, ?, ?, NULL)`, [at, p.id, brand, margin]]);
+      changes.push({ field: names.get(brand) || `бренд ${brand}`, from: `${margin}%`, to: 'вимкнено' });
+    }
+    if (st.length) await db.batch(st);
+    if (changes.length) await audit(c, p.id, `бренди й маржа партнера «${p.name}»`, changes);
+    return changes;
+  }
+
+  // ---------- групові дії над партнерами ----------
+  // action: pause | resume | limits | margin. Для margin: brand — 'all' (усі увімкнені бренди партнера) або id;
+  // mode: set (задати %), add (додати/відняти п.п.), disable (вимкнути бренд). enable — увімкнути бренд, де він вимкнений (для set з конкретним брендом).
+  app.post('/api/b2b/partners/bulk', async (c) => {
+    need(c, 'b2b.admin');
+    const b = await c.req.json().catch(() => ({}));
+    const ids = [...new Set((Array.isArray(b.ids) ? b.ids : []).map(Number).filter((x) => x > 0))];
+    if (!ids.length) throw fail(400, 'Оберіть партнерів.');
+    if (ids.length > 200) throw fail(400, 'Не більше 200 партнерів за раз.');
+    const list = await db.all(`SELECT * FROM b2b_partners WHERE COALESCE(deleted_at, '') = '' AND id IN (SELECT value FROM json_each(?))`, [JSON.stringify(ids)]);
+    let margin = null;
+    if (b.action === 'margin') {
+      const mode = ['set', 'add', 'disable'].includes(b.mode) ? b.mode : '';
+      if (!mode) throw fail(400, 'Оберіть дію з маржею.');
+      const brand = b.brand === 'all' ? 'all' : parseInt(b.brand, 10);
+      if (brand !== 'all' && !(brand >= 0)) throw fail(400, 'Оберіть бренд.');
+      const v = round2(num(b.value));
+      if (mode === 'set' && (v < 0 || v >= 100)) throw fail(400, 'Маржа — від 0 до 99,99 %.');
+      if (mode === 'add' && (!v || Math.abs(v) >= 100)) throw fail(400, 'Вкажіть, на скільки змінити маржу (напр. 2 або -1,5).');
+      if (mode === 'disable' && brand === 'all') throw fail(400, 'Вимикати можна конкретний бренд.');
+      margin = { mode, brand, v, enable: !!b.enable && brand !== 'all' && mode === 'set' };
+    } else if (!['pause', 'resume', 'limits'].includes(b.action)) throw fail(400, 'Невідома дія.');
+    const names = await brandNames();
+    const results = [];
+    for (const p of list) {
+      try {
+        let changed = 0;
+        if (b.action === 'pause') changed = await applyPause(c, p, { paused: 1, pause_note: b.note ?? '' });
+        else if (b.action === 'resume') changed = await applyPause(c, p, { paused: 0 });
+        else if (b.action === 'limits') {
+          const f = {};
+          for (const k of ['open_limit', 'unpaid_limit', 'postpay_days', 'postpay_limit']) if (b[k] !== undefined && b[k] !== null) f[k] = b[k];
+          changed = await applyLimits(c, p, f);
+        } else {
+          const { mode, brand, v, enable } = margin;
+          changed = (await applyMargins(c, p, (cur) => {
+            const next = new Map(cur);
+            const targets = brand === 'all' ? [...cur.keys()] : (cur.has(brand) || enable ? [brand] : []);
+            for (const id of targets) {
+              if (mode === 'disable') next.delete(id);
+              else if (mode === 'set') next.set(id, v);
+              else next.set(id, Math.min(99.99, Math.max(0, round2((cur.get(id) || 0) + v))));
+            }
+            return next;
+          }, names)).length;
+        }
+        results.push({ id: p.id, name: p.name, ok: true, changed });
+      } catch (e) { results.push({ id: p.id, name: p.name, ok: false, error: e.message }); }
+    }
+    return c.json({ results });
   });
 
   // Бренди й маржа: тіло — [{ brand_id, margin }] для всіх увімкнених брендів (решта вимикаються).
@@ -194,25 +296,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
       if (margin < 0 || margin >= 100) throw fail(400, 'Маржа — від 0 до 99,99 %.');
       next.set(brand, margin);
     }
-    const cur = new Map((await db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id])).map((x) => [x.brand_id, x.margin]));
-    const names = await brandNames();
-    const at = nowIso();
-    const st = [];
-    const changes = [];
-    for (const [brand, margin] of next) {
-      if (cur.get(brand) === margin) continue;
-      st.push([`INSERT INTO b2b_margins (partner_id, brand_id, margin) VALUES (?, ?, ?) ON CONFLICT(partner_id, brand_id) DO UPDATE SET margin = excluded.margin`, [p.id, brand, margin]]);
-      st.push([`INSERT INTO b2b_margin_log (at, partner_id, brand_id, old_margin, new_margin) VALUES (?, ?, ?, ?, ?)`, [at, p.id, brand, cur.has(brand) ? cur.get(brand) : null, margin]]);
-      changes.push({ field: names.get(brand) || `бренд ${brand}`, from: cur.has(brand) ? `${cur.get(brand)}%` : 'вимкнено', to: `${margin}%` });
-    }
-    for (const [brand, margin] of cur) {
-      if (next.has(brand)) continue;
-      st.push([`DELETE FROM b2b_margins WHERE partner_id = ? AND brand_id = ?`, [p.id, brand]]);
-      st.push([`INSERT INTO b2b_margin_log (at, partner_id, brand_id, old_margin, new_margin) VALUES (?, ?, ?, ?, NULL)`, [at, p.id, brand, margin]]);
-      changes.push({ field: names.get(brand) || `бренд ${brand}`, from: `${margin}%`, to: 'вимкнено' });
-    }
-    await db.batch(st);
-    if (changes.length) await audit(c, p.id, `бренди й маржа партнера «${p.name}»`, changes);
+    const changes = await applyMargins(c, p, () => next);
     return c.json({ ok: true, changed: changes.length });
   });
 
