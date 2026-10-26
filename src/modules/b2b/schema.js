@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 19,
+  version: 20,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -230,6 +230,13 @@ export const schema = {
     ['b2b_orders', 'delivery', "TEXT DEFAULT 'np'"],
     // Документ партнера (kind = 'doc'): вид документа з b2b_doc_types.
     ['b2b_files', 'doc_type', 'INTEGER'],
+    // Відстрочка оплати: партнеру — дні й ліміт (задає адмін); закупівлі — умови, дні, строк і останнє нагадування.
+    ['b2b_partners', 'postpay_days', 'INTEGER DEFAULT 0'],
+    ['b2b_partners', 'postpay_limit', 'REAL'],
+    ['b2b_orders', 'pay_terms', "TEXT DEFAULT 'prepay'"],
+    ['b2b_orders', 'pay_days', 'INTEGER DEFAULT 0'],
+    ['b2b_orders', 'due_date', "TEXT DEFAULT ''"],
+    ['b2b_orders', 'due_notified', "TEXT DEFAULT ''"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ['b2b_tg_docs', 'source', "TEXT DEFAULT 'private'"],
     ['b2b_tg_docs', 'reply_to', 'INTEGER'],

@@ -7,7 +7,7 @@
 // Ліміт неоплачених закупівель (unpaid_limit, типово 100 000): понад нього нові закупівлі й поповнення відкритої — ні.
 import { fail, need, nowIso, round2 } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
-import { listFilter } from './filters.js';
+import { listFilter, kyivDayOf } from './filters.js';
 import { pdfText, parseNpLabel } from '../../integrations/pdftext.js';
 import { can } from '../../core/auth.js';
 
@@ -43,6 +43,13 @@ export const limitsOf = (p) => ({
   unpaid: Number(p?.unpaid_limit) > 0 ? Number(p.unpaid_limit) : DEFAULT_LIMITS.unpaid,
 });
 const UNPAID = `('open', 'invoice_wait', 'pay_wait', 'partial')`;
+// Борг партнера: рахунок виставлено, а оплати (повної) ще немає.
+export const DEBT = `('pay_wait', 'partial')`;
+const today = () => kyivDayOf(new Date().toISOString());
+const addDaysTo = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+// Скільки днів прострочено (0 — не прострочено або вже оплачено).
+export const overdueDays = (o) => (o.due_date && ['pay_wait', 'partial'].includes(o.status) && o.due_date < today()
+  ? Math.round((Date.parse(`${today()}T12:00:00Z`) - Date.parse(`${o.due_date}T12:00:00Z`)) / 86400000) : 0);
 // «Закрито»: усі товари закупівлі розписано на замовлення клієнтів (не скасовані) — залишку немає.
 export const CLOSED_SQL = `(o.kind = 'supply' AND o.status NOT IN ('open', 'cancelled', 'draft')
   AND EXISTS (SELECT 1 FROM b2b_order_items i WHERE i.order_id = o.id)
@@ -72,6 +79,25 @@ const fromB64 = (s) => Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0));
 const userName = (u) => u?.name || u?.login || '';
 
 export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup, hooks = {} }) {
+  // Нагадування про відстрочку: за день до строку і при простроченні (потім — раз на тиждень). Партнеру й адмінам.
+  onCleanup(async () => {
+    const t = today();
+    const rows = await db.all(`SELECT o.*, p.name AS partner FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id
+      WHERE o.kind = 'supply' AND o.status IN ${DEBT} AND o.due_date != '' AND o.due_date <= ? LIMIT 50`, [addDaysTo(t, 1)]);
+    for (const o of rows) {
+      const left = round2(o.total - o.paid_amount);
+      const late = overdueDays(o);
+      const last = String(o.due_notified || '');
+      let text = '';
+      if (!late && o.due_date > t && last !== 'pre') text = `⏰ <b>Завтра строк оплати</b> закупівлі ${orderNo(o.id)}${o.invoice_no ? ` (рахунок № ${h(o.invoice_no)})` : ''}: ${uah(left)}`;
+      else if (late && (!last.startsWith('over:') || addDaysTo(last.slice(5), 7) <= t)) text = `🔴 <b>Прострочено оплату</b> закупівлі ${orderNo(o.id)}${o.invoice_no ? ` (рахунок № ${h(o.invoice_no)})` : ''} на ${late} дн.: ${uah(left)}`;
+      if (!text) continue;
+      await db.run(`UPDATE b2b_orders SET due_notified = ? WHERE id = ?`, [late ? `over:${t}` : 'pre', o.id]);
+      await tgPartner(o.partner_id, text);
+      await tgAdmins(`${text} — «${h(o.partner)}»`);
+    }
+  });
+
   // Файли старші за 30 днів видаляються (номери рахунків і накладних у замовленні лишаються).
   onCleanup(async () => {
     const border = new Date(Date.now() - KEEP_FILES_DAYS * 86400000).toISOString();
@@ -98,7 +124,8 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (items.length > 60) lines.push(`…і ще ${items.length - 60} поз.`);
     return `${title} <b>${orderNo(o.id)}</b> від «${h(p.name)}»\n\n`
       + `<b>Рахунок і накладна на:</b>\n${h(o.entity || '—')}\n`
-      + `<b>Доставка:</b> ${o.delivery === 'pickup' ? '🚗 <b>САМОВИВІЗ</b> — партнер забирає всю закупівлю зі складу' : 'відправка клієнтам (Нова пошта)'}\n\n`
+      + `<b>Доставка:</b> ${o.delivery === 'pickup' ? '🚗 <b>САМОВИВІЗ</b> — партнер забирає всю закупівлю зі складу' : 'відправка клієнтам (Нова пошта)'}\n`
+      + `${o.pay_terms === 'postpay' ? `<b>Оплата:</b> ⏳ <b>ВІДСТРОЧКА ${o.pay_days} дн.</b> від дати рахунку\n` : ''}\n`
       + `<b>Товари:</b>\n${lines.join('\n')}\n\n<b>Разом: ${uah(o.total)}</b> (з ПДВ)`
       + `${o.comment ? `\n\n<i>Коментар: ${h(String(o.comment).slice(0, 300))}</i>` : ''}`;
   };
@@ -230,23 +257,26 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const e = await myEntity(p, b.entity_id);
     const items = await priceItems(p, b.items);
     const total = totalOf(items);
-    if (!draft) await checkUnpaid(p, total);
+    const terms = termsOf(b);
+    if (terms === 'postpay' && !(Number(p.postpay_days) > 0)) throw fail(403, 'Відстрочку оплати вам ще не відкрито — зверніться до менеджера.');
+    if (!draft) await checkTerms(p, terms, total);
+    const payDays = terms === 'postpay' ? Number(p.postpay_days) : 0;
     const now = nowIso();
     if (draft) {
       const r = await db.run(
-        `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery) VALUES (?, 'supply', 'draft', ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery)],
+        `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery), terms, payDays],
       );
       await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r.lastId, now, userName(c.get('user')), `створено чернетку на ${uah(total)}`]]]);
       return c.json({ id: r.lastId, number: orderNo(r.lastId), total, draft: true });
     }
     const r = await db.run(
-      `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery)],
+      `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery), terms, payDays],
     );
     await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
       [r.lastId, now, userName(c.get('user')), `оформлено закупівлю на ${uah(total)}${deliveryOf(b.delivery) === 'pickup' ? ' (самовивіз)' : ''}`]]]);
-    const full = orderText('🆕 Нова закупівля', { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery) }, p, items);
+    const full = orderText('🆕 Нова закупівля', { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), pay_terms: terms, pay_days: payDays }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${r.lastId}`)}`);
     await tgGroup(p.id, full);
     await hooks.finRequest?.(r.lastId).catch(() => 0); // запит рахунку в групу «Фінансові питання»
@@ -254,10 +284,36 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   });
 
   // ---------------------------------------------------------------- ліміти й відкрита закупівля
+  // Неоплачені закупівлі з передоплатою (з відстрочкою — окремий ліміт відстрочки).
   async function unpaidTotal(partnerId, exceptId = 0) {
-    const r = await db.get(`SELECT COALESCE(SUM(total - paid_amount), 0) AS t FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status IN ${UNPAID} AND id != ?`, [partnerId, exceptId]);
+    const r = await db.get(`SELECT COALESCE(SUM(total - paid_amount), 0) AS t FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status IN ${UNPAID}
+      AND COALESCE(pay_terms, 'prepay') != 'postpay' AND id != ?`, [partnerId, exceptId]);
     return round2(r?.t || 0);
   }
+  // Відстрочка оплати: дозволена, якщо адмін задав партнеру кількість днів; ліміт (порожньо — без окремого ліміту);
+  // з простроченою оплатою — нових закупівель з відстрочкою не можна.
+  async function postpayInfo(p, exceptId = 0) {
+    const days = Number(p.postpay_days) || 0;
+    const [used, overdue] = await Promise.all([
+      db.get(`SELECT COALESCE(SUM(total - paid_amount), 0) AS t FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status IN ${UNPAID}
+        AND pay_terms = 'postpay' AND id != ?`, [p.id, exceptId]),
+      db.all(`SELECT id, total, paid_amount, due_date, status FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status IN ${DEBT}
+        AND due_date != '' AND due_date < ?`, [p.id, today()]),
+    ]);
+    return { days, limit: Number(p.postpay_limit) > 0 ? Number(p.postpay_limit) : null, used: round2(used?.t || 0),
+      overdue: overdue.map((o) => ({ id: o.id, number: orderNo(o.id), due: round2(o.total - o.paid_amount), due_date: o.due_date, days: overdueDays(o) })) };
+  }
+  async function checkTerms(p, terms, total, exceptId = 0) {
+    if (terms !== 'postpay') return checkUnpaid(p, total, exceptId);
+    const pi = await postpayInfo(p, exceptId);
+    if (!pi.days) throw fail(403, 'Відстрочку оплати вам ще не відкрито — зверніться до менеджера.');
+    if (pi.overdue.length) throw fail(400, `Є прострочена оплата (${pi.overdue.map((x) => x.number).join(', ')}) — нові закупівлі з відстрочкою після її оплати.`);
+    if (pi.limit != null && pi.used + total > pi.limit + 0.004) {
+      throw fail(400, `Ліміт відстрочки — ${uah(pi.limit)}: зараз за відстрочкою ${uah(pi.used)}, нова сума ${uah(total)}.`);
+    }
+    return null;
+  }
+  const termsOf = (b, o = null) => (b.pay_terms === undefined ? (o?.pay_terms === 'postpay' ? 'postpay' : 'prepay') : (b.pay_terms === 'postpay' ? 'postpay' : 'prepay'));
   // Нова сума неоплачених закупівель (exceptId — закупівля, що змінюється) не має перевищити ліміт партнера.
   async function checkUnpaid(p, addTotal, exceptId = 0) {
     const lim = limitsOf(p).unpaid;
@@ -265,6 +321,13 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (cur + addTotal > lim + 0.004) {
       throw fail(400, `Ліміт неоплачених закупівель — ${uah(lim)}: зараз неоплачено ${uah(cur)}, нова сума ${uah(addTotal)}. Спершу оплатіть закупівлі або зверніться до менеджера.`);
     }
+  }
+  // Заборгованість партнера: закупівлі з рахунком без повної оплати — сума, оплачено, залишок, строк, прострочення.
+  async function debtOf(partnerId) {
+    const rows = await db.all(`SELECT id, status, total, paid_amount, invoice_no, invoice_date, due_date, pay_terms, created_at FROM b2b_orders
+      WHERE partner_id = ? AND kind = 'supply' AND status IN ${DEBT} ORDER BY COALESCE(NULLIF(due_date, ''), invoice_date, created_at), id`, [partnerId]);
+    const list = rows.map((o) => ({ ...o, number: orderNo(o.id), due: round2(o.total - o.paid_amount), overdue: overdueDays(o) }));
+    return { total: round2(list.reduce((t, o) => t + o.due, 0)), overdue: round2(list.filter((o) => o.overdue).reduce((t, o) => t + o.due, 0)), rows: list };
   }
   const getOpen = (partnerId) => db.get(`SELECT * FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status = 'open' ORDER BY id LIMIT 1`, [partnerId]);
   // Товари відкритої закупівлі = товари її замовлень клієнтів (без скасованих). Порожня — видаляється.
@@ -298,6 +361,8 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return c.json({
       open: { id: open?.id || null, number: open ? orderNo(open.id) : '', total: open?.total || 0, limit: lim.open, orders: cnt },
       unpaid: { total: await unpaidTotal(p.id), limit: lim.unpaid },
+      postpay: await postpayInfo(p),
+      debt: await debtOf(p.id),
     });
   });
 
@@ -331,6 +396,11 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (o.kind === 'supply' && ['partial', 'pay_wait'].includes(o.status)) out.due = round2(o.total - (o.paid_amount || 0));
     if (o.kind === 'supply' && o.status === 'partial') out.status_name = `Частково оплачено · ще ${uah(out.due)}`;
     if (o.kind === 'supply' && o.closed) { out.closed = true; out.status_name = `${out.status_name} · Закрито`; }
+    if (o.kind === 'supply') {
+      out.pay_terms = o.pay_terms === 'postpay' ? 'postpay' : 'prepay';
+      out.overdue = overdueDays(o);
+      if (out.overdue) out.status_name = `${out.status_name} · прострочено ${out.overdue} дн.`;
+    }
     if (o.kind === 'client') Object.assign(out, { no_supply: !o.supply_id || o.supply_status === 'open', open_supply: o.supply_status === 'open', pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : '' });
     return out;
   };
@@ -394,7 +464,10 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const e = await myEntity(p, b.entity_id ?? o.entity_id);
     const items = await priceItems(p, b.items);
     const total = totalOf(items);
-    if (!isDraft) await checkUnpaid(p, total, o.id);
+    const terms = termsOf(b, o);
+    if (terms === 'postpay' && !(Number(p.postpay_days) > 0)) throw fail(403, 'Відстрочку оплати вам ще не відкрито — зверніться до менеджера.');
+    if (!isDraft) await checkTerms(p, terms, total, o.id);
+    const payDays = terms === 'postpay' ? (o.pay_terms === 'postpay' && o.pay_days ? o.pay_days : Number(p.postpay_days)) : 0;
     // Не менше, ніж уже розписано на замовлення клієнтів.
     const want = new Map(items.map((i) => [i.product_id, i.qty]));
     const left = await supplyLeft(o.id);
@@ -406,12 +479,12 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, items),
-      [`UPDATE b2b_orders SET entity_id = ?, entity = ?, total = ?, comment = ?, delivery = ?, updated_at = ? WHERE id = ?`,
-        [e.id, entityText(e), total, String(b.comment ?? o.comment ?? '').trim().slice(0, 1000), delivery, nowIso(), o.id]],
+      [`UPDATE b2b_orders SET entity_id = ?, entity = ?, total = ?, comment = ?, delivery = ?, pay_terms = ?, pay_days = ?, updated_at = ? WHERE id = ?`,
+        [e.id, entityText(e), total, String(b.comment ?? o.comment ?? '').trim().slice(0, 1000), delivery, terms, payDays, nowIso(), o.id]],
     ]);
     await log(o.id, c.get('user'), `змінено ${isDraft ? 'чернетку' : 'замовлення'}: ${items.length} поз., ${uah(total)}`);
     if (isDraft) return c.json({ ok: true, total });
-    const full = orderText('✏️ Змінено закупівлю', { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment, delivery }, p, items);
+    const full = orderText('✏️ Змінено закупівлю', { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment, delivery, pay_terms: terms, pay_days: payDays }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${o.id}`)}`);
     await hooks.finRequest?.(o.id, 'changed').catch(() => 0);
     return c.json({ ok: true, total });
@@ -434,11 +507,11 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const items = await db.all(`SELECT product_id, name, article, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
     if (!items.length) throw fail(400, 'Чернетка порожня — додайте товари.');
     const e = await myEntity(p, o.entity_id).catch(() => { throw fail(400, 'Юрособу чернетки видалено — оберіть іншу («Змінити»).'); });
-    await checkUnpaid(p, o.total, o.id);
+    await checkTerms(p, o.pay_terms === 'postpay' ? 'postpay' : 'prepay', o.total, o.id);
     const claim = await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity = ?, created_at = ?, updated_at = ? WHERE id = ? AND status = 'draft'`, [entityText(e), nowIso(), nowIso(), o.id]);
     if (!claim.changes) throw fail(409, 'Чернетку вже відправлено.');
     await log(o.id, c.get('user'), `відправлено закупівлю: ${uah(o.total)}`);
-    const full = orderText('🆕 Нова закупівля', { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery }, p, items);
+    const full = orderText('🆕 Нова закупівля', { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery, pay_terms: o.pay_terms, pay_days: o.pay_days }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${o.id}`)}`);
     await tgGroup(p.id, full);
     await hooks.finRequest?.(o.id).catch(() => 0);
@@ -517,8 +590,11 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     let status = o.status;
     if (o.kind === 'supply' && next.invoice_no && status === 'invoice_wait') status = 'pay_wait';
     if (o.kind === 'supply' && !next.invoice_no && status === 'pay_wait') status = 'invoice_wait';
-    await db.run(`UPDATE b2b_orders SET invoice_no = ?, invoice_date = ?, waybill_no = ?, status = ?, updated_at = ? WHERE id = ?`,
-      [next.invoice_no, next.invoice_date, next.waybill_no, status, nowIso(), o.id]);
+    // Відстрочка: строк оплати — від дати рахунку (або від сьогодні) + днів, зафіксованих у закупівлі.
+    const dueDate = o.pay_terms === 'postpay' && next.invoice_no ? addDaysTo(next.invoice_date || today(), Number(o.pay_days) || 0) : (o.due_date || '');
+    await db.run(`UPDATE b2b_orders SET invoice_no = ?, invoice_date = ?, waybill_no = ?, status = ?, due_date = ?, updated_at = ? WHERE id = ?`,
+      [next.invoice_no, next.invoice_date, next.waybill_no, status, dueDate, nowIso(), o.id]);
+    if (dueDate && dueDate !== o.due_date) await log(o.id, user, `строк оплати (відстрочка): до ${dueDate.split('-').reverse().join('.')}`);
     const changes = [];
     if (next.invoice_no !== o.invoice_no) changes.push(`рахунок № ${next.invoice_no || '—'}${next.invoice_date ? ` від ${next.invoice_date}` : ''}`);
     if (next.waybill_no !== o.waybill_no) changes.push(`накладна № ${next.waybill_no || '—'}`);
@@ -711,5 +787,5 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return c.json({ ok: true, inCrm: o.crm_id || '' });
   });
 
-  return { labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
+  return { debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
 }

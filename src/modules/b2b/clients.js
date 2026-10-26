@@ -7,7 +7,7 @@
 // Передачу в CRM вмикає адмін у «Налаштуваннях CRM» (ID відділу + перемикач) — коли ключ LP-CRM отримає дозвіл на addNewOrder.
 import { fail, need, nowIso, loadSettings, MASK } from '../../core/common.js';
 import { addNewOrder, getOrdersBatch, getStatuses, phpSerialize, phpUrlencode } from '../../integrations/lpcrm.js';
-import { CLIENT_STATUS, ORDER_STATUS, CLOSED_SQL, payState, orderNo } from './orders.js';
+import { CLIENT_STATUS, ORDER_STATUS, CLOSED_SQL, payState, orderNo, overdueDays } from './orders.js';
 import { listFilter } from './filters.js';
 
 const CRM_REFRESH_MIN = 10;
@@ -236,9 +236,10 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
   const supplyOf = (id) => (id ? db.get(`SELECT id, status FROM b2b_orders WHERE id = ?`, [id]) : null);
   // Відвантаження без оплати (замовлення з неоплаченої закупівлі пішло в CRM) — адмінам і власнику особисто.
   async function warnUnpaidShipped(c, o) {
-    const s = await supplyOf(o.supply_id);
+    const s = o.supply_id ? await db.get(`SELECT id, status, pay_terms, due_date FROM b2b_orders WHERE id = ?`, [o.supply_id]) : null;
     const st = s?.status || '';
     if (['paid', 'done'].includes(st) || (!o.supply_id && o.paid_at)) return;
+    if (s?.pay_terms === 'postpay' && !overdueDays(s)) return; // відстрочка: відвантаження до оплати — норма
     const p = await db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [o.partner_id]);
     await tgAdmins(`⚠️ <b>Відвантаження без оплати</b>: ${orderNo(o.id)} (${h(o.client_name)}, ${uah(o.total)}) «${h(p?.name || '')}» передано в CRM, а `
       + `${!o.supply_id ? 'замовлення без закупівлі не оплачене' : st === 'open' ? `відкрита закупівля ${orderNo(o.supply_id)} ще без рахунку` : `закупівля ${orderNo(o.supply_id)} не оплачена (${ORDER_STATUS[st] || st})`}.\n${link(c, `b2bclients/${o.id}`)}`);
@@ -271,6 +272,9 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     }
     if (s.status === 'partial') {
       return { paid: false, text: [`⏳ ЧАСТКОВО ОПЛАЧЕНО: закупівля ${orderNo(s.id)}, ${inv} — отримано ${num(s.paid_amount)}, залишок ${num(s.total - s.paid_amount)} грн`, ...lines].join('\n') };
+    }
+    if (s.pay_terms === 'postpay') {
+      return { paid: false, text: `⏳ ВІДСТРОЧКА ОПЛАТИ${s.due_date ? ` до ${ukDate(s.due_date)}` : ` ${s.pay_days} дн. від рахунку`}: закупівля ${orderNo(s.id)}, ${inv}; рахунок на ${ent}, від «${partnerName}»${overdueDays(s) ? ` — ПРОСТРОЧЕНО ${overdueDays(s)} дн.` : ''}` };
     }
     return { paid: false, text: `⏳ ОЧІКУЄМО ОПЛАТУ: закупівля ${orderNo(s.id)}, ${inv}; рахунок на ${ent}, від «${partnerName}»` };
   }
