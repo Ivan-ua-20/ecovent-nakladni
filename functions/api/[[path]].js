@@ -5423,7 +5423,7 @@ var DELIVERY = { np: "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0430 \u0
 var deliveryOf = (v) => DELIVERY[v] ? v : "np";
 var LIST_STATUSES = { ...ORDER_STATUS, closed: "\u0417\u0430\u043A\u0440\u0438\u0442\u043E (\u0443\u0441\u0435 \u0440\u043E\u0437\u043F\u0438\u0441\u0430\u043D\u043E)" };
 var ENTITY_KIND = { fop: "\u0424\u041E\u041F", tov: "\u0422\u041E\u0412", other: "\u0406\u043D\u0448\u0430 \u044E\u0440\u043E\u0441\u043E\u0431\u0430" };
-var FILE_KIND = { invoice: "\u0420\u0430\u0445\u0443\u043D\u043E\u043A", waybill: "\u041D\u0430\u043A\u043B\u0430\u0434\u043D\u0430", label: "\u041C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F", other: "\u0424\u0430\u0439\u043B" };
+var FILE_KIND = { invoice: "\u0420\u0430\u0445\u0443\u043D\u043E\u043A", waybill: "\u041D\u0430\u043A\u043B\u0430\u0434\u043D\u0430", label: "\u041C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F", doc: "\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442", other: "\u0424\u0430\u0439\u043B" };
 var MAX_FILE = 5 * 1024 * 1024;
 var PART = 600 * 1024;
 var KEEP_FILES_DAYS = 30;
@@ -5723,11 +5723,12 @@ ${link(c, `b2borders/${open.id}`)}`);
     }
     const [items, files, history, clients] = await Promise.all([
       db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]),
-      db.all(`SELECT id, kind, name, mime, size, created_by, created_at FROM b2b_files WHERE order_id = ? ORDER BY id`, [o.id]),
+      db.all(`SELECT f.id, f.kind, f.name, f.mime, f.size, f.created_by, f.created_at, f.doc_type, t.name AS doc_name
+        FROM b2b_files f LEFT JOIN b2b_doc_types t ON t.id = f.doc_type WHERE f.order_id = ? ORDER BY f.id`, [o.id]),
       db.all(`SELECT at, user_name, action FROM b2b_order_log WHERE order_id = ? ORDER BY id DESC LIMIT 100`, [o.id]),
       o.kind === "supply" ? db.all(`SELECT id, status, client_name, total, created_at FROM b2b_orders WHERE supply_id = ? AND kind = 'client' ORDER BY id DESC`, [o.id]) : []
     ]);
-    const out = { order: publicOrder(o), items, files: files.map((f) => ({ ...f, kind_name: FILE_KIND[f.kind] || f.kind })), history };
+    const out = { order: publicOrder(o), items, files: files.map((f) => ({ ...f, kind_name: f.doc_name || FILE_KIND[f.kind] || f.kind })), history };
     if (o.kind === "supply") {
       out.clients = clients.map((x) => ({ ...x, number: orderNo(x.id), status_name: CLIENT_STATUS[x.status] || x.status }));
       out.left = clients.length ? await supplyLeft(o.id) : items.map((i) => ({ ...i, used: 0, left: i.qty }));
@@ -5874,7 +5875,8 @@ ${link(c, `b2borders/${o.id}`)}`);
     need(c, "b2b.admin");
     const o = await orderOf(c.req.param("id"));
     const p = await db.get(`SELECT id, name, phone, email FROM b2b_partners WHERE id = ?`, [o.partner_id]);
-    return c.json({ ...await orderDetail(o), partner: p });
+    const missing = o.kind === "client" && o.status === "new" ? await hooks.missingDocs?.(o) || [] : [];
+    return c.json({ ...await orderDetail(o), partner: p, missing });
   });
   app.put("/api/b2b/orders/:id", async (c) => {
     need(c, "b2b.admin");
@@ -6096,7 +6098,8 @@ var newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Ma
 function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {} }) {
   const { labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h6 } = orders;
   const userName4 = (u) => u?.name || u?.login || "";
-  const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files
+  const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files,
+    (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id AND f.kind = 'label') AS labels
     FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id`;
   async function crmConfig() {
     const s = await loadSettings(db);
@@ -6289,6 +6292,17 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {} }) {
     }
     return { supplyId: null, toOpen: true, openId: open?.id || null, items, total };
   }
+  async function missingDocs(o) {
+    const [types, have] = await Promise.all([
+      db.all(`SELECT id, name FROM b2b_doc_types WHERE partner_id = ? AND active = 1 AND required = 1 ORDER BY sort, id`, [o.partner_id]),
+      db.all(`SELECT kind, doc_type FROM b2b_files WHERE order_id = ?`, [o.id])
+    ]);
+    const out = [];
+    if (!have.some((f) => f.kind === "label")) out.push("\u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F");
+    for (const t of types) if (!have.some((f) => f.kind === "doc" && f.doc_type === t.id)) out.push(t.name);
+    return out;
+  }
+  hooks.missingDocs = missingDocs;
   const ttnDupMsg = async (ttn, dup, partnerId) => (await db.get(`SELECT partner_id FROM b2b_orders WHERE id = ?`, [dup.id]))?.partner_id === partnerId ? `\u0422\u0422\u041D ${ttn} \u0443\u0436\u0435 \u0454 \u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 ${dup.number} (${dup.client_name}).` : `\u0422\u0422\u041D ${ttn} \u0443\u0436\u0435 \u0432\u0438\u043A\u043E\u0440\u0438\u0441\u0442\u0430\u043D\u0430 \u0432 \u0456\u043D\u0448\u043E\u043C\u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.`;
   async function ensureOpen(p) {
     const open = await getOpen(p.id);
@@ -6434,7 +6448,25 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     const p = await myPartner(c);
     const o = await myClientOrder(c, p);
     if (o.crm_id) await refreshCrm({ partnerId: p.id });
-    return c.json(await orderDetail(await orderOf(o.id, p.id)));
+    return c.json({ ...await orderDetail(await orderOf(o.id, p.id)), missing: await missingDocs(o) });
+  });
+  const docTypes = (partnerId) => db.all(`SELECT id, name, required, print FROM b2b_doc_types WHERE partner_id = ? AND active = 1 ORDER BY sort, id`, [partnerId]);
+  app.get("/api/b2b/p/doc-types", async (c) => c.json(await docTypes((await myPartner(c)).id)));
+  app.put("/api/b2b/p/doc-types", async (c) => {
+    const p = await myPartner(c);
+    need(c, "b2b.team");
+    const list = (await c.req.json()).types;
+    if (!Array.isArray(list)) throw fail(400, "\u041D\u0435\u0432\u0456\u0440\u043D\u0456 \u0434\u0430\u043D\u0456.");
+    const rows = list.map((t) => ({ id: parseInt(t.id, 10) || 0, name: String(t.name || "").trim().replace(/\s+/g, " ").slice(0, 60), required: t.required ? 1 : 0, print: t.print === false ? 0 : 1 })).filter((t) => t.name);
+    if (rows.length > 5) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 5 \u0432\u0438\u0434\u0456\u0432 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0456\u0432.");
+    if (new Set(rows.map((t) => t.name.toLowerCase())).size !== rows.length) throw fail(400, "\u041D\u0430\u0437\u0432\u0438 \u0432\u0438\u0434\u0456\u0432 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0456\u0432 \u043C\u0430\u044E\u0442\u044C \u0432\u0456\u0434\u0440\u0456\u0437\u043D\u044F\u0442\u0438\u0441\u044F.");
+    if (rows.some((t) => /^маркуван/i.test(t.name))) throw fail(400, "\u041C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u0432\u0436\u0435 \u0454 \u0437\u0430\u0432\u0436\u0434\u0438 \u2014 \u0434\u043E\u0434\u0430\u0439\u0442\u0435 \u0456\u043D\u0448\u0456 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0438.");
+    const cur = await db.all(`SELECT id FROM b2b_doc_types WHERE partner_id = ? AND active = 1`, [p.id]);
+    const keep = new Set(rows.filter((t) => t.id && cur.some((x) => x.id === t.id)).map((t) => t.id));
+    const st = cur.filter((x) => !keep.has(x.id)).map((x) => [`UPDATE b2b_doc_types SET active = 0 WHERE id = ?`, [x.id]]);
+    rows.forEach((t, i) => st.push(keep.has(t.id) ? [`UPDATE b2b_doc_types SET name = ?, required = ?, print = ?, sort = ? WHERE id = ? AND partner_id = ?`, [t.name, t.required, t.print, i, t.id, p.id]] : [`INSERT INTO b2b_doc_types (partner_id, name, required, print, sort, active) VALUES (?, ?, ?, ?, ?, 1)`, [p.id, t.name, t.required, t.print, i]]));
+    if (st.length) await db.batch(st);
+    return c.json({ ok: true, types: await docTypes(p.id) });
   });
   app.post("/api/b2b/p/clients", async (c) => {
     const p = await myPartner(c);
@@ -6517,10 +6549,22 @@ ${link(c, `b2bclients/${o.id}`)}`);
   app.post("/api/b2b/p/clients/:id/files", async (c) => {
     const p = await myPartner(c);
     const o = await myClientOrder(c, p);
-    if (o.status !== "new") throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u0432 \u0440\u043E\u0431\u043E\u0442\u0456 \u2014 \u043D\u043E\u0432\u0438\u0439 \u0444\u0430\u0439\u043B \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u043D\u0430\u0434\u0456\u0448\u043B\u0456\u0442\u044C \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0443.");
-    if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_files WHERE order_id = ?`, [o.id])).n >= 10) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 10 \u0444\u0430\u0439\u043B\u0456\u0432 \u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.");
+    if (o.status !== "new") throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u0432 \u0440\u043E\u0431\u043E\u0442\u0456 \u2014 \u043D\u043E\u0432\u0438\u0439 \u0444\u0430\u0439\u043B \u043D\u0430\u0434\u0456\u0448\u043B\u0456\u0442\u044C \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0443.");
+    if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_files WHERE order_id = ?`, [o.id])).n >= 15) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 15 \u0444\u0430\u0439\u043B\u0456\u0432 \u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.");
     const bytes = new Uint8Array(await c.req.arrayBuffer());
     if (!bytes.length) throw fail(400, "\u041F\u043E\u0440\u043E\u0436\u043D\u0456\u0439 \u0444\u0430\u0439\u043B.");
+    const typeId = parseInt(c.req.query("type"), 10) || 0;
+    if (typeId) {
+      const t = await db.get(`SELECT * FROM b2b_doc_types WHERE id = ? AND partner_id = ? AND active = 1`, [typeId, p.id]);
+      if (!t) throw fail(404, "\u0422\u0430\u043A\u043E\u0433\u043E \u0432\u0438\u0434\u0443 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0430 \u043D\u0435\u043C\u0430\u0454 \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443.");
+      const { hash: hash2 } = await labelInfo(bytes);
+      if (await db.get(`SELECT id FROM b2b_files WHERE order_id = ? AND hash = ?`, [o.id, hash2])) throw fail(409, "\u0426\u0435\u0439 \u0444\u0430\u0439\u043B \u0443\u0436\u0435 \u0434\u043E\u0434\u0430\u043D\u043E \u0434\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
+      const f2 = await saveFile(c, o, "doc", bytes, { hash: hash2 });
+      await db.run(`UPDATE b2b_files SET doc_type = ? WHERE id = ?`, [t.id, f2.id]);
+      await log(o.id, c.get("user"), `\u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442: ${t.name}`);
+      if (t.print) await hooks.afterDoc?.(o, f2, t).catch(() => 0);
+      return c.json({ id: f2.id, warnings: [] });
+    }
     const info = await labelInfo(bytes);
     const dup = await labelDup(info, o.id);
     if (dup) throw fail(409, dup.id && (await db.get(`SELECT partner_id FROM b2b_orders WHERE id = ?`, [dup.id]))?.partner_id === p.id ? dupText(dup) : "\u0422\u0430\u043A\u0435 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u0432\u0436\u0435 \u0432\u0438\u043A\u043E\u0440\u0438\u0441\u0442\u0430\u043D\u0435 \u0432 \u0456\u043D\u0448\u043E\u043C\u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.");
@@ -6533,7 +6577,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
     const p = await myPartner(c);
     const o = await myClientOrder(c, p);
     if (o.status !== "new") throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u0432 \u0440\u043E\u0431\u043E\u0442\u0456.");
-    const f = await db.get(`SELECT * FROM b2b_files WHERE id = ? AND order_id = ? AND kind = 'label'`, [c.req.param("fid"), o.id]);
+    const f = await db.get(`SELECT * FROM b2b_files WHERE id = ? AND order_id = ? AND kind IN ('label', 'doc')`, [c.req.param("fid"), o.id]);
     if (!f) throw fail(404, "\u0424\u0430\u0439\u043B \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     await db.batch([[`DELETE FROM b2b_file_parts WHERE file_id = ?`, [f.id]], [`DELETE FROM b2b_files WHERE id = ?`, [f.id]]]);
     await log(o.id, c.get("user"), `\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u0444\u0430\u0439\u043B \xAB${f.name}\xBB`);
@@ -6581,6 +6625,8 @@ ${link(c, `b2bclients/${o.id}`)}`);
     if (!k.on) throw fail(400, "\u041F\u0435\u0440\u0435\u0434\u0430\u0447\u0443 \u0432 LP-CRM \u0449\u0435 \u043D\u0435 \u0432\u0432\u0456\u043C\u043A\u043D\u0435\u043D\u043E. \u041A\u043E\u043B\u0438 \u043A\u043B\u044E\u0447 LP-CRM \u043E\u0442\u0440\u0438\u043C\u0430\u0454 \u0434\u043E\u0437\u0432\u0456\u043B \u043D\u0430 addNewOrder \u2014 \u0443\u0432\u0456\u043C\u043A\u043D\u0456\u0442\u044C \u0457\u0457 \u0432 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 CRM\xBB (\u0432\u043A\u043B\u0430\u0434\u043A\u0430 \xAB\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432\xBB). \u041F\u043E\u043A\u0438 \u0449\u043E \u0441\u0442\u0432\u043E\u0440\u0456\u0442\u044C \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 CRM \u0432\u0440\u0443\u0447\u043D\u0443 \u0456 \u0432\u043F\u0438\u0448\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u043D\u043E\u043C\u0435\u0440.");
     if (!k.office) throw fail(400, "\u041D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E ID \u0432\u0456\u0434\u0434\u0456\u043B\u0443 B2B \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 CRM\xBB.");
     if (!k.creds.subdomain || !k.creds.key) throw fail(400, "\u041D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E LP-CRM: \u043F\u0456\u0434\u0434\u043E\u043C\u0435\u043D \u0456 API-\u043A\u043B\u044E\u0447 \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445\xBB.");
+    const missing = await missingDocs(o);
+    if (missing.length) throw fail(400, `\u0411\u0440\u0430\u043A\u0443\u0454 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0456\u0432: ${missing.join(", ")}. \u041F\u043E\u043F\u0440\u043E\u0441\u0456\u0442\u044C \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0434\u043E\u0434\u0430\u0442\u0438 \u0457\u0445 \u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 (\u0430\u0431\u043E \u043F\u0440\u0438\u0432\u2019\u044F\u0436\u0456\u0442\u044C \u043D\u043E\u043C\u0435\u0440 CRM \u0432\u0440\u0443\u0447\u043D\u0443).`);
     const code = newCode();
     const now = nowIso();
     const stale = new Date(Date.now() - SENDING_TTL_MS).toISOString();
@@ -7680,6 +7726,12 @@ ${h5(firstLine(o.entity))}
   }
   hooks.cleanup = () => db.run(`DELETE FROM b2b_tg_docs WHERE created_at < ?`, [new Date(Date.now() - 3 * 864e5).toISOString()]);
   hooks.afterLabel = afterLabel;
+  hooks.afterDoc = async (o, f, t) => {
+    const chat = await labelsChat();
+    if (!chat) return;
+    const sent = await notify()?.sendFile({ chatIds: [chat] }, f, `\u{1F4C4} <b>${h5(t.name)}</b> \xB7 ${labelCaption(o).replace(/^🏷 /, "")}`).catch(() => 0);
+    if (sent) await orders.log(o.id, { name: "Telegram" }, `\xAB${t.name}\xBB \u043D\u0430\u0434\u0456\u0441\u043B\u0430\u043D\u043E \u0432 \u0433\u0440\u0443\u043F\u0443 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u044C`);
+  };
   hooks.crmLinked = crmLinked;
   hooks.finRequest = finRequest;
   hooks.finClosed = finClosed;
@@ -9821,7 +9873,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 18,
+  version: 19,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -9992,7 +10044,19 @@ var schema11 = {
     created_at TEXT NOT NULL,
     created_by TEXT DEFAULT ''
   )`,
-    `CREATE INDEX IF NOT EXISTS b2b_payments_order ON b2b_payments (order_id)`
+    `CREATE INDEX IF NOT EXISTS b2b_payments_order ON b2b_payments (order_id)`,
+    // Види документів партнера до замовлень клієнтів (до 5): «Чек для клієнта», «Накладна для клієнта»…
+    // required — без нього замовлення не оформити й не передати в CRM; print — бот надсилає в групу маркувань (для друку).
+    `CREATE TABLE IF NOT EXISTS b2b_doc_types (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    required INTEGER NOT NULL DEFAULT 0,
+    print INTEGER NOT NULL DEFAULT 1,
+    sort INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1
+  )`,
+    `CREATE INDEX IF NOT EXISTS b2b_doc_types_partner ON b2b_doc_types (partner_id, active)`
   ],
   // ---------- етап 3: замовлення для клієнтів партнера ----------
   // supply_id — закупівля, з якої взято товари (порожньо — «без закупівлі»); дані клієнта й ТТН партнера;
@@ -10035,6 +10099,8 @@ var schema11 = {
     ["b2b_partners", "default_entity", "INTEGER"],
     // Спосіб отримання закупівлі: np — відправка клієнтам (замовлення клієнтів), pickup — самовивіз усієї закупівлі.
     ["b2b_orders", "delivery", "TEXT DEFAULT 'np'"],
+    // Документ партнера (kind = 'doc'): вид документа з b2b_doc_types.
+    ["b2b_files", "doc_type", "INTEGER"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ["b2b_tg_docs", "source", "TEXT DEFAULT 'private'"],
     ["b2b_tg_docs", "reply_to", "INTEGER"],
