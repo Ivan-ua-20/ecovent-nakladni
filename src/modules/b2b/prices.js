@@ -2,7 +2,7 @@
 // бот надсилає зведення в Telegram-групу партнера (якщо не прив'язана — його користувачам особисто):
 // нові РРЦ і нові ціни партнера по товарах, зміни знижки на бренди, відкриті й закриті бренди.
 // Лише вручну (без розкладу). Після успішного надсилання запам'ятовується час (b2b_partners.prices_sent_at).
-import { need, nowIso, round2 } from '../../core/common.js';
+import { need, fail, nowIso, round2 } from '../../core/common.js';
 
 const h = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const nf = new Intl.NumberFormat('uk-UA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -134,5 +134,32 @@ export function mountB2bPrices(app, { db, services, partnerPrice }) {
       results.push({ id: p.id, name: p.name, sent: sent > 0, where: p.tg_group ? 'group' : 'users', products: ch.products.length });
     }
     return c.json({ results });
+  });
+
+  // ---------------------------------------------------------------- оголошення партнерам
+  // Довільний текст (знижка з такого-то числа тощо): адмін обирає партнерів і куди — у Telegram-групу партнера
+  // та/або особисто його користувачам у бот. Клієнт шле по одному партнеру за запит (ліміт підзапитів Cloudflare).
+  const ANN_MAX = 3500;
+  const annText = (raw) => `📢 ${h(String(raw || '').trim()).slice(0, ANN_MAX)}`;
+  app.get('/api/b2b/announce/targets', async (c) => {
+    need(c, 'b2b.admin');
+    const rows = await db.all(`SELECT p.id, p.name, p.tg_group, p.tg_group_title,
+        (SELECT COUNT(*) FROM users u WHERE u.partner_id = p.id AND u.role = 'partner' AND u.active = 1 AND u.tg_chat_id != '') AS tg_users
+      FROM b2b_partners p WHERE p.active = 1 AND COALESCE(p.deleted_at, '') = '' ORDER BY p.name`);
+    return c.json(rows.map((p) => ({ id: p.id, name: p.name, group: p.tg_group ? (p.tg_group_title || 'група') : '', tgUsers: p.tg_users })));
+  });
+  app.post('/api/b2b/announce', async (c) => {
+    need(c, 'b2b.admin');
+    const b = await c.req.json().catch(() => ({}));
+    const raw = String(b.text || '').trim();
+    if (!raw) throw fail(400, 'Напишіть текст оголошення.');
+    if (raw.length > ANN_MAX) throw fail(400, `Текст задовгий — до ${ANN_MAX} символів.`);
+    if (!b.groups && !b.users) throw fail(400, 'Оберіть, куди надсилати: у групи та/або в бот.');
+    const p = await db.get(`SELECT id, name, tg_group FROM b2b_partners WHERE id = ? AND active = 1 AND COALESCE(deleted_at, '') = ''`, [Number(b.partner_id) || 0]);
+    if (!p) throw fail(404, 'Партнера не знайдено.');
+    const text = annText(raw);
+    const group = b.groups && p.tg_group ? (await services.notify?.sendText({ chatIds: [p.tg_group] }, text).catch(() => 0)) || 0 : 0;
+    const users = b.users ? (await services.notify?.sendText({ partnerId: p.id }, text).catch(() => 0)) || 0 : 0;
+    return c.json({ id: p.id, group, users });
   });
 }
