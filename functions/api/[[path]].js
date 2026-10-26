@@ -3055,8 +3055,8 @@ function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {} }) {
     else if (!demo && /^\d{1,8}$/.test(orderId)) crmOrder.orderId = String(orderId);
     const prefs = await db.get(`SELECT * FROM order_prefs WHERE order_id = ?`, [orderId]);
     const edits = prefs?.edits ? JSON.parse(prefs.edits) : null;
-    const today = kyivDay();
-    const autoInvoiceDate = s.invoice_date_mode === "order" ? String(crmOrder.date || "").slice(0, 10) || today : today;
+    const today2 = kyivDay();
+    const autoInvoiceDate = s.invoice_date_mode === "order" ? String(crmOrder.date || "").slice(0, 10) || today2 : today2;
     crmOrder.invoiceDate = autoInvoiceDate;
     const order2 = applyEdits(crmOrder, edits);
     const allFops = await db.all(`SELECT * FROM fops WHERE active = 1`);
@@ -3419,11 +3419,11 @@ function mountRahunky(app, { db, services, onCleanup }) {
       i.unit = "\u0448\u0442";
       i.sum = round2(i.qty * i.price);
     }
-    const today = kyivDay();
+    const today2 = kyivDay();
     const { signature, stamp, ...fopRest } = fop;
     return {
       number: String(number),
-      date: /^\d{4}-\d{2}-\d{2}$/.test(String(b.date || "")) ? b.date : today,
+      date: /^\d{4}-\d{2}-\d{2}$/.test(String(b.date || "")) ? b.date : today2,
       source: b.source === "crm" ? "crm" : "manual",
       orderRef: String(b.order_ref || ""),
       fop: { ...fopRest, signature, stamp, warning_text: fop.warning_text || DEFAULT_WARNING },
@@ -4093,13 +4093,13 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
       await db.batch([[`DELETE FROM an_items`, []], [`DELETE FROM an_orders`, []], [`DELETE FROM an_day_bounds`, []], [`UPDATE an_products SET fetched = 0`, []]]);
     }
     const firstRun = !(await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`))?.value;
-    const today = kyivDay();
-    const keepFrom = addMonths(monthStart(today), -st.months);
-    const start = mode === "today" || mode === "daily" ? addDays(today, -29) : keepFrom;
+    const today2 = kyivDay();
+    const keepFrom = addMonths(monthStart(today2), -st.months);
+    const start = mode === "today" || mode === "daily" ? addDays(today2, -29) : keepFrom;
     const statuses = [...st.okStatuses, ...st.refuseStatuses];
     const units = [];
-    for (let m = monthStart(today); m >= monthStart(start); m = addMonths(m, -1)) {
-      const to = monthEnd(m) > today ? today : monthEnd(m);
+    for (let m = monthStart(today2); m >= monthStart(start); m = addMonths(m, -1)) {
+      const to = monthEnd(m) > today2 ? today2 : monthEnd(m);
       const from = m < start ? start : m;
       for (const s of statuses) units.push({ s, from, to });
     }
@@ -4109,10 +4109,10 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
       start,
       keepFrom,
       firstRun,
-      today,
+      today: today2,
       // Повні дані (сума, товари, менеджер) наново — лише для сьогоднішніх замовлень; решта — лише нові
       // і ті, у яких змінився статус (щоденне оновлення більше не перечитує весь тиждень).
-      refetchFrom: mode === "today" || mode === "daily" ? today : "9999-12-31",
+      refetchFrom: mode === "today" || mode === "daily" ? today2 : "9999-12-31",
       phase: "units",
       units,
       unitsTotal: units.length,
@@ -4208,9 +4208,9 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
         }
         if (state.phase === "deliv") {
           const fill = await getJson("an_deliv_fill") || {};
-          const today = kyivDay();
-          if (fill.day !== today) {
-            fill.day = today;
+          const today2 = kyivDay();
+          if (fill.day !== today2) {
+            fill.day = today2;
             fill.n = 0;
           }
           if (fill.done || fill.n >= DELIV_PER_DAY || (state.stats.deliv || 0) >= DELIV_PER_RUN) {
@@ -4318,9 +4318,9 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
   app.post("/api/an/query", async (c) => {
     const b = await c.req.json();
     const st = await getSt();
-    const today = kyivDay();
-    const from = isDay(b.from) ? b.from : addDays(today, -6);
-    const to = isDay(b.to) && b.to >= from ? b.to : today;
+    const today2 = kyivDay();
+    const from = isDay(b.from) ? b.from : addDays(today2, -6);
+    const to = isDay(b.to) && b.to >= from ? b.to : today2;
     if (daysBetween(from, to) > 400) throw fail(400, "\u041F\u0435\u0440\u0456\u043E\u0434 \u0437\u0430\u0432\u0435\u043B\u0438\u043A\u0438\u0439 (\u043C\u0430\u043A\u0441\u0438\u043C\u0443\u043C 400 \u0434\u043D\u0456\u0432).");
     const cmp = st.compare && isDay(b.cmpFrom) && isDay(b.cmpTo) && b.cmpTo >= b.cmpFrom ? { from: b.cmpFrom, to: b.cmpTo } : null;
     const ints = (a) => Array.isArray(a) ? a.map((x) => parseInt(x, 10)).filter((x) => Number.isFinite(x)).slice(0, 40) : [];
@@ -4340,7 +4340,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
     const ph = (a) => a.map(() => "?").join(",");
     const rfExpr = `(CASE WHEN o.status IN (${rf.join(",") || "-1"}) THEN 1 ELSE 0 END)`;
     const ver = (await db.get(`SELECT value FROM settings WHERE key = 'an_ver'`))?.value || "0";
-    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today, kpi: 4 }));
+    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today: today2, kpi: 4 }));
     const hit = await db.get(`SELECT value FROM an_cache WHERE key = ?`, [cacheKey]);
     if (hit) return c.body(hit.value, 200, { "content-type": "application/json; charset=UTF-8" });
     function base(range, { items = itemLevel, skipCats = false } = {}) {
@@ -5415,6 +5415,10 @@ var limitsOf = (p) => ({
   unpaid: Number(p?.unpaid_limit) > 0 ? Number(p.unpaid_limit) : DEFAULT_LIMITS.unpaid
 });
 var UNPAID = `('open', 'invoice_wait', 'pay_wait', 'partial')`;
+var DEBT = `('pay_wait', 'partial')`;
+var today = () => kyivDayOf((/* @__PURE__ */ new Date()).toISOString());
+var addDaysTo = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+var overdueDays = (o) => o.due_date && ["pay_wait", "partial"].includes(o.status) && o.due_date < today() ? Math.round((Date.parse(`${today()}T12:00:00Z`) - Date.parse(`${o.due_date}T12:00:00Z`)) / 864e5) : 0;
 var CLOSED_SQL = `(o.kind = 'supply' AND o.status NOT IN ('open', 'cancelled', 'draft')
   AND EXISTS (SELECT 1 FROM b2b_order_items i WHERE i.order_id = o.id)
   AND NOT EXISTS (SELECT 1 FROM b2b_order_items i WHERE i.order_id = o.id AND i.qty > COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci
@@ -5439,6 +5443,23 @@ function toB64(bytes) {
 var fromB64 = (s) => Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0));
 var userName2 = (u) => u?.name || u?.login || "";
 function mountB2bOrders(app, { db, services, myPartner, partnerPrice: partnerPrice2, onCleanup, hooks = {} }) {
+  onCleanup(async () => {
+    const t = today();
+    const rows = await db.all(`SELECT o.*, p.name AS partner FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id
+      WHERE o.kind = 'supply' AND o.status IN ${DEBT} AND o.due_date != '' AND o.due_date <= ? LIMIT 50`, [addDaysTo(t, 1)]);
+    for (const o of rows) {
+      const left = round2(o.total - o.paid_amount);
+      const late = overdueDays(o);
+      const last = String(o.due_notified || "");
+      let text = "";
+      if (!late && o.due_date > t && last !== "pre") text = `\u23F0 <b>\u0417\u0430\u0432\u0442\u0440\u0430 \u0441\u0442\u0440\u043E\u043A \u043E\u043F\u043B\u0430\u0442\u0438</b> \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(o.id)}${o.invoice_no ? ` (\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h3(o.invoice_no)})` : ""}: ${uah2(left)}`;
+      else if (late && (!last.startsWith("over:") || addDaysTo(last.slice(5), 7) <= t)) text = `\u{1F534} <b>\u041F\u0440\u043E\u0441\u0442\u0440\u043E\u0447\u0435\u043D\u043E \u043E\u043F\u043B\u0430\u0442\u0443</b> \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(o.id)}${o.invoice_no ? ` (\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h3(o.invoice_no)})` : ""} \u043D\u0430 ${late} \u0434\u043D.: ${uah2(left)}`;
+      if (!text) continue;
+      await db.run(`UPDATE b2b_orders SET due_notified = ? WHERE id = ?`, [late ? `over:${t}` : "pre", o.id]);
+      await tgPartner(o.partner_id, text);
+      await tgAdmins(`${text} \u2014 \xAB${h3(o.partner)}\xBB`);
+    }
+  });
   onCleanup(async () => {
     const border = new Date(Date.now() - KEEP_FILES_DAYS * 864e5).toISOString();
     await db.batch([
@@ -5465,7 +5486,8 @@ function mountB2bOrders(app, { db, services, myPartner, partnerPrice: partnerPri
 <b>\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u0456 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0430 \u043D\u0430:</b>
 ${h3(o.entity || "\u2014")}
 <b>\u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430:</b> ${o.delivery === "pickup" ? "\u{1F697} <b>\u0421\u0410\u041C\u041E\u0412\u0418\u0412\u0406\u0417</b> \u2014 \u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0437\u0430\u0431\u0438\u0440\u0430\u0454 \u0432\u0441\u044E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443" : "\u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0430 \u043A\u043B\u0456\u0454\u043D\u0442\u0430\u043C (\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430)"}
-
+${o.pay_terms === "postpay" ? `<b>\u041E\u043F\u043B\u0430\u0442\u0430:</b> \u23F3 <b>\u0412\u0406\u0414\u0421\u0422\u0420\u041E\u0427\u041A\u0410 ${o.pay_days} \u0434\u043D.</b> \u0432\u0456\u0434 \u0434\u0430\u0442\u0438 \u0440\u0430\u0445\u0443\u043D\u043A\u0443
+` : ""}
 <b>\u0422\u043E\u0432\u0430\u0440\u0438:</b>
 ${lines.join("\n")}
 
@@ -5595,25 +5617,28 @@ ${e.email}` : ""}`;
     const e = await myEntity(p, b.entity_id);
     const items = await priceItems(p, b.items);
     const total = totalOf(items);
-    if (!draft) await checkUnpaid(p, total);
+    const terms = termsOf(b);
+    if (terms === "postpay" && !(Number(p.postpay_days) > 0)) throw fail(403, "\u0412\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0443 \u043E\u043F\u043B\u0430\u0442\u0438 \u0432\u0430\u043C \u0449\u0435 \u043D\u0435 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u043E \u2014 \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.");
+    if (!draft) await checkTerms(p, terms, total);
+    const payDays = terms === "postpay" ? Number(p.postpay_days) : 0;
     const now = nowIso();
     if (draft) {
       const r2 = await db.run(
-        `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery) VALUES (?, 'supply', 'draft', ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [p.id, e.id, entityText(e), total, String(b.comment || "").trim().slice(0, 1e3), userName2(c.get("user")), now, now, deliveryOf(b.delivery)]
+        `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [p.id, e.id, entityText(e), total, String(b.comment || "").trim().slice(0, 1e3), userName2(c.get("user")), now, now, deliveryOf(b.delivery), terms, payDays]
       );
       await db.batch([...itemRows(r2.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r2.lastId, now, userName2(c.get("user")), `\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u043D\u0430 ${uah2(total)}`]]]);
       return c.json({ id: r2.lastId, number: orderNo(r2.lastId), total, draft: true });
     }
     const r = await db.run(
-      `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [p.id, e.id, entityText(e), total, String(b.comment || "").trim().slice(0, 1e3), userName2(c.get("user")), now, now, deliveryOf(b.delivery)]
+      `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [p.id, e.id, entityText(e), total, String(b.comment || "").trim().slice(0, 1e3), userName2(c.get("user")), now, now, deliveryOf(b.delivery), terms, payDays]
     );
     await db.batch([...itemRows(r.lastId, items), [
       `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
       [r.lastId, now, userName2(c.get("user")), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah2(total)}${deliveryOf(b.delivery) === "pickup" ? " (\u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437)" : ""}`]
     ]]);
-    const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery) }, p, items);
+    const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), pay_terms: terms, pay_days: payDays }, p, items);
     await tgAdmins(`${full}
 
 ${link(c, `b2borders/${r.lastId}`)}`);
@@ -5622,15 +5647,48 @@ ${link(c, `b2borders/${r.lastId}`)}`);
     return c.json({ id: r.lastId, number: orderNo(r.lastId), total });
   });
   async function unpaidTotal(partnerId, exceptId = 0) {
-    const r = await db.get(`SELECT COALESCE(SUM(total - paid_amount), 0) AS t FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status IN ${UNPAID} AND id != ?`, [partnerId, exceptId]);
+    const r = await db.get(`SELECT COALESCE(SUM(total - paid_amount), 0) AS t FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status IN ${UNPAID}
+      AND COALESCE(pay_terms, 'prepay') != 'postpay' AND id != ?`, [partnerId, exceptId]);
     return round2(r?.t || 0);
   }
+  async function postpayInfo(p, exceptId = 0) {
+    const days = Number(p.postpay_days) || 0;
+    const [used, overdue] = await Promise.all([
+      db.get(`SELECT COALESCE(SUM(total - paid_amount), 0) AS t FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status IN ${UNPAID}
+        AND pay_terms = 'postpay' AND id != ?`, [p.id, exceptId]),
+      db.all(`SELECT id, total, paid_amount, due_date, status FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status IN ${DEBT}
+        AND due_date != '' AND due_date < ?`, [p.id, today()])
+    ]);
+    return {
+      days,
+      limit: Number(p.postpay_limit) > 0 ? Number(p.postpay_limit) : null,
+      used: round2(used?.t || 0),
+      overdue: overdue.map((o) => ({ id: o.id, number: orderNo(o.id), due: round2(o.total - o.paid_amount), due_date: o.due_date, days: overdueDays(o) }))
+    };
+  }
+  async function checkTerms(p, terms, total, exceptId = 0) {
+    if (terms !== "postpay") return checkUnpaid(p, total, exceptId);
+    const pi = await postpayInfo(p, exceptId);
+    if (!pi.days) throw fail(403, "\u0412\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0443 \u043E\u043F\u043B\u0430\u0442\u0438 \u0432\u0430\u043C \u0449\u0435 \u043D\u0435 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u043E \u2014 \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.");
+    if (pi.overdue.length) throw fail(400, `\u0404 \u043F\u0440\u043E\u0441\u0442\u0440\u043E\u0447\u0435\u043D\u0430 \u043E\u043F\u043B\u0430\u0442\u0430 (${pi.overdue.map((x) => x.number).join(", ")}) \u2014 \u043D\u043E\u0432\u0456 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0437 \u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u043E\u044E \u043F\u0456\u0441\u043B\u044F \u0457\u0457 \u043E\u043F\u043B\u0430\u0442\u0438.`);
+    if (pi.limit != null && pi.used + total > pi.limit + 4e-3) {
+      throw fail(400, `\u041B\u0456\u043C\u0456\u0442 \u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0438 \u2014 ${uah2(pi.limit)}: \u0437\u0430\u0440\u0430\u0437 \u0437\u0430 \u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u043E\u044E ${uah2(pi.used)}, \u043D\u043E\u0432\u0430 \u0441\u0443\u043C\u0430 ${uah2(total)}.`);
+    }
+    return null;
+  }
+  const termsOf = (b, o = null) => b.pay_terms === void 0 ? o?.pay_terms === "postpay" ? "postpay" : "prepay" : b.pay_terms === "postpay" ? "postpay" : "prepay";
   async function checkUnpaid(p, addTotal, exceptId = 0) {
     const lim = limitsOf(p).unpaid;
     const cur = await unpaidTotal(p.id, exceptId);
     if (cur + addTotal > lim + 4e-3) {
       throw fail(400, `\u041B\u0456\u043C\u0456\u0442 \u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0438\u0445 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C \u2014 ${uah2(lim)}: \u0437\u0430\u0440\u0430\u0437 \u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E ${uah2(cur)}, \u043D\u043E\u0432\u0430 \u0441\u0443\u043C\u0430 ${uah2(addTotal)}. \u0421\u043F\u0435\u0440\u0448\u0443 \u043E\u043F\u043B\u0430\u0442\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0430\u0431\u043E \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.`);
     }
+  }
+  async function debtOf(partnerId) {
+    const rows = await db.all(`SELECT id, status, total, paid_amount, invoice_no, invoice_date, due_date, pay_terms, created_at FROM b2b_orders
+      WHERE partner_id = ? AND kind = 'supply' AND status IN ${DEBT} ORDER BY COALESCE(NULLIF(due_date, ''), invoice_date, created_at), id`, [partnerId]);
+    const list = rows.map((o) => ({ ...o, number: orderNo(o.id), due: round2(o.total - o.paid_amount), overdue: overdueDays(o) }));
+    return { total: round2(list.reduce((t, o) => t + o.due, 0)), overdue: round2(list.filter((o) => o.overdue).reduce((t, o) => t + o.due, 0)), rows: list };
   }
   const getOpen = (partnerId) => db.get(`SELECT * FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status = 'open' ORDER BY id LIMIT 1`, [partnerId]);
   async function rebuildOpen(supplyId) {
@@ -5664,7 +5722,9 @@ ${link(c, `b2borders/${r.lastId}`)}`);
     const cnt = open ? (await db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled'`, [open.id])).n : 0;
     return c.json({
       open: { id: open?.id || null, number: open ? orderNo(open.id) : "", total: open?.total || 0, limit: lim.open, orders: cnt },
-      unpaid: { total: await unpaidTotal(p.id), limit: lim.unpaid }
+      unpaid: { total: await unpaidTotal(p.id), limit: lim.unpaid },
+      postpay: await postpayInfo(p),
+      debt: await debtOf(p.id)
     });
   });
   app.post("/api/b2b/p/open/form", async (c) => {
@@ -5704,6 +5764,11 @@ ${link(c, `b2borders/${open.id}`)}`);
     if (o.kind === "supply" && o.closed) {
       out.closed = true;
       out.status_name = `${out.status_name} \xB7 \u0417\u0430\u043A\u0440\u0438\u0442\u043E`;
+    }
+    if (o.kind === "supply") {
+      out.pay_terms = o.pay_terms === "postpay" ? "postpay" : "prepay";
+      out.overdue = overdueDays(o);
+      if (out.overdue) out.status_name = `${out.status_name} \xB7 \u043F\u0440\u043E\u0441\u0442\u0440\u043E\u0447\u0435\u043D\u043E ${out.overdue} \u0434\u043D.`;
     }
     if (o.kind === "client") Object.assign(out, { no_supply: !o.supply_id || o.supply_status === "open", open_supply: o.supply_status === "open", pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : "" });
     return out;
@@ -5768,7 +5833,10 @@ ${link(c, `b2borders/${open.id}`)}`);
     const e = await myEntity(p, b.entity_id ?? o.entity_id);
     const items = await priceItems(p, b.items);
     const total = totalOf(items);
-    if (!isDraft) await checkUnpaid(p, total, o.id);
+    const terms = termsOf(b, o);
+    if (terms === "postpay" && !(Number(p.postpay_days) > 0)) throw fail(403, "\u0412\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0443 \u043E\u043F\u043B\u0430\u0442\u0438 \u0432\u0430\u043C \u0449\u0435 \u043D\u0435 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u043E \u2014 \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.");
+    if (!isDraft) await checkTerms(p, terms, total, o.id);
+    const payDays = terms === "postpay" ? o.pay_terms === "postpay" && o.pay_days ? o.pay_days : Number(p.postpay_days) : 0;
     const want = new Map(items.map((i) => [i.product_id, i.qty]));
     const left = await supplyLeft(o.id);
     for (const r of left) {
@@ -5780,13 +5848,13 @@ ${link(c, `b2borders/${open.id}`)}`);
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, items),
       [
-        `UPDATE b2b_orders SET entity_id = ?, entity = ?, total = ?, comment = ?, delivery = ?, updated_at = ? WHERE id = ?`,
-        [e.id, entityText(e), total, String(b.comment ?? o.comment ?? "").trim().slice(0, 1e3), delivery, nowIso(), o.id]
+        `UPDATE b2b_orders SET entity_id = ?, entity = ?, total = ?, comment = ?, delivery = ?, pay_terms = ?, pay_days = ?, updated_at = ? WHERE id = ?`,
+        [e.id, entityText(e), total, String(b.comment ?? o.comment ?? "").trim().slice(0, 1e3), delivery, terms, payDays, nowIso(), o.id]
       ]
     ]);
     await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E ${isDraft ? "\u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443" : "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F"}: ${items.length} \u043F\u043E\u0437., ${uah2(total)}`);
     if (isDraft) return c.json({ ok: true, total });
-    const full = orderText("\u270F\uFE0F \u0417\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E", { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment, delivery }, p, items);
+    const full = orderText("\u270F\uFE0F \u0417\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E", { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment, delivery, pay_terms: terms, pay_days: payDays }, p, items);
     await tgAdmins(`${full}
 
 ${link(c, `b2borders/${o.id}`)}`);
@@ -5811,11 +5879,11 @@ ${link(c, `b2borders/${o.id}`)}`);
     const e = await myEntity(p, o.entity_id).catch(() => {
       throw fail(400, "\u042E\u0440\u043E\u0441\u043E\u0431\u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0456\u043D\u0448\u0443 (\xAB\u0417\u043C\u0456\u043D\u0438\u0442\u0438\xBB).");
     });
-    await checkUnpaid(p, o.total, o.id);
+    await checkTerms(p, o.pay_terms === "postpay" ? "postpay" : "prepay", o.total, o.id);
     const claim = await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity = ?, created_at = ?, updated_at = ? WHERE id = ? AND status = 'draft'`, [entityText(e), nowIso(), nowIso(), o.id]);
     if (!claim.changes) throw fail(409, "\u0427\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0432\u0436\u0435 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E.");
     await log(o.id, c.get("user"), `\u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E: ${uah2(o.total)}`);
-    const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery }, p, items);
+    const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery, pay_terms: o.pay_terms, pay_days: o.pay_days }, p, items);
     await tgAdmins(`${full}
 
 ${link(c, `b2borders/${o.id}`)}`);
@@ -5896,10 +5964,12 @@ ${link(c, `b2borders/${o.id}`)}`);
     let status = o.status;
     if (o.kind === "supply" && next.invoice_no && status === "invoice_wait") status = "pay_wait";
     if (o.kind === "supply" && !next.invoice_no && status === "pay_wait") status = "invoice_wait";
+    const dueDate = o.pay_terms === "postpay" && next.invoice_no ? addDaysTo(next.invoice_date || today(), Number(o.pay_days) || 0) : o.due_date || "";
     await db.run(
-      `UPDATE b2b_orders SET invoice_no = ?, invoice_date = ?, waybill_no = ?, status = ?, updated_at = ? WHERE id = ?`,
-      [next.invoice_no, next.invoice_date, next.waybill_no, status, nowIso(), o.id]
+      `UPDATE b2b_orders SET invoice_no = ?, invoice_date = ?, waybill_no = ?, status = ?, due_date = ?, updated_at = ? WHERE id = ?`,
+      [next.invoice_no, next.invoice_date, next.waybill_no, status, dueDate, nowIso(), o.id]
     );
+    if (dueDate && dueDate !== o.due_date) await log(o.id, user, `\u0441\u0442\u0440\u043E\u043A \u043E\u043F\u043B\u0430\u0442\u0438 (\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430): \u0434\u043E ${dueDate.split("-").reverse().join(".")}`);
     const changes = [];
     if (next.invoice_no !== o.invoice_no) changes.push(`\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${next.invoice_no || "\u2014"}${next.invoice_date ? ` \u0432\u0456\u0434 ${next.invoice_date}` : ""}`);
     if (next.waybill_no !== o.waybill_no) changes.push(`\u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0430 \u2116 ${next.waybill_no || "\u2014"}`);
@@ -6082,7 +6152,7 @@ ${link(c, `porders/${o.id}`)}`);
     await logAudit(db, { user: c.get("user"), kind: "b2b", refId: o.partner_id, action: `\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E"} ${orderNo(o.id)} \u043D\u0430 ${uah2(o.total)}${o.crm_id ? ` (\u0443 LP-CRM \u2116 ${o.crm_id} \u2014 \u043D\u0435 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E)` : ""}` }).catch(() => 0);
     return c.json({ ok: true, inCrm: o.crm_id || "" });
   });
-  return { labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah2, h: h3 };
+  return { debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah2, h: h3 };
 }
 
 // src/modules/b2b/clients.js
@@ -6314,9 +6384,10 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {} }) {
   }
   const supplyOf = (id) => id ? db.get(`SELECT id, status FROM b2b_orders WHERE id = ?`, [id]) : null;
   async function warnUnpaidShipped(c, o) {
-    const s = await supplyOf(o.supply_id);
+    const s = o.supply_id ? await db.get(`SELECT id, status, pay_terms, due_date FROM b2b_orders WHERE id = ?`, [o.supply_id]) : null;
     const st = s?.status || "";
     if (["paid", "done"].includes(st) || !o.supply_id && o.paid_at) return;
+    if (s?.pay_terms === "postpay" && !overdueDays(s)) return;
     const p = await db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [o.partner_id]);
     await tgAdmins(`\u26A0\uFE0F <b>\u0412\u0456\u0434\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u043E\u043F\u043B\u0430\u0442\u0438</b>: ${orderNo(o.id)} (${h6(o.client_name)}, ${uah3(o.total)}) \xAB${h6(p?.name || "")}\xBB \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 CRM, \u0430 ${!o.supply_id ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0435" : st === "open" ? `\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.supply_id)} \u0449\u0435 \u0431\u0435\u0437 \u0440\u0430\u0445\u0443\u043D\u043A\u0443` : `\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.supply_id)} \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0430 (${ORDER_STATUS[st] || st})`}.
 ${link(c, `b2bclients/${o.id}`)}`);
@@ -6356,6 +6427,9 @@ ${link(c, `b2bclients/${o.id}`)}`);
     }
     if (s.status === "partial") {
       return { paid: false, text: [`\u23F3 \u0427\u0410\u0421\u0422\u041A\u041E\u0412\u041E \u041E\u041F\u041B\u0410\u0427\u0415\u041D\u041E: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(s.id)}, ${inv} \u2014 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E ${num4(s.paid_amount)}, \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${num4(s.total - s.paid_amount)} \u0433\u0440\u043D`, ...lines].join("\n") };
+    }
+    if (s.pay_terms === "postpay") {
+      return { paid: false, text: `\u23F3 \u0412\u0406\u0414\u0421\u0422\u0420\u041E\u0427\u041A\u0410 \u041E\u041F\u041B\u0410\u0422\u0418${s.due_date ? ` \u0434\u043E ${ukDate(s.due_date)}` : ` ${s.pay_days} \u0434\u043D. \u0432\u0456\u0434 \u0440\u0430\u0445\u0443\u043D\u043A\u0443`}: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(s.id)}, ${inv}; \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430 ${ent}, \u0432\u0456\u0434 \xAB${partnerName}\xBB${overdueDays(s) ? ` \u2014 \u041F\u0420\u041E\u0421\u0422\u0420\u041E\u0427\u0415\u041D\u041E ${overdueDays(s)} \u0434\u043D.` : ""}` };
     }
     return { paid: false, text: `\u23F3 \u041E\u0427\u0406\u041A\u0423\u0404\u041C\u041E \u041E\u041F\u041B\u0410\u0422\u0423: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(s.id)}, ${inv}; \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430 ${ent}, \u0432\u0456\u0434 \xAB${partnerName}\xBB` };
   }
@@ -6760,8 +6834,8 @@ function mountB2bStats(app, { db, myPartner }) {
     return { cat: new Map(cats.map((r) => [r.id, r.name])), brand: new Map([...brands.map((r) => [r.id, r.name]), [0, "\u0406\u043D\u0448\u0456"]]) };
   }
   async function report(partnerId, q) {
-    const today = kyivDayOf((/* @__PURE__ */ new Date()).toISOString());
-    const to = isDay2(q.to) ? q.to : today;
+    const today2 = kyivDayOf((/* @__PURE__ */ new Date()).toISOString());
+    const to = isDay2(q.to) ? q.to : today2;
     const from = isDay2(q.from) && q.from <= to ? q.from : addDays2(to, -29);
     const days = Math.min(daysBetween2(from, to), 400);
     const prevTo = addDays2(from, -1);
@@ -7980,7 +8054,10 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
         (SELECT COUNT(*) FROM users u WHERE u.partner_id = p.id AND u.role = 'partner' AND u.added_by LIKE 'partner:%') AS users_by_partner,
         (SELECT COUNT(*) FROM b2b_margins m WHERE m.partner_id = p.id) AS brands
       FROM b2b_partners p WHERE COALESCE(p.deleted_at, '') = '' ORDER BY p.active DESC, p.name`);
-    return c.json(rows);
+    const today2 = (/* @__PURE__ */ new Date()).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+    const debt = new Map((await db.all(`SELECT partner_id, SUM(total - paid_amount) AS due, SUM(CASE WHEN due_date != '' AND due_date < ? THEN total - paid_amount ELSE 0 END) AS overdue,
+      COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND status IN ('pay_wait', 'partial') GROUP BY partner_id`, [today2])).map((r) => [r.partner_id, r]));
+    return c.json(rows.map((r) => ({ ...r, debt: Math.round((debt.get(r.id)?.due || 0) * 100) / 100, debt_overdue: Math.round((debt.get(r.id)?.overdue || 0) * 100) / 100, debt_cnt: debt.get(r.id)?.n || 0 })));
   });
   const partnerFields = (b) => ({
     name: String(b.name ?? "").trim().slice(0, 120),
@@ -8032,7 +8109,9 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       brands,
       entities,
       roles: PARTNER_ROLES,
-      limits: { open: lim.open, unpaid: lim.unpaid, openTotal: open?.total || 0, openId: open?.id || null, unpaidTotal: await orders.unpaidTotal(p.id) }
+      limits: { open: lim.open, unpaid: lim.unpaid, openTotal: open?.total || 0, openId: open?.id || null, unpaidTotal: await orders.unpaidTotal(p.id) },
+      postpay: await orders.postpayInfo(p),
+      debt: await orders.debtOf(p.id)
     });
   });
   app.delete("/api/b2b/partners/:id", async (c) => {
@@ -8062,7 +8141,15 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const f = { ...partnerFields({ ...p, ...b }) };
     if (!f.name) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043D\u0430\u0437\u0432\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430.");
     const active = b.active === void 0 ? p.active : b.active ? 1 : 0;
-    for (const [k, label] of [["open_limit", "\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u043E\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456"], ["unpaid_limit", "\u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0438\u0445 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C"]]) {
+    if (b.postpay_days !== void 0) {
+      const v = parseInt(b.postpay_days, 10) || 0;
+      if (v < 0 || v > 180) throw fail(400, "\u0412\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 \u2014 \u0432\u0456\u0434 0 \u0434\u043E 180 \u0434\u043D\u0456\u0432.");
+      if (v !== (Number(p.postpay_days) || 0)) {
+        await db.run(`UPDATE b2b_partners SET postpay_days = ? WHERE id = ?`, [v, p.id]);
+        await audit(c, p.id, v ? `\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 \u043E\u043F\u043B\u0430\u0442\u0438: ${v} \u0434\u043D.` : "\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0443 \u043E\u043F\u043B\u0430\u0442\u0438 \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E");
+      }
+    }
+    for (const [k, label] of [["open_limit", "\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u043E\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456"], ["unpaid_limit", "\u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0438\u0445 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C"], ["postpay_limit", "\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0438"]]) {
       if (b[k] === void 0) continue;
       const raw2 = String(b[k] ?? "").replace(/\s/g, "");
       if (raw2 && !/^\d+([.,]\d+)?$/.test(raw2)) throw fail(400, `\u041B\u0456\u043C\u0456\u0442 ${label} \u2014 \u0441\u0443\u043C\u0430 \u0432 \u0433\u0440\u0438\u0432\u043D\u044F\u0445.`);
@@ -8223,10 +8310,10 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     return c.json({ rows: rows.map((r) => ({ ...r, brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456" })), state });
   });
   async function catalogState() {
-    const today = kyivDay();
+    const today2 = kyivDay();
     const [last, left] = await Promise.all([
       db.get(`SELECT value FROM settings WHERE key = 'b2b_catalog_sync'`),
-      db.get(`SELECT COUNT(*) AS n FROM b2b_catalog WHERE hidden = 0 AND checked_at < ? AND (manual = 1 OR brand_id IN (SELECT brand_id FROM b2b_margins))`, [today])
+      db.get(`SELECT COUNT(*) AS n FROM b2b_catalog WHERE hidden = 0 AND checked_at < ? AND (manual = 1 OR brand_id IN (SELECT brand_id FROM b2b_margins))`, [today2])
     ]);
     return { lastSync: last?.value || "", stale: left?.n || 0 };
   }
@@ -8251,7 +8338,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     need(c, "b2b.admin");
     const s = await loadSettings(db);
     if (!s.lpcrm_subdomain || !s.lpcrm_key) throw fail(400, "\u041D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E LP-CRM: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u043F\u0456\u0434\u0434\u043E\u043C\u0435\u043D \u0456 API-\u043A\u043B\u044E\u0447 \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445\xBB.");
-    const today = kyivDay();
+    const today2 = kyivDay();
     await db.batch([
       [`INSERT OR IGNORE INTO b2b_catalog (product_id, name, brand_id) SELECT product_id, COALESCE(name, ''), brand_id FROM an_products WHERE product_id > 0`, []],
       [`UPDATE b2b_catalog SET brand_id = (SELECT a.brand_id FROM an_products a WHERE a.product_id = b2b_catalog.product_id)
@@ -8260,7 +8347,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const todo = await db.all(
       `SELECT product_id, rrp FROM b2b_catalog WHERE hidden = 0 AND checked_at < ? AND (manual = 1 OR brand_id IN (SELECT brand_id FROM b2b_margins))
        ORDER BY checked_at LIMIT ?`,
-      [today, BATCH * BATCHES_PER_CALL]
+      [today2, BATCH * BATCHES_PER_CALL]
     );
     const at = nowIso();
     let changed = 0;
@@ -8273,14 +8360,14 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       for (const r of part) {
         const p = got.get(r.product_id);
         if (!p) {
-          st.push([`UPDATE b2b_catalog SET checked_at = ? WHERE product_id = ?`, [today, r.product_id]]);
+          st.push([`UPDATE b2b_catalog SET checked_at = ? WHERE product_id = ?`, [today2, r.product_id]]);
           continue;
         }
         const rrp = round2(num3(p.price));
         const vendor = p.vendor && p.vendor !== "\u0410\u0440\u0442\u0438\u043A\u0443\u043B" ? p.vendor : "";
         st.push([
           `UPDATE b2b_catalog SET name = ?, article = ?, rrp = ?, image = ?, checked_at = ? WHERE product_id = ?`,
-          [String(p.name || p.title || "").trim().slice(0, 300), String(p.article || vendor || p.model || "").slice(0, 60), rrp, findImage(p), today, r.product_id]
+          [String(p.name || p.title || "").trim().slice(0, 300), String(p.article || vendor || p.model || "").slice(0, 60), rrp, findImage(p), today2, r.product_id]
         ]);
         if (r.rrp > 0 && rrp > 0 && Math.abs(rrp - r.rrp) >= 5e-3) {
           st.push([`INSERT INTO b2b_price_log (at, product_id, old_rrp, new_rrp) VALUES (?, ?, ?, ?)`, [at, r.product_id, r.rrp, rrp]]);
@@ -9873,7 +9960,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 19,
+  version: 20,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -10101,6 +10188,13 @@ var schema11 = {
     ["b2b_orders", "delivery", "TEXT DEFAULT 'np'"],
     // Документ партнера (kind = 'doc'): вид документа з b2b_doc_types.
     ["b2b_files", "doc_type", "INTEGER"],
+    // Відстрочка оплати: партнеру — дні й ліміт (задає адмін); закупівлі — умови, дні, строк і останнє нагадування.
+    ["b2b_partners", "postpay_days", "INTEGER DEFAULT 0"],
+    ["b2b_partners", "postpay_limit", "REAL"],
+    ["b2b_orders", "pay_terms", "TEXT DEFAULT 'prepay'"],
+    ["b2b_orders", "pay_days", "INTEGER DEFAULT 0"],
+    ["b2b_orders", "due_date", "TEXT DEFAULT ''"],
+    ["b2b_orders", "due_notified", "TEXT DEFAULT ''"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ["b2b_tg_docs", "source", "TEXT DEFAULT 'private'"],
     ["b2b_tg_docs", "reply_to", "INTEGER"],

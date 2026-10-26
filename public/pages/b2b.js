@@ -17,13 +17,17 @@ export function createB2bPages(ctx = {}) {
       <div class="head-row"><h2>B2B партнери</h2><button class="btn primary" id="pNew">+ Новий партнер</button></div>
       <div class="alert info" style="margin-bottom:14px">Партнер бачить лише свій кабінет: каталог увімкнених йому брендів з РРЦ і своєю ціною (РРЦ − маржа).
         За замовчуванням партнер не бачить жодного бренду — увімкніть бренди й задайте маржу в картці партнера.</div>
-      ${rows.length ? `<table class="list"><thead><tr><th>Партнер</th><th class="hide-m">Контакти</th><th class="r">Користувачі</th><th class="r">Бренди</th><th>Стан</th></tr></thead><tbody>
+      ${rows.length ? `<table class="list"><thead><tr><th>Партнер</th><th class="hide-m">Контакти</th><th class="r">Борг</th><th class="r hide-m">Користувачі</th><th class="r hide-m">Бренди</th><th>Стан</th></tr></thead><tbody>
         ${rows.map((p) => `<tr class="click" data-p="${p.id}">
           <td><b>${esc(p.name)}</b></td>
           <td class="small hide-m">${esc([p.phone, p.email].filter(Boolean).join(' · ') || '—')}</td>
-          <td class="r">${p.users}${p.users_by_partner ? `<div class="small muted">з них додав партнер: ${p.users_by_partner}</div>` : ''}</td><td class="r">${p.brands}</td>
+          <td class="r nowrap">${p.debt ? `<b>${money(p.debt)} грн</b><div class="small muted">закупівель: ${p.debt_cnt}${p.postpay_days ? ` · відстрочка ${p.postpay_days} дн.` : ''}</div>` : `<span class="muted">—</span>${p.postpay_days ? `<div class="small muted">відстрочка ${p.postpay_days} дн.</div>` : ''}`}
+            ${p.debt_overdue ? `<div><span class="badge bad">прострочено ${money(p.debt_overdue)}</span></div>` : ''}</td>
+          <td class="r hide-m">${p.users}${p.users_by_partner ? `<div class="small muted">з них додав партнер: ${p.users_by_partner}</div>` : ''}</td><td class="r hide-m">${p.brands}</td>
           <td>${p.active ? '<span class="badge ok">активний</span>' : '<span class="badge bad">вимкнений</span>'}</td>
-        </tr>`).join('')}</tbody></table>`
+        </tr>`).join('')}
+        <tr class="bk-total"><td><b>Усього борг</b></td><td class="hide-m"></td><td class="r nowrap"><b>${money(rows.reduce((t, p) => t + (p.debt || 0), 0))} грн</b>
+          ${rows.some((p) => p.debt_overdue) ? `<div><span class="badge bad">прострочено ${money(rows.reduce((t, p) => t + (p.debt_overdue || 0), 0))}</span></div>` : ''}</td><td class="hide-m"></td><td class="hide-m"></td><td></td></tr></tbody></table>`
         : '<div class="card empty"><div class="big">Партнерів ще немає</div>Створіть першого партнера, додайте йому користувача і ввімкніть бренди.</div>'}`;
     $$('[data-p]').forEach((tr) => (tr.onclick = () => { location.hash = `#/b2bpartners/${tr.dataset.p}`; }));
     $('#pNew').onclick = () => partnerForm(null);
@@ -42,7 +46,13 @@ export function createB2bPages(ctx = {}) {
           <label class="f"><span>Ліміт неоплачених закупівель, грн</span><input name="unpaid_limit" inputmode="decimal" value="${esc(p?.unpaid_limit ?? '')}" placeholder="100000 (типово)"></label>
         </div>
         <div class="small muted">Відкрита закупівля — замовлення клієнтів без закупівлі; понад ліміт нові такі замовлення не приймаються, доки партнер не сформує рахунок.
-          Неоплачені закупівлі — сума всіх неоплачених (разом із відкритою); понад ліміт нові закупівлі не приймаються.</div>
+          Неоплачені закупівлі — сума всіх неоплачених з передоплатою (разом із відкритою); понад ліміт нові закупівлі не приймаються.</div>
+        <div class="grid2">
+          <label class="f"><span>Відстрочка оплати, днів (0 — лише передоплата)</span><input name="postpay_days" type="number" min="0" max="180" value="${esc(p?.postpay_days || 0)}"></label>
+          <label class="f"><span>Ліміт відстрочки, грн</span><input name="postpay_limit" inputmode="decimal" value="${esc(p?.postpay_limit ?? '')}" placeholder="без окремого ліміту"></label>
+        </div>
+        <div class="small muted">Відстрочка: партнер може обрати в закупівлі «оплата з відстрочкою» — товар відвантажується до оплати, строк — N днів від дати рахунку.
+          Ліміт — скільки максимум може бути неоплачено за такими закупівлями. З простроченою оплатою нових закупівель з відстрочкою не буде; про строк нагадує бот.</div>
       </form>`, { footer: `<button class="btn" data-close>Скасувати</button><button class="btn primary" id="pSave">${isNew ? 'Створити' : 'Зберегти'}</button>` });
     $('#pSave', m.el).onclick = async () => {
       const f = $('#pF', m.el);
@@ -51,7 +61,7 @@ export function createB2bPages(ctx = {}) {
       try {
         if (isNew) {
           const r = await api('POST', '/api/b2b/partners', d);
-          if (d.open_limit || d.unpaid_limit) await api('PUT', `/api/b2b/partners/${r.id}`, { open_limit: d.open_limit, unpaid_limit: d.unpaid_limit });
+          if (d.open_limit || d.unpaid_limit || Number(d.postpay_days) || d.postpay_limit) await api('PUT', `/api/b2b/partners/${r.id}`, { name: d.name, open_limit: d.open_limit, unpaid_limit: d.unpaid_limit, postpay_days: d.postpay_days, postpay_limit: d.postpay_limit });
           m.close(); location.hash = `#/b2bpartners/${r.id}`;
         }
         else { await api('PUT', `/api/b2b/partners/${p.id}`, d); m.close(); toast('Збережено'); viewPartner(p.id); }
@@ -60,7 +70,7 @@ export function createB2bPages(ctx = {}) {
   }
 
   async function viewPartner(id) {
-    const { partner: p, users, brands, entities = [], roles = {}, limits } = await api('GET', `/api/b2b/partners/${id}`);
+    const { partner: p, users, brands, entities = [], roles = {}, limits, postpay, debt } = await api('GET', `/api/b2b/partners/${id}`);
     const byPartner = users.filter((u) => u.added_by_partner).length;
     main.innerHTML = `
       <div class="head-row"><h2>${esc(p.name)} ${p.active ? '' : '<span class="badge bad">вимкнений</span>'}</h2>
@@ -85,10 +95,20 @@ export function createB2bPages(ctx = {}) {
           </div>
         </div>
         <div class="form-stack">
+          ${debt ? `<div class="card form-stack">
+            <h3>Заборгованість: ${money(debt.total)} грн${debt.overdue ? ` <span class="badge bad">прострочено ${money(debt.overdue)}</span>` : ''}</h3>
+            ${debt.rows.length ? `<table class="list"><thead><tr><th>Закупівля</th><th class="r">Сума</th><th class="r">Оплачено</th><th class="r">Залишок</th><th>Строк</th></tr></thead><tbody>
+              ${debt.rows.map((o) => `<tr class="click" data-dord="${o.id}"><td><b>${esc(o.number)}</b><div class="small muted">${o.invoice_no ? `рах. № ${esc(o.invoice_no)}` : ''}${o.invoice_date ? ` від ${esc(fmtDay(o.invoice_date))}` : ''}${o.pay_terms === 'postpay' ? ' · відстрочка' : ''}</div></td>
+                <td class="r">${money(o.total)}</td><td class="r">${o.paid_amount ? money(o.paid_amount) : '—'}</td><td class="r"><b>${money(o.due)}</b></td>
+                <td class="small nowrap">${o.due_date ? esc(fmtDay(o.due_date)) : 'передоплата'}${o.overdue ? `<div><span class="badge bad">прострочено ${o.overdue} дн.</span></div>` : ''}</td></tr>`).join('')}</tbody></table>`
+              : '<div class="small muted">Неоплачених закупівель з рахунком немає.</div>'}
+            <div class="small muted">Борг — закупівлі з виставленим рахунком без повної оплати. Закупівлі, що ще чекають рахунок, сюди не входять.</div>
+          </div>` : ''}
           ${limits ? `<div class="card form-stack">
             <h3>Ліміти</h3>
             <div class="small">Відкрита закупівля${limits.openId ? ` <a href="#/b2borders/${limits.openId}">B2B-${limits.openId}</a>` : ''}: <b>${money(limits.openTotal)}</b> з ${money(limits.open)} грн</div>
             <div class="small">Неоплачені закупівлі: <b>${money(limits.unpaidTotal)}</b> з ${money(limits.unpaid)} грн</div>
+            <div class="small">Відстрочка оплати: ${postpay?.days ? `<b>${postpay.days} дн.</b> · зараз за відстрочкою <b>${money(postpay.used)}</b>${postpay.limit != null ? ` з ${money(postpay.limit)} грн` : ' (без окремого ліміту)'}` : '<span class="muted">вимкнена (лише передоплата)</span>'}</div>
             <div class="small muted">Змінити — кнопка «Змінити» вгорі картки.</div>
           </div>` : ''}
           <div class="card form-stack">
@@ -143,6 +163,7 @@ export function createB2bPages(ctx = {}) {
       inp.disabled = !cb.checked;
       if (cb.checked && !inp.value) inp.focus();
     }));
+    $$('[data-dord]').forEach((tr) => (tr.onclick = () => { location.hash = `#/b2borders/${tr.dataset.dord}`; }));
     $('#mSave').onclick = async () => {
       const list = [];
       for (const cb of $$('[data-be]')) {
@@ -363,6 +384,7 @@ export function createB2bPages(ctx = {}) {
               ${closed ? '' : '<button class="btn danger" data-set="cancelled">Скасувати замовлення</button>'}
             </div>
             ${o.status === 'partial' ? `<div class="alert info small">Отримано ${uah(o.paid_amount)} з ${uah(o.total)} — <b>ще до оплати ${uah(o.due)}</b></div>` : ''}
+            ${o.pay_terms === 'postpay' ? `<div class="small">⏳ <b>Відстрочка оплати ${o.pay_days} дн.</b>${o.due_date ? ` — оплатити до <b>${esc(fmtDay(o.due_date))}</b>` : ' — строк рахується від дати рахунку'}${o.overdue ? ` <span class="badge bad">прострочено ${o.overdue} дн.</span>` : ''}</div>` : ''}
             ${o.paid_at ? `<div class="small">Оплата: ${esc(fmtDateTime(o.paid_at))}${o.paid_by && o.paid_by !== 'Opendatabot' ? ` · позначив(ла) ${esc(o.paid_by)}` : ' · Opendatabot'}</div>` : ''}
           </div>
           ${['pay_wait', 'partial', 'paid', 'done'].includes(o.status) ? '<div class="card form-stack" id="oPays"><h3>Платежі (Opendatabot)</h3><div class="small muted">Завантаження…</div></div>' : ''}

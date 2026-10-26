@@ -235,15 +235,18 @@ export function createPartnerPages(ctx = {}) {
     if (id && mode === 'edit') return orderForm(id);
     if (id) return viewOrder(id);
     const qs = filterQs(supFilter);
-    const { rows, statuses } = await api('GET', `/api/b2b/p/orders${qs ? `?${qs}` : ''}`);
+    const [{ rows, statuses }, lim] = await Promise.all([api('GET', `/api/b2b/p/orders${qs ? `?${qs}` : ''}`), api('GET', '/api/b2b/p/limits').catch(() => null)]);
+    const debt = lim?.debt;
     main.innerHTML = `
       <div class="head-row"><h2>Закупівлі</h2>${canEdit() ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div>
+      ${debt?.total ? `<div class="alert ${debt.overdue ? 'bad' : 'info'}" style="margin-bottom:10px">До оплати: <b>${uah(debt.total)}</b> за ${debt.rows.length} ${debt.rows.length === 1 ? 'закупівлею' : 'закупівлями'}${debt.overdue ? ` · <b>прострочено ${uah(debt.overdue)}</b> — оплатіть, будь ласка` : ''}
+        ${lim.postpay?.days ? `<div class="small">Відстрочка оплати: ${lim.postpay.days} дн. від дати рахунку${lim.postpay.limit != null ? ` · використано ${uah(lim.postpay.used)} з ${uah(lim.postpay.limit)}` : ''}</div>` : ''}</div>` : ''}
       <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap"><button class="chip ${supFilter.status ? '' : 'on'}" data-pst="">Усі</button>
         ${Object.entries(statuses).map(([k, v]) => `<button class="chip ${supFilter.status === k ? 'on' : ''}" data-pst="${k}">${esc(v)}</button>`).join('')}</div>
       ${filterBar(supFilter, { placeholder: '№, юрособа, № рахунку…' })}
       ${rows.length ? `<table class="list"><thead><tr><th>№</th><th class="hide-m">Дата</th><th>Сума</th><th>Статус</th><th class="hide-m">Рахунок</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click" data-o="${o.id}">
-          <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? ' <span class="badge info">🚗 самовивіз</span>' : ''}<div class="small muted">${esc(o.entity.split('\n')[0].split(',')[0])}</div></td>
+          <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? ' <span class="badge info">🚗 самовивіз</span>' : ''}${o.pay_terms === 'postpay' ? ` <span class="badge ${o.overdue ? 'bad' : 'warn'}">відстрочка${o.due_date ? ` до ${esc(fmtDay(o.due_date))}` : ''}</span>` : ''}<div class="small muted">${esc(o.entity.split('\n')[0].split(',')[0])}</div></td>
           <td class="small hide-m">${esc(fmtDateTime(o.created_at))}</td>
           <td><b>${uah(o.total)}</b></td>
           <td>${statusBadge(o)}</td>
@@ -288,6 +291,7 @@ export function createPartnerPages(ctx = {}) {
             <h3>Рахунок</h3>
             <div class="small" style="white-space:pre-line"><b>Платник:</b> ${esc(o.entity)}</div>
             <div class="small"><b>Отримання:</b> ${esc(o.delivery_name || '')}</div>
+            ${o.pay_terms === 'postpay' ? `<div class="small"><b>Оплата:</b> відстрочка ${o.pay_days} дн.${o.due_date ? ` — до <b>${esc(fmtDay(o.due_date))}</b>` : ' від дати рахунку'}${o.overdue ? ` <span class="badge bad">прострочено ${o.overdue} дн.</span>` : ''}</div>` : ''}
             ${o.invoice_no ? `<div><b>Рахунок № ${esc(o.invoice_no)}</b>${o.invoice_date ? ` від ${esc(fmtDay(o.invoice_date))}` : ''}</div>` : '<div class="muted small">Рахунок ще готується — сповістимо в Telegram.</div>'}
             ${o.waybill_no ? `<div>Накладна № ${esc(o.waybill_no)}</div>` : ''}
             ${o.status === 'paid' || o.status === 'done' ? `<div class="badge ok">Оплачено ${esc(fmtDateTime(o.paid_at))}</div>` : ''}
@@ -323,6 +327,8 @@ export function createPartnerPages(ctx = {}) {
     // Чернетки команди: нову закупівлю можна додати до наявної чернетки (кількості сумуються).
     const drafts = id ? [] : (await api('GET', '/api/b2b/p/orders?status=draft').catch(() => ({ rows: [] }))).rows || [];
     const qty = new Map((cur?.items || []).map((i) => [i.product_id, i.qty]));
+    const plim = await api('GET', '/api/b2b/p/limits').catch(() => null);
+    const pp = plim?.postpay || { days: 0 };
     let fb = '';
     let fq = '';
     if (!entities.length) {
@@ -348,6 +354,10 @@ export function createPartnerPages(ctx = {}) {
             <div class="f"><span>Як отримуєте товар</span>
               <label class="check"><input type="radio" name="ofDel" value="np" ${cur?.order.delivery === 'pickup' ? '' : 'checked'}> Відправка клієнтам Новою поштою (оформлюю замовлення на клієнтів)</label>
               <label class="check"><input type="radio" name="ofDel" value="pickup" ${cur?.order.delivery === 'pickup' ? 'checked' : ''}> Самовивіз — забираю всю закупівлю зі складу</label></div>
+            ${pp.days ? `<div class="f"><span>Оплата</span>
+              <label class="check"><input type="radio" name="ofPay" value="prepay" ${cur?.order.pay_terms === 'postpay' ? '' : 'checked'}> Передоплата</label>
+              <label class="check"><input type="radio" name="ofPay" value="postpay" ${cur?.order.pay_terms === 'postpay' ? 'checked' : ''} ${pp.overdue?.length ? 'disabled' : ''}> Відстрочка ${pp.days} дн. від дати рахунку${pp.limit != null ? ` (доступно ${uah(Math.max(0, pp.limit - pp.used))})` : ''}</label>
+              ${pp.overdue?.length ? `<div class="small" style="color:var(--bad, #b42318)">Є прострочена оплата (${pp.overdue.map((x) => esc(x.number)).join(', ')}) — відстрочка після її оплати.</div>` : ''}</div>` : ''}
             <label class="f"><span>Рахунок виставити на</span><select id="ofEnt">${entities.map((e) => `<option value="${e.id}" ${String(cur?.order.entity_id) === String(e.id) ? 'selected' : ''}>${esc(e.name)} (${esc(e.code)})</option>`).join('')}</select></label>
             <label class="f"><span>Коментар</span><textarea id="ofComment" rows="2">${esc(cur?.order.comment || '')}</textarea></label>
             ${drafts.length ? `<label class="f"><span>Чернетка</span><select id="ofDraft"><option value="">Нова закупівля</option>
@@ -384,7 +394,7 @@ export function createPartnerPages(ctx = {}) {
     const submit = async (draft) => {
       const items = [...qty].filter(([, q]) => q > 0).map(([product_id, q]) => ({ product_id, qty: q }));
       if (!items.length) { toast('Вкажіть кількість хоча б одного товару', true); return; }
-      const body = { entity_id: Number($('#ofEnt').value), items, comment: $('#ofComment').value, delivery: $('input[name="ofDel"]:checked')?.value || 'np' };
+      const body = { entity_id: Number($('#ofEnt').value), items, comment: $('#ofComment').value, delivery: $('input[name="ofDel"]:checked')?.value || 'np', pay_terms: $('input[name="ofPay"]:checked')?.value || 'prepay' };
       const toDraft = draft && $('#ofDraft')?.value ? Number($('#ofDraft').value) : 0;
       $$('#ofSave, #ofDraftSave').forEach((b) => { b.disabled = true; });
       try {

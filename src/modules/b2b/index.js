@@ -65,7 +65,11 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
         (SELECT COUNT(*) FROM users u WHERE u.partner_id = p.id AND u.role = 'partner' AND u.added_by LIKE 'partner:%') AS users_by_partner,
         (SELECT COUNT(*) FROM b2b_margins m WHERE m.partner_id = p.id) AS brands
       FROM b2b_partners p WHERE COALESCE(p.deleted_at, '') = '' ORDER BY p.active DESC, p.name`);
-    return c.json(rows);
+    // Борг: закупівлі з рахунком без повної оплати (одним запитом на всіх партнерів).
+    const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Kyiv' });
+    const debt = new Map((await db.all(`SELECT partner_id, SUM(total - paid_amount) AS due, SUM(CASE WHEN due_date != '' AND due_date < ? THEN total - paid_amount ELSE 0 END) AS overdue,
+      COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND status IN ('pay_wait', 'partial') GROUP BY partner_id`, [today])).map((r) => [r.partner_id, r]));
+    return c.json(rows.map((r) => ({ ...r, debt: Math.round((debt.get(r.id)?.due || 0) * 100) / 100, debt_overdue: Math.round((debt.get(r.id)?.overdue || 0) * 100) / 100, debt_cnt: debt.get(r.id)?.n || 0 })));
   });
 
   const partnerFields = (b) => ({
@@ -109,7 +113,8 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     const lim = orders.limitsOf(p);
     const open = await orders.getOpen(p.id);
     return c.json({ partner: p, users: users.map(teamRow), brands, entities, roles: PARTNER_ROLES,
-      limits: { open: lim.open, unpaid: lim.unpaid, openTotal: open?.total || 0, openId: open?.id || null, unpaidTotal: await orders.unpaidTotal(p.id) } });
+      limits: { open: lim.open, unpaid: lim.unpaid, openTotal: open?.total || 0, openId: open?.id || null, unpaidTotal: await orders.unpaidTotal(p.id) },
+      postpay: await orders.postpayInfo(p), debt: await orders.debtOf(p.id) });
   });
 
   // Видалення партнера. Без замовлень — повністю; із замовленнями — в архів (замовлення й документи лишаються,
@@ -143,7 +148,16 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     if (!f.name) throw fail(400, 'Вкажіть назву партнера.');
     const active = b.active === undefined ? p.active : (b.active ? 1 : 0);
     // Ліміти: відкрита закупівля (замовлення без закупівлі) і всі неоплачені закупівлі; порожньо — типові 20 000 / 100 000.
-    for (const [k, label] of [['open_limit', 'відкритої закупівлі'], ['unpaid_limit', 'неоплачених закупівель']]) {
+    // Відстрочка оплати: днів (0 — лише передоплата) і ліміт (порожньо — без окремого ліміту).
+    if (b.postpay_days !== undefined) {
+      const v = parseInt(b.postpay_days, 10) || 0;
+      if (v < 0 || v > 180) throw fail(400, 'Відстрочка — від 0 до 180 днів.');
+      if (v !== (Number(p.postpay_days) || 0)) {
+        await db.run(`UPDATE b2b_partners SET postpay_days = ? WHERE id = ?`, [v, p.id]);
+        await audit(c, p.id, v ? `відстрочка оплати: ${v} дн.` : 'відстрочку оплати вимкнено');
+      }
+    }
+    for (const [k, label] of [['open_limit', 'відкритої закупівлі'], ['unpaid_limit', 'неоплачених закупівель'], ['postpay_limit', 'відстрочки']]) {
       if (b[k] === undefined) continue;
       const raw = String(b[k] ?? '').replace(/\s/g, '');
       if (raw && !/^\d+([.,]\d+)?$/.test(raw)) throw fail(400, `Ліміт ${label} — сума в гривнях.`);
