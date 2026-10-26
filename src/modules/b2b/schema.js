@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 18,
+  version: 19,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,6 +175,18 @@ export const schema = {
     created_by TEXT DEFAULT ''
   )`,
   `CREATE INDEX IF NOT EXISTS b2b_payments_order ON b2b_payments (order_id)`,
+  // Види документів партнера до замовлень клієнтів (до 5): «Чек для клієнта», «Накладна для клієнта»…
+  // required — без нього замовлення не оформити й не передати в CRM; print — бот надсилає в групу маркувань (для друку).
+  `CREATE TABLE IF NOT EXISTS b2b_doc_types (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    required INTEGER NOT NULL DEFAULT 0,
+    print INTEGER NOT NULL DEFAULT 1,
+    sort INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_doc_types_partner ON b2b_doc_types (partner_id, active)`,
   ],
   // ---------- етап 3: замовлення для клієнтів партнера ----------
   // supply_id — закупівля, з якої взято товари (порожньо — «без закупівлі»); дані клієнта й ТТН партнера;
@@ -216,6 +228,8 @@ export const schema = {
     ['b2b_partners', 'default_entity', 'INTEGER'],
     // Спосіб отримання закупівлі: np — відправка клієнтам (замовлення клієнтів), pickup — самовивіз усієї закупівлі.
     ['b2b_orders', 'delivery', "TEXT DEFAULT 'np'"],
+    // Документ партнера (kind = 'doc'): вид документа з b2b_doc_types.
+    ['b2b_files', 'doc_type', 'INTEGER'],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ['b2b_tg_docs', 'source', "TEXT DEFAULT 'private'"],
     ['b2b_tg_docs', 'reply_to', 'INTEGER'],

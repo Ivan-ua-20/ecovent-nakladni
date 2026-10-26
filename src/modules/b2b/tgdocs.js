@@ -604,6 +604,13 @@ export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
   // Старі незавершені завантаження — прибрати.
   hooks.cleanup = () => db.run(`DELETE FROM b2b_tg_docs WHERE created_at < ?`, [new Date(Date.now() - 3 * 86400000).toISOString()]);
   hooks.afterLabel = afterLabel;
+  // Документ партнера для друку (чек, накладна для клієнта…) — у групу маркувань із підписом виду документа.
+  hooks.afterDoc = async (o, f, t) => {
+    const chat = await labelsChat();
+    if (!chat) return;
+    const sent = await notify()?.sendFile({ chatIds: [chat] }, f, `📄 <b>${h(t.name)}</b> · ${labelCaption(o).replace(/^🏷 /, '')}`).catch(() => 0);
+    if (sent) await orders.log(o.id, { name: 'Telegram' }, `«${t.name}» надіслано в групу маркувань`);
+  };
   hooks.crmLinked = crmLinked;
   hooks.finRequest = finRequest;
   hooks.finClosed = finClosed;

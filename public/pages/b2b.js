@@ -486,7 +486,7 @@ export function createB2bPages(ctx = {}) {
         ${rows.map((o) => `<tr class="click ${o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''}" data-o="${o.id}">
           ${selCell(o.id)}
           <td><b>${esc(o.number)}</b><div>${supplyMark(o)}</div><div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
-          <td>${esc(o.partner)}<div class="small">${esc(o.client_name)} · ${esc(phoneFmt(o.client_phone))}</div>${o.ttn || o.files ? `<div class="small muted">${o.ttn ? `ТТН ${esc(o.ttn)}` : ''}${o.ttn && o.files ? ' · ' : ''}${o.files ? `📎 маркування: ${o.files}` : ''}</div>` : ''}</td>
+          <td>${esc(o.partner)}<div class="small">${esc(o.client_name)} · ${esc(phoneFmt(o.client_phone))}</div><div class="small muted">${o.ttn ? `ТТН ${esc(o.ttn)} · ` : ''}${o.labels ? `📎 маркування: ${o.labels}` : (o.status === 'new' ? '<span class="badge bad">без маркування</span>' : '')}${o.files > (o.labels || 0) ? ` · 📄 документів: ${o.files - (o.labels || 0)}` : ''}</div></td>
           <td class="r"><b>${uah(o.total)}</b></td>
           <td>${statusBadge(o)}</td>
           <td class="hide-m">${payBadge(o)}</td>
@@ -574,7 +574,7 @@ export function createB2bPages(ctx = {}) {
   const labelsGroup = () => groupModal('labels');
 
   async function viewClient(id) {
-    const [{ order: o, items, files, history, partner }, cfg] = await Promise.all([api('GET', `/api/b2b/orders/${id}`), api('GET', '/api/b2b/crm-settings')]);
+    const [{ order: o, items, files, history, partner, missing = [] }, cfg] = await Promise.all([api('GET', `/api/b2b/orders/${id}`), api('GET', '/api/b2b/crm-settings')]);
     if (o.kind !== 'client') { location.hash = `#/b2borders/${id}`; return; }
     const closed = o.status === 'cancelled';
     main.innerHTML = `
@@ -595,6 +595,7 @@ export function createB2bPages(ctx = {}) {
         <div class="form-stack">
           <div class="card form-stack">
             <h3>LP-CRM</h3>
+            ${missing.length ? `<div class="alert bad small">Бракує: <b>${missing.map(esc).join(', ')}</b> — «Додати в CRM» не спрацює, доки партнер їх не додасть.</div>` : ''}
             ${o.crm_id ? `<div>Замовлення № <b>${esc(o.crm_id)}</b>${o.crm_status ? ` · <span class="badge info">${esc(o.crm_status)}</span>` : ''}</div>` : ''}
             ${!closed && o.status === 'new' ? `<button class="btn primary" id="clCrm" ${cfg.on ? '' : 'disabled'}>Додати в CRM</button>
               ${cfg.on ? '' : '<div class="small muted">Передача в LP-CRM ще вимкнена (вкладка «Замовлення клієнтів» → «Налаштування CRM»). Поки що створіть замовлення в CRM вручну і впишіть номер нижче.</div>'}` : ''}
