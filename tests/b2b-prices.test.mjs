@@ -115,6 +115,9 @@ assert.equal((await req('GET', '/api/b2b/p/catalog', null, A)).products.find((p)
 const run = new Date().toISOString();
 const sr = await req('POST', '/api/b2b/catalog/sync', { run });
 assert.ok(sr.changed >= 1, 'зміну РРЦ записано для розсилки');
+const it11 = sr.items.find((x) => x.id === 11);
+assert.deepEqual([it11.old, it11.now, it11.brand], [before, 1111, 'Evoair'], 'список змінених РРЦ для вікна');
+assert.equal(sr.items.length, sr.changed);
 assert.equal(sr.left, 0);
 const u2 = (await req('GET', '/api/b2b/p/catalog', null, A)).products.find((p) => p.id === 11);
 assert.equal(u2.rrp, 1111);

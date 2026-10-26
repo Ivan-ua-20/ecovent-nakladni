@@ -384,23 +384,49 @@ export function createB2bPages(ctx = {}) {
   // Спершу — свіжі РРЦ з LP-CRM: у Telegram іде рівно те, що одразу бачить партнер у кабінеті (ціни з одного каталогу).
   async function sendPrices(only = null) {
     const wait = modal('Надіслати зміни цін партнерам', '<div class="form-stack"><div><span class="spinner"></span> <span id="spProg">Підтягую актуальні РРЦ з LP-CRM…</span></div></div>', { footer: '' });
-    try { await crmRefresh((n, left) => { const el = $('#spProg', wait.el); if (el) el.textContent = `Підтягую актуальні РРЦ з LP-CRM… ${n}${left ? ` / ${n + left}` : ''}`; }); }
+    let items;
+    try { items = await crmRefresh((n, left) => { const el = $('#spProg', wait.el); if (el) el.textContent = `Підтягую актуальні РРЦ з LP-CRM… ${n}${left ? ` / ${n + left}` : ''}`; }); }
     catch (e) { wait.close(); toast(`Не вдалося оновити ціни з LP-CRM — розсилку не відкрито: ${e.message}`, true); return; }
     wait.close();
+    await priceModal({ items, only });
+  }
+
+  // Вікно: які РРЦ щойно змінилися + розсилка партнерам (за замовчуванням — усі, кому є що надіслати; можна зняти).
+  // quiet — нічого не показувати, якщо немає ні змін РРЦ, ні неразісланих змін. Повертає true, якщо вікно відкрито.
+  async function priceModal({ items = [], only = null, quiet = false }) {
     const rows = await api('GET', '/api/b2b/price-changes');
     const withCh = rows.filter((r) => !r.empty);
+    if (quiet && !items.length && !withCh.length) return false;
+    const reach = (r) => r.group || r.tgUsers;
     const dest = (r) => (r.group ? `група «${esc(r.group)}»` : r.tgUsers ? `особисто: ${r.tgUsers} корист.` : '<span class="badge bad">нікому — немає Telegram</span>');
-    const m = modal('Надіслати зміни цін партнерам', withCh.length ? `<div class="form-stack">
-        <div class="small muted">Зміни РРЦ і знижок з минулої розсилки кожному партнеру. РРЦ щойно оновлено з LP-CRM — у кабінеті партнера вже ці ціни.</div>
-        ${withCh.map((r) => `<div class="card form-stack" style="padding:10px 12px">
-          <label class="check"><input type="checkbox" data-pp="${r.id}" ${!(r.group || r.tgUsers) ? 'disabled' : !only || only.includes(r.id) ? 'checked' : ''}> <b>${esc(r.name)}</b> — товарів: ${r.products}${r.brands ? `, брендів: ${r.brands}` : ''} → ${dest(r)}</label>
-          <details><summary class="small">Переглянути повідомлення</summary>${r.preview.map((t) => `<pre class="small" style="white-space:pre-wrap;margin:6px 0">${t}</pre>`).join('')}</details>
-        </div>`).join('')}
-        ${rows.length > withCh.length ? `<div class="small muted">Без змін: ${rows.filter((r) => r.empty).map((r) => esc(r.name)).join(', ')}</div>` : ''}
-      </div>` : '<div class="small">Змін цін і знижок з минулої розсилки немає.</div>',
-    { wide: true, footer: `<button class="btn" data-close>Закрити</button>${withCh.length ? '<button class="btn primary" id="ppSend">Надіслати</button>' : ''}` });
+    const pct = (o, n) => (o > 0 ? `${n > o ? '+' : ''}${String(Math.round(((n - o) / o) * 1000) / 10).replace('.', ',')}%` : '');
+    const list = [...items].sort((a, b) => a.brand.localeCompare(b.brand, 'uk') || a.name.localeCompare(b.name, 'uk'));
+    const m = modal('Зміни цін', `<div class="form-stack">
+        ${list.length ? `<div><h3 style="margin:0 0 6px">Змінились РРЦ у LP-CRM: ${list.length}</h3>
+          <div class="table-wrap" style="max-height:280px;overflow:auto"><table class="list"><thead><tr><th>Товар</th><th class="hide-m">Бренд</th><th class="r">Було</th><th class="r">Стало</th><th class="r"></th></tr></thead><tbody>
+          ${list.map((x) => `<tr><td>${esc(x.name)}<div class="small muted">ID ${x.id}</div></td><td class="hide-m small">${esc(x.brand)}</td><td class="r nowrap">${money(x.old)}</td>
+            <td class="r nowrap"><b>${money(x.now)}</b></td><td class="r nowrap small" style="color:var(${x.now > x.old ? '--bad' : '--ok'})">${x.now > x.old ? '▲' : '▼'} ${pct(x.old, x.now)}</td></tr>`).join('')}
+          </tbody></table></div>
+          <div class="small muted">Нові РРЦ уже в каталозі — партнери бачать нові ціни в кабінеті.</div></div>`
+        : '<div class="small muted">РРЦ у LP-CRM не змінились. Нижче — неразіслані зміни знижок і брендів.</div>'}
+        <h3 style="margin:6px 0 0">Розсилка партнерам</h3>
+        ${withCh.length ? `<div class="small muted">Кожен отримає лише свої бренди й ціни: зміни з його минулої розсилки.</div>
+          <label class="check"><input type="checkbox" id="ppAll"> <b>Усі</b></label>
+          ${withCh.map((r) => `<div class="card form-stack" style="padding:8px 12px">
+            <label class="check"><input type="checkbox" data-pp="${r.id}" ${!reach(r) ? 'disabled' : !only || only.includes(r.id) ? 'checked' : ''}> <b>${esc(r.name)}</b> — товарів: ${r.products}${r.brands ? `, брендів: ${r.brands}` : ''} → ${dest(r)}</label>
+            <details><summary class="small">Переглянути повідомлення</summary>${r.preview.map((t) => `<pre class="small" style="white-space:pre-wrap;margin:6px 0">${t}</pre>`).join('')}</details>
+          </div>`).join('')}
+          ${rows.length > withCh.length ? `<div class="small muted">Не стосується (немає змін у їхніх брендах): ${rows.filter((r) => r.empty).map((r) => esc(r.name)).join(', ')}</div>` : ''}`
+        : '<div class="small">Розсилати нічого: змінені товари не входять у бренди партнерів або все вже розіслано.</div>'}
+      </div>`,
+    { wide: true, footer: `<button class="btn" data-close>${withCh.length ? 'Не надсилати' : 'Закрити'}</button>${withCh.length ? '<button class="btn primary" id="ppSend">Надіслати</button>' : ''}` });
+    const boxes = () => $$('[data-pp]', m.el).filter((x) => !x.disabled);
+    const syncAll = () => { const all = $('#ppAll', m.el); if (all) all.checked = boxes().length > 0 && boxes().every((x) => x.checked); };
+    $('#ppAll', m.el) && ($('#ppAll', m.el).onchange = (e) => boxes().forEach((x) => { x.checked = e.target.checked; }));
+    boxes().forEach((x) => (x.onchange = syncAll));
+    syncAll();
     $('#ppSend', m.el) && ($('#ppSend', m.el).onclick = async (e) => {
-      const ids = $$('[data-pp]', m.el).filter((x) => x.checked).map((x) => Number(x.dataset.pp));
+      const ids = boxes().filter((x) => x.checked).map((x) => Number(x.dataset.pp));
       if (!ids.length) { toast('Оберіть партнерів', true); return; }
       e.currentTarget.disabled = true;
       try {
@@ -410,6 +436,7 @@ export function createB2bPages(ctx = {}) {
         m.close();
       } catch (er) { toast(er.message, true); e.currentTarget.disabled = false; }
     });
+    return true;
   }
 
   // ---------------------------------------------------------------- оголошення партнерам
@@ -473,23 +500,27 @@ export function createB2bPages(ctx = {}) {
   // Перечитати з LP-CRM усі товари каталогу (навіть якщо сьогодні вже оновлювали); повертає кількість змінених РРЦ.
   async function crmRefresh(progress = () => {}) {
     const run = new Date().toISOString();
-    let changed = 0;
+    const items = [];
     let done = 0;
     for (let i = 0; i < 100; i++) {
       const r = await api('POST', '/api/b2b/catalog/sync', { run });
-      changed += r.changed || 0;
+      items.push(...(r.items || []));
       done += r.checked || 0;
       progress(done, r.left || 0);
       if (!r.left || !r.checked) break;
     }
-    return changed;
+    return items;
   }
+  // «Оновити з LP-CRM»: якщо РРЦ змінилися (або є неразіслані зміни знижок) — одразу вікно зі списком і розсилкою.
   async function syncCatalog(btn, done = viewCatalog) {
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> Оновлюю з LP-CRM…';
     try {
-      const changed = await crmRefresh((n, left) => { btn.innerHTML = `<span class="spinner"></span> Оновлюю з LP-CRM… ${n}${left ? ` / ${n + left}` : ''}`; });
-      toast(`Каталог оновлено${changed ? ` · змінилися ціни: ${changed}` : ''}`);
+      const items = await crmRefresh((n, left) => { btn.innerHTML = `<span class="spinner"></span> Оновлюю з LP-CRM… ${n}${left ? ` / ${n + left}` : ''}`; });
+      btn.disabled = false;
+      done();
+      if (!(await priceModal({ items, quiet: true }))) toast('Каталог оновлено — ціни не змінились');
+      return;
     } catch (e) { toast(e.message, true); }
     btn.disabled = false;
     done();
