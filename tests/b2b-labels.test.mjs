@@ -160,6 +160,7 @@ assert.equal((await req('GET', `/api/b2b/p/orders/${sp.id}`, null, A)).order.del
 // ---------- 7. Чернетки: менеджери збирають, керівник або наш адмін відправляє ----------
 await req('POST', '/api/b2b/p/team', { login: 'mgr1', name: 'Олена', password: 'pass1234', partner_role: 'staff' }, A);
 await req('POST', '/api/b2b/p/team', { login: 'mgr2', name: 'Ігор', password: 'pass1234', partner_role: 'staff' }, A);
+await db.run(`UPDATE users SET tg_chat_id = '1' WHERE login = 'owner'`);
 const M1 = await login('mgr1', 'pass1234');
 const M2 = await login('mgr2', 'pass1234');
 tg.length = 0;
