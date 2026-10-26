@@ -8449,12 +8449,14 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
         WHERE EXISTS (SELECT 1 FROM an_products a WHERE a.product_id = b2b_catalog.product_id AND a.brand_id IS NOT b2b_catalog.brand_id)`, []]
     ]);
     const todo = await db.all(
-      `SELECT product_id, rrp FROM b2b_catalog WHERE hidden = 0 AND checked_at < ? AND (manual = 1 OR brand_id IN (SELECT brand_id FROM b2b_margins))
+      `SELECT product_id, rrp, brand_id FROM b2b_catalog WHERE hidden = 0 AND checked_at < ? AND (manual = 1 OR brand_id IN (SELECT brand_id FROM b2b_margins))
        ORDER BY checked_at LIMIT ?`,
       [today2, BATCH * BATCHES_PER_CALL]
     );
     const at = nowIso();
     let changed = 0;
+    const items = [];
+    const names = todo.length ? await brandNames() : /* @__PURE__ */ new Map();
     for (let i = 0; i < todo.length; i += BATCH) {
       const part = todo.slice(i, i + BATCH);
       const j = await call(fetchFn, s.lpcrm_subdomain, s.lpcrm_key, "getProduct", { product_id: part.map((x) => x.product_id).join(","), status_ignore: "1" });
@@ -8476,13 +8478,14 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
         if (r.rrp > 0 && rrp > 0 && Math.abs(rrp - r.rrp) >= 5e-3) {
           st.push([`INSERT INTO b2b_price_log (at, product_id, old_rrp, new_rrp) VALUES (?, ?, ?, ?)`, [at, r.product_id, r.rrp, rrp]]);
           changed++;
+          items.push({ id: r.product_id, name: String(p.name || p.title || "").trim().slice(0, 300), brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456", old: r.rrp, now: rrp });
         }
       }
       await db.batch(st);
     }
     await db.run(`INSERT INTO settings (key, value) VALUES ('b2b_catalog_sync', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [at]);
     const state = await catalogState(today2);
-    return c.json({ ok: true, checked: todo.length, changed, left: state.stale, lastSync: at });
+    return c.json({ ok: true, checked: todo.length, changed, items, left: state.stale, lastSync: at });
   });
   app.get("/api/b2b/brands", async (c) => {
     need(c, "b2b.admin");
