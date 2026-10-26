@@ -268,7 +268,7 @@ window.addEventListener('hashchange', route);
 // =====================================================================
 const PAY = createPayUI({ api, $, $$, esc, toast, modal, can, get main() { return main; }, reloadBoot: () => loadBoot() });
 const PAYSTATS = createPayStatsUI({ api, $, $$, esc, toast, modal, get main() { return main; } });
-const AN = createAnalyticsUI({ api, $, $$, esc, toast, modal, can, get main() { return main; }, fmtDateTime, setPending });
+const AN = createAnalyticsUI({ api, $, $$, esc, toast, modal, can, get boot() { return boot; }, get main() { return main; }, fmtDateTime, setPending });
 
 // ---------- старт ----------
 async function start() {
