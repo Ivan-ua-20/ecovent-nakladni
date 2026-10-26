@@ -436,7 +436,7 @@ export function createPartnerPages(ctx = {}) {
   }
 
   async function viewClient(id) {
-    const { order: o, items, files, history } = await api('GET', `/api/b2b/p/clients/${id}`);
+    const [{ order: o, items, files, history, missing = [] }, docTypes] = await Promise.all([api('GET', `/api/b2b/p/clients/${id}`), api('GET', '/api/b2b/p/doc-types').catch(() => [])]);
     const editable = o.status === 'new' && canEdit();
     main.innerHTML = `
       <div class="head-row"><h2>Замовлення ${esc(o.number)} ${statusBadge(o)} ${payBadge(o)}</h2>
@@ -463,10 +463,12 @@ export function createPartnerPages(ctx = {}) {
           </div>
           <div class="card form-stack">
             <h3>Файли</h3>
+            ${missing.length && o.status === 'new' ? `<div class="alert bad small">Бракує: <b>${missing.map(esc).join(', ')}</b> — без цього замовлення не передадуть у роботу.</div>` : ''}
             ${files.length ? files.map((f) => `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-              <a class="btn sm" href="/api/b2b/p/files/${f.id}" target="_blank" rel="noopener">📎 ${esc(f.kind_name)}: ${esc(f.name)}</a><span class="small muted">${fileSize(f.size)}</span>
-              ${editable && f.kind === 'label' ? `<button class="btn sm danger" data-fdel="${f.id}" aria-label="Видалити файл">✕</button>` : ''}</div>`).join('') : '<div class="small muted">Файлів ще немає.</div>'}
+              <a class="btn sm" href="/api/b2b/p/files/${f.id}" target="_blank" rel="noopener">${f.kind === 'doc' ? '📄' : '📎'} ${esc(f.kind_name)}: ${esc(f.name)}</a><span class="small muted">${fileSize(f.size)}</span>
+              ${editable && ['label', 'doc'].includes(f.kind) ? `<button class="btn sm danger" data-fdel="${f.id}" aria-label="Видалити файл">✕</button>` : ''}</div>`).join('') : '<div class="small muted">Файлів ще немає.</div>'}
             ${editable ? `<div class="drop-zone" id="cDrop"><div class="drop-hint">Перетягніть файл маркування сюди або <label class="btn sm">+ Файл маркування (етикетка ТТН)<input type="file" id="cUp" accept=".pdf,image/*" hidden></label></div></div>
+              ${docTypes.map((t) => `<div class="drop-zone" id="cDocZone${t.id}"><div class="drop-hint">${esc(t.name)}${t.required ? ' *' : ''}: перетягніть сюди або <label class="btn sm">+ Додати<input type="file" data-cdoc="${t.id}" accept=".pdf,image/*" hidden></label></div></div>`).join('')}
               <div class="small muted">PDF або фото до 5 МБ. Файли зберігаються 30 днів.</div>` : ''}
           </div>
           ${historyCard(history)}
@@ -485,6 +487,15 @@ export function createPartnerPages(ctx = {}) {
     };
     $('#cUp') && ($('#cUp').onchange = (e) => { const f = [...e.target.files]; e.target.value = ''; if (f.length) upLabels(f); });
     dropZone($('#cDrop'), upLabels);
+    const upDocs = async (tid, list) => {
+      for (const file of list) {
+        if (file.size > 5 * 1024 * 1024) { toast(`Файл «${file.name}» завеликий (до 5 МБ)`, true); continue; }
+        try { await uploadFile(`/api/b2b/p/clients/${o.id}/files?type=${tid}`, file); toast('Документ додано'); } catch (er) { toast(`${file.name}: ${er.message}`, true); }
+      }
+      viewClient(o.id);
+    };
+    for (const t of editable ? docTypes : []) dropZone($(`#cDocZone${t.id}`), (f) => upDocs(t.id, f));
+    $$('[data-cdoc]').forEach((inp) => (inp.onchange = () => { const f = [...inp.files]; inp.value = ''; if (f.length) upDocs(Number(inp.dataset.cdoc), f); }));
     $$('[data-fdel]').forEach((b) => (b.onclick = async () => {
       if (!(await confirmDanger('Видалити файл?', '', 'Видалити'))) return;
       try { await api('DELETE', `/api/b2b/p/clients/${o.id}/files/${b.dataset.fdel}`); toast('Видалено'); viewClient(o.id); } catch (er) { toast(er.message, true); }
@@ -493,8 +504,9 @@ export function createPartnerPages(ctx = {}) {
 
   // Оформлення / зміна: джерело товарів (закупівля із залишком або «без закупівлі» — каталог), клієнт, ТТН.
   async function clientForm(id, presetSupply) {
-    const [supplies, catalog, cur] = await Promise.all([
+    const [supplies, catalog, cur, docTypes] = await Promise.all([
       api('GET', '/api/b2b/p/supplies'), api('GET', '/api/b2b/p/catalog'), id ? api('GET', `/api/b2b/p/clients/${id}`) : null,
+      api('GET', '/api/b2b/p/doc-types').catch(() => []),
     ]);
     if (cur && cur.order.status !== 'new') { location.hash = `#/pclients/${id}`; return; }
     // Закупівля поточного замовлення — із залишком з урахуванням його власних позицій.
@@ -545,12 +557,16 @@ export function createPartnerPages(ctx = {}) {
             <label class="f"><span>Телефон *</span><input name="client_phone" value="${esc(o.client_phone || '')}" inputmode="tel" placeholder="0XXXXXXXXX" required></label>
             <label class="f"><span>ТТН (ваша)</span><input name="ttn" value="${esc(o.ttn || '')}" inputmode="numeric" placeholder="20450000000000"></label>
             <label class="f"><span>Коментар</span><textarea name="comment" rows="2">${esc(o.comment || '')}</textarea></label>
-            <div class="f"><span>Маркування (етикетка ТТН)</span>
+            <div class="f"><span>Маркування (етикетка ТТН) *</span>
               <div class="drop-zone" id="cfDrop">
                 <div id="cfFileList" class="form-stack" style="gap:6px"></div>
                 <div class="drop-hint">Перетягніть файл сюди або <label class="btn sm">+ Додати маркування<input type="file" id="cfFiles" accept=".pdf,image/*" multiple hidden></label></div>
               </div></div>
             <div class="small muted">PDF або фото до 5 МБ; можна кілька, зайве — ✕. Те саме маркування двічі (в одне чи різні замовлення) додати не можна.</div>
+            ${docTypes.map((t) => `<div class="f"><span>${esc(t.name)}${t.required ? ' *' : ''}</span>
+              <div class="drop-zone" id="cfDocZone${t.id}"><div id="cfDocList${t.id}" class="form-stack" style="gap:6px"></div>
+                <div class="drop-hint">Перетягніть файл сюди або <label class="btn sm">+ Додати<input type="file" data-doc="${t.id}" accept=".pdf,image/*" multiple hidden></label></div></div></div>`).join('')}
+            ${docTypes.length ? '' : '<div class="small muted">Свої документи для клієнта (чек, накладна тощо) можна додати у «Налаштуваннях».</div>'}
             <div id="cfSum"></div>
             <button class="btn primary" id="cfSave">${id ? 'Зберегти зміни' : 'Оформити замовлення'}</button>
           </form>
@@ -605,6 +621,35 @@ export function createPartnerPages(ctx = {}) {
       }));
     };
     drawFiles();
+    // Документи партнера за видами (з «Налаштувань»): збережені — з ✕ одразу, нові — до збереження замовлення.
+    const docSaved = new Map(docTypes.map((t) => [t.id, (cur?.files || []).filter((f) => f.kind === 'doc' && f.doc_type === t.id)]));
+    const docPend = new Map(docTypes.map((t) => [t.id, []]));
+    const drawDocs = (tid) => {
+      const box = $(`#cfDocList${tid}`);
+      if (!box) return;
+      box.innerHTML = [...docSaved.get(tid).map((f) => ({ name: f.name, size: f.size, saved: f.id })), ...docPend.get(tid).map((f, i) => ({ name: f.name, size: f.size, idx: i }))]
+        .map((f) => `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="small">📄 ${esc(f.name)} <span class="muted">${fileSize(f.size)}${f.saved ? ' · збережено' : ''}</span></span>
+          <button type="button" class="btn sm danger" ${f.saved ? `data-dsaved="${f.saved}"` : `data-dpend="${f.idx}"`} data-dt="${tid}" aria-label="Прибрати ${esc(f.name)}">✕</button></div>`).join('')
+        || '<div class="small muted">Ще не додано.</div>';
+      $$(`[data-dpend][data-dt="${tid}"]`, box).forEach((b) => (b.onclick = () => { docPend.get(tid).splice(Number(b.dataset.dpend), 1); drawDocs(tid); }));
+      $$(`[data-dsaved][data-dt="${tid}"]`, box).forEach((b) => (b.onclick = async () => {
+        if (!(await confirmDanger('Видалити документ?', 'Файл буде видалено із замовлення.', 'Видалити'))) return;
+        try { await api('DELETE', `/api/b2b/p/clients/${id}/files/${b.dataset.dsaved}`); docSaved.set(tid, docSaved.get(tid).filter((f) => String(f.id) !== b.dataset.dsaved)); drawDocs(tid); } catch (er) { toast(er.message, true); }
+      }));
+    };
+    const addDocs = (tid, files) => {
+      for (const f of files) {
+        if (f.size > 5 * 1024 * 1024) { toast(`Файл «${f.name}» завеликий (до 5 МБ)`, true); continue; }
+        if (docPend.get(tid).some((x) => x.name === f.name && x.size === f.size)) { toast(`«${f.name}» уже додано`, true); continue; }
+        docPend.get(tid).push(f);
+      }
+      drawDocs(tid);
+    };
+    for (const t of docTypes) {
+      drawDocs(t.id);
+      dropZone($(`#cfDocZone${t.id}`), (files) => addDocs(t.id, files));
+    }
+    $$('[data-doc]').forEach((inp) => (inp.onchange = () => { const f = [...inp.files]; inp.value = ''; addDocs(Number(inp.dataset.doc), f); }));
     // Новий файл: перевірка на дубль (той самий файл чи ТТН в іншому замовленні), і з маркування НП — ПІБ, телефон, ТТН.
     const addLabels = async (files) => {
       for (const file of files) {
@@ -647,6 +692,9 @@ export function createPartnerPages(ctx = {}) {
       if (!items.length) { toast('Вкажіть кількість хоча б одного товару', true); return; }
       const body = { ...Object.fromEntries(new FormData(e.target)), supply_id: source ? Number(source) : null, items };
       const files = pending.map((x) => x.file);
+      // Обов'язкові: маркування завжди, документи з позначкою «обов'язковий».
+      const lack = [...(saved.length + pending.length ? [] : ['маркування']), ...docTypes.filter((t) => t.required && !docSaved.get(t.id).length && !docPend.get(t.id).length).map((t) => t.name)];
+      if (lack.length) { toast(`Додайте: ${lack.join(', ')}`, true); return; }
       if (!(await confirmOrder(body, items))) return;
       $('#cfSave').disabled = true;
       let orderId = id;
@@ -657,6 +705,7 @@ export function createPartnerPages(ctx = {}) {
       // Маркування — після збереження замовлення; якщо файл не пройшов, замовлення вже є — його можна додати на сторінці замовлення.
       let failed = 0;
       for (const f of files) { try { await uploadFile(`/api/b2b/p/clients/${orderId}/files`, f); } catch (er) { failed++; toast(`${f.name}: ${er.message}`, true); } }
+      for (const [tid, list] of docPend) for (const f of list) { try { await uploadFile(`/api/b2b/p/clients/${orderId}/files?type=${tid}`, f); } catch (er) { failed++; toast(`${f.name}: ${er.message}`, true); } }
       toast(id ? 'Зміни збережено' : 'Замовлення оформлено' + (files.length && !failed ? ' разом із маркуванням' : ''));
       location.hash = `#/pclients/${orderId}`;
     };
@@ -677,6 +726,7 @@ export function createPartnerPages(ctx = {}) {
             <div>Телефон: <b>${esc(phoneFmt(body.client_phone))}</b></div>
             <div>ТТН: ${body.ttn ? `<b>${esc(body.ttn)}</b>` : '<span class="badge warn">не вказано</span>'}</div>
             <div>Маркування: ${labels.length ? labels.map(esc).join(', ') : '<span class="badge warn">не додано</span>'}</div>
+            ${docTypes.map((t) => { const n = [...docSaved.get(t.id).map((f) => f.name), ...docPend.get(t.id).map((f) => f.name)]; return `<div>${esc(t.name)}: ${n.length ? n.map(esc).join(', ') : `<span class="badge ${t.required ? 'bad' : 'warn'}">не додано</span>`}</div>`; }).join('')}
             ${body.comment ? `<div class="small">Коментар: ${esc(body.comment)}</div>` : ''}
           </div>
           <div class="small muted">Перевірте товари, кількість і дані отримувача — після передачі в роботу змінити їх зможе лише менеджер.</div></div>`,
@@ -752,5 +802,42 @@ export function createPartnerPages(ctx = {}) {
       </div>`;
   }
 
-  return { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders, viewClients, viewTeam };
+  // ---------------------------------------------------------------- налаштування партнера: види документів
+  async function viewSettings() {
+    let types = await api('GET', '/api/b2b/p/doc-types');
+    const head = ctx.can ? ctx.can('b2b.team') : true;
+    const draw = () => {
+      main.innerHTML = `
+        <div class="head-row"><h2>Налаштування</h2></div>
+        <div class="card form-stack" style="max-width:760px">
+          <h3>Документи до замовлень клієнтів</h3>
+          <div class="small muted">Маркування (етикетка ТТН) потрібне завжди. Тут — ваші документи для клієнта: чек, накладна, гарантійний талон тощо (до 5).
+            У замовленні для кожного буде окреме поле. <b>Обов’язковий</b> — без нього замовлення не оформити й не передати в роботу.
+            <b>Друкувати</b> — ми отримуємо його разом із маркуванням і вкладаємо в посилку.</div>
+          <table class="list"><thead><tr><th>Назва документа</th><th class="r">Обов’язковий</th><th class="r">Друкувати</th>${head ? '<th></th>' : ''}</tr></thead><tbody>
+            ${types.map((t, i) => `<tr>
+              <td>${head ? `<input data-tn="${i}" value="${esc(t.name)}" maxlength="60" aria-label="Назва документа" placeholder="Напр. Чек для клієнта" style="width:100%">` : esc(t.name)}</td>
+              <td class="r"><input type="checkbox" data-tr="${i}" ${t.required ? 'checked' : ''} ${head ? '' : 'disabled'} aria-label="Обов’язковий"></td>
+              <td class="r"><input type="checkbox" data-tp="${i}" ${t.print ? 'checked' : ''} ${head ? '' : 'disabled'} aria-label="Друкувати"></td>
+              ${head ? `<td class="r"><button class="btn sm danger" data-tdel="${i}" aria-label="Прибрати">✕</button></td>` : ''}</tr>`).join('')
+              || `<tr><td colspan="4" class="small muted">Ще немає — лише маркування.</td></tr>`}
+          </tbody></table>
+          ${head ? `<div class="btn-row">${types.length < 5 ? '<button class="btn" id="tAdd">+ Додати документ</button>' : ''}<button class="btn primary" id="tSave">Зберегти</button></div>`
+            : '<div class="small muted">Змінює керівник вашої команди.</div>'}
+        </div>`;
+      if (!head) return;
+      const sync = () => {
+        types = types.map((t, i) => ({ ...t, name: $(`[data-tn="${i}"]`)?.value ?? t.name, required: $(`[data-tr="${i}"]`)?.checked ?? t.required, print: $(`[data-tp="${i}"]`)?.checked ?? t.print }));
+      };
+      $('#tAdd') && ($('#tAdd').onclick = () => { sync(); types.push({ id: 0, name: '', required: false, print: true }); draw(); $(`[data-tn="${types.length - 1}"]`)?.focus(); });
+      $$('[data-tdel]').forEach((b) => (b.onclick = () => { sync(); types.splice(Number(b.dataset.tdel), 1); draw(); }));
+      $('#tSave').onclick = async () => {
+        sync();
+        try { types = (await api('PUT', '/api/b2b/p/doc-types', { types: types.filter((t) => t.name.trim()) })).types; toast('Збережено'); draw(); } catch (e) { toast(e.message, true); }
+      };
+    };
+    draw();
+  }
+
+  return { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders, viewClients, viewTeam, viewSettings };
 }

@@ -56,6 +56,7 @@ const SECTIONS = [
     { id: 'pentities', label: 'Мої юрособи' },
     { id: 'pstats', label: 'Аналітика' },
     { id: 'pteam', label: 'Команда', perm: 'b2b.team' },
+    { id: 'psettings', label: 'Налаштування' },
     { id: 'phelp', label: 'Інструкція' },
   ] },
   { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [{ id: 'settings', label: 'Загальні налаштування' }, { id: 'errors', label: 'Журнал помилок', perm: 'users' }] },
@@ -205,7 +206,7 @@ const { viewUsers } = createUsersPages(ctx);
 const { viewErrors } = createErrorsPages(ctx);
 const B2BSTATS = createB2bStats();
 const { viewPartners, viewCatalog, viewOrders: viewB2bOrders, viewClients: viewB2bClients } = createB2bPages(ctx);
-const { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients, viewTeam: viewPartnerTeam } = createPartnerPages(ctx);
+const { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients, viewTeam: viewPartnerTeam, viewSettings: viewPartnerSettings } = createPartnerPages(ctx);
 setUnauthorized(() => showAuth());
 
 const routes = {
@@ -232,6 +233,7 @@ const routes = {
   porders: viewPartnerOrders,
   pclients: viewPartnerClients,
   pteam: viewPartnerTeam,
+  psettings: viewPartnerSettings,
   pstats: () => B2BSTATS.view({ url: '/api/b2b/p/stats', title: 'Аналітика продажів' }),
   b2bstats: (pid) => B2BSTATS.view({ url: '/api/b2b/stats', admin: true, title: 'Аналітика B2B', partner: pid }),
   b2bclients: viewB2bClients,

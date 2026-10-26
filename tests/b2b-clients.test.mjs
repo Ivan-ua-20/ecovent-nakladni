@@ -185,6 +185,10 @@ assert.equal(cfg.in_key, '••••••', 'вхідний ключ не п�
 assert.equal((await req('GET', '/api/bootstrap')).settings.lpcrm_in_key, '••••••', 'і в загальних налаштуваннях — маска');
 await req('PUT', '/api/b2b/crm-settings', { ...cfg, on: true, office: '7' }); // маска не перезаписує ключ
 assert.equal((await db.get(`SELECT value FROM settings WHERE key = 'lpcrm_in_key'`)).value, 'abcdef0123456789abcdef0123456789');
+// без маркування в CRM не передається
+assert.match(await errOf(() => req('POST', `/api/b2b/clients/${c1.id}/crm`)), /Бракує документів: маркування/);
+const fakeLabel = (oid) => db.run(`INSERT INTO b2b_files (order_id, kind, name, mime, size, parts, created_by, created_at) VALUES (?, 'label', 'l.pdf', 'application/pdf', 1, 0, 't', '2026-10-26')`, [oid]);
+await fakeLabel(c1.id);
 // відмова CRM (немає дозволу) → замовлення лишається «Нове», можна повторити
 addReply = { status: 'error', message: 'Access denied for method addNewOrder' };
 assert.match(await errOf(() => req('POST', `/api/b2b/clients/${c1.id}/crm`)), /Access denied/);
@@ -228,6 +232,7 @@ const c3 = await req('POST', '/api/b2b/p/clients', { ...client, ttn: '2045000000
 // CRM прийняла, але замовлення ще не знаходиться за кодом → номер підтягнеться пізніше
 addReply = { status: 'ok', data: { order_id: 'x' } };
 crm.length = 0;
+await fakeLabel(c3.id);
 const s3 = await req('POST', `/api/b2b/clients/${c3.id}/crm`);
 assert.equal(s3.crm_id, '');
 const add3 = crm.find((x) => x.method === 'addNewOrder').p;

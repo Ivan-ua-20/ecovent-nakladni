@@ -24,7 +24,8 @@ const newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(10000 
 export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {} }) {
   const { labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h } = orders;
   const userName = (u) => u?.name || u?.login || '';
-  const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files
+  const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files,
+    (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id AND f.kind = 'label') AS labels
     FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id`;
 
   // ---------------------------------------------------------------- налаштування передачі в CRM
@@ -207,6 +208,19 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     }
     return { supplyId: null, toOpen: true, openId: open?.id || null, items, total };
   }
+  // Обов'язкові документи замовлення: маркування завжди + види документів партнера з позначкою «обов'язковий».
+  async function missingDocs(o) {
+    const [types, have] = await Promise.all([
+      db.all(`SELECT id, name FROM b2b_doc_types WHERE partner_id = ? AND active = 1 AND required = 1 ORDER BY sort, id`, [o.partner_id]),
+      db.all(`SELECT kind, doc_type FROM b2b_files WHERE order_id = ?`, [o.id]),
+    ]);
+    const out = [];
+    if (!have.some((f) => f.kind === 'label')) out.push('маркування');
+    for (const t of types) if (!have.some((f) => f.kind === 'doc' && f.doc_type === t.id)) out.push(t.name);
+    return out;
+  }
+  hooks.missingDocs = missingDocs;
+
   // ТТН уже є в іншому замовленні: своє — з номером і клієнтом, чуже — без подробиць.
   const ttnDupMsg = async (ttn, dup, partnerId) => ((await db.get(`SELECT partner_id FROM b2b_orders WHERE id = ?`, [dup.id]))?.partner_id === partnerId
     ? `ТТН ${ttn} уже є в замовленні ${dup.number} (${dup.client_name}).` : `ТТН ${ttn} уже використана в іншому замовленні.`);
@@ -339,7 +353,31 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     const p = await myPartner(c);
     const o = await myClientOrder(c, p);
     if (o.crm_id) await refreshCrm({ partnerId: p.id });
-    return c.json(await orderDetail(await orderOf(o.id, p.id)));
+    return c.json({ ...(await orderDetail(await orderOf(o.id, p.id))), missing: await missingDocs(o) });
+  });
+
+  // ---------- види документів партнера (налаштування партнера) ----------
+  const docTypes = (partnerId) => db.all(`SELECT id, name, required, print FROM b2b_doc_types WHERE partner_id = ? AND active = 1 ORDER BY sort, id`, [partnerId]);
+  app.get('/api/b2b/p/doc-types', async (c) => c.json(await docTypes((await myPartner(c)).id)));
+  // Список цілком (до 5): нові — додаються, прибрані — ховаються (у старих замовленнях назва лишається).
+  app.put('/api/b2b/p/doc-types', async (c) => {
+    const p = await myPartner(c);
+    need(c, 'b2b.team');
+    const list = (await c.req.json()).types;
+    if (!Array.isArray(list)) throw fail(400, 'Невірні дані.');
+    const rows = list.map((t) => ({ id: parseInt(t.id, 10) || 0, name: String(t.name || '').trim().replace(/\s+/g, ' ').slice(0, 60), required: t.required ? 1 : 0, print: t.print === false ? 0 : 1 }))
+      .filter((t) => t.name);
+    if (rows.length > 5) throw fail(400, 'Не більше 5 видів документів.');
+    if (new Set(rows.map((t) => t.name.toLowerCase())).size !== rows.length) throw fail(400, 'Назви видів документів мають відрізнятися.');
+    if (rows.some((t) => /^маркуван/i.test(t.name))) throw fail(400, 'Маркування вже є завжди — додайте інші документи.');
+    const cur = await db.all(`SELECT id FROM b2b_doc_types WHERE partner_id = ? AND active = 1`, [p.id]);
+    const keep = new Set(rows.filter((t) => t.id && cur.some((x) => x.id === t.id)).map((t) => t.id));
+    const st = cur.filter((x) => !keep.has(x.id)).map((x) => [`UPDATE b2b_doc_types SET active = 0 WHERE id = ?`, [x.id]]);
+    rows.forEach((t, i) => st.push(keep.has(t.id)
+      ? [`UPDATE b2b_doc_types SET name = ?, required = ?, print = ?, sort = ? WHERE id = ? AND partner_id = ?`, [t.name, t.required, t.print, i, t.id, p.id]]
+      : [`INSERT INTO b2b_doc_types (partner_id, name, required, print, sort, active) VALUES (?, ?, ?, ?, ?, 1)`, [p.id, t.name, t.required, t.print, i]]));
+    if (st.length) await db.batch(st);
+    return c.json({ ok: true, types: await docTypes(p.id) });
   });
 
   app.post('/api/b2b/p/clients', async (c) => {
@@ -418,10 +456,23 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
   app.post('/api/b2b/p/clients/:id/files', async (c) => {
     const p = await myPartner(c);
     const o = await myClientOrder(c, p);
-    if (o.status !== 'new') throw fail(400, 'Замовлення вже в роботі — новий файл маркування надішліть менеджеру.');
-    if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_files WHERE order_id = ?`, [o.id])).n >= 10) throw fail(400, 'Не більше 10 файлів у замовленні.');
+    if (o.status !== 'new') throw fail(400, 'Замовлення вже в роботі — новий файл надішліть менеджеру.');
+    if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_files WHERE order_id = ?`, [o.id])).n >= 15) throw fail(400, 'Не більше 15 файлів у замовленні.');
     const bytes = new Uint8Array(await c.req.arrayBuffer());
     if (!bytes.length) throw fail(400, 'Порожній файл.');
+    // Документ партнера (чек, накладна для клієнта…): вид — з налаштувань партнера; той самий файл двічі — ні.
+    const typeId = parseInt(c.req.query('type'), 10) || 0;
+    if (typeId) {
+      const t = await db.get(`SELECT * FROM b2b_doc_types WHERE id = ? AND partner_id = ? AND active = 1`, [typeId, p.id]);
+      if (!t) throw fail(404, 'Такого виду документа немає — оновіть сторінку.');
+      const { hash } = await labelInfo(bytes);
+      if (await db.get(`SELECT id FROM b2b_files WHERE order_id = ? AND hash = ?`, [o.id, hash])) throw fail(409, 'Цей файл уже додано до замовлення.');
+      const f = await saveFile(c, o, 'doc', bytes, { hash });
+      await db.run(`UPDATE b2b_files SET doc_type = ? WHERE id = ?`, [t.id, f.id]);
+      await log(o.id, c.get('user'), `документ: ${t.name}`);
+      if (t.print) await hooks.afterDoc?.(o, f, t).catch(() => 0);
+      return c.json({ id: f.id, warnings: [] });
+    }
     const info = await labelInfo(bytes);
     const dup = await labelDup(info, o.id);
     if (dup) throw fail(409, dup.id && (await db.get(`SELECT partner_id FROM b2b_orders WHERE id = ?`, [dup.id]))?.partner_id === p.id ? dupText(dup) : 'Таке маркування вже використане в іншому замовленні.');
@@ -434,7 +485,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     const p = await myPartner(c);
     const o = await myClientOrder(c, p);
     if (o.status !== 'new') throw fail(400, 'Замовлення вже в роботі.');
-    const f = await db.get(`SELECT * FROM b2b_files WHERE id = ? AND order_id = ? AND kind = 'label'`, [c.req.param('fid'), o.id]);
+    const f = await db.get(`SELECT * FROM b2b_files WHERE id = ? AND order_id = ? AND kind IN ('label', 'doc')`, [c.req.param('fid'), o.id]);
     if (!f) throw fail(404, 'Файл не знайдено.');
     await db.batch([[`DELETE FROM b2b_file_parts WHERE file_id = ?`, [f.id]], [`DELETE FROM b2b_files WHERE id = ?`, [f.id]]]);
     await log(o.id, c.get('user'), `видалено файл «${f.name}»`);
@@ -483,6 +534,8 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     if (!k.on) throw fail(400, 'Передачу в LP-CRM ще не ввімкнено. Коли ключ LP-CRM отримає дозвіл на addNewOrder — увімкніть її в «Налаштуваннях CRM» (вкладка «Замовлення клієнтів»). Поки що створіть замовлення в CRM вручну і впишіть його номер.');
     if (!k.office) throw fail(400, 'Не вказано ID відділу B2B у «Налаштуваннях CRM».');
     if (!k.creds.subdomain || !k.creds.key) throw fail(400, 'Не налаштовано LP-CRM: піддомен і API-ключ у «Налаштуваннях».');
+    const missing = await missingDocs(o);
+    if (missing.length) throw fail(400, `Бракує документів: ${missing.join(', ')}. Попросіть партнера додати їх у замовленні (або прив’яжіть номер CRM вручну).`);
     // Захист від подвійного натискання: «бронюємо» відправку.
     const code = newCode();
     const now = nowIso();

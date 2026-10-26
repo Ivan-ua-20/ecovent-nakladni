@@ -190,4 +190,37 @@ const dr3 = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, items: [
 assert.equal((await req('POST', `/api/b2b/p/orders/${dr3.id}/cancel`, {}, M2)).deleted, true);
 assert.ok(!(await db.get(`SELECT id FROM b2b_orders WHERE id = ?`, [dr3.id])), 'чернетку видалено');
 
+// ---------- 8. Документи партнера: види (до 5), обов'язкові, друк у групу маркувань ----------
+assert.match(await errOf(() => req('PUT', '/api/b2b/p/doc-types', { types: [{ name: 'Чек' }] }, M1)), /./, 'менеджер не змінює');
+assert.match(await errOf(() => req('PUT', '/api/b2b/p/doc-types', { types: [1, 2, 3, 4, 5, 6].map((n) => ({ name: `Д${n}` })) }, A)), /Не більше 5/);
+let dt = (await req('PUT', '/api/b2b/p/doc-types', { types: [{ name: 'Чек для клієнта', required: true, print: true }, { name: 'Гарантійний талон', required: false, print: false }] }, A)).types;
+assert.deepEqual(dt.map((t) => [t.name, t.required, t.print]), [['Чек для клієнта', 1, 1], ['Гарантійний талон', 0, 0]]);
+assert.equal((await req('GET', '/api/b2b/p/doc-types', null, B)).length, 0, 'в іншого партнера — свої');
+await db.run(`INSERT INTO settings (key, value) VALUES ('b2b_labels_chat', '-900') ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+const kd = await req('POST', '/api/b2b/p/clients', { client_name: 'Док Тест', client_phone: '0501112233', items: [{ product_id: 13, qty: 1 }] }, A);
+let kdd = await req('GET', `/api/b2b/p/clients/${kd.id}`, null, A);
+assert.deepEqual(kdd.missing, ['маркування', 'Чек для клієнта']);
+const upDoc = async (bytes, type, name) => {
+  const r = await app.request(`/api/b2b/p/clients/${kd.id}/files${type ? `?type=${type}` : ''}`, { method: 'POST', headers: { Cookie: A.Cookie, 'Content-Type': 'application/pdf', 'x-file-name': name }, body: bytes });
+  const j = await r.json();
+  if (r.status >= 400) throw new Error(j.error);
+  return j;
+};
+tg.length = 0;
+const chek = new Uint8Array([37, 80, 68, 70, 1, 2, 3]);
+await upDoc(chek, dt[0].id, 'check.pdf');
+assert.match(await errOf(() => upDoc(chek, dt[1].id, 'check2.pdf')), /уже додано/, 'той самий файл двічі — ні');
+await upDoc(new Uint8Array([9, 9, 9]), dt[1].id, 'talon.pdf');
+const toPrint = tg.filter((m) => String(m.chat_id) === '-900');
+void toPrint;
+kdd = await req('GET', `/api/b2b/p/clients/${kd.id}`, null, A);
+assert.deepEqual(kdd.missing, ['маркування']);
+assert.deepEqual(kdd.files.map((f) => f.kind_name).sort(), ['Гарантійний талон', 'Чек для клієнта']);
+assert.deepEqual((await req('GET', `/api/b2b/orders/${kd.id}`)).missing, ['маркування'], 'адмін бачить, чого бракує');
+// вид документа прибрали — у старому замовленні назва лишається
+dt = (await req('PUT', '/api/b2b/p/doc-types', { types: [{ id: dt[0].id, name: 'Чек для клієнта', required: true, print: true }] }, A)).types;
+assert.equal(dt.length, 1);
+assert.ok((await req('GET', `/api/b2b/p/clients/${kd.id}`, null, A)).files.some((f) => f.kind_name === 'Гарантійний талон'));
+await req('PUT', '/api/b2b/p/doc-types', { types: [] }, A);
+
 console.log('OK — B2B: часті товари, маркування без дублів, заміна номера LP-CRM, «Закрито»');

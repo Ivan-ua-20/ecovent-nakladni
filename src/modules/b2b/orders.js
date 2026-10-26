@@ -53,7 +53,7 @@ export const DELIVERY = { np: 'Відправка клієнтам (Нова п�
 const deliveryOf = (v) => (DELIVERY[v] ? v : 'np');
 const LIST_STATUSES = { ...ORDER_STATUS, closed: 'Закрито (усе розписано)' };
 const ENTITY_KIND = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
-const FILE_KIND = { invoice: 'Рахунок', waybill: 'Накладна', label: 'Маркування', other: 'Файл' };
+const FILE_KIND = { invoice: 'Рахунок', waybill: 'Накладна', label: 'Маркування', doc: 'Документ', other: 'Файл' };
 const MAX_FILE = 5 * 1024 * 1024;
 const PART = 600 * 1024; // байтів у частині (у base64 ≈ 800 КБ — менше за обмеження рядка D1)
 const KEEP_FILES_DAYS = 30;
@@ -349,11 +349,12 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     }
     const [items, files, history, clients] = await Promise.all([
       db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]),
-      db.all(`SELECT id, kind, name, mime, size, created_by, created_at FROM b2b_files WHERE order_id = ? ORDER BY id`, [o.id]),
+      db.all(`SELECT f.id, f.kind, f.name, f.mime, f.size, f.created_by, f.created_at, f.doc_type, t.name AS doc_name
+        FROM b2b_files f LEFT JOIN b2b_doc_types t ON t.id = f.doc_type WHERE f.order_id = ? ORDER BY f.id`, [o.id]),
       db.all(`SELECT at, user_name, action FROM b2b_order_log WHERE order_id = ? ORDER BY id DESC LIMIT 100`, [o.id]),
       o.kind === 'supply' ? db.all(`SELECT id, status, client_name, total, created_at FROM b2b_orders WHERE supply_id = ? AND kind = 'client' ORDER BY id DESC`, [o.id]) : [],
     ]);
-    const out = { order: publicOrder(o), items, files: files.map((f) => ({ ...f, kind_name: FILE_KIND[f.kind] || f.kind })), history };
+    const out = { order: publicOrder(o), items, files: files.map((f) => ({ ...f, kind_name: f.doc_name || FILE_KIND[f.kind] || f.kind })), history };
     if (o.kind === 'supply') {
       out.clients = clients.map((x) => ({ ...x, number: orderNo(x.id), status_name: CLIENT_STATUS[x.status] || x.status }));
       out.left = clients.length ? await supplyLeft(o.id) : items.map((i) => ({ ...i, used: 0, left: i.qty }));
@@ -491,7 +492,8 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     need(c, 'b2b.admin');
     const o = await orderOf(c.req.param('id'));
     const p = await db.get(`SELECT id, name, phone, email FROM b2b_partners WHERE id = ?`, [o.partner_id]);
-    return c.json({ ...(await orderDetail(o)), partner: p });
+    const missing = o.kind === 'client' && o.status === 'new' ? await hooks.missingDocs?.(o) || [] : [];
+    return c.json({ ...(await orderDetail(o)), partner: p, missing });
   });
 
   // Бухгалтер вносить номер рахунку (і накладної): «Очікує рахунок» → «Очікує оплату».
