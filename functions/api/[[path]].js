@@ -5724,7 +5724,8 @@ ${link(c, `b2borders/${r.lastId}`)}`);
       open: { id: open?.id || null, number: open ? orderNo(open.id) : "", total: open?.total || 0, limit: lim.open, orders: cnt },
       unpaid: { total: await unpaidTotal(p.id), limit: lim.unpaid },
       postpay: await postpayInfo(p),
-      debt: await debtOf(p.id)
+      debt: await debtOf(p.id),
+      paused: p.paused ? { note: p.pause_note || "" } : null
     });
   });
   app.post("/api/b2b/p/open/form", async (c) => {
@@ -8068,6 +8069,10 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   app.use("/api/b2b/p/*", async (c, next) => {
     const u = c.get("user");
     if (u?.role === "partner" && c.req.method !== "GET" && !can(u, "b2b.order")) throw fail(403, "\u0423 \u0432\u0430\u0441 \u0434\u043E\u0441\u0442\u0443\u043F \u043B\u0438\u0448\u0435 \u043D\u0430 \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u0434. \u0417\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043A\u0435\u0440\u0456\u0432\u043D\u0438\u043A\u0430 \u0432\u0430\u0448\u043E\u0457 \u043A\u043E\u043C\u0430\u043D\u0434\u0438.");
+    if (u?.role === "partner" && c.req.method === "POST" && /^\/api\/b2b\/p\/(orders|clients|orders\/\d+\/send)\/?$/.test(c.req.path)) {
+      const p = await db.get(`SELECT paused, pause_note FROM b2b_partners WHERE id = ?`, [u.partner_id]);
+      if (p?.paused) throw fail(403, `\u041D\u043E\u0432\u0456 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0439 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0442\u0438\u043C\u0447\u0430\u0441\u043E\u0432\u043E \u043F\u0440\u0438\u0437\u0443\u043F\u0438\u043D\u0435\u043D\u043E${p.pause_note ? `: ${p.pause_note}` : ""}. \u0417\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.`);
+    }
     await next();
   });
   app.get("/api/b2b/partners", async (c) => {
@@ -8157,19 +8162,15 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     await audit(c, p.id, `${hasOrders ? "\u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E (\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u043E \u0432 \u0430\u0440\u0445\u0456\u0432\u0456)" : "\u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E"}: \xAB${p.name}\xBB`);
     return c.json({ ok: true, archived: !!hasOrders });
   });
-  app.put("/api/b2b/partners/:id", async (c) => {
-    need(c, "b2b.admin");
-    const p = await getPartner(c.req.param("id"));
-    const b = await c.req.json();
-    const f = { ...partnerFields({ ...p, ...b }) };
-    if (!f.name) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043D\u0430\u0437\u0432\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430.");
-    const active = b.active === void 0 ? p.active : b.active ? 1 : 0;
+  async function applyLimits(c, p, b) {
+    const st = [];
+    const log = [];
     if (b.postpay_days !== void 0) {
       const v = parseInt(b.postpay_days, 10) || 0;
       if (v < 0 || v > 180) throw fail(400, "\u0412\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 \u2014 \u0432\u0456\u0434 0 \u0434\u043E 180 \u0434\u043D\u0456\u0432.");
       if (v !== (Number(p.postpay_days) || 0)) {
-        await db.run(`UPDATE b2b_partners SET postpay_days = ? WHERE id = ?`, [v, p.id]);
-        await audit(c, p.id, v ? `\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 \u043E\u043F\u043B\u0430\u0442\u0438: ${v} \u0434\u043D.` : "\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0443 \u043E\u043F\u043B\u0430\u0442\u0438 \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E");
+        st.push([`UPDATE b2b_partners SET postpay_days = ? WHERE id = ?`, [v, p.id]]);
+        log.push(v ? `\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 \u043E\u043F\u043B\u0430\u0442\u0438: ${v} \u0434\u043D.` : "\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0443 \u043E\u043F\u043B\u0430\u0442\u0438 \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E");
       }
     }
     for (const [k, label] of [["open_limit", "\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u043E\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456"], ["unpaid_limit", "\u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0438\u0445 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C"], ["postpay_limit", "\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0438"]]) {
@@ -8179,10 +8180,32 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       const v = raw2 ? round2(num3(raw2)) : null;
       if (v !== null && !(v >= 0 && v <= 1e8)) throw fail(400, `\u041B\u0456\u043C\u0456\u0442 ${label} \u2014 \u0441\u0443\u043C\u0430 \u0432 \u0433\u0440\u0438\u0432\u043D\u044F\u0445.`);
       if (v !== (p[k] ?? null)) {
-        await db.run(`UPDATE b2b_partners SET ${k} = ? WHERE id = ?`, [v, p.id]);
-        await audit(c, p.id, `\u043B\u0456\u043C\u0456\u0442 ${label}: ${p[k] ?? "\u0442\u0438\u043F\u043E\u0432\u0438\u0439"} \u2192 ${v ?? "\u0442\u0438\u043F\u043E\u0432\u0438\u0439"}`);
+        st.push([`UPDATE b2b_partners SET ${k} = ? WHERE id = ?`, [v, p.id]]);
+        log.push(`\u043B\u0456\u043C\u0456\u0442 ${label}: ${p[k] ?? "\u0442\u0438\u043F\u043E\u0432\u0438\u0439"} \u2192 ${v ?? "\u0442\u0438\u043F\u043E\u0432\u0438\u0439"}`);
       }
     }
+    if (st.length) await db.batch(st);
+    for (const x of log) await audit(c, p.id, x);
+    return log.length;
+  }
+  async function applyPause(c, p, b) {
+    if (b.paused === void 0) return 0;
+    const v = b.paused ? 1 : 0;
+    const note = v ? String(b.pause_note ?? p.pause_note ?? "").trim().slice(0, 300) : "";
+    if (v === (Number(p.paused) || 0) && note === (p.pause_note || "")) return 0;
+    await db.run(`UPDATE b2b_partners SET paused = ?, pause_note = ? WHERE id = ?`, [v, note, p.id]);
+    await audit(c, p.id, v ? `\u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043F\u043E\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E \u043D\u0430 \u043F\u0430\u0443\u0437\u0443${note ? `: ${note}` : ""}` : "\u043F\u0430\u0443\u0437\u0443 \u0437\u043D\u044F\u0442\u043E");
+    return 1;
+  }
+  app.put("/api/b2b/partners/:id", async (c) => {
+    need(c, "b2b.admin");
+    const p = await getPartner(c.req.param("id"));
+    const b = await c.req.json();
+    const f = { ...partnerFields({ ...p, ...b }) };
+    if (!f.name) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043D\u0430\u0437\u0432\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430.");
+    const active = b.active === void 0 ? p.active : b.active ? 1 : 0;
+    await applyLimits(c, p, b);
+    await applyPause(c, p, b);
     await db.run(`UPDATE b2b_partners SET name = ?, phone = ?, email = ?, note = ?, active = ? WHERE id = ?`, [f.name, f.phone, f.email, f.note, active, p.id]);
     if (!active && p.active) {
       await db.batch([
@@ -8193,21 +8216,10 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     if (active !== p.active) await audit(c, p.id, active ? "\u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0443\u0432\u0456\u043C\u043A\u043D\u0435\u043D\u043E" : "\u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E");
     return c.json({ ok: true });
   });
-  app.put("/api/b2b/partners/:id/margins", async (c) => {
-    need(c, "b2b.admin");
-    const p = await getPartner(c.req.param("id"));
-    const list = await c.req.json();
-    if (!Array.isArray(list)) throw fail(400, "\u041D\u0435\u0432\u0456\u0440\u043D\u0456 \u0434\u0430\u043D\u0456.");
-    const next = /* @__PURE__ */ new Map();
-    for (const r of list) {
-      const brand = parseInt(r.brand_id, 10);
-      const margin = round2(num3(r.margin));
-      if (!Number.isFinite(brand) || brand < 0) continue;
-      if (margin < 0 || margin >= 100) throw fail(400, "\u041C\u0430\u0440\u0436\u0430 \u2014 \u0432\u0456\u0434 0 \u0434\u043E 99,99 %.");
-      next.set(brand, margin);
-    }
+  async function applyMargins(c, p, build, names = null) {
     const cur = new Map((await db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id])).map((x) => [x.brand_id, x.margin]));
-    const names = await brandNames();
+    const next = build(cur);
+    names = names || await brandNames();
     const at = nowIso();
     const st = [];
     const changes = [];
@@ -8223,8 +8235,74 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       st.push([`INSERT INTO b2b_margin_log (at, partner_id, brand_id, old_margin, new_margin) VALUES (?, ?, ?, ?, NULL)`, [at, p.id, brand, margin]]);
       changes.push({ field: names.get(brand) || `\u0431\u0440\u0435\u043D\u0434 ${brand}`, from: `${margin}%`, to: "\u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E" });
     }
-    await db.batch(st);
+    if (st.length) await db.batch(st);
     if (changes.length) await audit(c, p.id, `\u0431\u0440\u0435\u043D\u0434\u0438 \u0439 \u043C\u0430\u0440\u0436\u0430 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \xAB${p.name}\xBB`, changes);
+    return changes;
+  }
+  app.post("/api/b2b/partners/bulk", async (c) => {
+    need(c, "b2b.admin");
+    const b = await c.req.json().catch(() => ({}));
+    const ids = [...new Set((Array.isArray(b.ids) ? b.ids : []).map(Number).filter((x) => x > 0))];
+    if (!ids.length) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432.");
+    if (ids.length > 200) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 200 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432 \u0437\u0430 \u0440\u0430\u0437.");
+    const list = await db.all(`SELECT * FROM b2b_partners WHERE COALESCE(deleted_at, '') = '' AND id IN (SELECT value FROM json_each(?))`, [JSON.stringify(ids)]);
+    let margin = null;
+    if (b.action === "margin") {
+      const mode = ["set", "add", "disable"].includes(b.mode) ? b.mode : "";
+      if (!mode) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u0434\u0456\u044E \u0437 \u043C\u0430\u0440\u0436\u0435\u044E.");
+      const brand = b.brand === "all" ? "all" : parseInt(b.brand, 10);
+      if (brand !== "all" && !(brand >= 0)) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u0431\u0440\u0435\u043D\u0434.");
+      const v = round2(num3(b.value));
+      if (mode === "set" && (v < 0 || v >= 100)) throw fail(400, "\u041C\u0430\u0440\u0436\u0430 \u2014 \u0432\u0456\u0434 0 \u0434\u043E 99,99 %.");
+      if (mode === "add" && (!v || Math.abs(v) >= 100)) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C, \u043D\u0430 \u0441\u043A\u0456\u043B\u044C\u043A\u0438 \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u043C\u0430\u0440\u0436\u0443 (\u043D\u0430\u043F\u0440. 2 \u0430\u0431\u043E -1,5).");
+      if (mode === "disable" && brand === "all") throw fail(400, "\u0412\u0438\u043C\u0438\u043A\u0430\u0442\u0438 \u043C\u043E\u0436\u043D\u0430 \u043A\u043E\u043D\u043A\u0440\u0435\u0442\u043D\u0438\u0439 \u0431\u0440\u0435\u043D\u0434.");
+      margin = { mode, brand, v, enable: !!b.enable && brand !== "all" && mode === "set" };
+    } else if (!["pause", "resume", "limits"].includes(b.action)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0430 \u0434\u0456\u044F.");
+    const names = await brandNames();
+    const results = [];
+    for (const p of list) {
+      try {
+        let changed = 0;
+        if (b.action === "pause") changed = await applyPause(c, p, { paused: 1, pause_note: b.note ?? "" });
+        else if (b.action === "resume") changed = await applyPause(c, p, { paused: 0 });
+        else if (b.action === "limits") {
+          const f = {};
+          for (const k of ["open_limit", "unpaid_limit", "postpay_days", "postpay_limit"]) if (b[k] !== void 0 && b[k] !== null) f[k] = b[k];
+          changed = await applyLimits(c, p, f);
+        } else {
+          const { mode, brand, v, enable } = margin;
+          changed = (await applyMargins(c, p, (cur) => {
+            const next = new Map(cur);
+            const targets = brand === "all" ? [...cur.keys()] : cur.has(brand) || enable ? [brand] : [];
+            for (const id of targets) {
+              if (mode === "disable") next.delete(id);
+              else if (mode === "set") next.set(id, v);
+              else next.set(id, Math.min(99.99, Math.max(0, round2((cur.get(id) || 0) + v))));
+            }
+            return next;
+          }, names)).length;
+        }
+        results.push({ id: p.id, name: p.name, ok: true, changed });
+      } catch (e) {
+        results.push({ id: p.id, name: p.name, ok: false, error: e.message });
+      }
+    }
+    return c.json({ results });
+  });
+  app.put("/api/b2b/partners/:id/margins", async (c) => {
+    need(c, "b2b.admin");
+    const p = await getPartner(c.req.param("id"));
+    const list = await c.req.json();
+    if (!Array.isArray(list)) throw fail(400, "\u041D\u0435\u0432\u0456\u0440\u043D\u0456 \u0434\u0430\u043D\u0456.");
+    const next = /* @__PURE__ */ new Map();
+    for (const r of list) {
+      const brand = parseInt(r.brand_id, 10);
+      const margin = round2(num3(r.margin));
+      if (!Number.isFinite(brand) || brand < 0) continue;
+      if (margin < 0 || margin >= 100) throw fail(400, "\u041C\u0430\u0440\u0436\u0430 \u2014 \u0432\u0456\u0434 0 \u0434\u043E 99,99 %.");
+      next.set(brand, margin);
+    }
+    const changes = await applyMargins(c, p, () => next);
     return c.json({ ok: true, changed: changes.length });
   });
   const MAX_TEAM = 30;
@@ -9983,7 +10061,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 20,
+  version: 21,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -10218,6 +10296,9 @@ var schema11 = {
     ["b2b_orders", "pay_days", "INTEGER DEFAULT 0"],
     ["b2b_orders", "due_date", "TEXT DEFAULT ''"],
     ["b2b_orders", "due_notified", "TEXT DEFAULT ''"],
+    // Пауза партнера: кабінет доступний, нові закупівлі й замовлення — ні; причина показується партнеру.
+    ["b2b_partners", "paused", "INTEGER DEFAULT 0"],
+    ["b2b_partners", "pause_note", "TEXT DEFAULT ''"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ["b2b_tg_docs", "source", "TEXT DEFAULT 'private'"],
     ["b2b_tg_docs", "reply_to", "INTEGER"],
