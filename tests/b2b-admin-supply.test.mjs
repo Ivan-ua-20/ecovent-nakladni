@@ -46,6 +46,7 @@ await req('POST', `/api/b2b/partners/${pa.id}/users`, { login: 'pa', password: '
 await req('PUT', `/api/b2b/partners/${pa.id}/margins`, [{ brand_id: 901, margin: 10 }]);
 await db.run(`UPDATE b2b_partners SET tg_group = '-100500' WHERE id = ?`, [pa.id]);
 await db.run(`UPDATE users SET tg_chat_id = '200' WHERE login = 'pa'`);
+await db.run(`UPDATE users SET tg_chat_id = '100' WHERE login = 'owner'`);
 const A = await login('pa', 'pass1234');
 
 // ---------- 1. Варіанти для форми: лише бренди партнера, ціни за його маржею ----------
@@ -88,7 +89,7 @@ await req('POST', `/api/b2b/p/orders/${o.id}/confirm`, { entity_id: ea.id }, A);
 d = await req('GET', `/api/b2b/orders/${o.id}`);
 assert.equal(d.order.status, 'invoice_wait');
 assert.ok(d.order.entity.startsWith('ФОП А'));
-assert.ok(tg.some((m) => m.text.includes('Партнер підтвердив')), 'адмінам — про підтвердження');
+assert.ok(tg.some((m) => String(m.chat_id) === '100' && m.text.includes('Партнер підтвердив')), 'адмінам — про підтвердження');
 assert.equal(await status(() => req('POST', `/api/b2b/p/orders/${o.id}/confirm`, { entity_id: ea.id }, A)), 400, 'двічі — ні');
 // з такої закупівлі замовлення клієнтів не оформлюються
 assert.equal((await req('GET', '/api/b2b/p/supplies', null, A)).length, 0);
