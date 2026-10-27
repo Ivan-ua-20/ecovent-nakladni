@@ -105,7 +105,8 @@ const first = await runSync('full');
 
 // ---------- Дублі ТТН у LP-CRM → менеджеру в Telegram ----------
 {
-  const todays = [...orders.values()].filter((o) => o.datetime.slice(0, 10) === today);
+  const tracked = new Set((await db.all(`SELECT code FROM an_orders WHERE day = ? AND status != 0`, [today])).map((r) => r.code));
+  const todays = [...orders.values()].filter((o) => tracked.has(o.order_id)); // лише замовлення відстежуваних статусів
   assert.ok(todays.length >= 4, 'є сьогоднішні замовлення');
   const [a, b, c2, d] = todays;
   await db.batch([
