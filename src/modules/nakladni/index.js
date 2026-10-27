@@ -16,7 +16,7 @@ const docFop = (f) => {
   return rest;
 };
 
-export function mountNakladni(app, { db, fetchFn, onCleanup, shared = {} }) {
+export function mountNakladni(app, { db, fetchFn, onCleanup, shared = {}, services = {} }) {
   const settings = () => loadSettings(db);
   shared.receiptCache ||= new Map();
   const receiptCache = shared.receiptCache;
@@ -320,6 +320,9 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, shared = {} }) {
   app.get('/api/invoice/:orderId', async (c) => {
     const orderId = c.req.param('orderId').trim().replace(/^№/, '');
     const inv = await buildInvoice(orderId, { fresh: c.req.query('fresh') === '1' });
+    // Замовлення від B2B-партнера: накладна не формується (версії не зберігаємо) — лише маркування, яке додав партнер.
+    const b2b = await services.b2b?.crmOrderInfo?.({ ids: [orderId, inv.crmOrder?.orderId, inv.crmOrder?.shortId, inv.crmCode], comment: inv.crmOrder?.comment }).catch(() => null);
+    if (b2b) return c.json({ ...inv, b2b, versionsCount: 0 });
     await trackChanges(orderId, inv, userName(c));
     const n = await db.get(`SELECT COUNT(*) AS n FROM versions WHERE order_id = ?`, [orderId]);
     return c.json({ ...inv, versionsCount: n?.n || 0 });

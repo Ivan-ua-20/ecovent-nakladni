@@ -50,7 +50,7 @@ async function loadInvoice(orderId, fresh = false, wide = false) {
     const qs = [fresh ? 'fresh=1' : '', wide ? 'wide=1' : ''].filter(Boolean).join('&');
     current = await api('GET', `/api/invoice/${encodeURIComponent(orderId)}${qs ? `?${qs}` : ''}`);
     current.requestedId = orderId;
-    renderInvoiceView();
+    if (current.b2b) renderB2bView(); else renderInvoiceView();
   } catch (e) {
     current = null;
     if ($('#invActions')) $('#invActions').innerHTML = '';
@@ -59,6 +59,27 @@ async function loadInvoice(orderId, fresh = false, wide = false) {
       ${ext ? `<div class="btn-row" style="margin-top:10px"><button class="btn primary" id="invWide">Перевірити за ${esc(e.data.extendDays)} днів</button></div>` : ''}</div>`;
     if (ext) $('#invWide').onclick = () => loadInvoice(orderId, false, true);
   }
+}
+
+// Замовлення від B2B-партнера: накладну не формуємо — лише маркування, яке партнер додав у своє замовлення.
+function renderB2bView() {
+  const b = current.b2b;
+  const o = current.order;
+  $('#invArea').innerHTML = `<div class="card form-stack" style="max-width:760px">
+      <h3 style="margin:0">📦 Замовлення від B2B партнера</h3>
+      <div class="alert info">Накладна для замовлень від B2B-партнерів не формується. Маркування додав партнер — кнопка «Маркування» відкриє його файл.</div>
+      <dl class="kv">
+        <dt>Замовлення LP-CRM</dt><dd>№${esc(o.orderId)}${o.shortId ? ` · ${esc(o.shortId)}` : ''}</dd>
+        <dt>Партнер</dt><dd><b>${esc(b.partner)}</b> · ${esc(b.number)}</dd>
+        <dt>Клієнт</dt><dd>${esc(b.client_name || o.buyer?.name || '')}</dd>
+        ${b.ttn ? `<dt>ТТН партнера</dt><dd>${esc(b.ttn)}</dd>` : ''}
+        <dt>Маркування</dt><dd>${b.label ? `📎 ${esc(b.label.name)} <span class="small muted">· ${esc(fmtDateTime(b.label.created_at))}</span>` : '<span class="badge bad">партнер ще не додав (або файл старший за 30 днів)</span>'}</dd>
+      </dl>
+      ${can('b2b.admin') ? `<div><a class="btn sm" href="#/b2bclients/${b.id}">Відкрити ${esc(b.number)} у B2B</a></div>` : ''}
+    </div>`;
+  $('#invActions').innerHTML = `<button class="btn primary" id="actNp" ${b.label ? '' : 'disabled'}>Маркування</button><button class="btn" id="actRefresh">Оновити з CRM</button>`;
+  $('#actNp').onclick = () => npMarking($('#actNp'));
+  $('#actRefresh').onclick = () => loadInvoice(current.requestedId, true);
 }
 
 function renderInvoiceView() {
@@ -205,6 +226,14 @@ async function npMarking(btn) {
   btn.disabled = true;
   setPending((n) => { btn.innerHTML = `<span class="spinner"></span> Шукаю ТТН… (${n + 1})`; });
   try {
+    if (current.b2b) { // маркування, яке додав партнер
+      const res = await fetch(`/api/b2b/label/${current.b2b.id}`);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Маркування партнера не отримано.');
+      const url = URL.createObjectURL(await res.blob());
+      if (win) win.location.href = url; else window.open(url, '_blank');
+      toast(`Маркування партнера «${current.b2b.partner}» · ${current.b2b.number}`);
+      return;
+    }
     const rzTtn = String(o.delivery?.ttn || '').toUpperCase().replace(/\s/g, '');
     if (/^RMP/.test(rzTtn)) {
       const res = await fetch(`/api/rz/marking/${encodeURIComponent(rzTtn)}`);

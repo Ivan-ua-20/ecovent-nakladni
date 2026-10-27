@@ -2924,7 +2924,7 @@ var docFop = (f) => {
   const { checkbox_login, checkbox_password, checkbox_license, checkbox_pin, ...rest } = f;
   return rest;
 };
-function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {} }) {
+function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {}, services = {} }) {
   const settings = () => loadSettings(db);
   shared2.receiptCache ||= /* @__PURE__ */ new Map();
   const receiptCache = shared2.receiptCache;
@@ -3201,6 +3201,8 @@ function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {} }) {
   app.get("/api/invoice/:orderId", async (c) => {
     const orderId = c.req.param("orderId").trim().replace(/^№/, "");
     const inv = await buildInvoice(orderId, { fresh: c.req.query("fresh") === "1" });
+    const b2b = await services.b2b?.crmOrderInfo?.({ ids: [orderId, inv.crmOrder?.orderId, inv.crmOrder?.shortId, inv.crmCode], comment: inv.crmOrder?.comment }).catch(() => null);
+    if (b2b) return c.json({ ...inv, b2b, versionsCount: 0 });
     await trackChanges(orderId, inv, userName(c));
     const n = await db.get(`SELECT COUNT(*) AS n FROM versions WHERE order_id = ?`, [orderId]);
     return c.json({ ...inv, versionsCount: n?.n || 0 });
@@ -6328,13 +6330,38 @@ ${link(c, `porders/${o.id}`)}`);
     await log(f.order_id, c.get("user"), `\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u0444\u0430\u0439\u043B \xAB${f.name}\xBB`);
     return c.json({ ok: true });
   });
+  app.get("/api/b2b/label/:id", async (c) => {
+    need(c, "docs.view");
+    const f = await db.get(`SELECT f.* FROM b2b_files f JOIN b2b_orders o ON o.id = f.order_id WHERE f.order_id = ? AND f.kind = 'label' AND o.kind = 'client' ORDER BY f.id DESC LIMIT 1`, [c.req.param("id")]);
+    if (!f) throw fail(404, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440 \u0449\u0435 \u043D\u0435 \u0434\u043E\u0434\u0430\u0432 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F (\u0430\u0431\u043E \u0444\u0430\u0439\u043B \u0441\u0442\u0430\u0440\u0448\u0438\u0439 \u0437\u0430 30 \u0434\u043D\u0456\u0432).");
+    return sendFile(f);
+  });
+  async function crmOrderInfo({ ids = [], comment = "" } = {}) {
+    const m = /B2B-(\d+)\s*·\s*B2B «/.exec(String(comment || ""));
+    let o = m ? await db.get(`SELECT * FROM b2b_orders WHERE id = ? AND kind = 'client'`, [Number(m[1])]) : null;
+    const list = [...new Set(ids.map((x) => String(x || "").trim()).filter(Boolean))];
+    if (!o && list.length) {
+      o = await db.get(
+        `SELECT * FROM b2b_orders WHERE kind = 'client' AND id IN (
+          SELECT id FROM b2b_orders WHERE crm_id != '' AND crm_id IN (SELECT value FROM json_each(?))
+          UNION SELECT id FROM b2b_orders WHERE crm_ext != '' AND crm_ext IN (SELECT value FROM json_each(?))) ORDER BY id DESC LIMIT 1`,
+        [JSON.stringify(list), JSON.stringify(list)]
+      );
+    }
+    if (!o) return null;
+    const [p, label] = await Promise.all([
+      db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [o.partner_id]),
+      db.get(`SELECT id, name, mime, created_at FROM b2b_files WHERE order_id = ? AND kind = 'label' ORDER BY id DESC LIMIT 1`, [o.id])
+    ]);
+    return { id: o.id, number: orderNo(o.id), partner: p?.name || "", client_name: o.client_name, ttn: o.ttn || "", status: o.status, label: label || null };
+  }
   app.get("/api/b2b/p/files/:id", async (c) => {
     const p = await myPartner(c);
     const f = await db.get(`SELECT f.* FROM b2b_files f JOIN b2b_orders o ON o.id = f.order_id WHERE f.id = ? AND o.partner_id = ?`, [c.req.param("id"), p.id]);
     if (!f) throw fail(404, "\u0424\u0430\u0439\u043B \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (\u0437\u0431\u0435\u0440\u0456\u0433\u0430\u044E\u0442\u044C\u0441\u044F 30 \u0434\u043D\u0456\u0432).");
     return sendFile(f);
   });
-  return { entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah2, h: h3 };
+  return { crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah2, h: h3 };
 }
 
 // src/modules/b2b/clients.js
@@ -9214,7 +9241,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   };
   const tgGroupMoved = (from, to) => db.run(`UPDATE b2b_partners SET tg_group = ? WHERE tg_group = ?`, [to, from]);
   const tgGroupLeft = (chat) => db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '' WHERE tg_group = ?`, [chat]);
-  return { partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupMessage: tgdocs.tgGroupMessage, onPayments: pay.onPayments, payInfo: pay.payInfo };
+  return { crmOrderInfo: orders.crmOrderInfo, partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupMessage: tgdocs.tgGroupMessage, onPayments: pay.onPayments, payInfo: pay.payInfo };
 }
 
 // src/integrations/novaposhta.js
@@ -11138,7 +11165,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 23,
+  version: 24,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -11418,6 +11445,9 @@ var schema11 = {
       [`CREATE INDEX IF NOT EXISTS b2b_files_hash ON b2b_files (hash)`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_files_ttn ON b2b_files (ttn)`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_orders_ttn ON b2b_orders (ttn)`, []],
+      // Сторінка накладної: чи це замовлення B2B-партнера (за № / кодом замовлення в LP-CRM).
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_crm ON b2b_orders (crm_id) WHERE crm_id != ''`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_crmext ON b2b_orders (crm_ext) WHERE crm_ext != ''`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_payments_payer ON b2b_payments (payer_code)`, []]
     ]);
   }
