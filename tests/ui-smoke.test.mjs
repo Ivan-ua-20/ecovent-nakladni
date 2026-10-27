@@ -29,7 +29,7 @@ globalThis.fetch = async (url) => {
 process.on('unhandledRejection', (e) => errors.push(e));
 await import(new URL('../public/app.js', import.meta.url));
 await new Promise((r) => setTimeout(r, 30));
-const routes = ['invoice', 'history', 'fops', 'fops/1', 'fops/new', 'offices', 'templates', 'templates/1', 'nsettings', 'rahunky', 'rlist', 'invfops', 'invfops/1', 'invfops/new', 'rsettings', 'settings', 'errors', 'users', 'b2bpartners', 'b2bpartners/1', 'b2bcatalog', 'pcatalog', 'phelp', 'b2borders', 'b2borders/1', 'porders', 'porders/new', 'porders/1', 'porders/1/edit', 'pentities', 'pclients', 'pclients/new', 'pclients/new/1', 'pclients/2', 'pclients/2/edit', 'b2bclients', 'b2bclients/2', 'pteam', 'psettings', 'pstats', 'b2bstats', 'b2bstats/1', 'ansettings', 'b2btrash', 'ptrash'];
+const routes = ['invoice', 'history', 'fops', 'fops/1', 'fops/new', 'offices', 'templates', 'templates/1', 'nsettings', 'rahunky', 'rlist', 'invfops', 'invfops/1', 'invfops/new', 'rsettings', 'settings', 'errors', 'users', 'b2bpartners', 'b2bpartners/1', 'b2bcatalog', 'pcatalog', 'phelp', 'b2borders', 'b2borders/1', 'porders', 'porders/new', 'porders/1', 'porders/1/edit', 'pentities', 'pclients', 'pclients/new', 'pclients/new/1', 'pclients/2', 'pclients/2/edit', 'b2bclients', 'b2bclients/2', 'pteam', 'psettings', 'pstats', 'b2bstats', 'b2bstats/1', 'ansettings', 'b2btrash', 'ptrash', 'np'];
 for (const r of routes) {
   location.hash = `#/${r}`;
   mainHtml = '';
