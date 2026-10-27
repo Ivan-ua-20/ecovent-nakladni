@@ -9677,8 +9677,8 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
 // src/integrations/rozetka-supplier.js
 var RZS_API = "https://api-cabinet-supplier.rozetka.com.ua";
 var rzsError = (status, j, fallback) => Object.assign(
-  new Error(`\u0420\u043E\u0437\u0435\u0442\u043A\u0430: ${status === 401 ? "\u043D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u0430\u0431\u043E \u043F\u0440\u043E\u0441\u0442\u0440\u043E\u0447\u0435\u043D\u0438\u0439 \u0442\u043E\u043A\u0435\u043D (\u041A\u0430\u0431\u0456\u043D\u0435\u0442 \u043F\u043E\u0441\u0442\u0430\u0447\u0430\u043B\u044C\u043D\u0438\u043A\u0430 \u2192 \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0422\u043E\u043A\u0435\u043D\u0438)" : j?.message || fallback || `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${status}`}`),
-  { status: status === 401 ? 400 : status >= 500 ? 502 : 400, rzsStatus: status, rzs: j }
+  new Error(`\u0420\u043E\u0437\u0435\u0442\u043A\u0430: ${status === 401 ? "\u043D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u0430\u0431\u043E \u043F\u0440\u043E\u0441\u0442\u0440\u043E\u0447\u0435\u043D\u0438\u0439 \u0442\u043E\u043A\u0435\u043D (\u041A\u0430\u0431\u0456\u043D\u0435\u0442 \u043F\u043E\u0441\u0442\u0430\u0447\u0430\u043B\u044C\u043D\u0438\u043A\u0430 \u2192 \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0422\u043E\u043A\u0435\u043D\u0438)" : status === 429 ? "\u0437\u0430\u0431\u0430\u0433\u0430\u0442\u043E \u0437\u0430\u043F\u0438\u0442\u0456\u0432 \u043F\u043E\u0441\u043F\u0456\u043B\u044C \u2014 \u0437\u0430\u0447\u0435\u043A\u0430\u0439\u0442\u0435 \u043A\u0456\u043B\u044C\u043A\u0430 \u0441\u0435\u043A\u0443\u043D\u0434 \u0456 \u043F\u043E\u0432\u0442\u043E\u0440\u0456\u0442\u044C" : j?.message || fallback || `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${status}`}`),
+  { status: status === 401 ? 400 : status === 429 ? 429 : status >= 500 ? 502 : 400, rzsStatus: status, rzs: j }
 );
 async function rq(fetchFn, token, method, path, { json, xml, raw: raw2 = false } = {}) {
   let res;
@@ -10106,10 +10106,12 @@ function mountRetail(app, { db, fetchFn }) {
       return { supplierCode: p.supplierCode, confirmedQuantity: p.quantity, ...sn.length ? { serialNumbers: sn } : {} };
     });
     const res = await rzsConfirm(fetchFn, a.token, r.id, products);
-    const fresh = await rzsOrder(fetchFn, a.token, r.id).catch(() => null);
-    if (fresh && (fresh.orderId || fresh.id)) await saveOrders2([fresh], a.id);
-    else await db.run(`UPDATE rzs_orders SET status = ?, confirmed_at = COALESCE(NULLIF(confirmed_at, ''), ?) WHERE id = ?`, [res.status, nowIso(), r.id]);
-    await db.run(`UPDATE rzs_orders SET note = ? WHERE id = ?`, [`\u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432(\u043B\u0430) ${userName5(c.get("user"))}`, r.id]);
+    const sent = new Map(products.map((p) => [p.supplierCode, p]));
+    const confirmed = JSON.parse(r.products || "[]").map((x2) => ({ ...x2, ...sent.get(String(x2.supplierCode)) }));
+    await db.run(
+      `UPDATE rzs_orders SET status = ?, products = ?, confirmed_at = COALESCE(NULLIF(confirmed_at, ''), ?), note = ? WHERE id = ?`,
+      [res.status || "confirmed", JSON.stringify(confirmed), nowIso(), `\u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432(\u043B\u0430) ${userName5(c.get("user"))}`, r.id]
+    );
     return c.json({ ok: true, status: res.status, warnings: res.warnings.map((w) => w.message || String(w)) });
   });
   function seatsFor(o) {

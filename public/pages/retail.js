@@ -6,6 +6,9 @@ import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../c
 const ST_CLS = { new: 'warn', updated: 'warn', confirmed: 'info', shipping: 'info', problem: 'bad', closed: 'ok', delivery_refused: 'bad', deleted: 'bad', shipped_from_rozetka: 'ok' };
 const UZD_CLS = { verified: 'ok', skipped: 'ok', problem: 'bad', not_uploaded: '' };
 const VIEWS = { '': 'Усі', todo: 'До підтвердження', nottn: 'Без ТТН', nocrm: 'Не в LP-CRM', docs: 'З документами' };
+const GAP_MS = 2000; // пауза між замовленнями в групових діях
+const RETRY_MS = [5000, 10000, 20000]; // якщо Розетка все ж відповіла «забагато запитів»
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const n2 = (v) => { const x = parseFloat(String(v ?? '').replace(/\s/g, '').replace(',', '.')); return Number.isFinite(x) ? x : 0; };
 
 export function createRetailPages(ctx) {
@@ -80,7 +83,7 @@ export function createRetailPages(ctx) {
     $$('[data-sel]').forEach((x) => (x.onchange = draw));
     $('#rzAll') && ($('#rzAll').onchange = (e) => { $$('[data-sel]').forEach((x) => { x.checked = e.target.checked; }); draw(); });
     const ACT = {
-      confirm: { label: 'Підтвердити', ok: (o) => ['new', 'updated'].includes(o.status), why: 'вже підтверджене або не можна', run: (id) => api('POST', `/api/rzs/orders/${id}/confirm`, {}) },
+      confirm: { label: 'Підтвердити', ok: (o) => ['new', 'updated'].includes(o.status), why: 'вже підтверджене (або статус не дозволяє)', run: (id) => api('POST', `/api/rzs/orders/${id}/confirm`, {}) },
       ttn: { label: 'Створити ТТН', ok: (o) => ['confirmed', 'problem'].includes(o.status) && !o.ttn, why: 'не підтверджене або ТТН уже є', run: (id) => api('POST', `/api/rzs/orders/${id}/ttn`, {}) },
       crm: { label: 'У LP-CRM', ok: (o) => !o.crm_id && !o.crm_code && o.status !== 'deleted', why: 'уже в LP-CRM', run: (id) => api('POST', `/api/rzs/orders/${id}/crm`, {}) },
     };
@@ -96,9 +99,21 @@ export function createRetailPages(ctx) {
       const fails = [];
       let ok = 0;
       bar.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+      const label = (t) => { bar.querySelector('b').textContent = t; };
       for (const [i, id] of todo.entries()) {
-        bar.querySelector('b').textContent = `${a.label}: ${i + 1} з ${todo.length}…`;
-        try { const r = await a.run(id); ok++; if (r?.warnings?.length) fails.push(`${byId.get(id).order_num}: ⚠️ ${r.warnings.join('; ')}`); } catch (e) { fails.push(`${byId.get(id).order_num}: ${e.message}`); }
+        if (i) await sleep(k === 'crm' ? 400 : GAP_MS); // Розетка блокує часті запити — пауза між замовленнями
+        label(`${a.label}: ${i + 1} з ${todo.length}…`);
+        for (let attempt = 0; ; attempt++) {
+          try { const r = await a.run(id); ok++; if (r?.warnings?.length) fails.push(`${byId.get(id).order_num}: ⚠️ ${r.warnings.join('; ')}`); break; }
+          catch (e) {
+            if (e.status === 429 && attempt < RETRY_MS.length) {
+              for (let s = RETRY_MS[attempt] / 1000; s > 0; s--) { label(`${a.label}: ${i + 1} з ${todo.length} — Розетка просить зачекати, ще ${s} с…`); await sleep(1000); }
+              continue;
+            }
+            fails.push(`${byId.get(id).order_num}: ${e.message}`);
+            break;
+          }
+        }
       }
       toast(`${a.label}: виконано ${ok} з ${todo.length}`, ok < todo.length);
       if (fails.length || skipped.length) modal('Результат', `<div class="form-stack small">${[...fails, ...skipped].map((x) => `<div>${esc(x)}</div>`).join('')}</div>`, { footer: '<button class="btn primary" data-close>Зрозуміло</button>' });

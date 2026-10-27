@@ -5,8 +5,9 @@
 export const RZS_API = 'https://api-cabinet-supplier.rozetka.com.ua';
 
 const rzsError = (status, j, fallback) => Object.assign(
-  new Error(`Розетка: ${status === 401 ? 'невірний або прострочений токен (Кабінет постачальника → Налаштування → Токени)' : (j?.message || fallback || `помилка ${status}`)}`),
-  { status: status === 401 ? 400 : status >= 500 ? 502 : 400, rzsStatus: status, rzs: j },
+  new Error(`Розетка: ${status === 401 ? 'невірний або прострочений токен (Кабінет постачальника → Налаштування → Токени)'
+    : status === 429 ? 'забагато запитів поспіль — зачекайте кілька секунд і повторіть' : (j?.message || fallback || `помилка ${status}`)}`),
+  { status: status === 401 ? 400 : status === 429 ? 429 : status >= 500 ? 502 : 400, rzsStatus: status, rzs: j },
 );
 
 async function rq(fetchFn, token, method, path, { json, xml, raw = false } = {}) {
