@@ -7529,7 +7529,7 @@ function mountB2bTgDocs(app, { db, services, orders, hooks }) {
   const notify = () => services.notify;
   const tgApi = (method, body) => notify()?.api(method, body);
   const set = (key, value) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]);
-  const isPdf = (bytes) => bytes?.[0] === 37 && bytes[1] === 80 && bytes[2] === 68 && bytes[3] === 70;
+  const isPdf2 = (bytes) => bytes?.[0] === 37 && bytes[1] === 80 && bytes[2] === 68 && bytes[3] === 70;
   app.get("/api/b2b/labels-group", async (c) => {
     need(c, "b2b.admin");
     const s = await loadSettings(db);
@@ -7564,7 +7564,7 @@ function mountB2bTgDocs(app, { db, services, orders, hooks }) {
   async function afterLabel(o, f, _user, { fileId = "", replaced = false } = {}) {
     const warnings = [];
     let np = null;
-    if (f.bytes && isPdf(f.bytes)) np = parseNpLabel(await pdfText(f.bytes));
+    if (f.bytes && isPdf2(f.bytes)) np = parseNpLabel(await pdfText(f.bytes));
     if (np?.ttn) {
       if (!o.ttn) {
         await db.run(`UPDATE b2b_orders SET ttn = ?, updated_at = ? WHERE id = ?`, [np.ttn, nowIso(), o.id]);
@@ -7837,7 +7837,7 @@ ${[...checks, ...itemLines.slice(0, 20), ...more].join("\n")}${!kind ? "\n\n<b>\
       return true;
     }
     const bytes = await notify().download(file.id);
-    const doc = isPdf(bytes) ? parseBasDoc(await pdfText(bytes)) : null;
+    const doc = isPdf2(bytes) ? parseBasDoc(await pdfText(bytes)) : null;
     const hints = hintsOf(`${msg.caption || ""} ${file.name}`);
     const replyId = Number(/B2B-(\d+)/.exec(String(msg.reply_to_message?.text || msg.reply_to_message?.caption || ""))?.[1]) || null;
     const kind = doc?.kind || hints.kind || "";
@@ -9217,6 +9217,436 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   return { partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupMessage: tgdocs.tgGroupMessage, onPayments: pay.onPayments, payInfo: pay.payInfo };
 }
 
+// src/integrations/novaposhta.js
+var NP_API = "https://api.novaposhta.ua/v2.0/json/";
+var NP_PRINT = "https://my.novaposhta.ua/orders/printMarking100x100";
+async function npCall(fetchFn, apiKey, modelName, calledMethod, methodProperties = {}) {
+  let res;
+  try {
+    res = await fetchFn(NP_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey, modelName, calledMethod, methodProperties })
+    });
+  } catch (e) {
+    if (e.pending) throw e;
+    throw Object.assign(new Error("\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430 \u043D\u0435 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0430\u0454. \u0421\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0449\u0435 \u0440\u0430\u0437 \u0437\u0430 \u0445\u0432\u0438\u043B\u0438\u043D\u0443."), { status: 502 });
+  }
+  const j = await res.json().catch(() => null);
+  if (!j) throw Object.assign(new Error(`\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430: \u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${res.status}`), { status: 502 });
+  if (!j.success) {
+    const msg = [...j.errors || [], ...j.warnings || []].filter((x) => typeof x === "string").join("; ");
+    throw Object.assign(new Error(`\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430: ${msg || "\u0437\u0430\u043F\u0438\u0442 \u043D\u0435 \u0432\u0438\u043A\u043E\u043D\u0430\u043D\u043E"}`), { status: 400, npErrors: j.errorCodes || [] });
+  }
+  return Array.isArray(j.data) ? j.data : [];
+}
+async function npSender(fetchFn, apiKey) {
+  const list = await npCall(fetchFn, apiKey, "Counterparty", "getCounterparties", { CounterpartyProperty: "Sender", Page: "1" });
+  const s = list[0] || {};
+  return { name: String(s.Description || s.CounterpartyFullName || "").trim(), code: String(s.EDRPOU || "").trim() };
+}
+var npDate = (day) => day.split("-").reverse().join(".");
+var phone9 = (p) => String(p || "").replace(/\D/g, "").slice(-9);
+async function npDocumentsPage(fetchFn, apiKey, day, page) {
+  const list = await npCall(fetchFn, apiKey, "InternetDocument", "getDocumentList", {
+    DateTimeFrom: npDate(day),
+    DateTimeTo: npDate(day),
+    Page: String(page),
+    GetFullList: "0"
+  });
+  return list.map((d) => ({
+    ttn: String(d.IntDocNumber || "").trim(),
+    phone: phone9(d.RecipientsPhone || d.RecipientContactPhone || d.PhoneRecipient || ""),
+    orderRef: String(d.InfoRegClientBarcodes || d.ClientBarcode || "").trim(),
+    recipient: String(d.RecipientContactPerson || d.RecipientDescription || "").trim().slice(0, 120),
+    service: String(d.ServiceType || "").trim().slice(0, 40)
+  })).filter((d) => /^\d{10,20}$/.test(d.ttn));
+}
+async function npServiceType(fetchFn, apiKey, ttn) {
+  const list = await npCall(fetchFn, apiKey, "TrackingDocument", "getStatusDocuments", { Documents: [{ DocumentNumber: ttn, Phone: "" }] });
+  return String(list[0]?.ServiceType || "").trim().slice(0, 40);
+}
+var isDoorPickup = (service) => /^Doors/i.test(String(service || ""));
+async function npMarkingPdf(fetchFn, apiKey, ttn) {
+  const res = await fetchFn(`${NP_PRINT}/orders[]/${encodeURIComponent(ttn)}/type/pdf/apiKey/${encodeURIComponent(apiKey)}`);
+  if (!res.ok) return null;
+  const buf = new Uint8Array(await res.arrayBuffer());
+  const isPdf2 = buf.length > 4 && buf[0] === 37 && buf[1] === 80 && buf[2] === 68 && buf[3] === 70;
+  return isPdf2 ? buf : null;
+}
+
+// src/integrations/rozetka.js
+var RZ_API = "https://api-seller.rozetka.com.ua";
+var AUTH_CODES = /* @__PURE__ */ new Set([5401, 6001, 1020]);
+var b64 = (s) => {
+  const bytes = new TextEncoder().encode(String(s));
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+};
+var unb64 = (s) => Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0));
+var isPdf = (buf) => buf.length > 4 && buf[0] === 37 && buf[1] === 80 && buf[2] === 68 && buf[3] === 70;
+var rzError = (j) => {
+  const e = j?.errors || {};
+  const code = Number(e.code) || 0;
+  const text = {
+    invalid_credentials: "\u043F\u043E\u0442\u0440\u0456\u0431\u043D\u043E \u0443\u0432\u0456\u0439\u0442\u0438",
+    session_expired: "\u0441\u0435\u0441\u0456\u044F \u0437\u0430\u043A\u0456\u043D\u0447\u0438\u043B\u0430\u0441\u044F",
+    incorrect_username_pasword: "\u043D\u0435\u043F\u0440\u0430\u0432\u0438\u043B\u044C\u043D\u0438\u0439 \u043B\u043E\u0433\u0456\u043D \u0430\u0431\u043E \u043F\u0430\u0440\u043E\u043B\u044C",
+    entity_not_found: "\u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E",
+    access_denied: "\u043D\u0435\u043C\u0430\u0454 \u0434\u043E\u0441\u0442\u0443\u043F\u0443",
+    error_print_ttn: "\u043D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u043D\u0430\u0434\u0440\u0443\u043A\u0443\u0432\u0430\u0442\u0438 \u0422\u0422\u041D"
+  }[e.message] || e.message || "\u0437\u0430\u043F\u0438\u0442 \u043D\u0435 \u0432\u0438\u043A\u043E\u043D\u0430\u043D\u043E";
+  return Object.assign(new Error(`\u0420\u043E\u0437\u0435\u0442\u043A\u0430: ${text}`), { status: 400, rzCode: code, rzAuth: AUTH_CODES.has(code) });
+};
+async function send(fetchFn, path, { method = "GET", token, body } = {}) {
+  try {
+    return await fetchFn(`${RZ_API}${path}`, {
+      method,
+      headers: { "Content-Type": "application/json", "Content-Language": "uk", ...token ? { Authorization: `Bearer ${token}` } : {} },
+      body: body ? JSON.stringify(body) : void 0
+    });
+  } catch (e) {
+    if (e.pending) throw e;
+    throw Object.assign(new Error("\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u043D\u0435 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0430\u0454. \u0421\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0449\u0435 \u0440\u0430\u0437 \u0437\u0430 \u0445\u0432\u0438\u043B\u0438\u043D\u0443."), { status: 502 });
+  }
+}
+async function rzLogin(fetchFn, username, password) {
+  const res = await send(fetchFn, "/sites", { method: "POST", body: { username, password: b64(password) } });
+  const j = await res.json().catch(() => null);
+  if (!j?.success || !j.content?.access_token) throw rzError(j);
+  return { token: j.content.access_token, marketId: String(j.content.market?.id || ""), marketTitle: String(j.content.market?.title || "") };
+}
+async function rzTtnPdf(fetchFn, token, ttn) {
+  const res = await send(fetchFn, "/delivery-rozetka/ttn-print-batch", { method: "POST", token, body: { track_numbers: [ttn] } });
+  const buf = new Uint8Array(await res.arrayBuffer());
+  if (isPdf(buf)) return buf;
+  let j = null;
+  try {
+    j = JSON.parse(new TextDecoder().decode(buf));
+  } catch {
+    return null;
+  }
+  if (!j?.success) {
+    const err = rzError(j);
+    if (err.rzAuth) throw err;
+    return null;
+  }
+  const c = j.content;
+  const file = typeof c === "string" ? c : c?.file || c?.content || c?.base64 || "";
+  if (file && !/^https?:/.test(file)) {
+    try {
+      const pdf = unb64(file.replace(/^data:[^,]+,/, ""));
+      if (isPdf(pdf)) return pdf;
+    } catch {
+    }
+  }
+  const url = c?.url || c?.link || (/^https?:/.test(file) ? file : "");
+  if (url) {
+    const r = await fetchFn(url);
+    const pdf = new Uint8Array(await r.arrayBuffer());
+    if (isPdf(pdf)) return pdf;
+  }
+  return null;
+}
+
+// src/modules/marking/index.js
+var PAGES_PER_CALL = 12;
+var TODAY_REFRESH_MS = 5 * 60 * 1e3;
+var SEARCH_DAYS = 3;
+var KEEP_DAYS2 = 60;
+var addDays3 = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+var keyHint = (k) => k ? `${MASK}${String(k).slice(-4)}` : "";
+var pending = () => Object.assign(new Error("\u0428\u0443\u043A\u0430\u044E \u0422\u0422\u041D \u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0430\u0445 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438\u2026"), { pending: true });
+function mountMarking(app, { db, fetchFn, onCleanup }) {
+  onCleanup(async () => {
+    const border = addDays3(kyivDay(), -KEEP_DAYS2);
+    await db.batch([
+      [`DELETE FROM np_docs WHERE day != '' AND day < ?`, [border]],
+      [`DELETE FROM np_days WHERE day < ?`, [border]],
+      [`DELETE FROM rz_docs WHERE day != '' AND day < ?`, [border]]
+    ]);
+  });
+  const publicAccount = (a) => ({
+    id: a.id,
+    name: a.name,
+    key: keyHint(a.api_key),
+    sender_name: a.sender_name,
+    sender_code: a.sender_code,
+    active: a.active
+  });
+  const activeAccounts = () => db.all(`SELECT * FROM np_accounts WHERE active = 1 ORDER BY hits DESC, id`);
+  app.get("/api/np/accounts", async (c) => {
+    need(c, "api");
+    return c.json((await db.all(`SELECT * FROM np_accounts ORDER BY active DESC, name`)).map(publicAccount));
+  });
+  app.post("/api/np/accounts", async (c) => {
+    need(c, "api");
+    const b = await c.req.json();
+    const key = String(b.api_key || "").trim();
+    if (!/^[0-9a-f]{32}$/i.test(key)) throw fail(400, "\u041A\u043B\u044E\u0447 API \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 \u2014 32 \u0441\u0438\u043C\u0432\u043E\u043B\u0438 (\u0446\u0438\u0444\u0440\u0438 \u0439 \u043B\u0430\u0442\u0438\u043D\u0441\u044C\u043A\u0456 \u043B\u0456\u0442\u0435\u0440\u0438 a\u2013f).");
+    if (await db.get(`SELECT id FROM np_accounts WHERE api_key = ?`, [key])) throw fail(400, "\u0426\u0435\u0439 \u043A\u043B\u044E\u0447 \u0443\u0436\u0435 \u0434\u043E\u0434\u0430\u043D\u043E.");
+    const sender = await npSender(fetchFn, key);
+    const name = String(b.name || "").trim() || sender.name || "\u041A\u0430\u0431\u0456\u043D\u0435\u0442 \u041D\u041F";
+    const r = await db.run(
+      `INSERT INTO np_accounts (name, api_key, sender_name, sender_code, active, created_at) VALUES (?, ?, ?, ?, 1, ?)`,
+      [name, key, sender.name, sender.code, (/* @__PURE__ */ new Date()).toISOString()]
+    );
+    await logAudit(db, { user: c.get("user"), kind: "np", refId: r.lastId, action: "\u0434\u043E\u0434\u0430\u043D\u043E \u043A\u0430\u0431\u0456\u043D\u0435\u0442 \u041D\u041F", changes: [{ field: "name", from: "", to: name }] });
+    return c.json({ id: r.lastId, sender });
+  });
+  app.put("/api/np/accounts/:id", async (c) => {
+    need(c, "api");
+    const b = await c.req.json();
+    const cur = await db.get(`SELECT * FROM np_accounts WHERE id = ?`, [c.req.param("id")]);
+    if (!cur) throw fail(404, "\u041A\u0430\u0431\u0456\u043D\u0435\u0442 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const next = { name: cur.name, api_key: cur.api_key, sender_name: cur.sender_name, sender_code: cur.sender_code, active: cur.active };
+    if (b.name !== void 0) next.name = String(b.name).trim() || cur.name;
+    if (b.active !== void 0) next.active = b.active ? 1 : 0;
+    const key = String(b.api_key ?? "").trim();
+    const keyChanged = key && key !== MASK && !key.startsWith(MASK) && key !== cur.api_key;
+    if (keyChanged || b.check) {
+      if (keyChanged && !/^[0-9a-f]{32}$/i.test(key)) throw fail(400, "\u041A\u043B\u044E\u0447 API \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 \u2014 32 \u0441\u0438\u043C\u0432\u043E\u043B\u0438 (\u0446\u0438\u0444\u0440\u0438 \u0439 \u043B\u0430\u0442\u0438\u043D\u0441\u044C\u043A\u0456 \u043B\u0456\u0442\u0435\u0440\u0438 a\u2013f).");
+      const sender = await npSender(fetchFn, keyChanged ? key : cur.api_key);
+      Object.assign(next, { sender_name: sender.name, sender_code: sender.code }, keyChanged ? { api_key: key } : {});
+    }
+    await db.run(
+      `UPDATE np_accounts SET name = ?, api_key = ?, sender_name = ?, sender_code = ?, active = ? WHERE id = ?`,
+      [next.name, next.api_key, next.sender_name, next.sender_code, next.active, cur.id]
+    );
+    if (keyChanged) {
+      await db.batch([[`DELETE FROM np_docs WHERE account_id = ?`, [cur.id]], [`DELETE FROM np_days WHERE account_id = ?`, [cur.id]]]);
+      await logAudit(db, { user: c.get("user"), kind: "np", refId: cur.id, action: "\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u043A\u043B\u044E\u0447 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u041D\u041F", changes: [{ field: "api_key", from: keyHint(cur.api_key), to: keyHint(key) }] });
+    }
+    return c.json(publicAccount({ ...cur, ...next }));
+  });
+  app.delete("/api/np/accounts/:id", async (c) => {
+    need(c, "api");
+    const cur = await db.get(`SELECT * FROM np_accounts WHERE id = ?`, [c.req.param("id")]);
+    if (!cur) throw fail(404, "\u041A\u0430\u0431\u0456\u043D\u0435\u0442 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    await db.batch([
+      [`DELETE FROM np_accounts WHERE id = ?`, [cur.id]],
+      [`DELETE FROM np_docs WHERE account_id = ?`, [cur.id]],
+      [`DELETE FROM np_days WHERE account_id = ?`, [cur.id]]
+    ]);
+    await logAudit(db, { user: c.get("user"), kind: "np", refId: cur.id, action: "\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u043A\u0430\u0431\u0456\u043D\u0435\u0442 \u041D\u041F", changes: [{ field: "name", from: cur.name, to: "" }] });
+    return c.json({ ok: true });
+  });
+  app.post("/api/np/find", async (c) => {
+    need(c, "docs.view");
+    const b = await c.req.json();
+    const accounts = await activeAccounts();
+    if (!accounts.length) throw fail(400, "\u041A\u0430\u0431\u0456\u043D\u0435\u0442\u0438 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 \u0449\u0435 \u043D\u0435 \u0434\u043E\u0434\u0430\u043D\u043E: \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430 \u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0430\xBB.");
+    const byId = new Map(accounts.map((a) => [a.id, a]));
+    const answer = (row, source) => c.json({
+      ttn: row.ttn,
+      accountId: row.account_id || null,
+      accountName: byId.get(row.account_id)?.name || "",
+      source
+    });
+    const ttn = String(b.ttn || "").replace(/\D/g, "");
+    if (/^\d{10,20}$/.test(ttn)) {
+      const known = await db.get(`SELECT ttn, account_id FROM np_docs WHERE ttn = ?`, [ttn]);
+      return answer(known || { ttn, account_id: null }, "crm");
+    }
+    const phone = phone9(b.phone);
+    const refs = (Array.isArray(b.refs) ? b.refs : []).map((x) => String(x || "").trim()).filter((x) => x.length >= 3).slice(0, 3);
+    if (phone.length < 9 && !refs.length) throw fail(400, "\u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043D\u0435\u043C\u0430\u0454 \u043D\u0456 \u0422\u0422\u041D, \u043D\u0456 \u0442\u0435\u043B\u0435\u0444\u043E\u043D\u0443 \u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0447\u0430 \u2014 \u0448\u0443\u043A\u0430\u0442\u0438 \u043D\u0435\u043C\u0430 \u0437\u0430 \u0447\u0438\u043C.");
+    const today2 = kyivDay();
+    const from = /^\d{4}-\d{2}-\d{2}/.test(String(b.date || "")) ? String(b.date).slice(0, 10) : today2;
+    const to = addDays3(from, SEARCH_DAYS) < today2 ? addDays3(from, SEARCH_DAYS) : today2;
+    if (from > today2) throw fail(400, "\u0414\u0430\u0442\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 \u043C\u0430\u0439\u0431\u0443\u0442\u043D\u044C\u043E\u043C\u0443 \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
+    const match2 = (docs) => docs.find((d) => phone.length === 9 && d.phone === phone || d.orderRef && refs.includes(d.orderRef));
+    const lookup = () => db.get(
+      `SELECT ttn, account_id FROM (
+         SELECT ttn, account_id, day FROM np_docs WHERE phone = ? AND day BETWEEN ? AND ?
+         UNION ALL
+         SELECT ttn, account_id, day FROM np_docs WHERE order_ref IN (SELECT value FROM json_each(?)) AND day BETWEEN ? AND ?
+       ) ORDER BY day DESC LIMIT 1`,
+      [phone.length === 9 ? phone : "-", from, to, JSON.stringify(refs), from, to]
+    );
+    const hit = await lookup();
+    if (hit && byId.has(hit.account_id)) return answer(hit, "index");
+    const days = [];
+    for (let d = to; d >= from; d = addDays3(d, -1)) days.push(d);
+    const state = new Map((await db.all(
+      `SELECT account_id, day, next_page, done, at FROM np_days WHERE day BETWEEN ? AND ?`,
+      [from, to]
+    )).map((r) => [`${r.account_id}|${r.day}`, r]));
+    let pages = 0;
+    for (const a of accounts) {
+      for (const day of days) {
+        const st = state.get(`${a.id}|${day}`);
+        const fresh = st?.at && Date.now() - Date.parse(st.at) < TODAY_REFRESH_MS;
+        if (st?.done && (day < today2 || fresh)) continue;
+        let page = st?.done || !st ? 1 : st.next_page;
+        for (; ; ) {
+          if (pages >= PAGES_PER_CALL) throw pending();
+          pages++;
+          const docs = await npDocumentsPage(fetchFn, a.api_key, day, page);
+          const done = docs.length < 100;
+          await db.batch([
+            ...docs.map((d) => [
+              `INSERT INTO np_docs (ttn, account_id, day, phone, order_ref, recipient, service) VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(ttn) DO UPDATE SET account_id = excluded.account_id, day = excluded.day, phone = excluded.phone, order_ref = excluded.order_ref,
+               service = CASE WHEN excluded.service != '' THEN excluded.service ELSE np_docs.service END`,
+              [d.ttn, a.id, day, d.phone, d.orderRef, d.recipient, d.service || ""]
+            ]),
+            [
+              `INSERT INTO np_days (account_id, day, next_page, done, at) VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT(account_id, day) DO UPDATE SET next_page = excluded.next_page, done = excluded.done, at = excluded.at`,
+              [a.id, day, done ? page : page + 1, done ? 1 : 0, (/* @__PURE__ */ new Date()).toISOString()]
+            ]
+          ]);
+          const m = match2(docs);
+          if (m) return answer({ ttn: m.ttn, account_id: a.id }, "np");
+          if (done) break;
+          page++;
+        }
+      }
+    }
+    const last = await lookup();
+    if (last && byId.has(last.account_id)) return answer(last, "index");
+    throw fail(404, `\u0422\u0422\u041D \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E: \u0443 CRM \u0457\u0457 \u043D\u0435\u043C\u0430\u0454, \u0430 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0430\u0445 \u041D\u041F \u0437\u0430 ${from === to ? from : `${from} \u2013 ${to}`} \u043D\u0435\u043C\u0430\u0454 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0430 \u0446\u0435\u0439 \u0442\u0435\u043B\u0435\u0444\u043E\u043D.`);
+  });
+  app.get("/api/np/marking/:ttn", async (c) => {
+    need(c, "docs.view");
+    const ttn = String(c.req.param("ttn")).replace(/\D/g, "");
+    if (!/^\d{10,20}$/.test(ttn)) throw fail(400, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043D\u043E\u043C\u0435\u0440 \u0422\u0422\u041D.");
+    const accounts = await activeAccounts();
+    if (!accounts.length) throw fail(400, "\u041A\u0430\u0431\u0456\u043D\u0435\u0442\u0438 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 \u0449\u0435 \u043D\u0435 \u0434\u043E\u0434\u0430\u043D\u043E: \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430 \u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0430\xBB.");
+    const known = await db.get(`SELECT account_id, service FROM np_docs WHERE ttn = ?`, [ttn]);
+    const wanted = Number(c.req.query("account")) || known?.account_id;
+    const order2 = [...accounts.filter((a) => a.id === wanted), ...accounts.filter((a) => a.id !== wanted)];
+    for (const a of order2) {
+      const pdf = await npMarkingPdf(fetchFn, a.api_key, ttn);
+      if (!pdf) continue;
+      const service = known?.service || await npServiceType(fetchFn, a.api_key, ttn).catch(() => "");
+      await db.batch([
+        [`INSERT INTO np_docs (ttn, account_id, day, service) VALUES (?, ?, ?, ?) ON CONFLICT(ttn) DO UPDATE SET account_id = excluded.account_id,
+          service = CASE WHEN excluded.service != '' THEN excluded.service ELSE np_docs.service END`, [ttn, a.id, kyivDay(), service]],
+        [`UPDATE np_accounts SET hits = hits + 1 WHERE id = ?`, [a.id]]
+      ]);
+      return new Response(pdf, {
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `inline; filename="marking-${ttn}.pdf"`,
+          "X-NP-Account": encodeURIComponent(a.name),
+          "X-NP-Service": service,
+          "X-NP-Pickup": isDoorPickup(service) ? "1" : "0",
+          "Access-Control-Expose-Headers": "X-NP-Account, X-NP-Service, X-NP-Pickup",
+          "Cache-Control": "private, no-store"
+        }
+      });
+    }
+    throw fail(404, `\u0422\u0422\u041D ${ttn} \u043D\u0435\u043C\u0430\u0454 \u0432 \u0436\u043E\u0434\u043D\u043E\u043C\u0443 \u0437 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0445 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456\u0432 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 (\u0430\u0431\u043E \u0457\u0457 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E).`);
+  });
+  const RZ_TOKEN_MS = 20 * 60 * 60 * 1e3;
+  const publicRz = (a) => ({
+    id: a.id,
+    name: a.name,
+    username: a.username,
+    password: a.password ? MASK : "",
+    market_title: a.market_title,
+    active: a.active
+  });
+  async function rzToken(a, force = false) {
+    if (!force && a.token && Date.now() - Date.parse(a.token_at || 0) < RZ_TOKEN_MS) return a.token;
+    const r = await rzLogin(fetchFn, a.username, a.password);
+    await db.run(
+      `UPDATE rz_accounts SET token = ?, token_at = ?, market_id = ?, market_title = ? WHERE id = ?`,
+      [r.token, (/* @__PURE__ */ new Date()).toISOString(), r.marketId, r.marketTitle, a.id]
+    );
+    Object.assign(a, { token: r.token, market_title: r.marketTitle });
+    return r.token;
+  }
+  app.get("/api/rz/accounts", async (c) => {
+    need(c, "api");
+    return c.json((await db.all(`SELECT * FROM rz_accounts ORDER BY active DESC, name`)).map(publicRz));
+  });
+  app.post("/api/rz/accounts", async (c) => {
+    need(c, "api");
+    const b = await c.req.json();
+    const username = String(b.username || "").trim();
+    const password = String(b.password || "");
+    if (!username || !password) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043B\u043E\u0433\u0456\u043D \u0456 \u043F\u0430\u0440\u043E\u043B\u044C \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u043F\u0440\u043E\u0434\u0430\u0432\u0446\u044F \u0420\u043E\u0437\u0435\u0442\u043A\u0438.");
+    if (await db.get(`SELECT id FROM rz_accounts WHERE username = ?`, [username])) throw fail(400, "\u0426\u0435\u0439 \u043B\u043E\u0433\u0456\u043D \u0443\u0436\u0435 \u0434\u043E\u0434\u0430\u043D\u043E.");
+    const r = await rzLogin(fetchFn, username, password);
+    const name = String(b.name || "").trim() || r.marketTitle || "\u041C\u0430\u0433\u0430\u0437\u0438\u043D \u0420\u043E\u0437\u0435\u0442\u043A\u0438";
+    const ins = await db.run(
+      `INSERT INTO rz_accounts (name, username, password, market_id, market_title, token, token_at, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      [name, username, password, r.marketId, r.marketTitle, r.token, (/* @__PURE__ */ new Date()).toISOString(), (/* @__PURE__ */ new Date()).toISOString()]
+    );
+    await logAudit(db, { user: c.get("user"), kind: "rz", refId: ins.lastId, action: "\u0434\u043E\u0434\u0430\u043D\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D \u0420\u043E\u0437\u0435\u0442\u043A\u0438", changes: [{ field: "name", from: "", to: name }] });
+    return c.json({ id: ins.lastId, market: r.marketTitle });
+  });
+  app.put("/api/rz/accounts/:id", async (c) => {
+    need(c, "api");
+    const b = await c.req.json();
+    const cur = await db.get(`SELECT * FROM rz_accounts WHERE id = ?`, [c.req.param("id")]);
+    if (!cur) throw fail(404, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const next = { ...cur };
+    if (b.name !== void 0) next.name = String(b.name).trim() || cur.name;
+    if (b.active !== void 0) next.active = b.active ? 1 : 0;
+    if (b.username !== void 0 && String(b.username).trim()) next.username = String(b.username).trim();
+    if (b.password && b.password !== MASK) next.password = String(b.password);
+    const credsChanged = next.username !== cur.username || next.password !== cur.password;
+    if (credsChanged || b.check) {
+      next.token = "";
+      await rzToken(next, true);
+    }
+    await db.run(
+      `UPDATE rz_accounts SET name = ?, username = ?, password = ?, active = ? WHERE id = ?`,
+      [next.name, next.username, next.password, next.active, cur.id]
+    );
+    if (credsChanged) {
+      await db.run(`DELETE FROM rz_docs WHERE account_id = ?`, [cur.id]);
+      await logAudit(db, { user: c.get("user"), kind: "rz", refId: cur.id, action: "\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0434\u043E\u0441\u0442\u0443\u043F \u0434\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0443 \u0420\u043E\u0437\u0435\u0442\u043A\u0438", changes: [{ field: "username", from: cur.username, to: next.username }] });
+    }
+    return c.json(publicRz(next));
+  });
+  app.delete("/api/rz/accounts/:id", async (c) => {
+    need(c, "api");
+    const cur = await db.get(`SELECT * FROM rz_accounts WHERE id = ?`, [c.req.param("id")]);
+    if (!cur) throw fail(404, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    await db.batch([[`DELETE FROM rz_accounts WHERE id = ?`, [cur.id]], [`DELETE FROM rz_docs WHERE account_id = ?`, [cur.id]]]);
+    await logAudit(db, { user: c.get("user"), kind: "rz", refId: cur.id, action: "\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D \u0420\u043E\u0437\u0435\u0442\u043A\u0438", changes: [{ field: "name", from: cur.name, to: "" }] });
+    return c.json({ ok: true });
+  });
+  app.get("/api/rz/marking/:ttn", async (c) => {
+    need(c, "docs.view");
+    const ttn = String(c.req.param("ttn")).toUpperCase().replace(/\s/g, "");
+    if (!/^RMP-?[0-9A-Z-]{4,30}$/.test(ttn)) throw fail(400, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043D\u043E\u043C\u0435\u0440 \u0422\u0422\u041D \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (\u043C\u0430\u0454 \u043F\u043E\u0447\u0438\u043D\u0430\u0442\u0438\u0441\u044F \u0437 RMP).");
+    const accounts = await db.all(`SELECT * FROM rz_accounts WHERE active = 1 ORDER BY hits DESC, id`);
+    if (!accounts.length) throw fail(400, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D\u0438 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u0449\u0435 \u043D\u0435 \u0434\u043E\u0434\u0430\u043D\u043E: \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430 \u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0430\xBB.");
+    const known = await db.get(`SELECT account_id FROM rz_docs WHERE ttn = ?`, [ttn]);
+    const order2 = [...accounts.filter((a) => a.id === known?.account_id), ...accounts.filter((a) => a.id !== known?.account_id)];
+    for (const a of order2) {
+      let pdf;
+      try {
+        pdf = await rzTtnPdf(fetchFn, await rzToken(a), ttn);
+      } catch (e) {
+        if (!e.rzAuth) throw e;
+        pdf = await rzTtnPdf(fetchFn, await rzToken(a, true), ttn);
+      }
+      if (!pdf) continue;
+      await db.batch([
+        [`INSERT INTO rz_docs (ttn, account_id, day) VALUES (?, ?, ?) ON CONFLICT(ttn) DO UPDATE SET account_id = excluded.account_id`, [ttn, a.id, kyivDay()]],
+        [`UPDATE rz_accounts SET hits = hits + 1 WHERE id = ?`, [a.id]]
+      ]);
+      return new Response(pdf, {
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `inline; filename="marking-${ttn}.pdf"`,
+          "X-NP-Account": encodeURIComponent(a.name),
+          "Cache-Control": "private, max-age=600"
+        }
+      });
+    }
+    throw fail(404, `\u0422\u0422\u041D ${ttn} \u043D\u0435\u043C\u0430\u0454 \u0432 \u0436\u043E\u0434\u043D\u043E\u043C\u0443 \u0437 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0445 \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0456\u0432 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (\u0430\u0431\u043E \u0457\u0457 \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E).`);
+  });
+}
+
 // src/modules/payments/index.js
 var ODB_BASE = "https://iban.opendatabot.ua";
 var kindOf2 = (code) => /^\d{10}$/.test(String(code || "").trim()) ? "fop" : "company";
@@ -9946,6 +10376,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   services.errlog = mountErrLog(app, ctx);
   services.b2b = mountB2b(app, ctx);
   mountRahunky(app, ctx);
+  mountMarking(app, ctx);
   mountAnalytics(app, ctx);
   services.notify = mountTg(app, ctx);
   services.payments = mountOdb(app, { ...ctx, base: odbBase, notify: (...a) => services.notify.notify(...a), onTx: (ids, origin) => services.b2b?.onPayments?.(ids, origin) });
@@ -10992,8 +11423,76 @@ var schema11 = {
   }
 };
 
+// src/modules/marking/schema.js
+var schema12 = {
+  name: "marking",
+  version: 3,
+  tables: [
+    // Кабінети НП (ФОП або ТОВ): ключ API бачить лише сервер.
+    `CREATE TABLE IF NOT EXISTS np_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL DEFAULT '',
+    api_key TEXT NOT NULL,
+    sender_name TEXT DEFAULT '',
+    sender_code TEXT DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    hits INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT
+  )`,
+    // ТТН кабінетів: з якого кабінету ТТН, телефон отримувача (останні 9 цифр), номер замовлення клієнта.
+    `CREATE TABLE IF NOT EXISTS np_docs (
+    ttn TEXT PRIMARY KEY,
+    account_id INTEGER NOT NULL,
+    day TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    order_ref TEXT DEFAULT '',
+    recipient TEXT DEFAULT '',
+    service TEXT DEFAULT ''
+  )`,
+    `CREATE INDEX IF NOT EXISTS np_docs_phone ON np_docs (phone, day)`,
+    `CREATE INDEX IF NOT EXISTS np_docs_ref ON np_docs (order_ref, day)`,
+    // Які дні кабінету вже переглянуто: наступна сторінка, чи все, коли.
+    `CREATE TABLE IF NOT EXISTS np_days (
+    account_id INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    next_page INTEGER NOT NULL DEFAULT 1,
+    done INTEGER NOT NULL DEFAULT 0,
+    at TEXT,
+    PRIMARY KEY (account_id, day)
+  )`,
+    // Магазини Розетки (кабінет продавця): логін і пароль — лише на сервері; токен діє 24 год.
+    `CREATE TABLE IF NOT EXISTS rz_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL DEFAULT '',
+    username TEXT NOT NULL,
+    password TEXT NOT NULL,
+    market_id TEXT DEFAULT '',
+    market_title TEXT DEFAULT '',
+    token TEXT DEFAULT '',
+    token_at TEXT DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    hits INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT
+  )`,
+    // З якого магазину ТТН Розетки (щоб друкувати з першої спроби).
+    `CREATE TABLE IF NOT EXISTS rz_docs (
+    ttn TEXT PRIMARY KEY,
+    account_id INTEGER NOT NULL,
+    day TEXT DEFAULT ''
+  )`,
+    // Для щогодинної чистки за датою — без перегляду всієї таблиці.
+    `CREATE INDEX IF NOT EXISTS np_docs_day ON np_docs (day)`,
+    `CREATE INDEX IF NOT EXISTS np_days_day ON np_days (day)`,
+    `CREATE INDEX IF NOT EXISTS rz_docs_day ON rz_docs (day)`
+  ],
+  columns: [
+    // Тип доставки ТТН (DoorsWarehouse — адресний забір кур'єром тощо).
+    ["np_docs", "service", "TEXT DEFAULT ''"]
+  ]
+};
+
 // src/migrate.js
-var MODULE_SCHEMAS = [schema, schema2, schema3, schema4, schema5, schema6, schema7, schema8, schema9, schema10, schema11];
+var MODULE_SCHEMAS = [schema, schema2, schema3, schema4, schema5, schema6, schema7, schema8, schema9, schema10, schema11, schema12];
 var versionKey = (m) => `schema:${m.name}`;
 async function migrate(db, modules = MODULE_SCHEMAS) {
   let have = {};
