@@ -74,7 +74,13 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Kyiv' });
     const debt = new Map((await db.all(`SELECT partner_id, SUM(total - paid_amount) AS due, SUM(CASE WHEN due_date != '' AND due_date < ? THEN total - paid_amount ELSE 0 END) AS overdue,
       COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND status IN ('pay_wait', 'partial') GROUP BY partner_id`, [today])).map((r) => [r.partner_id, r]));
-    return c.json(rows.map((r) => ({ ...r, debt: Math.round((debt.get(r.id)?.due || 0) * 100) / 100, debt_overdue: Math.round((debt.get(r.id)?.overdue || 0) * 100) / 100, debt_cnt: debt.get(r.id)?.n || 0 })));
+    // + відвантажено без рахунку: замовлення клієнтів у CRM із відкритої закупівлі або такої, що чекає рахунок.
+    const ship = new Map((await db.all(`SELECT s.partner_id, SUM(co.total) AS sum, COUNT(co.id) AS n FROM b2b_orders s
+      JOIN b2b_orders co ON co.supply_id = s.id AND co.kind = 'client' AND co.status = 'crm'
+      WHERE s.kind = 'supply' AND s.status IN ('open', 'invoice_wait') GROUP BY s.partner_id`)).map((r) => [r.partner_id, r]));
+    const r2 = (n) => Math.round((n || 0) * 100) / 100;
+    return c.json(rows.map((r) => ({ ...r, debt: r2((debt.get(r.id)?.due || 0) + (ship.get(r.id)?.sum || 0)), debt_invoiced: r2(debt.get(r.id)?.due), debt_shipped: r2(ship.get(r.id)?.sum),
+      debt_shipped_cnt: ship.get(r.id)?.n || 0, debt_overdue: r2(debt.get(r.id)?.overdue), debt_cnt: debt.get(r.id)?.n || 0 })));
   });
 
   const partnerFields = (b) => ({
