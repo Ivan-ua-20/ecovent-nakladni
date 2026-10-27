@@ -273,10 +273,11 @@ export function mountRetail(app, { db, fetchFn }) {
       return { supplierCode: p.supplierCode, confirmedQuantity: p.quantity, ...(sn.length ? { serialNumbers: sn } : {}) };
     });
     const res = await rzsConfirm(fetchFn, a.token, r.id, products);
-    const fresh = await rzsOrder(fetchFn, a.token, r.id).catch(() => null);
-    if (fresh && (fresh.orderId || fresh.id)) await saveOrders([fresh], a.id);
-    else await db.run(`UPDATE rzs_orders SET status = ?, confirmed_at = COALESCE(NULLIF(confirmed_at, ''), ?) WHERE id = ?`, [res.status, nowIso(), r.id]);
-    await db.run(`UPDATE rzs_orders SET note = ? WHERE id = ?`, [`підтвердив(ла) ${userName(c.get('user'))}`, r.id]);
+    // Без повторного читання замовлення: Розетка обмежує частоту запитів, а групове підтвердження й так іде одне за одним.
+    const sent = new Map(products.map((p) => [p.supplierCode, p]));
+    const confirmed = JSON.parse(r.products || '[]').map((x) => ({ ...x, ...sent.get(String(x.supplierCode)) }));
+    await db.run(`UPDATE rzs_orders SET status = ?, products = ?, confirmed_at = COALESCE(NULLIF(confirmed_at, ''), ?), note = ? WHERE id = ?`,
+      [res.status || 'confirmed', JSON.stringify(confirmed), nowIso(), `підтвердив(ла) ${userName(c.get('user'))}`, r.id]);
     return c.json({ ok: true, status: res.status, warnings: res.warnings.map((w) => w.message || String(w)) });
   });
 

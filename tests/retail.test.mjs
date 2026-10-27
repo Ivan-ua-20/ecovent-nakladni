@@ -26,6 +26,7 @@ const ORDERS = new Map([
     deliveryCity: 'Львів', deliveryPhone: '380671234567', cashOnDelivery: 0, snRequired: true,
     products: [{ supplierCode: 'EV-200', rzCode: 778, quantity: 1, cargoSeats: [] }] }],
 ]);
+let tooMany = false;
 const calls = { list: 0, confirm: [], ttn: [], print: [], price: [], crm: [] };
 const json = (o, status = 200) => new Response(JSON.stringify(o), { status });
 const fetchFn = async (url, opts = {}) => {
@@ -49,6 +50,7 @@ const fetchFn = async (url, opts = {}) => {
   }
   let m = path.match(/^\/dropshipping\/orders\/confirm\/(.+)$/);
   if (m) {
+    if (tooMany) { tooMany = false; return json({ message: 'Too many requests. Please try again later.' }, 429); }
     const b = JSON.parse(opts.body);
     calls.confirm.push({ id: m[1], b });
     const o = ORDERS.get(m[1]);
@@ -141,6 +143,8 @@ assert.ok((await req('GET', '/api/rzs/accounts'))[0].hook_at, 'час остан
 
 // ---------- 4. Підтвердження: серійні номери, повне підтвердження ----------
 assert.match(await errOf(() => req('POST', `/api/rzs/orders/${ID2}/confirm`, {})), /серійні номери/, 'без серійних номерів — ні');
+tooMany = true;
+assert.equal(await status(() => req('POST', `/api/rzs/orders/${ID1}/confirm`, {})), 429, '«забагато запитів» — 429, браузер зачекає й повторить');
 await req('POST', `/api/rzs/orders/${ID1}/confirm`, {});
 await req('POST', `/api/rzs/orders/${ID2}/confirm`, { serials: { 'EV-200': 'SN-1' } });
 assert.deepEqual(calls.confirm[0].b.products, [{ supplierCode: 'EV-100', confirmedQuantity: 2 }]);
