@@ -786,6 +786,32 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return c.json({ ok: true });
   });
 
+  // Маркування партнера для сторінки накладної (менеджери, що друкують): останній файл маркування замовлення клієнта.
+  app.get('/api/b2b/label/:id', async (c) => {
+    need(c, 'docs.view');
+    const f = await db.get(`SELECT f.* FROM b2b_files f JOIN b2b_orders o ON o.id = f.order_id WHERE f.order_id = ? AND f.kind = 'label' AND o.kind = 'client' ORDER BY f.id DESC LIMIT 1`, [c.req.param('id')]);
+    if (!f) throw fail(404, 'Партнер ще не додав маркування (або файл старший за 30 днів).');
+    return sendFile(f);
+  });
+  // Чи замовлення LP-CRM — від B2B-партнера: за «B2B-…» у коментарі (так ми передаємо в CRM), інакше за № / кодом у CRM.
+  async function crmOrderInfo({ ids = [], comment = '' } = {}) {
+    const m = /B2B-(\d+)\s*·\s*B2B «/.exec(String(comment || ''));
+    let o = m ? await db.get(`SELECT * FROM b2b_orders WHERE id = ? AND kind = 'client'`, [Number(m[1])]) : null;
+    const list = [...new Set(ids.map((x) => String(x || '').trim()).filter(Boolean))];
+    if (!o && list.length) {
+      o = await db.get(`SELECT * FROM b2b_orders WHERE kind = 'client' AND id IN (
+          SELECT id FROM b2b_orders WHERE crm_id != '' AND crm_id IN (SELECT value FROM json_each(?))
+          UNION SELECT id FROM b2b_orders WHERE crm_ext != '' AND crm_ext IN (SELECT value FROM json_each(?))) ORDER BY id DESC LIMIT 1`,
+      [JSON.stringify(list), JSON.stringify(list)]);
+    }
+    if (!o) return null;
+    const [p, label] = await Promise.all([
+      db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [o.partner_id]),
+      db.get(`SELECT id, name, mime, created_at FROM b2b_files WHERE order_id = ? AND kind = 'label' ORDER BY id DESC LIMIT 1`, [o.id]),
+    ]);
+    return { id: o.id, number: orderNo(o.id), partner: p?.name || '', client_name: o.client_name, ttn: o.ttn || '', status: o.status, label: label || null };
+  }
+
   // Партнер — лише файли своїх замовлень.
   app.get('/api/b2b/p/files/:id', async (c) => {
     const p = await myPartner(c);
@@ -796,5 +822,5 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
 
   // Видалення замовлень і кошик — у edits.js.
 
-  return { entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
+  return { crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
 }

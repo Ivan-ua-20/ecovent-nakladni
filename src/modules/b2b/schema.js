@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 23,
+  version: 24,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -282,6 +282,9 @@ export const schema = {
       [`CREATE INDEX IF NOT EXISTS b2b_files_hash ON b2b_files (hash)`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_files_ttn ON b2b_files (ttn)`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_orders_ttn ON b2b_orders (ttn)`, []],
+      // Сторінка накладної: чи це замовлення B2B-партнера (за № / кодом замовлення в LP-CRM).
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_crm ON b2b_orders (crm_id) WHERE crm_id != ''`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_crmext ON b2b_orders (crm_ext) WHERE crm_ext != ''`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_payments_payer ON b2b_payments (payer_code)`, []],
     ]);
   },
