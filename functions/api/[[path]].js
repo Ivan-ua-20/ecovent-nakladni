@@ -3610,8 +3610,17 @@ function normalizeAnOrder(raw2) {
     utm: low(raw2.utm_source),
     total: round2(total),
     deliv: delivName(raw2),
+    ttn: ttnOf(raw2),
     lines
   };
+}
+var TTN_KEYS = ["ttn", "ttn_number", "np_ttn", "declaration", "tracking_number"];
+function ttnOf(raw2) {
+  for (const k of TTN_KEYS) {
+    const v = String(raw2?.[k] ?? "").replace(/\s/g, "").toUpperCase();
+    if (/^[0-9A-Z]{8,20}$/.test(v) && !/^0+$/.test(v)) return v;
+  }
+  return "";
 }
 function delivName(raw2) {
   const name = String(raw2.delivery_name ?? raw2.delivery ?? "").trim();
@@ -3639,11 +3648,11 @@ async function saveOrders(db, orders, maps) {
   const bounds = /* @__PURE__ */ new Map();
   for (const o of orders) {
     st.push([
-      `INSERT INTO an_orders (id, code, day, status, office, user, ch, site, utm, total, dept, src, deliv) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO an_orders (id, code, day, status, office, user, ch, site, utm, total, dept, src, deliv, ttn) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET code = excluded.code, day = excluded.day, status = excluded.status, office = excluded.office,
        user = excluded.user, ch = excluded.ch, site = excluded.site, utm = excluded.utm, total = excluded.total, dept = excluded.dept, src = excluded.src,
-       deliv = excluded.deliv`,
-      [o.id, o.code, o.day, o.status, o.office, o.user, o.ch, o.site, o.utm, o.total, deptOf(o, maps, srcOf(o, maps)), srcOf(o, maps), o.deliv ?? ""]
+       deliv = excluded.deliv, ttn = excluded.ttn`,
+      [o.id, o.code, o.day, o.status, o.office, o.user, o.ch, o.site, o.utm, o.total, deptOf(o, maps, srcOf(o, maps)), srcOf(o, maps), o.deliv ?? "", o.ttn || ""]
     ]);
     st.push([`DELETE FROM an_items WHERE id BETWEEN ? AND ?`, [o.id * 100, o.id * 100 + 99]]);
     o.lines.forEach((l, n) => {
@@ -3782,6 +3791,44 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
     }
     return next();
   });
+  async function checkTtnDups(orders, { firstRun = false } = {}) {
+    const ttns = [...new Set(orders.map((o) => o.ttn).filter(Boolean))];
+    if (!ttns.length) return 0;
+    const seenBefore = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_seen'`))?.value || "";
+    const silent = firstRun || !seenBefore;
+    if (!seenBefore || seenBefore.slice(0, 13) !== nowIso().slice(0, 13)) await putSetting2("an_ttn_seen", nowIso());
+    const rows = await db.all(`SELECT code, user, ttn, status, day FROM an_orders WHERE ttn IN (SELECT value FROM json_each(?)) AND status != 0 ORDER BY id`, [JSON.stringify(ttns)]);
+    const by = /* @__PURE__ */ new Map();
+    for (const r of rows) {
+      if (!by.has(r.ttn)) by.set(r.ttn, []);
+      by.get(r.ttn).push(r);
+    }
+    const dups = [...by].filter(([, list]) => new Set(list.map((r) => r.code)).size > 1);
+    if (!dups.length) return 0;
+    const sent = new Map((await db.all(`SELECT ttn, codes FROM an_ttn_dups WHERE ttn IN (SELECT value FROM json_each(?))`, [JSON.stringify(dups.map(([t]) => t))])).map((r) => [r.ttn, r.codes]));
+    const names = await getJson("an_status_names") || {};
+    const users = await db.all(`SELECT tg_chat_id, crm_logins FROM users WHERE active = 1 AND tg_chat_id != '' AND crm_logins != ''`);
+    const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    let n = 0;
+    const recent = addDays(kyivDay(), -14);
+    for (const [ttn, list] of dups) {
+      const codes = [...new Set(list.map((r) => r.code))].sort().join(",");
+      if (sent.get(ttn) === codes) continue;
+      if (silent || n >= 5 || !list.some((r) => r.day >= recent)) {
+        await db.run(`INSERT INTO an_ttn_dups (ttn, codes, at) VALUES (?, ?, ?) ON CONFLICT(ttn) DO UPDATE SET codes = excluded.codes, at = excluded.at`, [ttn, codes, nowIso()]);
+        continue;
+      }
+      const text = `\u26A0\uFE0F <b>\u0414\u0443\u0431\u043B\u044C \u0422\u0422\u041D ${esc(ttn)}</b> \u0443 LP-CRM \u2014 \u0446\u044F \u0422\u0422\u041D \u0454 \u0432 ${list.length} \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F\u0445:
+` + list.map((r) => `\u2022 \u2116 <b>${esc(r.code)}</b> \xB7 ${esc(names[r.status] || `\u0441\u0442\u0430\u0442\u0443\u0441 ${r.status}`)} \xB7 ${esc(r.day.split("-").reverse().join("."))}${r.user ? ` \xB7 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 ${esc(r.user)}` : ""}`).join("\n") + "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u043F\u043E\u043C\u0438\u043B\u043A\u0430 (\u043E\u0434\u043D\u0430 \u043F\u043E\u0441\u0438\u043B\u043A\u0430 \u043D\u0430 \u0434\u0432\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F).";
+      const logins = new Set(list.map((r) => r.user).filter(Boolean));
+      const chats = users.filter((u) => crmLogins(u.crm_logins).some((l) => logins.has(l))).map((u) => u.tg_chat_id);
+      if (chats.length) await services.notify?.sendText({ chatIds: chats }, text).catch(() => 0);
+      else await services.notify?.sendText({ admins: true }, text).catch(() => 0);
+      await db.run(`INSERT INTO an_ttn_dups (ttn, codes, at) VALUES (?, ?, ?) ON CONFLICT(ttn) DO UPDATE SET codes = excluded.codes, at = excluded.at`, [ttn, codes, nowIso()]);
+      n++;
+    }
+    return n;
+  }
   app.get("/api/an/config", async (c) => {
     const [st, depts, sources, smap, officeMap, managers, brands, offices, statusNames, lastSync, sync, categories] = await Promise.all([
       getSt(),
@@ -3797,6 +3844,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
       getJson("an_sync"),
       db.all(`SELECT id, name, parent_id FROM an_categories ORDER BY name`)
     ]);
+    const ttnSeen = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_seen'`))?.value || "";
     return c.json({
       categories,
       settings: st,
@@ -3810,6 +3858,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
       offices,
       statusNames: statusNames || {},
       lastSync: lastSync?.value || "",
+      ttnSeen,
       sync: sync ? { phase: sync.phase, startedAt: sync.startedAt, mode: sync.mode, error: sync.error || "" } : null
     });
   });
@@ -4199,6 +4248,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
             const orders = j.status === "ok" ? findOrders(j.data).map(normalizeAnOrder).filter(Boolean) : [];
             if (j.status !== "ok") warn(`LP-CRM (\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F): ${j.message || "\u043F\u043E\u043C\u0438\u043B\u043A\u0430"}`);
             await saveOrders(db, orders, maps);
+            await checkTtnDups(orders, { firstRun: state.firstRun || state.mode === "reset" }).catch(() => 0);
             state.stats.fetched += orders.length;
             state.pending = state.pending.slice(part.length);
             continue;
@@ -10413,7 +10463,7 @@ async function upgradeV10(db) {
 }
 var schema8 = {
   name: "analytics",
-  version: 3,
+  version: 4,
   tables: [
     // ---------- Аналітика ----------
     // Замовлення: id = короткий номер LP-CRM (зростає з часом), code = довгий код для API.
@@ -10449,7 +10499,9 @@ var schema8 = {
     // Таргет на місяць: kind = 'dept' | 'src'
     `CREATE TABLE IF NOT EXISTS an_targets (month TEXT NOT NULL, kind TEXT NOT NULL, ref_id INTEGER NOT NULL, amount REAL NOT NULL, PRIMARY KEY (month, kind, ref_id))`,
     // Збережені відповіді дашборду (поки дані й налаштування не змінились) — менше читань бази.
-    `CREATE TABLE IF NOT EXISTS an_cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, at INTEGER NOT NULL)`
+    `CREATE TABLE IF NOT EXISTS an_cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, at INTEGER NOT NULL)`,
+    // Дублі ТТН у LP-CRM, про які вже сповістили (набір № замовлень) — щоб не повторювати при кожному оновленні.
+    `CREATE TABLE IF NOT EXISTS an_ttn_dups (ttn TEXT PRIMARY KEY, codes TEXT NOT NULL, at TEXT NOT NULL)`
   ],
   columns: [
     ["an_managers", "depts", "TEXT DEFAULT ''"],
@@ -10457,12 +10509,15 @@ var schema8 = {
     ["an_products", "cat_manual", "INTEGER"],
     ["an_products", "seen", "INTEGER NOT NULL DEFAULT 0"],
     // Служба доставки з LP-CRM (назва); NULL — ще не дозаповнено для старих замовлень.
-    ["an_orders", "deliv", "TEXT"]
+    ["an_orders", "deliv", "TEXT"],
+    // ТТН із замовлення LP-CRM — для перевірки дублів.
+    ["an_orders", "ttn", "TEXT DEFAULT ''"]
   ],
   // Нова база: засіяти й позначити старі оновлення виконаними; стара — догнати оновлення v9–v12.
   async seed(db, { fresh }) {
     await seedAnalytics(db);
     await db.run(`CREATE INDEX IF NOT EXISTS an_orders_status ON an_orders(status, id)`);
+    await db.run(`CREATE INDEX IF NOT EXISTS an_orders_ttn ON an_orders(ttn) WHERE ttn != ''`);
     if (fresh) {
       await db.batch(["an_v9", "an_v10", "an_v11", "an_v12"].map((k) => [`INSERT INTO settings (key, value) VALUES (?, '1') ON CONFLICT(key) DO NOTHING`, [k]]));
       return;
