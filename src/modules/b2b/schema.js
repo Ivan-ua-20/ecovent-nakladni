@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 21,
+  version: 22,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -187,6 +187,23 @@ export const schema = {
     active INTEGER NOT NULL DEFAULT 1
   )`,
   `CREATE INDEX IF NOT EXISTS b2b_doc_types_partner ON b2b_doc_types (partner_id, active)`,
+  // Кошик: видалені закупівлі й замовлення клієнтів (знімок для відновлення) і прибрані з закупівлі товари.
+  // Хто й коли видалив; партнер бачить свій кошик, видаляють і відновлюють лише наші адміни.
+  `CREATE TABLE IF NOT EXISTS b2b_trash (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    order_id INTEGER,
+    partner_id INTEGER NOT NULL,
+    title TEXT DEFAULT '',
+    total REAL DEFAULT 0,
+    data TEXT DEFAULT '',
+    deleted_by TEXT DEFAULT '',
+    by_partner INTEGER DEFAULT 0,
+    deleted_at TEXT NOT NULL,
+    restored_at TEXT DEFAULT '',
+    restored_by TEXT DEFAULT ''
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_trash_partner ON b2b_trash (partner_id, id)`,
   ],
   // ---------- етап 3: замовлення для клієнтів партнера ----------
   // supply_id — закупівля, з якої взято товари (порожньо — «без закупівлі»); дані клієнта й ТТН партнера;
@@ -240,6 +257,9 @@ export const schema = {
     // Пауза партнера: кабінет доступний, нові закупівлі й замовлення — ні; причина показується партнеру.
     ['b2b_partners', 'paused', 'INTEGER DEFAULT 0'],
     ['b2b_partners', 'pause_note', "TEXT DEFAULT ''"],
+    // Закупівлю змінено після рахунку: який рахунок (і накладну) переробити; коли — старі файли рахунку замінюються новим.
+    ['b2b_orders', 'reinvoice', "TEXT DEFAULT ''"],
+    ['b2b_orders', 'reinvoiced_at', "TEXT DEFAULT ''"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ['b2b_tg_docs', 'source', "TEXT DEFAULT 'private'"],
     ['b2b_tg_docs', 'reply_to', 'INTEGER'],

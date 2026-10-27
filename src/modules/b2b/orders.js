@@ -6,7 +6,6 @@
 // партнера (ліміт open_limit, типово 20 000); партнер будь-коли обирає юрособу і «Формує рахунок» — вона стає звичайною.
 // Ліміт неоплачених закупівель (unpaid_limit, типово 100 000): понад нього нові закупівлі й поповнення відкритої — ні.
 import { fail, need, nowIso, round2 } from '../../core/common.js';
-import { logAudit } from '../../core/requisites.js';
 import { listFilter, kyivDayOf } from './filters.js';
 import { pdfText, parseNpLabel } from '../../integrations/pdftext.js';
 import { can } from '../../core/auth.js';
@@ -534,11 +533,12 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const p = await myPartner(c);
     const o = await orderOf(c.req.param('id'), p.id);
     if (o.kind !== 'supply') throw fail(404, 'Замовлення не знайдено.');
-    if (o.status === 'draft') { // чернетку — просто видаляємо
-      await db.batch([[`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]], [`DELETE FROM b2b_order_log WHERE order_id = ?`, [o.id]], [`DELETE FROM b2b_orders WHERE id = ?`, [o.id]]]);
+    if (o.status === 'draft') { // чернетку — видаляємо (у кошик: видно, хто видалив)
+      await hooks.toTrash(o, c.get('user'), { byPartner: true });
       return c.json({ ok: true, deleted: true });
     }
     if (o.status !== 'invoice_wait') throw fail(400, 'Рахунок уже виставлено — скасувати замовлення може лише менеджер.');
+    if (Number(o.paid_amount) > 0) throw fail(400, 'За закупівлею вже є оплата — скасувати її може лише менеджер.');
     if (await db.get(`SELECT id FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled' LIMIT 1`, [o.id])) {
       throw fail(400, 'З цієї закупівлі вже є замовлення клієнтів — спершу скасуйте їх.');
     }
@@ -600,12 +600,17 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     };
     if (next.invoice_date && !/^\d{4}-\d{2}-\d{2}$/.test(next.invoice_date)) throw fail(400, 'Дата рахунку — у форматі РРРР-ММ-ДД.');
     let status = o.status;
-    if (o.kind === 'supply' && next.invoice_no && status === 'invoice_wait') status = 'pay_wait';
+    // Новий рахунок: статус за вже отриманою оплатою (після зміни закупівлі оплата лишається).
+    const paid = Number(o.paid_amount) || 0;
+    if (o.kind === 'supply' && next.invoice_no && status === 'invoice_wait') status = paid > 0 && paid >= o.total - 0.004 ? 'paid' : paid > 0 ? 'partial' : 'pay_wait';
     if (o.kind === 'supply' && !next.invoice_no && status === 'pay_wait') status = 'invoice_wait';
     // Відстрочка: строк оплати — від дати рахунку (або від сьогодні) + днів, зафіксованих у закупівлі.
     const dueDate = o.pay_terms === 'postpay' && next.invoice_no ? addDaysTo(next.invoice_date || today(), Number(o.pay_days) || 0) : (o.due_date || '');
-    await db.run(`UPDATE b2b_orders SET invoice_no = ?, invoice_date = ?, waybill_no = ?, status = ?, due_date = ?, updated_at = ? WHERE id = ?`,
-      [next.invoice_no, next.invoice_date, next.waybill_no, status, dueDate, nowIso(), o.id]);
+    const reinvoice = next.invoice_no && next.invoice_no !== o.invoice_no ? '' : (o.reinvoice || '');
+    await db.run(`UPDATE b2b_orders SET invoice_no = ?, invoice_date = ?, waybill_no = ?, status = ?, due_date = ?, reinvoice = ?, updated_at = ? WHERE id = ?`,
+      [next.invoice_no, next.invoice_date, next.waybill_no, status, dueDate, reinvoice, nowIso(), o.id]);
+    if (o.reinvoice && !reinvoice) await log(o.id, user, `рахунок перевиставлено: № ${next.invoice_no} замість ${o.reinvoice}`);
+    if (o.reinvoice && !reinvoice && status === 'paid') await hooks.finPaid?.(o.id).catch(() => 0);
     if (dueDate && dueDate !== o.due_date) await log(o.id, user, `строк оплати (відстрочка): до ${dueDate.split('-').reverse().join('.')}`);
     const changes = [];
     if (next.invoice_no !== o.invoice_no) changes.push(`рахунок № ${next.invoice_no || '—'}${next.invoice_date ? ` від ${next.invoice_date}` : ''}`);
@@ -732,6 +737,12 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     for (let n = 0; n < parts; n++) st.push([`INSERT INTO b2b_file_parts (file_id, n, data) VALUES (?, ?, ?)`, [r.lastId, n, toB64(bytes.subarray(n * PART, (n + 1) * PART))]]);
     await db.batch(st);
     await log(o.id, u, `додано файл: ${FILE_KIND[kind]} «${name}»${how}`);
+    // Після зміни закупівлі новий рахунок (накладна) замінює старі файли того ж виду.
+    if (['invoice', 'waybill'].includes(kind) && o.reinvoiced_at) {
+      const old = await db.all(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = ? AND created_at < ? AND id != ?`, [o.id, kind, o.reinvoiced_at, r.lastId]);
+      for (const f of old) await deleteFile(f.id);
+      if (old.length) await log(o.id, u, `старий файл (${FILE_KIND[kind].toLowerCase()}) замінено новим`);
+    }
     return { id: r.lastId, bytes, name, mime };
   }
   async function deleteFile(fileId) {
@@ -778,26 +789,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return sendFile(f);
   });
 
-  // Видалення замовлення (тестові тощо): разом із позиціями, історією і файлами. Закупівлю з замовленнями клієнтів — ні.
-  app.delete('/api/b2b/orders/:id', async (c) => {
-    need(c, 'b2b.admin');
-    const o = await orderOf(c.req.param('id'));
-    if (o.kind === 'supply') {
-      const n = (await db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE supply_id = ? AND kind = 'client'`, [o.id])).n;
-      if (n) throw fail(400, `З цієї закупівлі є замовлення клієнтів (${n}) — спершу видаліть їх.`);
-    }
-    await db.batch([
-      [`DELETE FROM b2b_file_parts WHERE file_id IN (SELECT id FROM b2b_files WHERE order_id = ?)`, [o.id]],
-      [`DELETE FROM b2b_files WHERE order_id = ?`, [o.id]],
-      [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
-      [`DELETE FROM b2b_order_log WHERE order_id = ?`, [o.id]],
-      [`DELETE FROM b2b_orders WHERE id = ?`, [o.id]],
-    ]);
-    await hooks.finClosed?.(o.id, '🗑 видалено', o).catch(() => 0);
-    if (o.kind === 'client' && o.supply_id) await rebuildOpen(o.supply_id);
-    await logAudit(db, { user: c.get('user'), kind: 'b2b', refId: o.partner_id, action: `видалено ${o.kind === 'client' ? 'замовлення клієнта' : 'закупівлю'} ${orderNo(o.id)} на ${uah(o.total)}${o.crm_id ? ` (у LP-CRM № ${o.crm_id} — не видалено)` : ''}` }).catch(() => 0);
-    return c.json({ ok: true, inCrm: o.crm_id || '' });
-  });
+  // Видалення замовлень і кошик — у edits.js.
 
-  return { debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
+  return { entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
 }

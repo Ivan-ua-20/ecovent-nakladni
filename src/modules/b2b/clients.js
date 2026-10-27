@@ -186,7 +186,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
   }
   // Позиції замовлення. Без закупівлі — товари з каталогу йдуть у відкриту закупівлю партнера (у межах лімітів).
   // own — поточний внесок цього ж замовлення у відкриту закупівлю (при зміні).
-  async function buildItems(p, b, exceptId = 0, own = { openId: null, total: 0 }) {
+  async function buildItems(p, b, exceptId = 0, own = { openId: null, total: 0 }, { skipLimits = false } = {}) {
     const supplyId = parseInt(b.supply_id, 10) || null;
     if (supplyId) {
       const items = await supplyItems(p, supplyId, b.items, exceptId);
@@ -196,6 +196,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     const total = totalOf(items);
     const lim = limitsOf(p);
     const open = await getOpen(p.id);
+    if (skipLimits) return { supplyId: null, toOpen: true, openId: open?.id || null, items, total }; // правка нашого адміна — без лімітів
     const inOpen = open && own.openId === open.id ? own.total : 0;
     const openAfter = (open?.total || 0) - inOpen + total;
     if (openAfter > lim.open + 0.004) {
@@ -427,6 +428,67 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     await log(o.id, c.get('user'), `змінено замовлення клієнта: ${it.items.length} поз., ${uah(it.total)}`);
     await tgNew(c, p, o.id, f, it, 'Змінено замовлення клієнта');
     return c.json({ ok: true, total: it.total });
+  });
+
+  // ---------- правка замовлення клієнта нашим адміном: усе (клієнт, ТТН, коментар, закупівля-джерело, товари),
+  // у будь-якому статусі, крім скасованого; без лімітів партнера. Уже передане в CRM — LP-CRM змінюють вручну.
+  app.get('/api/b2b/clients/:id/edit-options', async (c) => {
+    need(c, 'b2b.admin');
+    const o = await orderOf(c.req.param('id'));
+    if (o.kind !== 'client') throw fail(404, 'Замовлення не знайдено.');
+    const since = new Date(Date.now() - 365 * 86400000).toISOString();
+    const rows = await db.all(
+      `SELECT s.id, s.status, i.product_id, i.name, i.article, i.price, i.qty,
+         COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci JOIN b2b_orders co ON co.id = ci.order_id
+           WHERE co.supply_id = s.id AND co.kind = 'client' AND co.status != 'cancelled' AND co.id != ? AND ci.product_id = i.product_id), 0) AS used
+       FROM b2b_orders s JOIN b2b_order_items i ON i.order_id = s.id
+       WHERE s.partner_id = ? AND s.kind = 'supply' AND s.status NOT IN ('cancelled', 'open', 'draft') AND COALESCE(s.delivery, 'np') != 'pickup'
+         AND (s.created_at > ? OR s.id = ?) ORDER BY s.id DESC, i.id`, [o.id, o.partner_id, since, o.supply_id || 0],
+    );
+    const map = new Map();
+    for (const r of rows) {
+      if (!map.has(r.id)) map.set(r.id, { id: r.id, number: orderNo(r.id), status_name: ORDER_STATUS[r.status] || r.status, items: [] });
+      map.get(r.id).items.push({ product_id: r.product_id, name: r.name, article: r.article, price: r.price, left: r.qty - r.used });
+    }
+    const supplies = [...map.values()].filter((s) => s.id === o.supply_id || s.items.some((i) => i.left > 0));
+    return c.json({ supplies, catalog: await hooks.partnerCatalog(o.partner_id) });
+  });
+  app.put('/api/b2b/clients/:id/edit', async (c) => {
+    need(c, 'b2b.admin');
+    const o = await orderOf(c.req.param('id'));
+    if (o.kind !== 'client') throw fail(404, 'Замовлення не знайдено.');
+    if (o.status === 'cancelled') throw fail(400, 'Замовлення скасовано.');
+    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [o.partner_id]);
+    const b = await c.req.json();
+    const f = clientFields(b);
+    if (f.ttn) { const dup = await labelDup({ ttn: f.ttn }, o.id); if (dup) throw fail(400, await ttnDupMsg(f.ttn, dup, p.id)); }
+    const cur = await supplyOf(o.supply_id);
+    const before = await db.all(`SELECT product_id, name, qty FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
+    const it = await buildItems(p, b, o.id, { openId: cur?.status === 'open' ? cur.id : null, total: o.total }, { skipLimits: true });
+    if (it.toOpen) it.openId = await ensureOpen(p);
+    await db.batch([
+      [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
+      ...itemRows(o.id, it.items),
+      [`UPDATE b2b_orders SET supply_id = ?, client_name = ?, client_phone = ?, ttn = ?, total = ?, comment = ?, updated_at = ? WHERE id = ?`,
+        [it.supplyId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, nowIso(), o.id]],
+    ]);
+    if (it.openId) await rebuildOpen(it.openId);
+    if (cur?.status === 'open' && cur.id !== it.openId) await rebuildOpen(cur.id);
+    const changes = [];
+    if (f.client_name !== o.client_name) changes.push(`ПІБ: ${o.client_name} → ${f.client_name}`);
+    if (f.client_phone !== o.client_phone) changes.push(`телефон: ${o.client_phone} → ${f.client_phone}`);
+    if (f.ttn !== (o.ttn || '')) changes.push(`ТТН: ${o.ttn || '—'} → ${f.ttn || '—'}`);
+    if (f.comment !== (o.comment || '')) changes.push('коментар');
+    const newSupply = it.supplyId || it.openId;
+    if (newSupply !== o.supply_id) changes.push(`закупівля: ${o.supply_id ? orderNo(o.supply_id) : '—'} → ${orderNo(newSupply)}`);
+    const bm = new Map(before.map((i) => [i.product_id, i]));
+    for (const i of it.items) { const x = bm.get(i.product_id); if (!x) changes.push(`+ ${i.name} × ${i.qty}`); else if (x.qty !== i.qty) changes.push(`${i.name}: ${x.qty} → ${i.qty} шт`); }
+    for (const x of before) if (!it.items.some((i) => i.product_id === x.product_id)) changes.push(`− ${x.name} × ${x.qty}`);
+    await log(o.id, c.get('user'), `змінив менеджер: ${changes.join('; ') || 'без змін'} — ${uah(it.total)}`.slice(0, 1800));
+    if (changes.length) {
+      await tgPartner(o.partner_id, `✏️ <b>Замовлення клієнта ${orderNo(o.id)} змінив менеджер</b> (${h(f.client_name)})\n${changes.slice(0, 15).map(h).join('\n')}\n${link(c, `pclients/${o.id}`)}`);
+    }
+    return c.json({ ok: true, total: it.total, inCrm: o.status === 'crm' ? (o.crm_id || 'так') : '' });
   });
 
   app.post('/api/b2b/p/clients/:id/cancel', async (c) => {
