@@ -214,7 +214,7 @@ async function upgradeV10(db) {
 
 export const schema = {
   name: 'analytics',
-  version: 3,
+  version: 4,
   tables: [
   // ---------- Аналітика ----------
   // Замовлення: id = короткий номер LP-CRM (зростає з часом), code = довгий код для API.
@@ -251,6 +251,8 @@ export const schema = {
   `CREATE TABLE IF NOT EXISTS an_targets (month TEXT NOT NULL, kind TEXT NOT NULL, ref_id INTEGER NOT NULL, amount REAL NOT NULL, PRIMARY KEY (month, kind, ref_id))`,
   // Збережені відповіді дашборду (поки дані й налаштування не змінились) — менше читань бази.
   `CREATE TABLE IF NOT EXISTS an_cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, at INTEGER NOT NULL)`,
+  // Дублі ТТН у LP-CRM, про які вже сповістили (набір № замовлень) — щоб не повторювати при кожному оновленні.
+  `CREATE TABLE IF NOT EXISTS an_ttn_dups (ttn TEXT PRIMARY KEY, codes TEXT NOT NULL, at TEXT NOT NULL)`,
   ],
   columns: [
     ['an_managers', 'depts', "TEXT DEFAULT ''"],
@@ -258,7 +260,9 @@ export const schema = {
     ['an_products', 'cat_manual', "INTEGER"],
     ['an_products', 'seen', "INTEGER NOT NULL DEFAULT 0"],
     // Служба доставки з LP-CRM (назва); NULL — ще не дозаповнено для старих замовлень.
-    ['an_orders', 'deliv', "TEXT"]
+    ['an_orders', 'deliv', "TEXT"],
+    // ТТН із замовлення LP-CRM — для перевірки дублів.
+    ['an_orders', 'ttn', "TEXT DEFAULT ''"],
   ],
   // Нова база: засіяти й позначити старі оновлення виконаними; стара — догнати оновлення v9–v12.
   async seed(db, { fresh }) {
@@ -266,6 +270,8 @@ export const schema = {
     // Звірка статусів при оновленні читає замовлення одного статусу за період — з індексом лише їх, а не всі замовлення
     // періоду для кожного статусу (у 6 разів менше прочитаних рядків; плюс один запис індексу на зміну статусу).
     await db.run(`CREATE INDEX IF NOT EXISTS an_orders_status ON an_orders(status, id)`);
+    // Пошук дублів ТТН — лише серед замовлень, що мають ТТН.
+    await db.run(`CREATE INDEX IF NOT EXISTS an_orders_ttn ON an_orders(ttn) WHERE ttn != ''`);
     if (fresh) {
       await db.batch(['an_v9', 'an_v10', 'an_v11', 'an_v12'].map((k) => [`INSERT INTO settings (key, value) VALUES (?, '1') ON CONFLICT(key) DO NOTHING`, [k]]));
       return;
