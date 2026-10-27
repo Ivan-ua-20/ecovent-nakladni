@@ -474,7 +474,8 @@ export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
     const lines = items.slice(0, 50).map((i) => `${h(i.name)} — ${i.qty} шт — ${m2(i.price)}`);
     if (items.length > 50) lines.push(`…і ще ${items.length - 50} поз.`);
     const head = done ? `🧾 <b>Закупівля ${orderNo(o.id)}</b> · ✅ рахунок № ${h(o.invoice_no)} додано`
-      : `🧾 <b>Потрібен рахунок · ${orderNo(o.id)}</b>${mode === 'changed' ? ' <i>(закупівлю змінено)</i>' : ''}`;
+      : o.reinvoice ? `🔁 <b>Переробіть рахунок № ${h(o.reinvoice)} · ${orderNo(o.id)}</b>\nЗакупівлю змінив менеджер — оновіть рахунок на цей склад${Number(o.paid_amount) > 0 ? ` (уже оплачено ${m2(o.paid_amount)} грн)` : ''}`
+        : `🧾 <b>Потрібен рахунок · ${orderNo(o.id)}</b>${mode === 'changed' ? ' <i>(закупівлю змінено)</i>' : ''}`;
     return `${head}\nПартнер: «${h(o.partner)}»\n\n`
       + `<b>Рахунок на:</b>\n${h(o.entity)}\n${o.delivery === 'pickup' ? '🚗 <b>Самовивіз</b> — партнер забирає всю закупівлю зі складу\n' : ''}\n<b>Товари:</b>\n${lines.join('\n')}\n\n<b>Разом: ${m2(o.total)} грн</b> (з ПДВ)`
       + `${o.comment ? `\n<i>Коментар: ${h(String(o.comment).slice(0, 200))}</i>` : ''}${done ? '' : '\n\n↩️ Надішліть рахунок <b>відповіддю на це повідомлення</b>'}`;
@@ -485,6 +486,13 @@ export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
     const o = await orderFull(orderId);
     if (!o || o.kind !== 'supply' || o.status !== 'invoice_wait') return;
     const text = await reqText(o, { mode });
+    // Переробити рахунок — нове повідомлення відповіддю на старий рахунок (або запит); далі документ — відповіддю на нього.
+    if (mode === 'reinvoice') {
+      const reply = o.fin_inv_msg || o.fin_req_msg;
+      const m = await tgApi('sendMessage', { chat_id: chat, text, parse_mode: 'HTML', ...(reply ? { reply_to_message_id: reply, allow_sending_without_reply: true } : {}) }).catch(() => null);
+      if (m?.message_id) await db.run(`UPDATE b2b_orders SET fin_req_msg = ?, fin_inv_msg = NULL, fin_pay_msg = NULL, fin_done = 0 WHERE id = ?`, [m.message_id, o.id]);
+      return;
+    }
     if (o.fin_req_msg) {
       const ok = await tgApi('editMessageText', { chat_id: chat, message_id: o.fin_req_msg, text, parse_mode: 'HTML' }).catch(() => null);
       if (ok) { await tgApi('sendMessage', { chat_id: chat, text: `✏️ Закупівлю ${orderNo(o.id)} змінено — рахунок на оновлений список.`, reply_to_message_id: o.fin_req_msg, allow_sending_without_reply: true }).catch(() => 0); return; }

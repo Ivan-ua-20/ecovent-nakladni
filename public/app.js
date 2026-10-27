@@ -47,6 +47,7 @@ const SECTIONS = [
     { id: 'b2bpartners', label: 'Партнери' },
     { id: 'b2bcatalog', label: 'Каталог і ціни' },
     { id: 'b2bstats', label: 'Аналітика' },
+    { id: 'b2btrash', label: 'Кошик' },
   ] },
   // Кабінет партнера — єдиний розділ, який бачить партнер.
   { id: 'partner', label: 'Кабінет партнера', perm: 'b2b.partner', home: 'pcatalog', tabs: [
@@ -56,6 +57,7 @@ const SECTIONS = [
     { id: 'pentities', label: 'Мої юрособи' },
     { id: 'pstats', label: 'Аналітика' },
     { id: 'psettings', label: 'Налаштування' },
+    { id: 'ptrash', label: 'Кошик' },
     { id: 'phelp', label: 'Інструкція' },
   ] },
   { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [{ id: 'settings', label: 'Загальні налаштування' }, { id: 'errors', label: 'Журнал помилок', perm: 'users' }] },
@@ -204,8 +206,8 @@ const { viewRahunky, viewRahunkyList } = createRahunkyPages(ctx);
 const { viewUsers } = createUsersPages(ctx);
 const { viewErrors } = createErrorsPages(ctx);
 const B2BSTATS = createB2bStats();
-const { viewPartners, viewCatalog, viewOrders: viewB2bOrders, viewClients: viewB2bClients } = createB2bPages(ctx);
-const { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients, viewTeam: viewPartnerTeam, viewSettings: viewPartnerSettings } = createPartnerPages(ctx);
+const { viewPartners, viewCatalog, viewOrders: viewB2bOrders, viewClients: viewB2bClients, viewTrash: viewB2bTrash } = createB2bPages(ctx);
+const { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients, viewTeam: viewPartnerTeam, viewSettings: viewPartnerSettings, viewTrash: viewPartnerTrash } = createPartnerPages(ctx);
 setUnauthorized(() => showAuth());
 
 const routes = {
@@ -236,6 +238,8 @@ const routes = {
   pstats: () => B2BSTATS.view({ url: '/api/b2b/p/stats', title: 'Аналітика продажів' }),
   b2bstats: (pid) => B2BSTATS.view({ url: '/api/b2b/stats', admin: true, title: 'Аналітика B2B', partner: pid }),
   b2bclients: viewB2bClients,
+  b2btrash: viewB2bTrash,
+  ptrash: viewPartnerTrash,
   pentities: viewEntities,
   b2bcatalog: viewCatalog,
   pcatalog: viewPartnerCatalog,

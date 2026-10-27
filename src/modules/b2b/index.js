@@ -15,6 +15,7 @@ import { mountB2bStats } from './stats.js';
 import { mountB2bPrices } from './prices.js';
 import { mountB2bTgDocs } from './tgdocs.js';
 import { mountB2bPay } from './odbpay.js';
+import { mountB2bEdits } from './edits.js';
 
 export const partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 
@@ -555,6 +556,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   const hooks = {};
   const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup, hooks });
   mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks });
+  mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice });
   const tgdocs = mountB2bTgDocs(app, { db, services, orders, hooks });
   const pay = mountB2bPay(app, { db, services, orders, hooks });
   onCleanup(() => hooks.cleanup?.());

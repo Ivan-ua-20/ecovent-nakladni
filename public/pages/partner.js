@@ -295,6 +295,7 @@ export function createPartnerPages(ctx = {}) {
             <h3>Рахунок</h3>
             <div class="small" style="white-space:pre-line"><b>Платник:</b> ${esc(o.entity)}</div>
             <div class="small"><b>Отримання:</b> ${esc(o.delivery_name || '')}</div>
+            ${o.reinvoice ? `<div class="alert warn small">Закупівлю змінив менеджер — рахунок № ${esc(o.reinvoice)} перевиставляється, новий надійде в Telegram і з’явиться тут.${o.paid_amount ? ` Уже оплачено: ${uah(o.paid_amount)}.` : ''}</div>` : ''}
             ${o.pay_terms === 'postpay' ? `<div class="small"><b>Оплата:</b> відстрочка ${o.pay_days} дн.${o.due_date ? ` — до <b>${esc(fmtDay(o.due_date))}</b>` : ' від дати рахунку'}${o.overdue ? ` <span class="badge bad">прострочено ${o.overdue} дн.</span>` : ''}</div>` : ''}
             ${o.invoice_no ? `<div><b>Рахунок № ${esc(o.invoice_no)}</b>${o.invoice_date ? ` від ${esc(fmtDay(o.invoice_date))}` : ''}</div>` : '<div class="muted small">Рахунок ще готується — сповістимо в Telegram.</div>'}
             ${o.waybill_no ? `<div>Накладна № ${esc(o.waybill_no)}</div>` : ''}
@@ -889,5 +890,18 @@ export function createPartnerPages(ctx = {}) {
     draw();
   }
 
-  return { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders, viewClients, viewTeam, viewSettings };
+  // Кошик: що видалив наш менеджер (або ваша команда — чернетки). Партнер нічого звідси не видаляє і не відновлює.
+  async function viewTrash() {
+    const rows = await api('GET', '/api/b2b/p/trash');
+    const KIND = { supply: 'Закупівля', client: 'Замовлення клієнта', item: 'Товар прибрано з закупівлі' };
+    main.innerHTML = `<div class="head-row"><h2>Кошик</h2></div>
+      <div class="alert info" style="margin-bottom:12px">Тут видно, що й коли видалив наш менеджер (а також чернетки, які видалила ваша команда). Якщо щось видалено помилково — напишіть менеджеру, він може відновити.</div>
+      ${rows.length ? `<table class="list"><thead><tr><th>Коли</th><th>Що</th><th class="r">Сума</th><th>Хто видалив</th></tr></thead><tbody>
+        ${rows.map((r) => `<tr><td class="small nowrap">${esc(fmtDateTime(r.deleted_at))}</td><td><span class="small muted">${KIND[r.kind] || r.kind}</span><div>${esc(r.title)}</div>
+          ${r.restored_at ? `<div class="small"><span class="badge ok">відновлено</span> ${esc(fmtDateTime(r.restored_at))}</div>` : ''}</td>
+          <td class="r nowrap">${uah(r.total)}</td><td class="small">${esc(r.deleted_by)}</td></tr>`).join('')}</tbody></table>`
+        : '<div class="card empty"><div class="big">Кошик порожній</div>Нічого не видалено.</div>'}`;
+  }
+
+  return { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders, viewClients, viewTeam, viewSettings, viewTrash };
 }
