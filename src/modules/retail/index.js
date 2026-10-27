@@ -22,6 +22,8 @@ const SYNC_GAP_MS = 2 * 60 * 1000;
 const keyHint = (k) => (k ? `${MASK}${String(k).slice(-4)}` : '');
 const newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(10000 + Math.random() * 90000))}`;
 const num = (v) => { const n = parseFloat(String(v ?? '').replace(/\s/g, '').replace(',', '.')); return Number.isFinite(n) ? n : null; };
+// Габарити з форми: «7,5» → 7.5.
+const normSeat = (s) => Object.fromEntries(['lengthCm', 'widthCm', 'heightCm', 'weightKg'].map((k) => [k, num(s?.[k]) ?? 0]));
 const goodSeat = (s) => ['lengthCm', 'widthCm', 'heightCm', 'weightKg'].every((k) => Number(s?.[k]) > 0);
 const seatOf = (s) => ({ lengthCm: round2(Number(s.lengthCm)), widthCm: round2(Number(s.widthCm)), heightCm: round2(Number(s.heightCm)), weightKg: round2(Number(s.weightKg)) });
 const userName = (u) => u?.name || u?.login || '';
@@ -302,6 +304,7 @@ export function mountRetail(app, { db, fetchFn }) {
     const o = publicOrder(r, await prodMap([r]));
     let seats;
     if (Array.isArray(b.seats) && b.seats.length) {
+      b.seats = b.seats.map(normSeat);
       if (!b.seats.every(goodSeat)) throw fail(400, 'Кожне місце: довжина, ширина, висота (см) і вага (кг) — більше 0.');
       seats = b.seats.map(seatOf);
     } else {
@@ -411,7 +414,7 @@ export function mountRetail(app, { db, fetchFn }) {
     if (price !== null && price !== undefined && !(price >= 0)) throw fail(400, 'Ціна закупівлі — число від 0.');
     let seats = cur.seats || '';
     if (b.seats !== undefined) {
-      const list = (Array.isArray(b.seats) ? b.seats : []).filter((s) => s && Object.values(s).some((v) => String(v).trim() !== ''));
+      const list = (Array.isArray(b.seats) ? b.seats : []).filter((s) => s && Object.values(s).some((v) => String(v).trim() !== '')).map(normSeat);
       if (!list.every(goodSeat)) throw fail(400, 'Габарити місця: довжина, ширина, висота (см) і вага (кг) — більше 0.');
       seats = list.length ? JSON.stringify(list.map(seatOf)) : '';
     }
