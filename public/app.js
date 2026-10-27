@@ -14,6 +14,7 @@ import { createErrorsPages } from './pages/errors.js';
 import { createB2bPages } from './pages/b2b.js';
 import { createPartnerPages } from './pages/partner.js';
 import { createB2bStats } from './pages/b2b-stats.js';
+import { createRetailPages } from './pages/retail.js';
 
 // ---------- стан ----------
 let boot = { fops: [], templates: [], offices: [], channels: [], invFops: [], settings: {}, user: null };
@@ -60,6 +61,11 @@ const SECTIONS = [
     { id: 'psettings', label: 'Налаштування' },
     { id: 'ptrash', label: 'Кошик' },
     { id: 'phelp', label: 'Інструкція' },
+  ] },
+  { id: 'retail', label: 'Рітейл', perm: 'docs.view', home: 'rzorders', tabs: [
+    { id: 'rzorders', label: 'Розетка' },
+    { id: 'rzproducts', label: 'Розетка: товари й ціни', perm: 'refs.edit' },
+    { id: 'rzsettings', label: 'Налаштування Розетки', perm: 'api' },
   ] },
   { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [{ id: 'settings', label: 'Загальні налаштування' }, { id: 'np', label: 'Нова пошта і Розетка', perm: 'api' }, { id: 'errors', label: 'Журнал помилок', perm: 'users' }] },
   { id: 'users', label: 'Користувачі', perm: 'people', home: 'users', tabs: [{ id: 'users', label: 'Користувачі' }] },
@@ -208,6 +214,7 @@ const { viewRahunky, viewRahunkyList } = createRahunkyPages(ctx);
 const { viewUsers } = createUsersPages(ctx);
 const { viewErrors } = createErrorsPages(ctx);
 const B2BSTATS = createB2bStats();
+const RETAIL = createRetailPages(ctx);
 const { viewPartners, viewCatalog, viewOrders: viewB2bOrders, viewClients: viewB2bClients, viewTrash: viewB2bTrash } = createB2bPages(ctx);
 const { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients, viewTeam: viewPartnerTeam, viewSettings: viewPartnerSettings, viewTrash: viewPartnerTrash } = createPartnerPages(ctx);
 setUnauthorized(() => showAuth());
@@ -247,6 +254,9 @@ const routes = {
   b2bcatalog: viewCatalog,
   pcatalog: viewPartnerCatalog,
   phelp: viewPartnerHelp,
+  rzorders: () => RETAIL.viewOrders(),
+  rzproducts: () => RETAIL.viewProducts(),
+  rzsettings: () => RETAIL.viewSettings(),
 };
 
 async function route() {

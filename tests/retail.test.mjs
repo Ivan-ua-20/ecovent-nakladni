@@ -1,0 +1,211 @@
+// Рітейл → Розетка (кабінет постачальника): кабінет і вебхук, синхронізація, підтвердження, ТТН, маркування,
+// документи, передача в LP-CRM за ціною закупівлі, товари й прайс.
+import assert from 'node:assert/strict';
+import { openDb } from '../src/core/db-node.js';
+import { migrate } from '../src/migrate.js';
+import { createApp } from '../src/app.js';
+
+const raw = openDb(':memory:');
+await migrate(raw);
+let q = 0;
+const db = { all: (...a) => { q++; return raw.all(...a); }, get: (...a) => { q++; return raw.get(...a); }, run: (...a) => { q++; return raw.run(...a); }, batch: (l) => { if (l.length) q++; return raw.batch(l); } };
+await raw.batch([
+  [`UPDATE settings SET value = 'k' WHERE key = 'lpcrm_key'`, []],
+  [`INSERT INTO b2b_catalog (product_id, name, article, rrp) VALUES (501, 'Рекуператор Ековент', 'EV-100', 9000)`, []],
+]);
+
+const TOKEN = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.test.token';
+const ID1 = '11111111-aaaa-4bbb-8ccc-000000000001';
+const ID2 = '11111111-aaaa-4bbb-8ccc-000000000002';
+const now = new Date().toISOString().slice(0, 10);
+const ORDERS = new Map([
+  [ID1, { orderId: ID1, orderNum: '900001', createdAt: `${now} 10:00:00`, updatedAt: `${now} 10:00:00`, orderStatus: 'new', uzdStatus: 'skipped', customerName: 'Петренко Іван',
+    deliveryCity: 'Київ', deliveryStreet: 'відд. 5', deliveryPhone: '+380501112233', cashOnDelivery: 9500, ttn: null, documentLink: null, snRequired: false,
+    products: [{ supplierCode: 'EV-100', rzCode: 777, quantity: 2, cargoSeats: [{ lengthCm: 40, widthCm: 30, heightCm: 20, weightKg: 5 }] }] }],
+  [ID2, { orderId: ID2, orderNum: '900002', createdAt: `${now} 11:00:00`, updatedAt: `${now} 11:00:00`, orderStatus: 'new', uzdStatus: 'not_uploaded', customerName: 'Коваль Ольга',
+    deliveryCity: 'Львів', deliveryPhone: '380671234567', cashOnDelivery: 0, snRequired: true,
+    products: [{ supplierCode: 'EV-200', rzCode: 778, quantity: 1, cargoSeats: [] }] }],
+]);
+const calls = { list: 0, confirm: [], ttn: [], print: [], price: [], crm: [] };
+const json = (o, status = 200) => new Response(JSON.stringify(o), { status });
+const fetchFn = async (url, opts = {}) => {
+  const u = new URL(url);
+  if (u.hostname.endsWith('lp-crm.biz')) {
+    const method = u.pathname.match(/\/api\/(\w+)\.html/)[1];
+    const p = Object.fromEntries(new URLSearchParams(opts.body));
+    calls.crm.push({ method, p });
+    if (method === 'addNewOrder') return json({ status: 'ok', data: { order_id: p.order_id }, message: 'ok' });
+    if (method === 'getOrdersByID') return json({ status: 'ok', data: [{ order_id: p.order_id, id: '88001', products: [], bayer_name: 'x' }] });
+    return json({ status: 'ok', data: [] });
+  }
+  assert.equal(u.origin, 'https://api-cabinet-supplier.rozetka.com.ua');
+  if (opts.headers.Authorization !== `Bearer ${TOKEN}`) return json({ name: 'Unauthorized', message: 'bad', status: 401 }, 401);
+  const path = u.pathname;
+  if (path === '/dropshipping/orders') {
+    calls.list++;
+    assert.ok(u.searchParams.get('expand').includes('products'));
+    const list = [...ORDERS.values()];
+    return json({ totalCount: list.length, currentPage: 1, orders: list });
+  }
+  let m = path.match(/^\/dropshipping\/orders\/confirm\/(.+)$/);
+  if (m) {
+    const b = JSON.parse(opts.body);
+    calls.confirm.push({ id: m[1], b });
+    const o = ORDERS.get(m[1]);
+    o.orderStatus = 'confirmed';
+    o.products.forEach((p) => { p.confirmedQuantity = p.quantity; });
+    return json({ orderStatus: 'confirmed', products: o.products, warnings: [] });
+  }
+  m = path.match(/^\/dropshipping\/orders\/ttn\/(.+)$/);
+  if (m) {
+    const b = JSON.parse(opts.body);
+    calls.ttn.push({ id: m[1], b });
+    const o = ORDERS.get(m[1]);
+    o.ttn = '20450000000001';
+    o.orderStatus = 'shipping';
+    return json({ ttn: o.ttn, orderStatus: 'shipping', shippingPointName: 'Склад Київ' });
+  }
+  if (path === '/dropshipping/orders/print-markings') {
+    calls.print.push(JSON.parse(opts.body));
+    return new Response('%PDF-1.4 marks', { headers: { 'Content-Type': 'application/pdf', 'X-Markings-Printed': '1', 'X-Markings-Skipped': '0' } });
+  }
+  m = path.match(/^\/dropshipping\/orders\/(.+)$/);
+  if (m) { const o = ORDERS.get(m[1]); return o ? json(o) : json({ message: 'not found' }, 404); }
+  if (path === '/prices/price-lists/create') {
+    calls.price.push({ body: opts.body, test: opts.headers['X-Test-Request'] });
+    return json({ success: true, count: (opts.body.match(/<item>/g) || []).length });
+  }
+  throw new Error(`неочікуваний запит ${url}`);
+};
+
+const mk = () => createApp({ db, fetchFn, maxSubrequests: 40 });
+const setup = await mk().request('/api/auth/setup', { method: 'POST', body: JSON.stringify({ login: 'o', password: 'secret123' }), headers: { 'Content-Type': 'application/json' } });
+const H = { 'Content-Type': 'application/json', Cookie: setup.headers.get('set-cookie').split(';')[0] };
+const maxQ = {};
+const send = async (method, path, body, headers = H) => {
+  q = 0;
+  const r = await mk().request(`https://ecovent.test${path}`, { method, headers, body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body) });
+  const k = `${method} ${path.split('?')[0].replace(/\/(\d+|[0-9a-f-]{36}|EV-\d+)(?=\/|$)/g, '/:id')}`;
+  maxQ[k] = Math.max(maxQ[k] || 0, q);
+  return r;
+};
+const req = async (method, path, body, headers) => {
+  const r = await send(method, path, body, headers);
+  const j = await r.json();
+  if (r.status >= 400) throw Object.assign(new Error(j.error || r.status), { status: r.status });
+  return j;
+};
+const errOf = async (fn) => { try { await fn(); return ''; } catch (e) { return e.message; } };
+const status = async (fn) => { try { await fn(); return 200; } catch (e) { return e.status; } };
+
+// ---------- 1. Кабінет: перевірка токена, маска, вебхук ----------
+assert.match(await errOf(() => req('POST', '/api/rzs/accounts', { token: 'x'.repeat(30) })), /токен/, 'чужий токен — зрозуміла помилка');
+const acc = await req('POST', '/api/rzs/accounts', { name: 'Ековент', token: TOKEN, price_list_id: '123', crm_office: '7' });
+let accs = await req('GET', '/api/rzs/accounts');
+assert.equal(accs.length, 1);
+assert.ok(!JSON.stringify(accs).includes(TOKEN), 'токен не віддається в браузер');
+const hook = accs[0].hook;
+assert.equal(hook.url, `https://ecovent.test/api/rzs/hook/${acc.id}`);
+assert.ok(hook.user && hook.pass.length >= 12);
+
+// ---------- 2. Синхронізація: замовлення, нові артикули, автозіставлення з каталогом ----------
+await req('POST', '/api/rzs/sync', { force: true });
+let list = await req('GET', '/api/rzs/orders');
+assert.equal(list.rows.length, 2);
+assert.equal(list.counts.new, 2);
+let prods = await req('GET', '/api/rzs/products');
+assert.deepEqual(prods.map((p) => p.code).sort(), ['EV-100', 'EV-200']);
+assert.equal(prods.find((p) => p.code === 'EV-100').product_id, 501, 'артикул знайдено в каталозі');
+assert.equal(prods.find((p) => p.code === 'EV-100').name, 'Рекуператор Ековент');
+calls.list = 0;
+await req('POST', '/api/rzs/sync', {});
+assert.equal(calls.list, 0, 'повторне оновлення протягом 2 хв — без запиту до Розетки');
+assert.equal((await req('GET', '/api/rzs/orders?status=todo')).rows.length, 2);
+assert.equal((await req('GET', '/api/rzs/orders?q=коваль')).rows.length, 1);
+
+// ---------- 3. Вебхук: Basic-логін, перечитування замовлення, позначка документів ----------
+const basic = (u, p) => ({ 'Content-Type': 'application/json', Authorization: `Basic ${btoa(`${u}:${p}`)}` });
+assert.equal((await send('POST', `/api/rzs/hook/${acc.id}`, { orderId: ID1 }, basic(hook.user, 'wrong'))).status, 401, 'чужий пароль — 401');
+ORDERS.get(ID1).documentLink = 'https://edo.vchasno.ua/doc/1';
+ORDERS.get(ID1).incomingInvoiceNumber = 'ВЧ-15';
+const hr = await req('POST', `/api/rzs/hook/${acc.id}`, { event: 'dropshipping.order.updated', data: { orderId: ID1 } }, basic(hook.user, hook.pass));
+assert.equal(hr.saved, 1);
+let o1 = await req('GET', `/api/rzs/orders/${ID1}`);
+assert.equal(o1.document_link, 'https://edo.vchasno.ua/doc/1');
+assert.equal(o1.invoice_no, 'ВЧ-15');
+assert.ok(o1.docs_at, 'час появи документів позначено');
+const docsAt = o1.docs_at;
+assert.equal((await req('GET', '/api/rzs/orders?status=docs')).rows.length, 1);
+assert.ok((await req('GET', '/api/rzs/accounts'))[0].hook_at, 'час останнього вебхука');
+
+// ---------- 4. Підтвердження: серійні номери, повне підтвердження ----------
+assert.match(await errOf(() => req('POST', `/api/rzs/orders/${ID2}/confirm`, {})), /серійні номери/, 'без серійних номерів — ні');
+await req('POST', `/api/rzs/orders/${ID1}/confirm`, {});
+await req('POST', `/api/rzs/orders/${ID2}/confirm`, { serials: { 'EV-200': 'SN-1' } });
+assert.deepEqual(calls.confirm[0].b.products, [{ supplierCode: 'EV-100', confirmedQuantity: 2 }]);
+assert.deepEqual(calls.confirm[1].b.products[0].serialNumbers, ['SN-1']);
+o1 = await req('GET', `/api/rzs/orders/${ID1}`);
+assert.equal(o1.status, 'confirmed');
+assert.ok(o1.confirmed_at);
+assert.equal(o1.docs_at, docsAt, 'час документів не перезаписується');
+
+// ---------- 5. ТТН: місця × кількість, свої габарити, ЮЗД, повтор ----------
+assert.match(await errOf(() => req('POST', `/api/rzs/orders/${ID2}/ttn`, {})), /ЮЗД/, 'ЮЗД не звірено — ТТН не можна');
+await raw.run(`UPDATE rzs_orders SET uzd_status = 'verified' WHERE id = ?`, [ID2]);
+assert.match(await errOf(() => req('POST', `/api/rzs/orders/${ID2}/ttn`, {})), /габаритів/, 'немає габаритів — зрозуміла помилка');
+await req('PUT', '/api/rzs/products/EV-200', { seats: [{ lengthCm: '50', widthCm: '40', heightCm: '30', weightKg: '7,5' }] });
+const t1 = await req('POST', `/api/rzs/orders/${ID1}/ttn`, {});
+assert.equal(t1.ttn, '20450000000001');
+assert.equal(calls.ttn[0].b.cargoSeats.length, 2, 'місце з каталогу Розетки × 2 шт.');
+assert.equal(calls.ttn[0].b.deliveryService, 'nova_poshta');
+await req('POST', `/api/rzs/orders/${ID2}/ttn`, {});
+assert.deepEqual(calls.ttn[1].b.cargoSeats, [{ lengthCm: 50, widthCm: 40, heightCm: 30, weightKg: 7.5 }], 'свої габарити товару');
+assert.match(await errOf(() => req('POST', `/api/rzs/orders/${ID1}/ttn`, {})), /ТТН уже є/);
+assert.equal((await req('GET', '/api/rzs/orders?status=nottn')).rows.length, 0);
+
+// ---------- 6. Маркування групою ----------
+const mr = await send('POST', '/api/rzs/markings', { ids: [ID1, ID2] });
+assert.equal(mr.status, 200);
+assert.equal((await mr.text()).slice(0, 4), '%PDF');
+assert.deepEqual(calls.print[0].orders.sort(), [ID1, ID2].sort());
+
+// ---------- 7. LP-CRM: ціна закупівлі, не роздрібна ----------
+assert.match(await errOf(() => req('POST', `/api/rzs/orders/${ID1}/crm`, {})), /ціну закупівлі/, 'без ціни закупівлі — ні');
+await req('PUT', '/api/rzs/products/EV-100', { purchase_price: '7 200,50', stock: 5 });
+const cr = await req('POST', `/api/rzs/orders/${ID1}/crm`, {});
+assert.equal(cr.crm_id, '88001');
+const add = calls.crm.find((x) => x.method === 'addNewOrder').p;
+assert.equal(add.office, '7');
+assert.equal(add.phone, '380501112233');
+assert.ok(add.comment.includes('900001') && add.comment.includes('20450000000001'), 'у коментарі — № Розетки і ТТН');
+assert.ok(decodeURIComponent(add.products.replace(/\+/g, ' ')).includes('s:5:"price";s:6:"7200.5"'), 'ціна — закупівельна');
+assert.match(await errOf(() => req('POST', `/api/rzs/orders/${ID1}/crm`, {})), /Уже в LP-CRM/, 'двічі — ні');
+assert.equal((await req('GET', '/api/rzs/orders?status=nocrm')).rows.length, 1);
+
+// ---------- 8. Прайс ----------
+await req('PUT', '/api/rzs/products/EV-200', { purchase_price: 3000, rrp: 4100, stock: 0 });
+const pr = await req('POST', '/api/rzs/price', { test: true });
+assert.equal(pr.sent, 2);
+assert.equal(calls.price[0].test, '1', 'тестовий режим');
+assert.ok(calls.price[0].body.includes('<purchase_price>7200.5</purchase_price>') && calls.price[0].body.includes('<price_list_id>123</price_list_id>'));
+assert.ok(calls.price[0].body.includes('<recommended_inet_price>4100</recommended_inet_price>'));
+
+// ---------- 9. Права ----------
+await req('POST', '/api/users', { login: 'viewer', password: 'pass1234', role: 'viewer' });
+const vl = await mk().request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: 'viewer', password: 'pass1234' }) });
+const VH = { 'Content-Type': 'application/json', Cookie: vl.headers.get('set-cookie').split(';')[0] };
+assert.equal((await req('GET', '/api/rzs/orders', undefined, VH)).rows.length, 2, 'перегляд бачить замовлення');
+assert.equal(await status(() => req('GET', '/api/rzs/accounts', undefined, VH)), 403, 'кабінети — лише власник/адміни');
+assert.equal(await status(() => req('POST', `/api/rzs/orders/${ID2}/crm`, {}, VH)), 403);
+assert.equal(await status(() => req('PUT', '/api/rzs/products/EV-200', { purchase_price: 1 }, VH)), 403);
+assert.equal(await status(() => req('POST', '/api/rzs/price', {}, VH)), 403);
+
+// ---------- 10. Новий пароль вебхука, видалення ----------
+await req('PUT', `/api/rzs/accounts/${acc.id}`, { new_hook_pass: true });
+assert.equal((await send('POST', `/api/rzs/hook/${acc.id}`, '{}', basic(hook.user, hook.pass))).status, 401, 'старий пароль більше не діє');
+await req('DELETE', `/api/rzs/accounts/${acc.id}`);
+assert.equal((await raw.get(`SELECT COUNT(*) AS n FROM rzs_orders`)).n, 0);
+
+console.log('  запитів до бази (макс.):', maxQ);
+for (const [k, n] of Object.entries(maxQ)) assert.ok(n <= 45, `${k}: ${n} запитів до бази`);
+console.log('OK — Рітейл: Розетка (кабінет постачальника)');

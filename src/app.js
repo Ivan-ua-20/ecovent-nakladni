@@ -15,6 +15,7 @@ import { mountTg } from './modules/notify/index.js';
 import { mountErrLog } from './modules/errlog/index.js';
 import { mountB2b } from './modules/b2b/index.js';
 import { mountMarking } from './modules/marking/index.js';
+import { mountRetail } from './modules/retail/index.js';
 import { mountOdb, ODB_BASE } from './modules/payments/index.js';
 
 // shared — стан, що живе довше за одне звернення (на Cloudflare застосунок створюється на кожен запит,
@@ -79,6 +80,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   services.b2b = mountB2b(app, ctx);
   mountRahunky(app, ctx);
   mountMarking(app, ctx);
+  mountRetail(app, ctx);
   mountAnalytics(app, ctx);
   services.notify = mountTg(app, ctx);
   services.payments = mountOdb(app, { ...ctx, base: odbBase, notify: (...a) => services.notify.notify(...a), onTx: (ids, origin) => services.b2b?.onPayments?.(ids, origin) });

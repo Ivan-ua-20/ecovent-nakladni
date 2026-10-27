@@ -1,0 +1,75 @@
+// Схема модуля «Рітейл»: маркетплейси (поки Розетка, кабінет постачальника — дропшипінг і прайс).
+// version — підвищуйте при зміні схеми модуля: тоді міграція цього модуля виконається знову.
+
+export const schema = {
+  name: 'retail',
+  version: 1,
+  tables: [
+  // Кабінети постачальника Розетки: токен (JWT) бачить лише сервер; прайс і параметри передачі замовлень у LP-CRM.
+  `CREATE TABLE IF NOT EXISTS rzs_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL DEFAULT '',
+    token TEXT NOT NULL,
+    price_list_id TEXT DEFAULT '',
+    crm_office TEXT DEFAULT '',
+    crm_delivery TEXT DEFAULT '1',
+    crm_site TEXT DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    synced_at TEXT DEFAULT '',
+    hook_user TEXT DEFAULT '',
+    hook_pass TEXT DEFAULT '',
+    hook_at TEXT DEFAULT '',
+    created_at TEXT
+  )`,
+  // Замовлення дропшипінгу (останні тижні): усе, що потрібно для списку й дій; products — JSON позицій з місцями.
+  `CREATE TABLE IF NOT EXISTS rzs_orders (
+    id TEXT PRIMARY KEY,
+    account_id INTEGER NOT NULL,
+    order_num TEXT DEFAULT '',
+    status TEXT DEFAULT '',
+    uzd_status TEXT DEFAULT '',
+    created_at TEXT DEFAULT '',
+    updated_at TEXT DEFAULT '',
+    delivery_type TEXT DEFAULT '',
+    delivery_company TEXT DEFAULT '',
+    address_id TEXT DEFAULT '',
+    customer TEXT DEFAULT '',
+    city TEXT DEFAULT '',
+    street TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    cod REAL DEFAULT 0,
+    ttn TEXT DEFAULT '',
+    tracking_code INTEGER,
+    tracking_status TEXT DEFAULT '',
+    return_ttn TEXT DEFAULT '',
+    document_link TEXT DEFAULT '',
+    invoice_no TEXT DEFAULT '',
+    sn_required INTEGER DEFAULT 0,
+    products TEXT DEFAULT '[]',
+    docs_at TEXT DEFAULT '',
+    confirmed_at TEXT DEFAULT '',
+    ttn_at TEXT DEFAULT '',
+    crm_id TEXT DEFAULT '',
+    crm_code TEXT DEFAULT '',
+    crm_at TEXT DEFAULT '',
+    note TEXT DEFAULT '',
+    synced_at TEXT DEFAULT ''
+  )`,
+  `CREATE INDEX IF NOT EXISTS rzs_orders_created ON rzs_orders (created_at)`,
+  `CREATE INDEX IF NOT EXISTS rzs_orders_status ON rzs_orders (status, created_at)`,
+  // Товари Розетки (артикул постачальника): товар LP-CRM, ціна закупівлі для Розетки (вона ж — ціна в LP-CRM), РІЦ, залишок,
+  // свої габарити місць (якщо в каталозі Розетки їх немає) — для ТТН.
+  `CREATE TABLE IF NOT EXISTS rzs_products (
+    code TEXT PRIMARY KEY,
+    rz_code TEXT DEFAULT '',
+    product_id INTEGER,
+    name TEXT DEFAULT '',
+    purchase_price REAL,
+    rrp REAL,
+    stock INTEGER,
+    seats TEXT DEFAULT '',
+    updated_at TEXT DEFAULT ''
+  )`,
+  ],
+  columns: [],
+};
