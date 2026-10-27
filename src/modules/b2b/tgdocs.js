@@ -147,7 +147,7 @@ export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
     const rows = await db.all(
       `SELECT o.id, o.kind, o.status, o.partner_id, o.total, o.entity, o.invoice_no, o.waybill_no, o.client_name, o.created_at, p.name AS partner
        FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id
-       WHERE o.status NOT IN ('cancelled', 'open', 'draft') AND o.created_at > ? AND (o.kind = 'supply' OR o.supply_id IS NULL) ORDER BY o.id DESC LIMIT 200`, [since],
+       WHERE o.status NOT IN ('cancelled', 'open', 'draft', 'confirm') AND o.created_at > ? AND (o.kind = 'supply' OR o.supply_id IS NULL) ORDER BY o.id DESC LIMIT 200`, [since],
     );
     const ents = await db.all(`SELECT partner_id, name FROM b2b_entities`);
     const byPartner = new Map();

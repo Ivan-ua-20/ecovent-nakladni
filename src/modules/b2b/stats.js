@@ -31,7 +31,7 @@ export function mountB2bStats(app, { db, myPartner }) {
     const orders = await db.all(
       `SELECT o.id, o.partner_id, o.kind, o.status, o.supply_id, o.total, o.paid_amount, o.paid_at, o.created_at, o.crm_status, s.status AS supply_status
        FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id
-       WHERE o.created_at >= ? AND o.created_at < ? AND o.status NOT IN ('cancelled', 'draft') ${byPartner}`,
+       WHERE o.created_at >= ? AND o.created_at < ? AND o.status NOT IN ('cancelled', 'draft', 'confirm') ${byPartner}`,
       [kyivDayStartIso(prevFrom), kyivDayStartIso(nextDay(to)), ...pp],
     );
     for (const o of orders) { o.day = kyivDayOf(o.created_at); o.cur = o.day >= from; }
@@ -109,7 +109,7 @@ export function mountB2bStats(app, { db, myPartner }) {
           SUM(CASE WHEN o.status IN ('pay_wait', 'partial') THEN 1 ELSE 0 END) AS due_cnt
         FROM b2b_orders o WHERE o.kind = 'supply' AND o.status IN ('invoice_wait', 'pay_wait', 'partial') ${byPartner}`, pp),
       db.get(`SELECT SUM(i.qty) AS units, SUM(i.qty * i.price) AS sum FROM b2b_order_items i JOIN b2b_orders o ON o.id = i.order_id
-        WHERE o.kind = 'supply' AND o.status NOT IN ('cancelled', 'draft') ${byPartner}`, pp),
+        WHERE o.kind = 'supply' AND o.status NOT IN ('cancelled', 'draft', 'confirm') ${byPartner}`, pp),
       db.get(`SELECT SUM(i.qty) AS units, SUM(i.qty * i.price) AS sum FROM b2b_order_items i JOIN b2b_orders o ON o.id = i.order_id
         WHERE o.kind = 'client' AND o.status != 'cancelled' AND o.supply_id IS NOT NULL ${byPartner}`, pp),
     ]);

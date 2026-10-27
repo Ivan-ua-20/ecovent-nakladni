@@ -3,6 +3,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
+import { viewAdminSupplyForm } from './b2b-supply.js';
 import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar } from './b2b-shared.js';
 
 const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
@@ -580,11 +581,12 @@ export function createB2bPages(ctx = {}) {
   // ---------------------------------------------------------------- замовлення партнерів (бухгалтер)
   let ordFilter = { status: '', partner: '', q: '', from: '', to: '' };
   async function viewOrders(id) {
+    if (id === 'new') return viewAdminSupplyForm(ordFilter.partner);
     if (id) return viewOrder(id);
     const qs = filterQs(ordFilter);
     const [{ rows, statuses, counts }, partners] = await Promise.all([api('GET', `/api/b2b/orders${qs ? `?${qs}` : ''}`), api('GET', '/api/b2b/partners')]);
     main.innerHTML = `
-      <div class="head-row"><h2>Закупівлі партнерів</h2><button class="btn" id="finGroup">Група «Фінансові питання»</button></div>
+      <div class="head-row"><h2>Закупівлі партнерів</h2><div class="btn-row"><button class="btn" id="finGroup">Група «Фінансові питання»</button><a class="btn primary" href="#/b2borders/new">+ Закупівля для партнера</a></div></div>
       <div class="btn-row" style="margin-bottom:12px;flex-wrap:wrap">
         <button class="chip ${ordFilter.status ? '' : 'on'}" data-st="">Усі</button>
         ${Object.entries(statuses).map(([k, v]) => `<button class="chip ${ordFilter.status === k ? 'on' : ''}" data-st="${k}">${esc(v)}${counts[k] ? ` · ${counts[k]}` : ''}</button>`).join('')}
@@ -595,8 +597,8 @@ export function createB2bPages(ctx = {}) {
       ${rows.length ? `<table class="list"><thead><tr>${selHead()}<th>№</th><th>Партнер</th><th class="hide-m">Дата</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Рахунок</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click" data-o="${o.id}">
           ${selCell(o.id)}
-          <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? '<div><span class="badge info">🚗 самовивіз</span></div>' : ''}</td>
-          <td>${esc(o.partner)}<div class="small muted">${esc(o.entity.split('\n')[0].split(',')[0])}</div></td>
+          <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? '<div><span class="badge info">🚗 самовивіз</span></div>' : o.delivery === 'warehouse' ? `<div><span class="badge info">🏬 на склад${o.crm_id || o.crm_ext ? ' · в LP-CRM' : ''}</span></div>` : ''}</td>
+          <td>${esc(o.partner)}<div class="small muted">${esc(o.status === 'confirm' ? 'юрособу обере партнер' : o.entity.split('\n')[0].split(',')[0])}</div></td>
           <td class="small hide-m">${esc(fmtDateTime(o.created_at))}</td>
           <td class="r"><b>${uah(o.total)}</b></td>
           <td>${statusBadge(o)}</td>
@@ -625,16 +627,23 @@ export function createB2bPages(ctx = {}) {
     main.innerHTML = `
       <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2borders">← До списку</a>${o.status === 'draft' ? '<button class="btn primary" id="oSendDraft">Відправити закупівлю</button>' : ''}${closed ? '' : '<button class="btn" id="oEdit">✏️ Змінити</button>'}<button class="btn danger" id="oDel">Видалити</button></div></div>
       ${o.reinvoice ? `<div class="alert warn" style="margin-bottom:12px"><b>Закупівлю змінено після рахунку</b> — потрібно переробити рахунок № ${esc(o.reinvoice)}. Запит надіслано в «Фінансові питання»; новий рахунок замінить старий файл і піде в групу партнера.${o.paid_amount ? ` Уже оплачено: ${uah(o.paid_amount)}.` : ''}</div>` : ''}
+      ${o.status === 'confirm' ? '<div class="alert warn" style="margin-bottom:12px"><b>Чекає підтвердження партнера</b> — закупівлю створили ми; партнер отримав її в кабінеті й у Telegram. Після підтвердження він обере юрособу, і в «Фінансові питання» піде запит рахунку. Склад ще можна змінити («✏️ Змінити»).</div>' : ''}
       ${o.status === 'draft' ? '<div class="alert warn" style="margin-bottom:12px"><b>Чернетка партнера</b> — команда партнера ще збирає товари. Відправити її (як від партнера) може керівник партнера або ви.</div>' : ''}
       <div class="form-page">
         <div class="form-stack">
           <div class="card">${itemsTable(items, { rrp: true })}</div>
-          ${o.comment ? `<div class="card small"><b>Коментар партнера:</b> ${esc(o.comment)}</div>` : ''}
+          ${o.comment ? `<div class="card small"><b>Коментар:</b> ${esc(o.comment)}</div>` : ''}
+          ${o.delivery === 'warehouse' && !closed ? `<div class="card form-stack"><h3>🏬 Відправка на склад партнера</h3>
+            ${o.crm_id || o.crm_ext ? `<div>Передано в LP-CRM${o.crm_id ? `: № <b>${esc(o.crm_id)}</b>` : ''}${o.crm_sent_at && !String(o.crm_sent_at).startsWith('sending') ? ` · ${esc(fmtDateTime(o.crm_sent_at))}` : ''}</div>`
+              : o.status === 'confirm' ? '<div class="small muted">Передати в LP-CRM можна після підтвердження партнером.</div>'
+                : `<div class="small">Уся закупівля піде одним замовленням у LP-CRM («Нові»), отримувач — склад партнера, ціни — партнера.</div><div class="btn-row"><button class="btn primary" id="oCrm">🚚 Додати в LP-CRM на відправку</button></div>`}
+          </div>` : ''}
           <div class="card form-stack">
             <h3>Платник (юрособа партнера)</h3>
-            <div class="small" style="white-space:pre-line" id="oEnt">${esc(o.entity)}</div>
-            ${closed || o.status === 'open' ? `<div class="small"><b>Отримання:</b> ${esc(o.delivery_name || '')}</div>` : `<label class="f"><span>Отримання</span>
-              <select id="oDeliv">${[['np', 'Відправка клієнтам (Нова пошта)'], ['pickup', '🚗 Самовивіз — партнер забирає всю закупівлю']].map(([k, v]) => `<option value="${k}" ${o.delivery === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>`}
+            <div class="small" style="white-space:pre-line" id="oEnt">${esc(o.entity || (o.status === 'confirm' ? 'Партнер обере юрособу при підтвердженні.' : '—'))}</div>
+            ${closed || o.status === 'open' || o.crm_id || o.crm_ext ? `<div class="small"><b>Отримання:</b> ${esc(o.delivery_name || '')}</div>` : `<label class="f"><span>Отримання</span>
+              <select id="oDeliv">${[['np', 'Відправка клієнтам (Нова пошта)'], ['pickup', '🚗 Самовивіз — партнер забирає всю закупівлю'], ['warehouse', '🏬 На склад партнера (уся закупівля — Новою поштою)']].map(([k, v]) => `<option value="${k}" ${o.delivery === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>`}
+            ${o.delivery === 'warehouse' && o.ship_to ? `<div class="small"><b>Склад партнера:</b> ${esc([o.ship_to.name, phoneFmt(o.ship_to.phone), o.ship_to.address].filter(Boolean).join(', '))}${closed || o.crm_id || o.crm_ext ? '' : ' <button type="button" class="btn sm" id="oShipEd">Змінити</button>'}</div>` : ''}
             <div class="btn-row"><button class="btn sm" id="oCopy">Скопіювати реквізити</button></div>
           </div>
           ${clients.length ? `<div class="card form-stack"><h3>Замовлення клієнтів із цієї закупівлі</h3>
@@ -705,9 +714,36 @@ export function createB2bPages(ctx = {}) {
       if (!(await confirmDanger(`Відправити чернетку ${o.number}?`, 'Вона стане закупівлею «Очікує рахунок»: прийдуть сповіщення, у «Фінансових питаннях» — запит рахунку.', 'Відправити закупівлю'))) return;
       try { await api('POST', `/api/b2b/orders/${o.id}/send`); toast('Закупівлю відправлено'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
     };
+    // Склад партнера (отримувач, телефон, відділення) — для «на склад партнера».
+    const shipForm = (cur) => new Promise((resolve) => {
+      const m = modal('Склад партнера', `<form id="shF" class="form-stack">
+          <label class="f"><span>Отримувач (ПІБ)</span><input name="name" value="${esc(cur?.name || '')}" required></label>
+          <label class="f"><span>Телефон</span><input name="phone" value="${esc(cur?.phone || '')}" inputmode="tel" required></label>
+          <label class="f"><span>Місто й відділення Нової пошти</span><input name="address" value="${esc(cur?.address || '')}" required></label></form>`,
+      { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="shOk">Зберегти склад</button>' });
+      let done = false;
+      $('#shOk', m.el).onclick = () => { done = true; const d = Object.fromEntries(new FormData($('#shF', m.el))); m.close(); resolve(d); };
+      new MutationObserver((_, obs) => { if (!document.contains(m.el)) { obs.disconnect(); if (!done) resolve(null); } }).observe(document.body, { childList: true });
+    });
+    const setDelivery = async (delivery, ship_to) => {
+      try { await api('POST', `/api/b2b/orders/${o.id}/delivery`, { delivery, ship_to }); toast('Спосіб отримання змінено — партнеру надіслано повідомлення'); viewOrder(o.id); }
+      catch (er) { toast(er.message, true); if ($('#oDeliv')) $('#oDeliv').value = o.delivery; }
+    };
     if ($('#oDeliv')) $('#oDeliv').onchange = async (e) => {
-      try { await api('POST', `/api/b2b/orders/${o.id}/delivery`, { delivery: e.target.value }); toast('Спосіб отримання змінено — партнеру надіслано повідомлення'); viewOrder(o.id); }
-      catch (er) { toast(er.message, true); e.target.value = o.delivery; }
+      if (e.target.value !== 'warehouse') return setDelivery(e.target.value);
+      const opts = await api('GET', `/api/b2b/partners/${o.partner_id}/supply-options`).catch(() => null);
+      const ship = await shipForm(opts?.partner?.warehouse);
+      if (!ship) { e.target.value = o.delivery; return; }
+      return setDelivery('warehouse', ship);
+    };
+    if ($('#oShipEd')) $('#oShipEd').onclick = async () => { const ship = await shipForm(o.ship_to); if (ship) setDelivery('warehouse', ship); };
+    if ($('#oCrm')) $('#oCrm').onclick = async (e) => {
+      const unpaid = !['paid', 'done'].includes(o.status) && o.pay_terms !== 'postpay';
+      if (!(await confirmDanger(`Додати ${o.number} у LP-CRM на відправку?`, `Одне замовлення в «Нові» на ${esc(uah(o.total))}: ${esc([o.ship_to?.name, o.ship_to?.address].filter(Boolean).join(', '))}.${unpaid ? ' <b>Закупівля ще не оплачена.</b>' : ''}`, 'Додати в LP-CRM'))) return;
+      const b = e.currentTarget;
+      b.disabled = true;
+      try { const r = await api('POST', `/api/b2b/orders/${o.id}/crm`); toast(r.crm_id ? `Додано в LP-CRM: № ${r.crm_id}` : 'Додано в LP-CRM'); viewOrder(o.id); }
+      catch (er) { toast(er.message, true); b.disabled = false; }
     };
     if ($('#oCheckPay')) $('#oCheckPay').onclick = () => checkPay(o);
     $$('[data-set]').forEach((b) => (b.onclick = async () => {
