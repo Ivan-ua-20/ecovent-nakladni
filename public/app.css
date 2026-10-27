@@ -547,3 +547,4 @@ table.list tr.grp td { background: var(--accent-soft); padding-top: 7px; padding
 .drop-zone .drop-hint { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--muted, #6b7280); }
 .drop-zone.drop-on { border-color: var(--accent); background: var(--accent-soft); }
 @media (prefers-reduced-motion: reduce) { .drop-zone { transition: none; } }
+.bad-input { border-color: var(--bad) !important; }

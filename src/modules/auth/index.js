@@ -77,7 +77,7 @@ export function mountAuth(app, { db, runCleanup, onCleanup }) {
   // Усе інше в /api — лише після входу.
   app.use('/api/*', async (c, next) => {
     // /api/cron/* — для запуску за розкладом (Cloudflare Worker): без входу, але з ключем, який перевіряє сам маршрут.
-    if (c.req.path.startsWith('/api/auth/') || c.req.path === '/api/odb/hook' || c.req.path === '/api/tg/hook' || c.req.path.startsWith('/api/cron/')) return next();
+    if (c.req.path.startsWith('/api/auth/') || c.req.path === '/api/odb/hook' || c.req.path === '/api/tg/hook' || c.req.path.startsWith('/api/cron/') || c.req.path.startsWith('/api/rzs/hook/')) return next();
     const user = await sessionUser(c);
     if (!user) throw fail(401, 'Потрібно увійти.');
     c.set('user', user);
