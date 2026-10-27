@@ -105,19 +105,22 @@ const first = await runSync('full');
 
 // ---------- Дублі ТТН у LP-CRM → менеджеру в Telegram ----------
 {
-  const tracked = new Set((await db.all(`SELECT code FROM an_orders WHERE day = ? AND status != 0`, [today])).map((r) => r.code));
-  const todays = [...orders.values()].filter((o) => tracked.has(o.order_id)); // лише замовлення відстежуваних статусів
-  assert.ok(todays.length >= 4, 'є сьогоднішні замовлення');
-  const [a, b, c2, d] = todays;
+  // замовлення відстежуваних статусів за останні дні; зміна статусу — щоб «Оновити сьогодні» перечитало їх повністю
+  const trackedRows = await db.all(`SELECT code, status FROM an_orders WHERE day >= ? AND status != 0 ORDER BY id DESC LIMIT 40`, [addDays(today, -10)]);
+  const trackedSt = [...new Set(trackedRows.map((r) => r.status))];
+  assert.ok(trackedRows.length >= 4 && trackedSt.length >= 2, 'є свіжі замовлення');
+  const [a, b, c2, d] = trackedRows.slice(0, 4).map((r) => orders.get(r.code));
+  const flip = (o) => { o.status = String(trackedSt.find((x) => String(x) !== o.status)); };
+  const orig = [a, b, c2, d].map((o) => o.status);
   await db.batch([
     [`INSERT INTO settings (key, value) VALUES ('tg_token', '1:x') ON CONFLICT(key) DO UPDATE SET value = excluded.value`, []],
     [`UPDATE users SET tg_chat_id = '42', crm_logins = ? WHERE login = 'o'`, [c2.user]],
   ]);
-  a.ttn = '20450000001111'; b.ttn = '20 4500 0000 1111';
+  a.ttn = '20450000001111'; b.ttn = '20 4500 0000 1111'; flip(a); flip(b);
   await runSync('today');
   assert.equal(tgSent.length, 0, 'перше надходження ТТН — без сповіщень про наявні дублі');
   assert.ok((await req('GET', '/api/an/config')).ttnSeen, 'видно, що ТТН приходять');
-  c2.ttn = '59000000002222'; d.ttn = '59000000002222';
+  c2.ttn = '59000000002222'; d.ttn = '59000000002222'; flip(c2); flip(d);
   await runSync('today');
   const msg = tgSent.filter((m) => /Дубль ТТН 59000000002222/.test(m.text));
   assert.equal(msg.length, 1, 'одне сповіщення');
@@ -126,7 +129,8 @@ const first = await runSync('full');
   await runSync('today');
   assert.equal(tgSent.filter((m) => /59000000002222/.test(m.text)).length, 1, 'не повторюється');
   await db.run(`UPDATE users SET tg_chat_id = '', crm_logins = '' WHERE login = 'o'`);
-  for (const o of [a, b, c2, d]) delete o.ttn;
+  [a, b, c2, d].forEach((o, i) => { delete o.ttn; o.status = orig[i]; });
+  await runSync('today'); // повернути статуси, як були, — далі тест рахує на початкових даних
 }
 const windowStart = (await db.get(`SELECT value FROM settings WHERE key='an_sync'`)) && JSON.parse((await db.get(`SELECT value FROM settings WHERE key='an_sync'`)).value).start;
 const inWindow = [...orders.values()].filter((o) => o.datetime.slice(0, 10) >= windowStart && ['11', '14', '53', '18', '54', '58'].includes(o.status));
