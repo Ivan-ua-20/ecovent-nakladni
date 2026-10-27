@@ -107,26 +107,64 @@ assert.deepEqual(files.map((f) => f.name), ['new.pdf'], 'старий рахун
 assert.ok(tg.some((m) => m.file), 'новий рахунок — файлом у групу партнера');
 assert.ok((await req('GET', `/api/b2b/orders/${s1.id}`)).history.some((h) => /перевиставлено: № СФ-2 замість СФ-1/.test(h.action)));
 
-// ---------- 4. Замовлення клієнта: повні правки адміна ----------
+// ---------- 4. Замовлення клієнта: правки адміна → підтвердження партнером ----------
 const c1 = await req('POST', '/api/b2b/p/clients', { client_name: 'Клієнт 1', client_phone: '0501112233', items: [{ product_id: 11, qty: 1 }], supply_id: s1.id }, A);
 const co = await req('GET', `/api/b2b/clients/${c1.id}/edit-options`);
 assert.deepEqual(co.supplies.find((s) => s.id === s1.id).items.find((i) => i.product_id === 11).left, 2, 'власна кількість не віднімається');
-r = await req('PUT', `/api/b2b/clients/${c1.id}/edit`, { client_name: 'Клієнт Новий', client_phone: '0671112233', ttn: '20450000000001', comment: 'x', supply_id: s1.id, items: [{ product_id: 11, qty: 2 }] });
+const cEdit = (body) => req('PUT', `/api/b2b/clients/${c1.id}/edit`, { client_name: 'Клієнт Новий', client_phone: '0671112233', ...body });
+tg.length = 0;
+r = await cEdit({ ttn: '20450000000001', comment: 'x', supply_id: s1.id, items: [{ product_id: 11, qty: 2 }] });
+assert.equal(r.pending, true);
 let cd = await req('GET', `/api/b2b/orders/${c1.id}`);
 assert.deepEqual([cd.order.client_name, cd.order.client_phone, cd.order.ttn, cd.order.total], ['Клієнт Новий', '380671112233', '20450000000001', 18000]);
-assert.match(await errOf(() => req('PUT', `/api/b2b/clients/${c1.id}/edit`, { client_name: 'К', client_phone: '0671112233', supply_id: s1.id, items: [{ product_id: 11, qty: 3 }] })), /залишилось 2/);
+assert.ok(cd.order.pending.changes.some((x) => /Товар 11: 1 → 2/.test(x)));
+let pc = (await req('GET', `/api/b2b/p/clients/${c1.id}`, null, A)).order;
+assert.ok(pc.pending && pc.pending.by === 'owner', 'партнер бачить зміни');
+assert.ok((await req('GET', '/api/b2b/p/clients', null, A)).rows.find((x) => x.id === c1.id).pending, 'у списку — позначка');
+assert.ok(tg.some((m) => String(m.chat_id) === '2' && /Підтвердіть або відхиліть/.test(m.text)));
+assert.match(await errOf(() => req('PUT', `/api/b2b/clients/${c1.id}`, { crm_id: '555' })), /не підтвердив/, 'до підтвердження — не в CRM');
+assert.match(await errOf(() => req('PUT', `/api/b2b/p/clients/${c1.id}`, { client_name: 'x', client_phone: '0501112233', supply_id: s1.id, items: [{ product_id: 11, qty: 1 }] }, A)), /підтвердіть або відхиліть/);
+// відхилити — як було
+await req('POST', `/api/b2b/p/clients/${c1.id}/reject`, {}, A);
+cd = await req('GET', `/api/b2b/orders/${c1.id}`);
+assert.deepEqual([cd.order.client_name, cd.order.ttn, cd.order.pending, cd.items.map((i) => [i.product_id, i.qty])], ['Клієнт 1', '', null, [[11, 1]]]);
+// заміна товару на інший, якого немає в закупівлі: без згоди — ні, зі згодою — додається в закупівлю (рахунок — переробити)
+assert.match(await errOf(() => cEdit({ supply_id: s1.id, items: [{ product_id: 13, qty: 1 }] })), /підтвердіть додавання/);
+r = await cEdit({ supply_id: s1.id, items: [{ product_id: 13, qty: 1 }], add_to_supply: true });
+assert.equal(r.supply.reinvoice, true);
+assert.deepEqual((await req('GET', `/api/b2b/orders/${c1.id}`)).items.map((i) => [i.product_id, i.qty, i.price]), [[13, 1, 1800]]);
+o = (await req('GET', `/api/b2b/orders/${s1.id}`)).order;
+assert.deepEqual([o.status, o.reinvoice], ['invoice_wait', 'СФ-2']);
+assert.ok((await req('GET', `/api/b2b/orders/${s1.id}`)).items.some((i) => i.product_id === 13));
+await req('POST', `/api/b2b/p/clients/${c1.id}/confirm`, {}, A);
+assert.equal((await req('GET', `/api/b2b/orders/${c1.id}`)).order.pending, null);
 // без закупівлі — у відкриту, без лімітів партнера
 await req('PUT', `/api/b2b/partners/${pa.id}`, { name: 'Партнер А', open_limit: 1000 });
-await req('PUT', `/api/b2b/clients/${c1.id}/edit`, { client_name: 'Клієнт Новий', client_phone: '0671112233', supply_id: null, items: [{ product_id: 12, qty: 1 }] });
+await cEdit({ supply_id: null, items: [{ product_id: 12, qty: 1 }] });
 cd = await req('GET', `/api/b2b/orders/${c1.id}`);
 assert.equal(cd.order.open_supply, true);
 const openId = cd.order.supply_id;
 assert.equal((await req('GET', `/api/b2b/orders/${openId}`)).order.total, 4500, 'відкрита перерахована');
 assert.match(await errOf(() => edit(openId, { items: [{ product_id: 12, qty: 2 }] })), /Відкрита закупівля складається/);
+await req('POST', `/api/b2b/p/clients/${c1.id}/confirm`, {}, A);
 await req('PUT', `/api/b2b/clients/${c1.id}`, { crm_id: '777' }); // передано в CRM
-r = await req('PUT', `/api/b2b/clients/${c1.id}/edit`, { client_name: 'Клієнт Новий 2', client_phone: '0671112233', supply_id: null, items: [{ product_id: 12, qty: 1 }] });
-assert.equal(r.inCrm, '777', 'уже в CRM — підказка змінити там');
-// партнер не може
+// змінено замовлення, що вже в CRM: старе анульовано, знову «Нове», партнеру й у групу — що було і що буде
+tg.length = 0;
+r = await cEdit({ client_name: 'Клієнт Е', supply_id: null, items: [{ product_id: 12, qty: 1 }] });
+assert.equal(r.crmOld, '777');
+cd = await req('GET', `/api/b2b/orders/${c1.id}`);
+assert.deepEqual([cd.order.status, cd.order.crm_id, cd.order.crm_old, cd.order.pending.crm_old], ['new', '', '777', '777']);
+const ann = tg.find((m) => String(m.chat_id) === '-500');
+assert.match(ann.text, /Старе замовлення в LP-CRM № <b>777<\/b> анульовано/);
+assert.match(ann.text, /Клієнт Новий[\s\S]*Буде створене нове[\s\S]*Клієнт Е/);
+assert.ok(tg.some((m) => String(m.chat_id) === '2' && /анульовано/.test(m.text)), 'партнеру особисто');
+assert.ok(tg.some((m) => String(m.chat_id) === '1' && /скасуйте в LP-CRM старе замовлення № 777/.test(m.text)), 'адмінам — скасувати в CRM');
+assert.match(await errOf(() => req('POST', `/api/b2b/clients/${c1.id}/crm`)), /не підтвердив|ще не ввімкнено/);
+// партнер відхилив — старе замовлення CRM знову чинне
+await req('POST', `/api/b2b/p/clients/${c1.id}/reject`, {}, A);
+cd = await req('GET', `/api/b2b/orders/${c1.id}`);
+assert.deepEqual([cd.order.status, cd.order.crm_id, cd.order.client_name], ['crm', '777', 'Клієнт Новий']);
+// партнер не може правити як адмін
 assert.ok(await errOf(() => req('PUT', `/api/b2b/clients/${c1.id}/edit`, { client_name: 'x', client_phone: '0671112233', items: [{ product_id: 12, qty: 1 }] }, A)));
 assert.ok(await errOf(() => req('PUT', `/api/b2b/orders/${s1.id}/edit`, { items: [{ product_id: 11, qty: 2 }] }, A)));
 assert.ok(await errOf(() => req('GET', '/api/b2b/trash', null, A)));
@@ -146,7 +184,7 @@ const tc = trash.find((t) => t.kind === 'client');
 r = await req('POST', `/api/b2b/trash/${tc.id}/restore`);
 assert.deepEqual([r.id, r.kind], [c1.id, 'client']);
 cd = await req('GET', `/api/b2b/orders/${c1.id}`);
-assert.equal(cd.order.client_name, 'Клієнт Новий 2');
+assert.equal(cd.order.client_name, 'Клієнт Новий');
 assert.equal(cd.order.open_supply, true, 'у нову відкриту закупівлю');
 assert.equal((await req('GET', `/api/b2b/orders/${cd.order.supply_id}`)).order.total, 4500);
 assert.ok(cd.history.some((h) => /відновлено з кошика/.test(h.action)));

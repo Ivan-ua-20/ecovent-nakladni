@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 22,
+  version: 23,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -260,6 +260,10 @@ export const schema = {
     // Закупівлю змінено після рахунку: який рахунок (і накладну) переробити; коли — старі файли рахунку замінюються новим.
     ['b2b_orders', 'reinvoice', "TEXT DEFAULT ''"],
     ['b2b_orders', 'reinvoiced_at', "TEXT DEFAULT ''"],
+    // Замовлення клієнта змінив наш менеджер — чекає підтвердження партнера (JSON: як було, що змінено, хто, коли);
+    // доки не підтверджено — у LP-CRM не передається. crm_old — номер старого замовлення в CRM, якщо його анульовано.
+    ['b2b_orders', 'pending', "TEXT DEFAULT ''"],
+    ['b2b_orders', 'crm_old', "TEXT DEFAULT ''"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ['b2b_tg_docs', 'source', "TEXT DEFAULT 'private'"],
     ['b2b_tg_docs', 'reply_to', 'INTEGER'],

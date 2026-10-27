@@ -435,8 +435,8 @@ export function createPartnerPages(ctx = {}) {
         ${Object.entries(statuses).map(([k, v]) => `<button class="chip ${cliFilter.status === k ? 'on' : ''}" data-pst="${k}">${esc(v)}</button>`).join('')}</div>
       ${filterBar(cliFilter, { pay: true })}
       ${rows.length ? `<table class="list"><thead><tr><th>№</th><th>Клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th class="hide-m">CRM</th></tr></thead><tbody>
-        ${rows.map((o) => `<tr class="click ${o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''}" data-o="${o.id}">
-          <td><b>${esc(o.number)}</b><div>${supplyMark(o)}</div><div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
+        ${rows.map((o) => `<tr class="click ${o.pending ? 'row-info' : o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''}" data-o="${o.id}">
+          <td><b>${esc(o.number)}</b><div>${supplyMark(o)}</div>${o.pending ? '<div><span class="badge info">🔵 зміни менеджера — підтвердіть</span></div>' : ''}<div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
           <td>${esc(o.client_name)}<div class="small muted">${esc(phoneFmt(o.client_phone))}${o.ttn ? ` · ТТН ${esc(o.ttn)}` : ''}</div></td>
           <td class="r"><b>${uah(o.total)}</b></td>
           <td>${statusBadge(o)}</td>
@@ -452,11 +452,18 @@ export function createPartnerPages(ctx = {}) {
 
   async function viewClient(id) {
     const [{ order: o, items, files, history, missing = [] }, docTypes] = await Promise.all([api('GET', `/api/b2b/p/clients/${id}`), api('GET', '/api/b2b/p/doc-types').catch(() => [])]);
-    const editable = o.status === 'new' && canEdit();
+    const editable = o.status === 'new' && canEdit() && !o.pending;
     main.innerHTML = `
       <div class="head-row"><h2>Замовлення ${esc(o.number)} ${statusBadge(o)} ${payBadge(o)}</h2>
         <div class="btn-row"><a class="btn" href="#/pclients">← До списку</a>
           ${editable ? `<a class="btn" href="#/pclients/${o.id}/edit">Змінити</a><button class="btn danger" id="cCancel">Скасувати</button>` : ''}</div></div>
+      ${o.pending ? `<div class="card form-stack card-info" style="margin-bottom:12px">
+          <h3 style="margin:0">🔵 Менеджер змінив замовлення — підтвердіть або відхиліть</h3>
+          ${o.pending.crm_old ? `<div class="small">Старе замовлення в LP-CRM № <b>${esc(o.pending.crm_old)}</b> анульовано — після підтвердження буде створене нове.</div>` : ''}
+          ${o.pending.changes.length ? `<ul class="small" style="margin:0;padding-left:18px">${o.pending.changes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+          <div class="small muted">${esc(o.pending.by || 'Менеджер')}${o.pending.at ? ` · ${esc(fmtDateTime(o.pending.at))}` : ''}. Доки ви не підтвердите, замовлення не передається в роботу.</div>
+          ${canEdit() ? '<div class="btn-row"><button class="btn primary" id="cpOk">Підтвердити зміни</button><button class="btn" id="cpNo">Відхилити (повернути як було)</button></div>' : ''}
+        </div>` : ''}
       ${o.no_supply && o.status !== 'cancelled' ? '<div class="alert bad" style="margin-bottom:12px"><b>Без закупівлі.</b> Товари не з вашої закупівлі — менеджер виставить на них рахунок окремо.</div>' : ''}
       ${!o.no_supply && o.pay !== 'paid' && o.status !== 'cancelled' ? `<div class="alert warn" style="margin-bottom:12px">Закупівля <a href="#/porders/${o.supply_id}">${esc(o.supply_number)}</a> ще не оплачена — замовлення позначене як неоплачене.</div>` : ''}
       <div class="form-page">
@@ -489,6 +496,13 @@ export function createPartnerPages(ctx = {}) {
           ${historyCard(history)}
         </div>
       </div>`;
+    $('#cpOk') && ($('#cpOk').onclick = async () => {
+      try { await api('POST', `/api/b2b/p/clients/${o.id}/confirm`); toast('Зміни підтверджено'); viewClient(o.id); } catch (e) { toast(e.message, true); }
+    });
+    $('#cpNo') && ($('#cpNo').onclick = async () => {
+      if (!(await confirmDanger(`Відхилити зміни в ${o.number}?`, 'Замовлення повернеться таким, яким було до змін менеджера; менеджер отримає сповіщення.', 'Відхилити зміни'))) return;
+      try { await api('POST', `/api/b2b/p/clients/${o.id}/reject`); toast('Зміни відхилено — повернуто як було'); viewClient(o.id); } catch (e) { toast(e.message, true); }
+    });
     $('#cCancel') && ($('#cCancel').onclick = async () => {
       if (!(await confirmDanger(`Скасувати замовлення ${o.number}?`, 'Товари повернуться в залишок закупівлі.', 'Скасувати замовлення'))) return;
       try { await api('POST', `/api/b2b/p/clients/${o.id}/cancel`); toast('Скасовано'); viewClient(o.id); } catch (e) { toast(e.message, true); }

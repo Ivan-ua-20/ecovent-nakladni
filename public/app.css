@@ -523,6 +523,10 @@ table.list tr.click:focus-visible td { background: #f6f8f7; }
 /* B2B: замовлення клієнта без закупівлі — червоним */
 tr.row-bad td { background: var(--bad-soft); }
 tr.row-bad td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
+/* замовлення змінив менеджер — чекає підтвердження партнера */
+tr.row-info td { background: var(--info-soft); }
+tr.row-info td:first-child { box-shadow: inset 3px 0 0 var(--info); }
+.card.card-info { border-color: var(--info); box-shadow: inset 3px 0 0 var(--info); }
 .card.card-bad { border-color: var(--bad); box-shadow: inset 3px 0 0 var(--bad); }
 
 /* B2B: вибір закупівлі для замовлення клієнта */
