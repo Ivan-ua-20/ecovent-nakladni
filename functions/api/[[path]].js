@@ -2077,14 +2077,14 @@ function mountAuth(app, { db, runCleanup, onCleanup }) {
   });
   const PARTNER_PATHS = ["/api/b2b/p", "/api/me/password", "/api/tg/me", "/api/tg/link", "/api/bootstrap"];
   app.use("/api/*", async (c, next) => {
-    if (c.req.path.startsWith("/api/auth/") || c.req.path === "/api/odb/hook" || c.req.path === "/api/tg/hook") return next();
+    if (c.req.path.startsWith("/api/auth/") || c.req.path === "/api/odb/hook" || c.req.path === "/api/tg/hook" || c.req.path.startsWith("/api/cron/")) return next();
     const user = await sessionUser(c);
     if (!user) throw fail(401, "\u041F\u043E\u0442\u0440\u0456\u0431\u043D\u043E \u0443\u0432\u0456\u0439\u0442\u0438.");
     c.set("user", user);
     if (user.role === "partner" && !PARTNER_PATHS.some((p) => c.req.path === p || c.req.path.startsWith(`${p}/`))) {
       throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432 \u0434\u043B\u044F \u0446\u0456\u0454\u0457 \u0434\u0456\u0457.");
     }
-    await runCleanup();
+    await runCleanup(c);
     return next();
   });
   app.put("/api/me/password", async (c) => {
@@ -3693,7 +3693,8 @@ function flattenCategories(node, parent = null, out = [], depth = 0) {
   }
   return out;
 }
-function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} }) {
+function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {}, onTick = () => {
+} }) {
   const settings = () => loadSettings(db);
   const getSt = async () => {
     const r = await db.get(`SELECT value FROM settings WHERE key = 'an_settings'`);
@@ -3798,6 +3799,9 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
     const silent = firstRun || !seenBefore;
     if (!seenBefore || seenBefore.slice(0, 13) !== nowIso().slice(0, 13)) await putSetting2("an_ttn_seen", nowIso());
     const rows = await db.all(`SELECT code, user, ttn, status, day FROM an_orders WHERE ttn IN (SELECT value FROM json_each(?)) AND status != 0 ORDER BY id`, [JSON.stringify(ttns)]);
+    return notifyDups(rows, { silent, recentDays: 14 });
+  }
+  async function notifyDups(rows, { silent = false, recentDays = 14 } = {}) {
     const by = /* @__PURE__ */ new Map();
     for (const r of rows) {
       if (!by.has(r.ttn)) by.set(r.ttn, []);
@@ -3810,7 +3814,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
     const users = await db.all(`SELECT tg_chat_id, crm_logins FROM users WHERE active = 1 AND tg_chat_id != '' AND crm_logins != ''`);
     const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     let n = 0;
-    const recent = addDays(kyivDay(), -14);
+    const recent = addDays(kyivDay(), -recentDays);
     for (const [ttn, list] of dups) {
       const codes = [...new Set(list.map((r) => r.code))].sort().join(",");
       if (sent.get(ttn) === codes) continue;
@@ -3829,6 +3833,97 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
     }
     return n;
   }
+  const TTN_EVERY = 10 * 6e4;
+  async function ttnQuick({ force = false } = {}) {
+    const now = Date.now();
+    if (!force) {
+      const claim = await db.run(
+        `INSERT INTO settings (key, value) VALUES ('an_ttn_check_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
+        [new Date(now).toISOString(), new Date(now - TTN_EVERY + 3e4).toISOString()]
+      );
+      if (!claim.changes) return { skipped: true };
+    } else await putSetting2("an_ttn_check_at", new Date(now).toISOString());
+    const s = await settings();
+    if (!s.lpcrm_subdomain || !s.lpcrm_key) return { skipped: true, reason: "LP-CRM \u043D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E" };
+    const cr = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
+    const st = await getSt();
+    const today2 = kyivDay();
+    const from = addDays(today2, -1);
+    const listed = /* @__PURE__ */ new Map();
+    for (const x of [...st.okStatuses, ...st.refuseStatuses]) {
+      const j = await lp(cr, "getOrdersIdByStatus", { status: String(x), date_start: from, date_end: today2 }).catch(() => null);
+      if (j?.status === "ok") for (const code of asList(j.data).map(String).filter(Boolean)) listed.set(code, x);
+    }
+    const codes = [...listed.keys()];
+    let fetched = 0;
+    let found = 0;
+    if (codes.length) {
+      const known = new Map((await db.all(`SELECT code, status FROM an_ttn_recent WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => [r.code, r.status]));
+      const todo = codes.filter((x) => known.get(x) !== listed.get(x)).slice(0, 300);
+      const got = [];
+      for (let i = 0; i < todo.length; i += 100) {
+        const j = await lp(cr, "getOrdersByID", { order_id: todo.slice(i, i + 100).join(",") }).catch(() => null);
+        if (j?.status === "ok") got.push(...findOrders(j.data).map(normalizeAnOrder).filter(Boolean));
+      }
+      fetched = got.length;
+      if (got.length) {
+        await db.batch(got.map((o) => [`INSERT INTO an_ttn_recent (code, ttn, day, user, status) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(code) DO UPDATE SET ttn = excluded.ttn, day = excluded.day, user = excluded.user, status = excluded.status`, [o.code, o.ttn || "", o.day, o.user, o.status]]));
+        const ttns = [...new Set(got.map((o) => o.ttn).filter(Boolean))];
+        if (ttns.length) {
+          const week = addDays(today2, -7);
+          const [a, b] = await Promise.all([
+            db.all(`SELECT code, user, ttn, status, day FROM an_ttn_recent WHERE ttn IN (SELECT value FROM json_each(?)) AND day >= ?`, [JSON.stringify(ttns), week]),
+            db.all(`SELECT code, user, ttn, status, day FROM an_orders WHERE ttn IN (SELECT value FROM json_each(?)) AND status != 0 AND day >= ?`, [JSON.stringify(ttns), week])
+          ]);
+          const seen = new Set(a.map((r) => r.code));
+          found = await notifyDups([...a, ...b.filter((r) => !seen.has(r.code))], { recentDays: 7 });
+        }
+      }
+    }
+    const pruneDay = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_prune'`))?.value || "";
+    if (pruneDay !== today2) {
+      await db.run(`DELETE FROM an_ttn_recent WHERE day < ?`, [addDays(today2, -10)]);
+      await putSetting2("an_ttn_prune", today2);
+    }
+    const res = { at: new Date(now).toISOString(), listed: codes.length, fetched, dups: found };
+    await putSetting2("an_ttn_last", JSON.stringify(res));
+    return res;
+  }
+  onTick((c) => {
+    if (Date.now() - (shared2.ttnTry || 0) < 6e4) return;
+    shared2.ttnTry = Date.now();
+    const p = (async () => {
+      const last = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_check_at'`))?.value || "";
+      if (last && Date.now() - Date.parse(last) < TTN_EVERY) return;
+      if (!(await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_seen'`))?.value) return;
+      await ttnQuick();
+    })().catch(() => 0);
+    try {
+      c?.executionCtx?.waitUntil(p);
+    } catch {
+    }
+  });
+  app.post("/api/cron/ttn", async (c) => {
+    const key = (await db.get(`SELECT value FROM settings WHERE key = 'an_cron_key'`))?.value || "";
+    const got = c.req.header("x-cron-key") || "";
+    if (!key || got.length !== key.length || got !== key) throw fail(401, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043A\u043B\u044E\u0447.");
+    return c.json(await ttnQuick());
+  });
+  app.post("/api/an/ttn-check", async (c) => {
+    if (!can(c.get("user"), "analytics")) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432.");
+    return c.json(await ttnQuick({ force: true }));
+  });
+  app.get("/api/an/cron-key", async (c) => {
+    need(c, "users");
+    return c.json({ key: (await db.get(`SELECT value FROM settings WHERE key = 'an_cron_key'`))?.value || "" });
+  });
+  app.post("/api/an/cron-key", async (c) => {
+    need(c, "users");
+    const key = [...crypto.getRandomValues(new Uint8Array(24))].map((x) => x.toString(16).padStart(2, "0")).join("");
+    await putSetting2("an_cron_key", key);
+    return c.json({ key });
+  });
   app.get("/api/an/config", async (c) => {
     const [st, depts, sources, smap, officeMap, managers, brands, offices, statusNames, lastSync, sync, categories] = await Promise.all([
       getSt(),
@@ -3845,6 +3940,8 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
       db.all(`SELECT id, name, parent_id FROM an_categories ORDER BY name`)
     ]);
     const ttnSeen = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_seen'`))?.value || "";
+    const ttnLast = await getJson("an_ttn_last");
+    const cronOn = Boolean((await db.get(`SELECT value FROM settings WHERE key = 'an_cron_key'`))?.value);
     return c.json({
       categories,
       settings: st,
@@ -3859,6 +3956,8 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {} 
       statusNames: statusNames || {},
       lastSync: lastSync?.value || "",
       ttnSeen,
+      ttnLast,
+      cronOn,
       sync: sync ? { phase: sync.phase, startedAt: sync.startedAt, mode: sync.mode, error: sync.error || "" } : null
     });
   });
@@ -9816,7 +9915,15 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   });
   const cleanupTasks = [];
   const onCleanup = (fn) => cleanupTasks.push(fn);
-  async function runCleanup() {
+  const tickTasks = [];
+  const onTick = (fn) => tickTasks.push(fn);
+  async function runCleanup(c = null) {
+    for (const t of tickTasks) {
+      try {
+        t(c);
+      } catch {
+      }
+    }
     if (Date.now() - (shared2.lastCleanup || 0) < 60 * 60 * 1e3) return;
     shared2.lastCleanup = Date.now();
     const hourAgo = new Date(Date.now() - 60 * 60 * 1e3).toISOString();
@@ -9831,7 +9938,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     for (const task of cleanupTasks) await task(border);
   }
   const services = {};
-  const ctx = { db, fetchFn, services, onCleanup, runCleanup, shared: shared2 };
+  const ctx = { db, fetchFn, services, onCleanup, onTick, runCleanup, shared: shared2 };
   mountAuth(app, ctx);
   mountRefs(app, ctx);
   services.nakladni = mountNakladni(app, ctx);
@@ -10488,7 +10595,7 @@ async function upgradeV10(db) {
 }
 var schema8 = {
   name: "analytics",
-  version: 4,
+  version: 5,
   tables: [
     // ---------- Аналітика ----------
     // Замовлення: id = короткий номер LP-CRM (зростає з часом), code = довгий код для API.
@@ -10526,7 +10633,11 @@ var schema8 = {
     // Збережені відповіді дашборду (поки дані й налаштування не змінились) — менше читань бази.
     `CREATE TABLE IF NOT EXISTS an_cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, at INTEGER NOT NULL)`,
     // Дублі ТТН у LP-CRM, про які вже сповістили (набір № замовлень) — щоб не повторювати при кожному оновленні.
-    `CREATE TABLE IF NOT EXISTS an_ttn_dups (ttn TEXT PRIMARY KEY, codes TEXT NOT NULL, at TEXT NOT NULL)`
+    `CREATE TABLE IF NOT EXISTS an_ttn_dups (ttn TEXT PRIMARY KEY, codes TEXT NOT NULL, at TEXT NOT NULL)`,
+    // Швидка перевірка ТТН нових замовлень (кожні 10 хв): ТТН замовлень за останні дні — окремо від аналітики.
+    `CREATE TABLE IF NOT EXISTS an_ttn_recent (code TEXT PRIMARY KEY, ttn TEXT NOT NULL DEFAULT '', day TEXT NOT NULL, user TEXT DEFAULT '', status INTEGER NOT NULL DEFAULT 0)`,
+    `CREATE INDEX IF NOT EXISTS an_ttn_recent_ttn ON an_ttn_recent(ttn)`,
+    `CREATE INDEX IF NOT EXISTS an_ttn_recent_day ON an_ttn_recent(day)`
   ],
   columns: [
     ["an_managers", "depts", "TEXT DEFAULT ''"],
