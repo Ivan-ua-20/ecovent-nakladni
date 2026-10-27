@@ -4752,6 +4752,7 @@ async function hashKey(str) {
 }
 
 // src/modules/notify/index.js
+var tgName = (x) => `${[x?.first_name, x?.last_name].filter(Boolean).join(" ")}${x?.username ? ` (@${x.username})` : ""}`.trim().slice(0, 120) || `id ${x?.id ?? ""}`;
 var TG = "https://api.telegram.org";
 var ALLOWED_UPDATES = ["message", "callback_query"];
 var HOOK_V = "2";
@@ -4807,8 +4808,27 @@ function mountTg(app, { db, fetchFn, services = {} }) {
     return c.json({ url: `https://t.me/${s.tg_bot}?start=${code}` });
   });
   app.delete("/api/tg/me", async (c) => {
-    await db.run(`UPDATE users SET tg_chat_id = '', tg_code = '' WHERE id = ?`, [c.get("user").id]);
+    await db.run(`UPDATE users SET tg_chat_id = '', tg_code = '', tg_name = '', tg_linked_at = '' WHERE id = ?`, [c.get("user").id]);
     return c.json({ ok: true });
+  });
+  async function fillTgNames(limit = 15) {
+    const s = await settings();
+    if (!s.tg_token) return 0;
+    const rows = await db.all(`SELECT id, tg_chat_id FROM users WHERE tg_chat_id != '' AND COALESCE(tg_name, '') = '' LIMIT ?`, [limit]);
+    let n = 0;
+    for (const r of rows) {
+      const ch = await tg(s.tg_token, "getChat", { chat_id: r.tg_chat_id }).catch(() => null);
+      await db.run(`UPDATE users SET tg_name = ? WHERE id = ?`, [ch ? tgName(ch) : "(\u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0438\u0439 \u2014 \u0431\u043E\u0442\u0430 \u0437\u0430\u0431\u043B\u043E\u043A\u043E\u0432\u0430\u043D\u043E?)", r.id]);
+      n++;
+    }
+    return n;
+  }
+  app.get("/api/users/tg", async (c) => {
+    need(c, "people");
+    await fillTgNames().catch(() => 0);
+    const s = await settings();
+    const rows = await db.all(`SELECT id, tg_chat_id, tg_name, tg_linked_at FROM users WHERE role != 'partner'`);
+    return c.json({ bot: s.tg_bot || "", users: rows.map((r) => ({ id: r.id, connected: Boolean(r.tg_chat_id), name: r.tg_name || "", at: r.tg_linked_at || "" })) });
   });
   app.put("/api/tg/me", async (c) => {
     need(c, "users");
@@ -4877,7 +4897,7 @@ function mountTg(app, { db, fetchFn, services = {} }) {
       const u = await db.get(`SELECT id, name, login, tg_code FROM users WHERE tg_code LIKE ? AND active = 1`, [`${m[1]}|%`]);
       const exp = Number(String(u?.tg_code || "").split("|")[1]) || 0;
       if (u && exp > Date.now()) {
-        await db.run(`UPDATE users SET tg_chat_id = ?, tg_code = '' WHERE id = ?`, [String(chat), u.id]);
+        await db.run(`UPDATE users SET tg_chat_id = ?, tg_code = '', tg_name = ?, tg_linked_at = ? WHERE id = ?`, [String(chat), tgName(msg.from || msg.chat), nowIso(), u.id]);
         reply = `\u2705 \u0413\u043E\u0442\u043E\u0432\u043E, ${h(u.name || u.login)}! \u0421\u044E\u0434\u0438 \u043D\u0430\u0434\u0445\u043E\u0434\u0438\u0442\u0438\u043C\u0443\u0442\u044C \u0432\u0430\u0448\u0456 \u0441\u043F\u043E\u0432\u0456\u0449\u0435\u043D\u043D\u044F.`;
       } else {
         reply = "\u041F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u0434\u043B\u044F \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043D\u044F \u0437\u0430\u0441\u0442\u0430\u0440\u0456\u043B\u043E. \u041D\u0430\u0442\u0438\u0441\u043D\u0456\u0442\u044C \xAB\u041F\u0456\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u0438 Telegram\xBB \u043D\u0430 \u0441\u0430\u0439\u0442\u0456 \u0449\u0435 \u0440\u0430\u0437.";
@@ -4994,7 +5014,7 @@ ${h(l.alias || "")}${l.created_by ? `
     if (!r.ok) throw fail(502, "Telegram: \u043D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0438\u0442\u0438 \u0444\u0430\u0439\u043B.");
     return new Uint8Array(await r.arrayBuffer());
   }
-  return { notify, sendText, sendFile, api, download, lastFileMessage: () => lastMessage };
+  return { fillTgNames, notify, sendText, sendFile, api, download, lastFileMessage: () => lastMessage };
 }
 
 // src/modules/errlog/index.js
@@ -8611,7 +8631,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     need(c, "b2b.admin");
     const p = await getPartner(c.req.param("id"));
     const [users, margins, counts, names, entities] = await Promise.all([
-      db.all(`SELECT id, login, name, active, created_at, partner_role, added_by FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY active DESC, login`, [p.id]),
+      services.notify?.fillTgNames?.(5).catch(() => 0).then(() => db.all(`SELECT id, login, name, active, created_at, partner_role, added_by, tg_chat_id, tg_name, tg_linked_at FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY active DESC, login`, [p.id])),
       db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id]),
       db.all(`SELECT brand_id, COUNT(*) AS n, SUM(CASE WHEN rrp > 0 THEN 1 ELSE 0 END) AS priced FROM b2b_catalog WHERE hidden = 0 GROUP BY brand_id`),
       brandNames(),
@@ -8815,7 +8835,8 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       partner_role: partnerRole(u),
       partner_role_name: PARTNER_ROLES[partnerRole(u)],
       added_by_partner: by === "partner",
-      added_by_name: who.join(":")
+      added_by_name: who.join(":"),
+      tg: { connected: Boolean(u.tg_chat_id), name: u.tg_name || "", at: u.tg_linked_at || "" }
     };
   };
   const roleOf = (v, fallback = "head") => PARTNER_ROLES[v] ? v : fallback;
@@ -8999,6 +9020,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   app.get("/api/b2b/p/team", async (c) => {
     const p = await myPartner(c);
     need(c, "b2b.team");
+    await services.notify?.fillTgNames?.(5).catch(() => 0);
     const rows = await db.all(`SELECT * FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY active DESC, login`, [p.id]);
     return c.json({ users: rows.map(teamRow), roles: PARTNER_ROLES, max: MAX_TEAM, me: c.get("user").id });
   });
@@ -9864,13 +9886,16 @@ var schema2 = {
 // src/modules/notify/schema.js
 var schema3 = {
   name: "notify",
-  version: 1,
+  version: 2,
   tables: [],
   columns: [
     ["users", "tg_chat_id", "TEXT DEFAULT ''"],
     ["users", "tg_code", "TEXT DEFAULT ''"],
     ["users", "tg_all_links", "INTEGER DEFAULT 0"],
-    ["users", "tg_all_tx", "INTEGER DEFAULT 0"]
+    ["users", "tg_all_tx", "INTEGER DEFAULT 0"],
+    // Який акаунт Telegram підключено (ім'я та @username) і коли.
+    ["users", "tg_name", "TEXT DEFAULT ''"],
+    ["users", "tg_linked_at", "TEXT DEFAULT ''"]
   ]
 };
 

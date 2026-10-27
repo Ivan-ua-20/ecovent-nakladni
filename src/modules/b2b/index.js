@@ -111,7 +111,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     need(c, 'b2b.admin');
     const p = await getPartner(c.req.param('id'));
     const [users, margins, counts, names, entities] = await Promise.all([
-      db.all(`SELECT id, login, name, active, created_at, partner_role, added_by FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY active DESC, login`, [p.id]),
+      services.notify?.fillTgNames?.(5).catch(() => 0).then(() => db.all(`SELECT id, login, name, active, created_at, partner_role, added_by, tg_chat_id, tg_name, tg_linked_at FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY active DESC, login`, [p.id])),
       db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id]),
       db.all(`SELECT brand_id, COUNT(*) AS n, SUM(CASE WHEN rrp > 0 THEN 1 ELSE 0 END) AS priced FROM b2b_catalog WHERE hidden = 0 GROUP BY brand_id`),
       brandNames(),
@@ -314,7 +314,8 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   const teamRow = (u) => {
     const [by, ...who] = String(u.added_by || '').split(':');
     return { id: u.id, login: u.login, name: u.name || '', active: u.active, created_at: u.created_at, partner_role: partnerRole(u),
-      partner_role_name: PARTNER_ROLES[partnerRole(u)], added_by_partner: by === 'partner', added_by_name: who.join(':') };
+      partner_role_name: PARTNER_ROLES[partnerRole(u)], added_by_partner: by === 'partner', added_by_name: who.join(':'),
+      tg: { connected: Boolean(u.tg_chat_id), name: u.tg_name || '', at: u.tg_linked_at || '' } };
   };
   const roleOf = (v, fallback = 'head') => (PARTNER_ROLES[v] ? v : fallback);
   const actorName = (c) => c.get('user')?.name || c.get('user')?.login || '';
@@ -494,6 +495,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   app.get('/api/b2b/p/team', async (c) => {
     const p = await myPartner(c);
     need(c, 'b2b.team');
+    await services.notify?.fillTgNames?.(5).catch(() => 0);
     const rows = await db.all(`SELECT * FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY active DESC, login`, [p.id]);
     return c.json({ users: rows.map(teamRow), roles: PARTNER_ROLES, max: MAX_TEAM, me: c.get('user').id });
   });

@@ -1,6 +1,9 @@
 // Telegram-бот для сповіщень про оплати: власник вставляє токен бота, кожен користувач підключає себе кнопкою.
 import { randomToken } from '../../core/auth.js';
-import { fail, need, loadSettings, putSetting as putSettingDb } from '../../core/common.js';
+import { fail, need, nowIso, loadSettings, putSetting as putSettingDb } from '../../core/common.js';
+
+// Назва акаунта Telegram: ім'я та @username.
+const tgName = (x) => `${[x?.first_name, x?.last_name].filter(Boolean).join(' ')}${x?.username ? ` (@${x.username})` : ''}`.trim().slice(0, 120) || `id ${x?.id ?? ''}`;
 
 const TG = 'https://api.telegram.org';
 // Які оновлення приймає бот: повідомлення і натискання кнопок (документи до закупівель). Зміна — новий HOOK_V.
@@ -61,8 +64,30 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
   });
 
   app.delete('/api/tg/me', async (c) => {
-    await db.run(`UPDATE users SET tg_chat_id = '', tg_code = '' WHERE id = ?`, [c.get('user').id]);
+    await db.run(`UPDATE users SET tg_chat_id = '', tg_code = '', tg_name = '', tg_linked_at = '' WHERE id = ?`, [c.get('user').id]);
     return c.json({ ok: true });
+  });
+
+  // ---------- хто підключив бота (для сторінки «Користувачі» і команди партнера) ----------
+  // Підключені раніше (без збереженої назви) — назву акаунта бере getChat, по кілька за раз.
+  async function fillTgNames(limit = 15) {
+    const s = await settings();
+    if (!s.tg_token) return 0;
+    const rows = await db.all(`SELECT id, tg_chat_id FROM users WHERE tg_chat_id != '' AND COALESCE(tg_name, '') = '' LIMIT ?`, [limit]);
+    let n = 0;
+    for (const r of rows) {
+      const ch = await tg(s.tg_token, 'getChat', { chat_id: r.tg_chat_id }).catch(() => null);
+      await db.run(`UPDATE users SET tg_name = ? WHERE id = ?`, [ch ? tgName(ch) : '(недоступний — бота заблоковано?)', r.id]);
+      n++;
+    }
+    return n;
+  }
+  app.get('/api/users/tg', async (c) => {
+    need(c, 'people');
+    await fillTgNames().catch(() => 0);
+    const s = await settings();
+    const rows = await db.all(`SELECT id, tg_chat_id, tg_name, tg_linked_at FROM users WHERE role != 'partner'`);
+    return c.json({ bot: s.tg_bot || '', users: rows.map((r) => ({ id: r.id, connected: Boolean(r.tg_chat_id), name: r.tg_name || '', at: r.tg_linked_at || '' })) });
   });
 
   app.put('/api/tg/me', async (c) => {
@@ -122,7 +147,7 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
       const u = await db.get(`SELECT id, name, login, tg_code FROM users WHERE tg_code LIKE ? AND active = 1`, [`${m[1]}|%`]);
       const exp = Number(String(u?.tg_code || '').split('|')[1]) || 0;
       if (u && exp > Date.now()) {
-        await db.run(`UPDATE users SET tg_chat_id = ?, tg_code = '' WHERE id = ?`, [String(chat), u.id]);
+        await db.run(`UPDATE users SET tg_chat_id = ?, tg_code = '', tg_name = ?, tg_linked_at = ? WHERE id = ?`, [String(chat), tgName(msg.from || msg.chat), nowIso(), u.id]);
         reply = `✅ Готово, ${h(u.name || u.login)}! Сюди надходитимуть ваші сповіщення.`;
       } else {
         reply = 'Посилання для підключення застаріло. Натисніть «Підключити Telegram» на сайті ще раз.';
@@ -227,5 +252,5 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
     return new Uint8Array(await r.arrayBuffer());
   }
 
-  return { notify, sendText, sendFile, api, download, lastFileMessage: () => lastMessage };
+  return { fillTgNames, notify, sendText, sendFile, api, download, lastFileMessage: () => lastMessage };
 }
