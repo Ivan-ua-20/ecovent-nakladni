@@ -142,6 +142,7 @@ function renderInvoiceView() {
 
   $('#invActions').innerHTML = `
     <button class="btn primary" id="actPrint">Друк</button>
+    <button class="btn" id="actNp" title="Маркування Нової пошти (100×100) або Розетки (ТТН RMP-…)">Маркування</button>
     <button class="btn" id="actWord">Word</button>
     <button class="btn" id="actPdf">PDF</button>
     <button class="btn" id="actEdit">Редагувати</button>
@@ -173,6 +174,7 @@ function renderInvoiceView() {
       await snapshot('Завантажено Word');
     } catch (e) { toast('Word: ' + e.message, true); }
   };
+  $('#actNp').onclick = () => npMarking($('#actNp'));
   $('#actEdit').onclick = openEditor;
   $('#actRefresh').onclick = () => loadInvoice(id, true);
   $('#rawBtn') && ($('#rawBtn').onclick = async () => {
@@ -191,6 +193,54 @@ async function snapshot(reason) {
   loadVersions(requestedId);
 }
 
+
+// Маркування: ТТН Розетки (RMP-…) — з магазину Розетки; інакше Нова пошта: ТТН з замовлення (з правками)
+// або пошук у кабінетах НП. PDF відкривається в новій вкладці. ТТН з адресним забором (кур'єр НП забирає з адреси) —
+// попередження менеджеру, щоб передав складу.
+async function npMarking(btn) {
+  const o = current.order;
+  // Вкладку відкриваємо одразу (у відповідь на натискання), інакше браузер заблокує її як спливаюче вікно.
+  const win = window.open('', '_blank');
+  if (win) win.document.write('<p style="font:16px sans-serif;padding:24px">Шукаю маркування…</p>');
+  btn.disabled = true;
+  setPending((n) => { btn.innerHTML = `<span class="spinner"></span> Шукаю ТТН… (${n + 1})`; });
+  try {
+    const rzTtn = String(o.delivery?.ttn || '').toUpperCase().replace(/\s/g, '');
+    if (/^RMP/.test(rzTtn)) {
+      const res = await fetch(`/api/rz/marking/${encodeURIComponent(rzTtn)}`);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Маркування Розетки не отримано.');
+      const url = URL.createObjectURL(await res.blob());
+      if (win) win.location.href = url; else window.open(url, '_blank');
+      toast(`ТТН ${rzTtn} · ${decodeURIComponent(res.headers.get('X-NP-Account') || '') || 'Розетка'}`);
+      return;
+    }
+    const f = await api('POST', '/api/np/find', {
+      ttn: o.delivery?.ttn || '', phone: o.buyer?.phone || '', date: current.crmOrder?.date || o.date || '',
+      refs: [o.orderId, o.shortId, current.requestedId].filter(Boolean),
+    });
+    const res = await fetch(`/api/np/marking/${encodeURIComponent(f.ttn)}${f.accountId ? `?account=${f.accountId}` : ''}`);
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Маркування не отримано.');
+    const url = URL.createObjectURL(await res.blob());
+    if (win) win.location.href = url; else window.open(url, '_blank');
+    const acc = decodeURIComponent(res.headers.get('X-NP-Account') || '') || f.accountName;
+    toast(`ТТН ${f.ttn}${acc ? ` · ${acc}` : ''}${f.source === 'crm' ? '' : ' (знайдено в кабінеті НП)'}`);
+    if (res.headers.get('X-NP-Pickup') === '1') pickupWarning(f.ttn, acc, res.headers.get('X-NP-Service'));
+  } catch (e) {
+    win?.close();
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Маркування';
+  }
+}
+const SERVICE_NAME = { DoorsWarehouse: 'адреса → відділення', DoorsDoors: 'адреса → адреса', DoorsPostomat: 'адреса → поштомат' };
+function pickupWarning(ttn, acc, service) {
+  modal('🚚 Адресний забір', `<div class="form-stack">
+      <div class="alert warn" style="font-size:16px"><b>ТТН ${esc(ttn)} оформлена з адресним забором</b> — посилку забере кур’єр Нової пошти з адреси відправника
+        ${SERVICE_NAME[service] ? `(${esc(SERVICE_NAME[service])})` : ''}. На відділення її <b>не відвозити</b>.</div>
+      <div>Передайте цю інформацію складу разом із маркуванням.${acc ? ` Кабінет НП: ${esc(acc)}.` : ''}</div></div>`,
+  { footer: '<button class="btn primary" data-close>Зрозуміло, передам складу</button>' });
+}
 
 function doPrint(reason) {
   printHtml(renderInvoice(current));

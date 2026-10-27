@@ -7,6 +7,7 @@ import { $, $$, main, api, setPending, setUnauthorized, toast, modal, fmtDateTim
 import { createNakladnaPages } from './pages/nakladna.js';
 import { createRefsPages } from './pages/refs.js';
 import { createSettingsPages } from './pages/settings.js';
+import { createNpPages } from './pages/np.js';
 import { createRahunkyPages } from './pages/rahunky.js';
 import { createUsersPages } from './pages/users.js';
 import { createErrorsPages } from './pages/errors.js';
@@ -60,7 +61,7 @@ const SECTIONS = [
     { id: 'ptrash', label: 'Кошик' },
     { id: 'phelp', label: 'Інструкція' },
   ] },
-  { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [{ id: 'settings', label: 'Загальні налаштування' }, { id: 'errors', label: 'Журнал помилок', perm: 'users' }] },
+  { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [{ id: 'settings', label: 'Загальні налаштування' }, { id: 'np', label: 'Нова пошта і Розетка', perm: 'api' }, { id: 'errors', label: 'Журнал помилок', perm: 'users' }] },
   { id: 'users', label: 'Користувачі', perm: 'people', home: 'users', tabs: [{ id: 'users', label: 'Користувачі' }] },
 ];
 const visibleTabs = (sec) => sec.tabs.filter((t) => !t.perm || can(t.perm));
@@ -202,6 +203,7 @@ const ctx = { get boot() { return boot; }, get PAY() { return PAY; }, can, loadB
 const { viewInvoice, viewHistory } = createNakladnaPages(ctx);
 const { viewFops, viewOffices, viewTemplates, viewInvFops } = createRefsPages(ctx);
 const { viewSettings, viewNakladniSettings, viewRahunkySettings } = createSettingsPages(ctx);
+const { viewNp } = createNpPages();
 const { viewRahunky, viewRahunkyList } = createRahunkyPages(ctx);
 const { viewUsers } = createUsersPages(ctx);
 const { viewErrors } = createErrorsPages(ctx);
@@ -227,6 +229,7 @@ const routes = {
   an: (...a) => AN.viewDashboard(...a),
   ansettings: (...a) => AN.viewSettings(...a),
   settings: viewSettings,
+  np: viewNp,
   users: viewUsers,
   errors: viewErrors,
   b2bpartners: viewPartners,
