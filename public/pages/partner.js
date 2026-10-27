@@ -243,7 +243,7 @@ export function createPartnerPages(ctx = {}) {
     const debt = lim?.debt;
     main.innerHTML = `
       <div class="head-row"><h2>Закупівлі</h2>${canEdit() && !lim?.paused ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div>
-      ${pauseHtml(lim)}${debt?.total ? `<div class="alert ${debt.overdue ? 'bad' : 'info'}" style="margin-bottom:10px">До оплати: <b>${uah(debt.total)}</b> за ${debt.rows.length} ${debt.rows.length === 1 ? 'закупівлею' : 'закупівлями'}${debt.overdue ? ` · <b>прострочено ${uah(debt.overdue)}</b> — оплатіть, будь ласка` : ''}
+      ${pauseHtml(lim)}${debt?.total ? `<div class="alert ${debt.overdue ? 'bad' : 'info'}" style="margin-bottom:10px">До оплати: <b>${uah(debt.total)}</b>${debt.rows.length ? ` — за рахунками ${uah(debt.invoiced ?? debt.total)} (${debt.rows.length} ${debt.rows.length === 1 ? 'закупівля' : 'закупівлі'})` : ''}${debt.shippedTotal ? `${debt.rows.length ? ',' : ' —'} відвантажено без рахунку ${uah(debt.shippedTotal)}` : ''}${debt.overdue ? ` · <b>прострочено ${uah(debt.overdue)}</b> — оплатіть, будь ласка` : ''}
         ${lim.postpay?.days ? `<div class="small">Відстрочка оплати: ${lim.postpay.days} дн. від дати рахунку${lim.postpay.limit != null ? ` · використано ${uah(lim.postpay.used)} з ${uah(lim.postpay.limit)}` : ''}</div>` : ''}</div>` : ''}
       <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap"><button class="chip ${supFilter.status ? '' : 'on'}" data-pst="">Усі</button>
         ${Object.entries(statuses).map(([k, v]) => `<button class="chip ${supFilter.status === k ? 'on' : ''}" data-pst="${k}">${esc(v)}</button>`).join('')}</div>

@@ -48,7 +48,7 @@ export function createB2bPages(ctx = {}) {
           <td data-nosel style="width:34px"><input type="checkbox" data-psel="${p.id}" aria-label="Обрати"></td>
           <td><b>${esc(p.name)}</b>${limTxt(p) ? `<div class="small muted">ліміти: ${limTxt(p)}</div>` : ''}</td>
           <td class="small hide-m">${esc([p.phone, p.email].filter(Boolean).join(' · ') || '—')}</td>
-          <td class="r nowrap">${p.debt ? `<b>${money(p.debt)} грн</b><div class="small muted">закупівель: ${p.debt_cnt}${p.postpay_days ? ` · відстрочка ${p.postpay_days} дн.` : ''}</div>` : `<span class="muted">—</span>${p.postpay_days ? `<div class="small muted">відстрочка ${p.postpay_days} дн.</div>` : ''}`}
+          <td class="r nowrap">${p.debt ? `<b>${money(p.debt)} грн</b><div class="small muted">${[p.debt_cnt ? `за рахунками: ${p.debt_cnt}` : '', p.debt_shipped ? `без рахунку: ${money(p.debt_shipped)}` : '', p.postpay_days ? `відстрочка ${p.postpay_days} дн.` : ''].filter(Boolean).join(' · ')}</div>` : `<span class="muted">—</span>${p.postpay_days ? `<div class="small muted">відстрочка ${p.postpay_days} дн.</div>` : ''}`}
             ${p.debt_overdue ? `<div><span class="badge bad">прострочено ${money(p.debt_overdue)}</span></div>` : ''}</td>
           <td class="r hide-m">${p.users}${p.users_by_partner ? `<div class="small muted">з них додав партнер: ${p.users_by_partner}</div>` : ''}</td><td class="r hide-m">${p.brands}</td>
           <td>${pState(p)}</td>
@@ -270,7 +270,11 @@ export function createB2bPages(ctx = {}) {
                 <td class="r">${money(o.total)}</td><td class="r">${o.paid_amount ? money(o.paid_amount) : '—'}</td><td class="r"><b>${money(o.due)}</b></td>
                 <td class="small nowrap">${o.due_date ? esc(fmtDay(o.due_date)) : 'передоплата'}${o.overdue ? `<div><span class="badge bad">прострочено ${o.overdue} дн.</span></div>` : ''}</td></tr>`).join('')}</tbody></table>`
               : '<div class="small muted">Неоплачених закупівель з рахунком немає.</div>'}
-            <div class="small muted">Борг — закупівлі з виставленим рахунком без повної оплати. Закупівлі, що ще чекають рахунок, сюди не входять.</div>
+            ${debt.shipped?.length ? `<div><b>Відвантажено без рахунку: ${money(debt.shippedTotal)} грн</b></div>
+              <table class="list"><thead><tr><th>Закупівля</th><th class="r">Замовлень у CRM</th><th class="r">Сума</th></tr></thead><tbody>
+              ${debt.shipped.map((s) => `<tr class="click" data-dord="${s.id}"><td><b>${esc(s.number)}</b><div class="small muted">${s.open ? 'відкрита — рахунок ще не сформовано' : 'очікує рахунок'}</div></td>
+                <td class="r">${s.orders}</td><td class="r"><b>${money(s.sum)}</b></td></tr>`).join('')}</tbody></table>` : ''}
+            <div class="small muted">Борг = закупівлі з рахунком без повної оплати + замовлення клієнтів, уже передані в CRM, із закупівель, на які ще немає рахунку.</div>
           </div>` : ''}
           ${limits ? `<div class="card form-stack">
             <h3>Ліміти</h3>

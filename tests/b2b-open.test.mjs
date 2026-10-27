@@ -97,6 +97,12 @@ const warn = tg.filter((m) => /Відвантаження без оплати/.t
 assert.equal(warn.length, 1);
 assert.equal(String(warn[0].chat_id), '1', 'власнику');
 assert.match(warn[0].text, /ще без рахунку/);
+// борг: замовлення, передане в CRM з відкритої закупівлі, — «відвантажено без рахунку»
+let prow = (await req('GET', '/api/b2b/partners')).find((x) => x.id === pa.id);
+assert.deepEqual([prow.debt, prow.debt_shipped, prow.debt_invoiced, prow.debt_shipped_cnt], [9000, 9000, 0, 1]);
+let pdebt = (await req('GET', `/api/b2b/partners/${pa.id}`)).debt;
+assert.deepEqual([pdebt.total, pdebt.shippedTotal, pdebt.shipped.map((x) => [x.id, x.orders, x.sum, x.open])], [9000, 9000, [[open1, 1, 9000, true]]]);
+assert.equal((await req('GET', '/api/b2b/p/limits', null, A)).debt.shippedTotal, 9000, 'партнер теж бачить');
 
 // ---------- 5. «Сформувати рахунок на закупівлю» ----------
 await req('POST', '/api/b2b/p/open/form', { entity_id: ent.id }, A);
@@ -104,6 +110,8 @@ d = await req('GET', `/api/b2b/orders/${open1}`);
 assert.equal(d.order.status, 'invoice_wait');
 assert.match(d.order.entity, /ФОП Альфа/);
 assert.equal((await req('GET', '/api/b2b/p/limits', null, A)).open.id, null, 'відкритої більше немає');
+pdebt = (await req('GET', `/api/b2b/partners/${pa.id}`)).debt;
+assert.deepEqual(pdebt.shipped.map((x) => [x.id, x.open, x.sum]), [[open1, false, 9000]], 'очікує рахунок — досі без рахунку');
 assert.equal((await req('GET', `/api/b2b/p/clients/${c1.id}`, null, A)).order.no_supply, false, 'позначка 🔴 знімається');
 assert.match(await errOf(() => req('POST', '/api/b2b/p/open/form', { entity_id: ent.id }, A)), /немає/);
 // нова — з нуля, і порожня зникає після скасування

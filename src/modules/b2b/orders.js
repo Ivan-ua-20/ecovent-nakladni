@@ -45,6 +45,8 @@ export const limitsOf = (p) => ({
 const UNPAID = `('open', 'invoice_wait', 'pay_wait', 'partial')`;
 // Борг партнера: рахунок виставлено, а оплати (повної) ще немає.
 export const DEBT = `('pay_wait', 'partial')`;
+// Закупівлі без рахунку, з яких уже могли відвантажити замовлення клієнтів.
+export const SHIP_NOINV = `('open', 'invoice_wait')`;
 const today = () => kyivDayOf(new Date().toISOString());
 const addDaysTo = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 // Скільки днів прострочено (0 — не прострочено або вже оплачено).
@@ -323,11 +325,20 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     }
   }
   // Заборгованість партнера: закупівлі з рахунком без повної оплати — сума, оплачено, залишок, строк, прострочення.
+  // + «відвантажено без рахунку»: замовлення клієнтів, уже передані в CRM, із закупівель без рахунку (відкрита / очікує рахунок).
   async function debtOf(partnerId) {
-    const rows = await db.all(`SELECT id, status, total, paid_amount, invoice_no, invoice_date, due_date, pay_terms, created_at FROM b2b_orders
-      WHERE partner_id = ? AND kind = 'supply' AND status IN ${DEBT} ORDER BY COALESCE(NULLIF(due_date, ''), invoice_date, created_at), id`, [partnerId]);
+    const [rows, ship] = await Promise.all([
+      db.all(`SELECT id, status, total, paid_amount, invoice_no, invoice_date, due_date, pay_terms, created_at FROM b2b_orders
+        WHERE partner_id = ? AND kind = 'supply' AND status IN ${DEBT} ORDER BY COALESCE(NULLIF(due_date, ''), invoice_date, created_at), id`, [partnerId]),
+      db.all(`SELECT s.id, s.status, COUNT(co.id) AS n, SUM(co.total) AS sum FROM b2b_orders s
+        JOIN b2b_orders co ON co.supply_id = s.id AND co.kind = 'client' AND co.status = 'crm'
+        WHERE s.partner_id = ? AND s.kind = 'supply' AND s.status IN ${SHIP_NOINV} GROUP BY s.id ORDER BY s.id`, [partnerId]),
+    ]);
     const list = rows.map((o) => ({ ...o, number: orderNo(o.id), due: round2(o.total - o.paid_amount), overdue: overdueDays(o) }));
-    return { total: round2(list.reduce((t, o) => t + o.due, 0)), overdue: round2(list.filter((o) => o.overdue).reduce((t, o) => t + o.due, 0)), rows: list };
+    const shipped = ship.map((s) => ({ id: s.id, number: orderNo(s.id), status: s.status, open: s.status === 'open', orders: s.n, sum: round2(s.sum || 0) }));
+    const invoiced = round2(list.reduce((t, o) => t + o.due, 0));
+    const shippedTotal = round2(shipped.reduce((t, s) => t + s.sum, 0));
+    return { total: round2(invoiced + shippedTotal), invoiced, shippedTotal, overdue: round2(list.filter((o) => o.overdue).reduce((t, o) => t + o.due, 0)), rows: list, shipped };
   }
   const getOpen = (partnerId) => db.get(`SELECT * FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status = 'open' ORDER BY id LIMIT 1`, [partnerId]);
   // Товари відкритої закупівлі = товари її замовлень клієнтів (без скасованих). Порожня — видаляється.

@@ -5416,6 +5416,7 @@ var limitsOf = (p) => ({
 });
 var UNPAID = `('open', 'invoice_wait', 'pay_wait', 'partial')`;
 var DEBT = `('pay_wait', 'partial')`;
+var SHIP_NOINV = `('open', 'invoice_wait')`;
 var today = () => kyivDayOf((/* @__PURE__ */ new Date()).toISOString());
 var addDaysTo = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 var overdueDays = (o) => o.due_date && ["pay_wait", "partial"].includes(o.status) && o.due_date < today() ? Math.round((Date.parse(`${today()}T12:00:00Z`) - Date.parse(`${o.due_date}T12:00:00Z`)) / 864e5) : 0;
@@ -5685,10 +5686,18 @@ ${link(c, `b2borders/${r.lastId}`)}`);
     }
   }
   async function debtOf(partnerId) {
-    const rows = await db.all(`SELECT id, status, total, paid_amount, invoice_no, invoice_date, due_date, pay_terms, created_at FROM b2b_orders
-      WHERE partner_id = ? AND kind = 'supply' AND status IN ${DEBT} ORDER BY COALESCE(NULLIF(due_date, ''), invoice_date, created_at), id`, [partnerId]);
+    const [rows, ship] = await Promise.all([
+      db.all(`SELECT id, status, total, paid_amount, invoice_no, invoice_date, due_date, pay_terms, created_at FROM b2b_orders
+        WHERE partner_id = ? AND kind = 'supply' AND status IN ${DEBT} ORDER BY COALESCE(NULLIF(due_date, ''), invoice_date, created_at), id`, [partnerId]),
+      db.all(`SELECT s.id, s.status, COUNT(co.id) AS n, SUM(co.total) AS sum FROM b2b_orders s
+        JOIN b2b_orders co ON co.supply_id = s.id AND co.kind = 'client' AND co.status = 'crm'
+        WHERE s.partner_id = ? AND s.kind = 'supply' AND s.status IN ${SHIP_NOINV} GROUP BY s.id ORDER BY s.id`, [partnerId])
+    ]);
     const list = rows.map((o) => ({ ...o, number: orderNo(o.id), due: round2(o.total - o.paid_amount), overdue: overdueDays(o) }));
-    return { total: round2(list.reduce((t, o) => t + o.due, 0)), overdue: round2(list.filter((o) => o.overdue).reduce((t, o) => t + o.due, 0)), rows: list };
+    const shipped = ship.map((s) => ({ id: s.id, number: orderNo(s.id), status: s.status, open: s.status === "open", orders: s.n, sum: round2(s.sum || 0) }));
+    const invoiced = round2(list.reduce((t, o) => t + o.due, 0));
+    const shippedTotal = round2(shipped.reduce((t, s) => t + s.sum, 0));
+    return { total: round2(invoiced + shippedTotal), invoiced, shippedTotal, overdue: round2(list.filter((o) => o.overdue).reduce((t, o) => t + o.due, 0)), rows: list, shipped };
   }
   const getOpen = (partnerId) => db.get(`SELECT * FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status = 'open' ORDER BY id LIMIT 1`, [partnerId]);
   async function rebuildOpen(supplyId) {
@@ -8085,7 +8094,19 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const today2 = (/* @__PURE__ */ new Date()).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
     const debt = new Map((await db.all(`SELECT partner_id, SUM(total - paid_amount) AS due, SUM(CASE WHEN due_date != '' AND due_date < ? THEN total - paid_amount ELSE 0 END) AS overdue,
       COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND status IN ('pay_wait', 'partial') GROUP BY partner_id`, [today2])).map((r) => [r.partner_id, r]));
-    return c.json(rows.map((r) => ({ ...r, debt: Math.round((debt.get(r.id)?.due || 0) * 100) / 100, debt_overdue: Math.round((debt.get(r.id)?.overdue || 0) * 100) / 100, debt_cnt: debt.get(r.id)?.n || 0 })));
+    const ship = new Map((await db.all(`SELECT s.partner_id, SUM(co.total) AS sum, COUNT(co.id) AS n FROM b2b_orders s
+      JOIN b2b_orders co ON co.supply_id = s.id AND co.kind = 'client' AND co.status = 'crm'
+      WHERE s.kind = 'supply' AND s.status IN ('open', 'invoice_wait') GROUP BY s.partner_id`)).map((r) => [r.partner_id, r]));
+    const r2 = (n) => Math.round((n || 0) * 100) / 100;
+    return c.json(rows.map((r) => ({
+      ...r,
+      debt: r2((debt.get(r.id)?.due || 0) + (ship.get(r.id)?.sum || 0)),
+      debt_invoiced: r2(debt.get(r.id)?.due),
+      debt_shipped: r2(ship.get(r.id)?.sum),
+      debt_shipped_cnt: ship.get(r.id)?.n || 0,
+      debt_overdue: r2(debt.get(r.id)?.overdue),
+      debt_cnt: debt.get(r.id)?.n || 0
+    })));
   });
   const partnerFields = (b) => ({
     name: String(b.name ?? "").trim().slice(0, 120),
