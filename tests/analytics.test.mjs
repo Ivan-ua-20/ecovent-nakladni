@@ -43,7 +43,9 @@ for (let d = addDays(today, -200); d <= today; d = addDays(d, 1)) {
 }
 let calls = 0;
 const byMethod = {};
+const tgSent = [];
 const fetchFn = async (url, opts = {}) => {
+  if (url.startsWith('https://api.telegram.org/')) { tgSent.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ ok: true, result: {} })); }
   calls++;
   const m = url.match(/api\/(\w+)\.html/)[1];
   byMethod[m] = (byMethod[m] || 0) + 1;
@@ -100,6 +102,31 @@ async function runSync(mode) {
 // ---------- 1. Перше завантаження ----------
 const t0 = Date.now();
 const first = await runSync('full');
+
+// ---------- Дублі ТТН у LP-CRM → менеджеру в Telegram ----------
+{
+  const todays = [...orders.values()].filter((o) => o.datetime.slice(0, 10) === today);
+  assert.ok(todays.length >= 4, 'є сьогоднішні замовлення');
+  const [a, b, c2, d] = todays;
+  await db.batch([
+    [`INSERT INTO settings (key, value) VALUES ('tg_token', '1:x') ON CONFLICT(key) DO UPDATE SET value = excluded.value`, []],
+    [`UPDATE users SET tg_chat_id = '42', crm_logins = ? WHERE login = 'o'`, [c2.user]],
+  ]);
+  a.ttn = '20450000001111'; b.ttn = '20 4500 0000 1111';
+  await runSync('today');
+  assert.equal(tgSent.length, 0, 'перше надходження ТТН — без сповіщень про наявні дублі');
+  assert.ok((await req('GET', '/api/an/config')).ttnSeen, 'видно, що ТТН приходять');
+  c2.ttn = '59000000002222'; d.ttn = '59000000002222';
+  await runSync('today');
+  const msg = tgSent.filter((m) => /Дубль ТТН 59000000002222/.test(m.text));
+  assert.equal(msg.length, 1, 'одне сповіщення');
+  assert.equal(String(msg[0].chat_id), '42', 'менеджеру замовлення (за логіном LP-CRM)');
+  assert.ok(msg[0].text.includes(c2.order_id) && msg[0].text.includes(d.order_id));
+  await runSync('today');
+  assert.equal(tgSent.filter((m) => /59000000002222/.test(m.text)).length, 1, 'не повторюється');
+  await db.run(`UPDATE users SET tg_chat_id = '', crm_logins = '' WHERE login = 'o'`);
+  for (const o of [a, b, c2, d]) delete o.ttn;
+}
 const windowStart = (await db.get(`SELECT value FROM settings WHERE key='an_sync'`)) && JSON.parse((await db.get(`SELECT value FROM settings WHERE key='an_sync'`)).value).start;
 const inWindow = [...orders.values()].filter((o) => o.datetime.slice(0, 10) >= windowStart && ['11', '14', '53', '18', '54', '58'].includes(o.status));
 const stored = (await db.get(`SELECT COUNT(*) AS n FROM an_orders WHERE status != 0`)).n;

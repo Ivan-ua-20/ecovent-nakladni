@@ -750,6 +750,8 @@ export function createAnalyticsUI(ctx) {
           <h3>Дані з LP-CRM</h3>
           <div class="small">${cfg.lastSync ? `Останнє оновлення: <b>${ctx.fmtDateTime(cfg.lastSync)}</b>` : 'Дані ще не завантажено.'}
             Завантажуються замовлення зі статусами: ${[...st.okStatuses, ...st.refuseStatuses].map((id) => esc(cfg.statusNames[id] || id)).join(', ')} за останні ${st.months} міс.</div>
+          <div class="small">${cfg.ttnSeen ? `✅ <b>Перевірка дублів ТТН працює</b>: ТТН приходять з LP-CRM (останні — ${ctx.fmtDateTime(cfg.ttnSeen)}). Та сама ТТН у кількох замовленнях — сповіщення в Telegram менеджерам цих замовлень (логін LP-CRM у профілі користувача), без прив’язаних — адмінам.`
+            : '⏳ <b>Перевірка дублів ТТН</b>: ТТН із LP-CRM ще не надходили — з’являться після оновлення замовлень зі статусом відправки. Якщо після оновлення цей рядок не зміниться — LP-CRM не віддає ТТН у даних замовлень.'}</div>
           <div id="sSync"></div>
           <div class="btn-row">
             <button class="btn primary" id="sToday">Оновити сьогодні</button>
