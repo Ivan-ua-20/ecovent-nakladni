@@ -248,7 +248,7 @@ function flattenCategories(node, parent = null, out = [], depth = 0) {
 }
 
 // =====================================================================
-export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {} }) {
+export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, onTick = () => {} }) {
   const settings = () => loadSettings(db);
   const getSt = async () => {
     const r = await db.get(`SELECT value FROM settings WHERE key = 'an_settings'`);
@@ -360,6 +360,10 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {} })
     const silent = firstRun || !seenBefore;
     if (!seenBefore || seenBefore.slice(0, 13) !== nowIso().slice(0, 13)) await putSetting('an_ttn_seen', nowIso());
     const rows = await db.all(`SELECT code, user, ttn, status, day FROM an_orders WHERE ttn IN (SELECT value FROM json_each(?)) AND status != 0 ORDER BY id`, [JSON.stringify(ttns)]);
+    return notifyDups(rows, { silent, recentDays: 14 });
+  }
+  // rows: { code, user, ttn, status, day } — групування за ТТН, сповіщення про нові дублі.
+  async function notifyDups(rows, { silent = false, recentDays = 14 } = {}) {
     const by = new Map();
     for (const r of rows) { if (!by.has(r.ttn)) by.set(r.ttn, []); by.get(r.ttn).push(r); }
     const dups = [...by].filter(([, list]) => new Set(list.map((r) => r.code)).size > 1);
@@ -369,7 +373,7 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {} })
     const users = await db.all(`SELECT tg_chat_id, crm_logins FROM users WHERE active = 1 AND tg_chat_id != '' AND crm_logins != ''`);
     const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     let n = 0;
-    const recent = addDays(kyivDay(), -14);
+    const recent = addDays(kyivDay(), -recentDays);
     for (const [ttn, list] of dups) {
       const codes = [...new Set(list.map((r) => r.code))].sort().join(',');
       if (sent.get(ttn) === codes) continue;
@@ -390,6 +394,100 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {} })
     return n;
   }
 
+  // ---------------------------------------------------------------- швидка перевірка дублів ТТН (кожні 10 хв)
+  // Нові замовлення LP-CRM за сьогодні й учора (і ті, що змінили статус) — їхня ТТН проти інших замовлень за 7 днів.
+  // Запуск: Cloudflare Worker за розкладом (/api/cron/ttn з ключем) або сам на запитах до сайту, не частіше разу на 10 хв.
+  const TTN_EVERY = 10 * 60e3;
+  async function ttnQuick({ force = false } = {}) {
+    const now = Date.now();
+    if (!force) {
+      const claim = await db.run(`INSERT INTO settings (key, value) VALUES ('an_ttn_check_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
+        [new Date(now).toISOString(), new Date(now - TTN_EVERY + 30e3).toISOString()]);
+      if (!claim.changes) return { skipped: true };
+    } else await putSetting('an_ttn_check_at', new Date(now).toISOString());
+    const s = await settings();
+    if (!s.lpcrm_subdomain || !s.lpcrm_key) return { skipped: true, reason: 'LP-CRM не налаштовано' };
+    const cr = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
+    const st = await getSt();
+    const today = kyivDay();
+    const from = addDays(today, -1);
+    const listed = new Map();
+    for (const x of [...st.okStatuses, ...st.refuseStatuses]) {
+      const j = await lp(cr, 'getOrdersIdByStatus', { status: String(x), date_start: from, date_end: today }).catch(() => null);
+      if (j?.status === 'ok') for (const code of asList(j.data).map(String).filter(Boolean)) listed.set(code, x);
+    }
+    const codes = [...listed.keys()];
+    let fetched = 0;
+    let found = 0;
+    if (codes.length) {
+      const known = new Map((await db.all(`SELECT code, status FROM an_ttn_recent WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => [r.code, r.status]));
+      const todo = codes.filter((x) => known.get(x) !== listed.get(x)).slice(0, 300);
+      const got = [];
+      for (let i = 0; i < todo.length; i += 100) {
+        const j = await lp(cr, 'getOrdersByID', { order_id: todo.slice(i, i + 100).join(',') }).catch(() => null);
+        if (j?.status === 'ok') got.push(...findOrders(j.data).map(normalizeAnOrder).filter(Boolean));
+      }
+      fetched = got.length;
+      if (got.length) {
+        await db.batch(got.map((o) => [`INSERT INTO an_ttn_recent (code, ttn, day, user, status) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(code) DO UPDATE SET ttn = excluded.ttn, day = excluded.day, user = excluded.user, status = excluded.status`, [o.code, o.ttn || '', o.day, o.user, o.status]]));
+        const ttns = [...new Set(got.map((o) => o.ttn).filter(Boolean))];
+        if (ttns.length) {
+          const week = addDays(today, -7);
+          const [a, b] = await Promise.all([
+            db.all(`SELECT code, user, ttn, status, day FROM an_ttn_recent WHERE ttn IN (SELECT value FROM json_each(?)) AND day >= ?`, [JSON.stringify(ttns), week]),
+            db.all(`SELECT code, user, ttn, status, day FROM an_orders WHERE ttn IN (SELECT value FROM json_each(?)) AND status != 0 AND day >= ?`, [JSON.stringify(ttns), week]),
+          ]);
+          const seen = new Set(a.map((r) => r.code));
+          found = await notifyDups([...a, ...b.filter((r) => !seen.has(r.code))], { recentDays: 7 });
+        }
+      }
+    }
+    // Старі записи (понад 10 днів) — раз на добу.
+    const pruneDay = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_prune'`))?.value || '';
+    if (pruneDay !== today) {
+      await db.run(`DELETE FROM an_ttn_recent WHERE day < ?`, [addDays(today, -10)]);
+      await putSetting('an_ttn_prune', today);
+    }
+    const res = { at: new Date(now).toISOString(), listed: codes.length, fetched, dups: found };
+    await putSetting('an_ttn_last', JSON.stringify(res));
+    return res;
+  }
+  // Сам на запитах до сайту — у фоні (після відповіді), коли перевірка вже потрібна.
+  onTick((c) => {
+    if (Date.now() - (shared.ttnTry || 0) < 60e3) return; // не частіше разу на хвилину на екземпляр — щоб не читати базу щозапиту
+    shared.ttnTry = Date.now();
+    const p = (async () => {
+      const last = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_check_at'`))?.value || '';
+      if (last && Date.now() - Date.parse(last) < TTN_EVERY) return;
+      if (!(await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_seen'`))?.value) return; // ТТН з LP-CRM ще не надходили
+      await ttnQuick();
+    })().catch(() => 0);
+    try { c?.executionCtx?.waitUntil(p); } catch { /* не Cloudflare — промис і так виконається */ }
+  });
+  // Для Cloudflare Worker за розкладом: заголовок X-Cron-Key = ключ із налаштувань аналітики.
+  app.post('/api/cron/ttn', async (c) => {
+    const key = (await db.get(`SELECT value FROM settings WHERE key = 'an_cron_key'`))?.value || '';
+    const got = c.req.header('x-cron-key') || '';
+    if (!key || got.length !== key.length || got !== key) throw fail(401, 'Невірний ключ.');
+    return c.json(await ttnQuick());
+  });
+  app.post('/api/an/ttn-check', async (c) => {
+    if (!can(c.get('user'), 'analytics')) throw fail(403, 'Недостатньо прав.');
+    return c.json(await ttnQuick({ force: true }));
+  });
+  // Ключ для Worker'а — показує й змінює лише власник/адмін з правом «users».
+  app.get('/api/an/cron-key', async (c) => {
+    need(c, 'users');
+    return c.json({ key: (await db.get(`SELECT value FROM settings WHERE key = 'an_cron_key'`))?.value || '' });
+  });
+  app.post('/api/an/cron-key', async (c) => {
+    need(c, 'users');
+    const key = [...crypto.getRandomValues(new Uint8Array(24))].map((x) => x.toString(16).padStart(2, '0')).join('');
+    await putSetting('an_cron_key', key);
+    return c.json({ key });
+  });
+
   // ---------------------------------------------------------------- налаштування
   app.get('/api/an/config', async (c) => {
     const [st, depts, sources, smap, officeMap, managers, brands, offices, statusNames, lastSync, sync, categories] = await Promise.all([
@@ -407,6 +505,8 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {} })
       db.all(`SELECT id, name, parent_id FROM an_categories ORDER BY name`),
     ]);
     const ttnSeen = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_seen'`))?.value || '';
+    const ttnLast = await getJson('an_ttn_last');
+    const cronOn = Boolean((await db.get(`SELECT value FROM settings WHERE key = 'an_cron_key'`))?.value);
     return c.json({
       categories,
       settings: st,
@@ -421,6 +521,8 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {} })
       statusNames: statusNames || {},
       lastSync: lastSync?.value || '',
       ttnSeen,
+      ttnLast,
+      cronOn,
       sync: sync ? { phase: sync.phase, startedAt: sync.startedAt, mode: sync.mode, error: sync.error || '' } : null,
     });
   });

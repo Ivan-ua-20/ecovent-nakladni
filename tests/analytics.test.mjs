@@ -361,6 +361,8 @@ const roles = Object.fromEntries((await db.all(`SELECT login, role FROM users`))
 assert.deepEqual(roles, { o: 'admin', man: 'owner' }, 'новий власник і нова роль колишнього');
 
 // ---------- Дублі ТТН у LP-CRM → менеджеру в Telegram ----------
+// фонова перевірка «на запитах» у цьому блоці не втручається (щойно «була»)
+await db.run(`INSERT INTO settings (key, value) VALUES ('an_ttn_check_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [new Date().toISOString()]);
 {
   // замовлення відстежуваних статусів за останні дні; зміна статусу — щоб «Оновити сьогодні» перечитало їх повністю
   const trackedRows = await db.all(`SELECT code, status FROM an_orders WHERE day >= ? AND status != 0 ORDER BY id DESC LIMIT 40`, [addDays(today, -10)]);
@@ -387,6 +389,38 @@ assert.deepEqual(roles, { o: 'admin', man: 'owner' }, 'новий власник
   await db.run(`DELETE FROM settings WHERE key = 'an_today_cnt'`);
   await runSync('today');
   assert.equal(tgSent.filter((m) => /59000000002222/.test(m.text)).length, 1, 'не повторюється');
+  await db.run(`UPDATE users SET tg_chat_id = '', crm_logins = '' WHERE login = 'o'`);
+}
+
+// ---------- Швидка перевірка дублів ТТН нових замовлень (кожні 10 хв; Worker або на запитах) ----------
+{
+  const trackedSt = new Set((await db.all(`SELECT DISTINCT status FROM an_orders WHERE status != 0`)).map((r) => String(r.status)));
+  const fresh = [...orders.values()].filter((o) => o.datetime.slice(0, 10) >= addDays(today, -1) && trackedSt.has(o.status));
+  assert.ok(fresh.length >= 2, 'є замовлення за сьогодні/учора');
+  const [x, y] = fresh;
+  x.ttn = '20459999999999'; y.ttn = '20459999999999';
+  await db.run(`UPDATE users SET tg_chat_id = '43', crm_logins = ? WHERE login = 'o'`, [x.user]);
+  tgSent.length = 0;
+  const r = await req('POST', '/api/an/ttn-check');
+  assert.ok(r.listed >= 2 && r.fetched >= 2, 'нові замовлення за 2 дні перечитано');
+  assert.equal(r.dups, 1);
+  const m = tgSent.filter((t) => /Дубль ТТН 20459999999999/.test(t.text));
+  assert.equal(m.length, 1);
+  assert.equal(String(m[0].chat_id), '43');
+  // повторно — вже відомі замовлення не перечитуються, дубль не повторюється
+  const r2 = await req('POST', '/api/an/ttn-check');
+  assert.deepEqual([r2.fetched, r2.dups], [0, 0]);
+  // Worker: без ключа — ні; з ключем — так, але не частіше разу на 10 хв
+  assert.equal((await app.request('/api/cron/ttn', { method: 'POST' })).status, 401);
+  const { key } = await req('POST', '/api/an/cron-key');
+  assert.equal(key.length, 48);
+  let cr = await (await app.request('/api/cron/ttn', { method: 'POST', headers: { 'X-Cron-Key': key } })).json();
+  assert.equal(cr.skipped, true, 'щойно перевіряли');
+  await db.run(`UPDATE settings SET value = ? WHERE key = 'an_ttn_check_at'`, [new Date(Date.now() - 11 * 60e3).toISOString()]);
+  cr = await (await app.request('/api/cron/ttn', { method: 'POST', headers: { 'X-Cron-Key': key } })).json();
+  assert.ok(!cr.skipped && cr.listed >= 2);
+  const cfg = await req('GET', '/api/an/config');
+  assert.ok(cfg.cronOn && cfg.ttnLast?.at);
   await db.run(`UPDATE users SET tg_chat_id = '', crm_logins = '' WHERE login = 'o'`);
 }
 
