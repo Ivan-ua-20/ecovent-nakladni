@@ -35,12 +35,21 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
   // items: [{ product_id, qty, price? }] — увесь новий склад (0 або відсутній — прибрати); ціну можна змінити вручну.
   app.put('/api/b2b/orders/:id/edit', async (c) => {
     need(c, 'b2b.admin');
+    return c.json(await editSupply(c, await orderOf(c.req.param('id')), await c.req.json()));
+  });
+  // Додати товари в закупівлю (з правки замовлення клієнта: товару немає в закупівлі або бракує залишку).
+  hooks.supplyAdd = async (c, supplyId, add) => {
+    const o = await orderOf(supplyId);
+    const cur = await db.all(`SELECT product_id, qty FROM b2b_order_items WHERE order_id = ?`, [o.id]);
+    const want = new Map(cur.map((i) => [i.product_id, i.qty]));
+    for (const [id, n] of add) want.set(id, (want.get(id) || 0) + n);
+    return editSupply(c, o, { items: [...want].map(([product_id, qty]) => ({ product_id, qty })) });
+  };
+  async function editSupply(c, o, b) {
     const u = c.get('user');
-    const o = await orderOf(c.req.param('id'));
     if (o.kind !== 'supply') throw fail(400, 'Це замовлення клієнта — змінюйте його на сторінці замовлення.');
     if (o.status === 'cancelled') throw fail(400, 'Закупівлю скасовано.');
     if (o.status === 'open') throw fail(400, 'Відкрита закупівля складається із замовлень клієнтів — змініть або видаліть їх, і закупівля перерахується сама.');
-    const b = await c.req.json();
     const cur = await db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
     const curMap = new Map(cur.map((i) => [i.product_id, i]));
     const want = new Map();
@@ -92,7 +101,7 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
     for (const i of removed) changes.push(`− ${i.name} × ${i.qty} (прибрано)`);
     if (ent.id !== o.entity_id) changes.push(`юрособа: ${firstLine(ent.text)}`);
     if (comment !== (o.comment || '')) changes.push('коментар');
-    if (!changes.length) return c.json({ ok: true, changed: false });
+    if (!changes.length) return { ok: true, changed: false };
 
     const invoiced = Boolean(o.invoice_no) && INVOICED.includes(o.status);
     const redo = invoiced ? `${o.invoice_no}${o.waybill_no ? ` (і накладну № ${o.waybill_no})` : ''}` : '';
@@ -118,8 +127,8 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
       if (invoiced) await tgGroup(o.partner_id, text);
       await hooks.finRequest?.(o.id, invoiced ? 'reinvoice' : 'changed').catch(() => 0);
     }
-    return c.json({ ok: true, changed: true, total, reinvoice: invoiced });
-  });
+    return { ok: true, changed: true, total, reinvoice: invoiced };
+  }
 
   // ---------------------------------------------------------------- кошик
   async function toTrash(o, u, { byPartner = false } = {}) {

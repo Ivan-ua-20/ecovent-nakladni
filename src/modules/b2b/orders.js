@@ -412,6 +412,11 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       out.overdue = overdueDays(o);
       if (out.overdue) out.status_name = `${out.status_name} · прострочено ${out.overdue} дн.`;
     }
+    if (o.kind === 'client') {
+      let pend = null;
+      if (o.pending) { try { const x = JSON.parse(o.pending); pend = { changes: x.changes || [], by: x.by || '', at: x.at || '', crm_old: x.crm_old || '' }; } catch { pend = { changes: [] }; } }
+      out.pending = pend;
+    }
     if (o.kind === 'client') Object.assign(out, { no_supply: !o.supply_id || o.supply_status === 'open', open_supply: o.supply_status === 'open', pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : '' });
     return out;
   };

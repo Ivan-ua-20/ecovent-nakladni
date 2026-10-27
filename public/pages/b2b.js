@@ -796,9 +796,9 @@ export function createB2bPages(ctx = {}) {
       ${filterBar(clFilter, { pay: true })}
       ${bulkBar()}
       ${rows.length ? `<table class="list"><thead><tr>${selHead()}<th>№</th><th>Партнер / клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th class="hide-m">CRM</th></tr></thead><tbody>
-        ${rows.map((o) => `<tr class="click ${o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''}" data-o="${o.id}">
+        ${rows.map((o) => `<tr class="click ${o.pending ? 'row-info' : o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''}" data-o="${o.id}">
           ${selCell(o.id)}
-          <td><b>${esc(o.number)}</b><div>${supplyMark(o)}</div><div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
+          <td><b>${esc(o.number)}</b><div>${supplyMark(o)}</div>${o.pending ? '<div><span class="badge info">🔵 чекає підтвердження партнера</span></div>' : ''}<div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
           <td>${esc(o.partner)}<div class="small">${esc(o.client_name)} · ${esc(phoneFmt(o.client_phone))}</div><div class="small muted">${o.ttn ? `ТТН ${esc(o.ttn)} · ` : ''}${o.labels ? `📎 маркування: ${o.labels}` : (o.status === 'new' ? '<span class="badge bad">без маркування</span>' : '')}${o.files > (o.labels || 0) ? ` · 📄 документів: ${o.files - (o.labels || 0)}` : ''}</div></td>
           <td class="r"><b>${uah(o.total)}</b></td>
           <td>${statusBadge(o)}</td>
@@ -810,7 +810,7 @@ export function createB2bPages(ctx = {}) {
     const byId = new Map(rows.map((r) => [r.id, r]));
     wireBulk([
       ...(crm ? [{ key: 'crm', label: 'Додати в CRM', confirm: (n) => `Передати ${n} замовлень у LP-CRM?`,
-        run: (id) => { const o = byId.get(id); if (o.status !== 'new') throw new Error(o.status === 'crm' ? 'вже в CRM' : 'скасовано'); return api('POST', `/api/b2b/clients/${id}/crm`); } }] : []),
+        run: (id) => { const o = byId.get(id); if (o.status !== 'new') throw new Error(o.status === 'crm' ? 'вже в CRM' : 'скасовано'); if (o.pending) throw new Error('чекає підтвердження партнера'); return api('POST', `/api/b2b/clients/${id}/crm`); } }] : []),
       { key: 'paid', label: 'Оплачено (без закупівлі)', run: (id) => { if (!byId.get(id).no_supply) throw new Error('оплата — за закупівлею'); return api('POST', `/api/b2b/clients/${id}/paid`, { paid: true }); } },
       { key: 'cancel', label: 'Скасувати', danger: true, confirm: (n) => `Скасувати ${n} замовлень? Ті, що вже в LP-CRM, скасуйте там вручну.`, run: (id) => api('POST', `/api/b2b/clients/${id}/cancel`) },
       { key: 'del', label: 'Видалити в кошик', danger: true, confirm: (n) => `Перенести ${n} замовлень у кошик? Ті, що вже в LP-CRM, видаліть там вручну.`, run: (id) => api('DELETE', `/api/b2b/orders/${id}`) },
@@ -892,6 +892,10 @@ export function createB2bPages(ctx = {}) {
     const closed = o.status === 'cancelled';
     main.innerHTML = `
       <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)} ${payBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2bclients">← До списку</a>${closed ? '' : '<button class="btn" id="clEdit">✏️ Змінити</button>'}<button class="btn danger" id="clDel">Видалити</button></div></div>
+      ${o.pending ? `<div class="card form-stack card-info" style="margin-bottom:12px"><b>🔵 Чекає підтвердження партнера</b>
+          ${o.pending.crm_old ? `<div class="small">Старе замовлення в LP-CRM № <b>${esc(o.pending.crm_old)}</b> анульовано — скасуйте його в CRM; нове передайте після підтвердження.</div>` : ''}
+          ${o.pending.changes.length ? `<ul class="small" style="margin:0;padding-left:18px">${o.pending.changes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+          <div class="small muted">Змінив(ла): ${esc(o.pending.by)}${o.pending.at ? ` · ${esc(fmtDateTime(o.pending.at))}` : ''}. Доки партнер не підтвердить, у LP-CRM не передається.</div></div>` : ''}
       ${o.no_supply && !closed ? '<div class="alert bad" style="margin-bottom:12px"><b>Без закупівлі.</b> Товари не з закупівлі партнера — виставте рахунок/накладну нижче і позначте оплату.</div>' : ''}
       ${!o.no_supply && o.pay !== 'paid' && !closed ? `<div class="alert warn" style="margin-bottom:12px">Закупівля <a href="#/b2borders/${o.supply_id}">${esc(o.supply_number)}</a> ще не оплачена.</div>` : ''}
       <div class="form-page">
@@ -910,7 +914,7 @@ export function createB2bPages(ctx = {}) {
             <h3>LP-CRM</h3>
             ${missing.length ? `<div class="alert bad small">Бракує: <b>${missing.map(esc).join(', ')}</b> — «Додати в CRM» не спрацює, доки партнер їх не додасть.</div>` : ''}
             ${o.crm_id ? `<div>Замовлення № <b>${esc(o.crm_id)}</b>${o.crm_status ? ` · <span class="badge info">${esc(o.crm_status)}</span>` : ''}</div>` : ''}
-            ${!closed && o.status === 'new' ? `<button class="btn primary" id="clCrm" ${cfg.on ? '' : 'disabled'}>Додати в CRM</button>
+            ${!closed && o.status === 'new' ? `<button class="btn primary" id="clCrm" ${cfg.on && !o.pending ? '' : 'disabled'}>Додати в CRM</button>${o.pending ? '<div class="small muted">Спершу партнер має підтвердити зміни.</div>' : ''}
               ${cfg.on ? '' : '<div class="small muted">Передача в LP-CRM ще вимкнена (вкладка «Замовлення клієнтів» → «Налаштування CRM»). Поки що створіть замовлення в CRM вручну і впишіть номер нижче.</div>'}` : ''}
             ${!closed ? `<form id="clLink" class="btn-row"><input name="crm_id" value="${esc(o.crm_id)}" inputmode="numeric" placeholder="№ або код замовлення LP-CRM" style="max-width:220px" aria-label="Номер замовлення LP-CRM">
               <button class="btn">${o.crm_id ? 'Змінити номер' : 'Прив’язати номер'}</button>${o.crm_id ? '<button type="button" class="btn" id="clRefresh">Оновити статус</button>' : ''}</form>` : ''}
@@ -1036,7 +1040,8 @@ export function createB2bPages(ctx = {}) {
     if (src && !opt.supplies.some((s) => String(s.id) === src)) src = '';
     let q = '';
     const m = modal(`Змінити замовлення ${o.number}`, `<form id="ceF" class="form-stack">
-        ${o.status === 'crm' ? `<div class="alert warn small">Замовлення вже в LP-CRM${o.crm_id ? ` (№ <b>${esc(o.crm_id)}</b>)` : ''} — після збереження змініть його там вручну (API LP-CRM не дає змінювати).</div>` : ''}
+        ${o.status === 'crm' ? `<div class="alert warn small">Замовлення вже в LP-CRM${o.crm_id ? ` (№ <b>${esc(o.crm_id)}</b>)` : ''}. Після збереження старе замовлення вважається анульованим: партнер (особисто й у групі) отримає, що було і що буде, замовлення повернеться в «Нові»; скасуйте старе в CRM і передайте нове після підтвердження партнером.</div>`
+          : '<div class="small muted">Після збереження партнер має підтвердити зміни — до того замовлення не передається в LP-CRM.</div>'}
         <div class="grid2"><label class="f"><span>ПІБ клієнта</span><input name="client_name" value="${esc(o.client_name)}"></label>
           <label class="f"><span>Телефон</span><input name="client_phone" value="${esc(o.client_phone)}" inputmode="tel"></label></div>
         <div class="grid2"><label class="f"><span>ТТН</span><input name="ttn" value="${esc(o.ttn || '')}" inputmode="numeric"></label>
@@ -1045,20 +1050,35 @@ export function createB2bPages(ctx = {}) {
         <div id="ceList"></div>
         <label class="f"><span>Коментар</span><textarea name="comment" rows="2">${esc(o.comment || '')}</textarea></label>
       </form>`, { wide: true, footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="ceSave">Зберегти</button>' });
+    const extra = new Map(); // інші товари з каталогу, яких немає в закупівлі-джерелі
+    const catMap = new Map(opt.catalog.map((p) => [p.product_id, p]));
+    for (const i of items) if (!o.no_supply && !(opt.supplies.find((s) => String(s.id) === src)?.items || []).some((x) => x.product_id === i.product_id)) extra.set(i.product_id, { product_id: i.product_id, name: i.name, price: i.price, left: 0 });
     const list = () => {
-      if (src) return (opt.supplies.find((s) => String(s.id) === src)?.items || []).map((i) => ({ ...i, hint: `залишок ${i.left}` }));
+      if (src) {
+        const sItems = (opt.supplies.find((s) => String(s.id) === src)?.items || []).map((i) => ({ ...i, hint: `залишок ${i.left}` }));
+        return [...sItems, ...[...extra.values()].filter((x) => !sItems.some((i) => i.product_id === x.product_id)).map((x) => ({ ...x, hint: 'немає в закупівлі — буде додано' }))];
+      }
       const ql = q.trim().toLowerCase();
       const all = opt.catalog.map((p) => ({ ...p, hint: '' }));
       return all.filter((p) => qty.get(p.product_id) || !ql || p.name.toLowerCase().includes(ql) || String(p.product_id) === ql).slice(0, 120);
     };
     const draw = () => {
       const l = list();
-      $('#ceList', m.el).innerHTML = `${src ? '' : `<input id="ceQ" placeholder="Пошук товару в каталозі партнера" value="${esc(q)}">`}
+      $('#ceList', m.el).innerHTML = `${src ? `<label class="f"><span>Замінити / додати інший товар (з каталогу партнера)</span><input id="ceAdd" list="ceCat" placeholder="Почніть вводити назву або ID">
+          <datalist id="ceCat">${opt.catalog.map((p) => `<option value="${p.product_id} · ${esc(p.name)}">`).join('')}</datalist></label>` : `<input id="ceQ" placeholder="Пошук товару в каталозі партнера" value="${esc(q)}">`}
         <table class="list"><thead><tr><th>Товар</th><th class="r">Ціна</th><th class="r">К-сть</th></tr></thead><tbody>
         ${l.map((p) => `<tr><td>${esc(p.name)}<div class="small muted">ID ${p.product_id}${p.hint ? ` · ${esc(p.hint)}` : ''}</div></td><td class="r nowrap">${money(p.price)}</td>
           <td class="r"><input data-cq="${p.product_id}" type="number" min="0" step="1" value="${qty.get(p.product_id) || ''}" style="width:76px" aria-label="Кількість"></td></tr>`).join('')
           || '<tr><td colspan="3" class="small muted">Немає товарів.</td></tr>'}</tbody></table>`;
       $$('[data-cq]', m.el).forEach((x) => (x.onchange = () => { const v = Math.max(0, Math.floor(n2(x.value))); if (v) qty.set(Number(x.dataset.cq), v); else qty.delete(Number(x.dataset.cq)); }));
+      const ai = $('#ceAdd', m.el);
+      if (ai) ai.onchange = () => {
+        const p = catMap.get(parseInt(ai.value, 10));
+        if (!p) { toast('Оберіть товар зі списку', true); return; }
+        if (!list().some((x) => x.product_id === p.product_id)) extra.set(p.product_id, { product_id: p.product_id, name: p.name, price: p.price, left: 0 });
+        qty.set(p.product_id, (qty.get(p.product_id) || 0) + 1);
+        draw();
+      };
       const qi = $('#ceQ', m.el);
       if (qi) qi.oninput = () => { q = qi.value; const pos = qi.selectionStart; draw(); const n = $('#ceQ', m.el); n.focus(); n.setSelectionRange(pos, pos); };
     };
@@ -1069,13 +1089,25 @@ export function createB2bPages(ctx = {}) {
       const ids = new Set(list().map((p) => p.product_id));
       const its = [...qty].filter(([id, n]) => n > 0 && (src ? ids.has(id) : true)).map(([product_id, n]) => ({ product_id, qty: n }));
       if (!its.length) { toast('Вкажіть кількість хоча б одного товару', true); return; }
-      e.currentTarget.disabled = true;
+      // Бракує в закупівлі — додати в закупівлю (з рахунком — перевиставлення).
+      let addToSupply = false;
+      if (src) {
+        const l = new Map(list().map((x) => [x.product_id, x.left ?? 0]));
+        const short = its.filter((x) => x.qty > Math.max(0, l.get(x.product_id) ?? 0)).map((x) => `${(list().find((p) => p.product_id === x.product_id) || {}).name || x.product_id} × ${x.qty - Math.max(0, l.get(x.product_id) ?? 0)}`);
+        const sup = opt.supplies.find((s) => String(s.id) === src);
+        if (short.length) {
+          if (!(await confirmDanger(`Додати в закупівлю ${sup?.number || ''}?`, `Бракує в закупівлі: ${short.join(', ')}. Товар буде додано в закупівлю${/Очікує рахунок|Чернетка/.test(sup?.status_name || '') ? '' : ' — рахунок доведеться переробити (запит у «Фінансові питання»)'}.`, 'Додати й зберегти'))) return;
+          addToSupply = true;
+        }
+      }
+      const btn = e.currentTarget;
+      btn.disabled = true;
       try {
-        const r = await api('PUT', `/api/b2b/clients/${o.id}/edit`, { ...f, supply_id: src || null, items: its });
+        const r = await api('PUT', `/api/b2b/clients/${o.id}/edit`, { ...f, supply_id: src || null, items: its, add_to_supply: addToSupply });
         m.close();
-        toast(r.inCrm ? `Збережено. Змініть замовлення і в LP-CRM${r.inCrm !== 'так' ? ` (№ ${r.inCrm})` : ''}` : 'Збережено');
+        toast(r.crmOld ? `Збережено. Скасуйте в LP-CRM старе замовлення № ${r.crmOld}; нове — після підтвердження партнером` : r.pending ? 'Збережено — партнер має підтвердити зміни' : 'Збережено');
         viewClient(o.id);
-      } catch (er) { toast(er.message, true); e.currentTarget.disabled = false; }
+      } catch (er) { toast(er.message, true); btn.disabled = false; }
     };
   }
 

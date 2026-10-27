@@ -411,6 +411,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     const p = await myPartner(c);
     const o = await myClientOrder(c, p);
     if (o.status !== 'new') throw fail(400, 'Замовлення вже передане в роботу — змінити його може лише менеджер.');
+    if (o.pending) throw fail(400, 'Менеджер змінив це замовлення — спершу підтвердіть або відхиліть зміни.');
     const b = await c.req.json();
     const f = clientFields(b);
     if (f.ttn) { const dup = await labelDup({ ttn: f.ttn }, o.id); if (dup) throw fail(400, await ttnDupMsg(f.ttn, dup, p.id)); }
@@ -453,42 +454,132 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     const supplies = [...map.values()].filter((s) => s.id === o.supply_id || s.items.some((i) => i.left > 0));
     return c.json({ supplies, catalog: await hooks.partnerCatalog(o.partner_id) });
   });
+  // Знімок «як було» (для підтвердження / відхилення партнером) і опис змін.
+  const snapOf = async (o) => ({
+    supply_id: o.supply_id, client_name: o.client_name, client_phone: o.client_phone, ttn: o.ttn || '', comment: o.comment || '', total: o.total,
+    status: o.status, crm_id: o.crm_id || '', crm_ext: o.crm_ext || '', crm_status: o.crm_status || '', crm_sent_at: o.crm_sent_at || '',
+    items: await db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]),
+  });
+  function diffOf(a, b) {
+    const ch = [];
+    if (a.client_name !== b.client_name) ch.push(`ПІБ: ${a.client_name} → ${b.client_name}`);
+    if (a.client_phone !== b.client_phone) ch.push(`телефон: ${a.client_phone} → ${b.client_phone}`);
+    if ((a.ttn || '') !== (b.ttn || '')) ch.push(`ТТН: ${a.ttn || '—'} → ${b.ttn || '—'}`);
+    if ((a.comment || '') !== (b.comment || '')) ch.push(`коментар: ${b.comment || '—'}`);
+    if (a.supply_id !== b.supply_id) ch.push(`закупівля: ${a.supply_id ? orderNo(a.supply_id) : '—'} → ${b.supply_id ? orderNo(b.supply_id) : '—'}`);
+    const am = new Map(a.items.map((i) => [i.product_id, i]));
+    for (const i of b.items) { const x = am.get(i.product_id); if (!x) ch.push(`+ ${i.name} × ${i.qty}`); else if (x.qty !== i.qty) ch.push(`${i.name}: ${x.qty} → ${i.qty} шт`); }
+    for (const x of a.items) if (!b.items.some((i) => i.product_id === x.product_id)) ch.push(`− ${x.name} × ${x.qty}`);
+    return ch;
+  }
+  const brief = (x) => `${x.client_name}, ${phoneTxt(x.client_phone)}${x.ttn ? `, ТТН ${x.ttn}` : ''}\n`
+    + `${x.items.map((i) => `   ${i.name} × ${i.qty} — ${uah(i.price)}`).join('\n')}\n   ${x.supply_id ? `із закупівлі ${orderNo(x.supply_id)}` : 'без закупівлі'} · разом ${uah(x.total)}`;
+  const phoneTxt = (ph) => (String(ph).length === 12 ? `+${ph}` : ph);
+
   app.put('/api/b2b/clients/:id/edit', async (c) => {
     need(c, 'b2b.admin');
-    const o = await orderOf(c.req.param('id'));
+    let o = await orderOf(c.req.param('id'));
     if (o.kind !== 'client') throw fail(404, 'Замовлення не знайдено.');
     if (o.status === 'cancelled') throw fail(400, 'Замовлення скасовано.');
     const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [o.partner_id]);
     const b = await c.req.json();
     const f = clientFields(b);
     if (f.ttn) { const dup = await labelDup({ ttn: f.ttn }, o.id); if (dup) throw fail(400, await ttnDupMsg(f.ttn, dup, p.id)); }
+    // Товару немає в закупівлі або бракує залишку — додаємо в закупівлю (з рахунком — перевиставлення рахунку).
+    const supplyId = parseInt(b.supply_id, 10) || null;
+    let supplyNote = null;
+    if (supplyId) {
+      const left = new Map((await supplyLeft(supplyId, o.id)).map((r) => [r.product_id, r.left]));
+      const add = new Map();
+      for (const it of Array.isArray(b.items) ? b.items : []) {
+        const id = parseInt(it.product_id, 10);
+        const n = Math.floor(Number(it.qty)) || 0;
+        if (id && n > 0) add.set(id, (add.get(id) || 0) + n);
+      }
+      for (const [id, n] of [...add]) { const need = n - Math.max(0, left.get(id) ?? 0); if (need > 0) add.set(id, need); else add.delete(id); }
+      if (add.size) {
+        if (!b.add_to_supply) throw fail(400, `Цих товарів немає в закупівлі ${orderNo(supplyId)} (або бракує залишку) — підтвердіть додавання в закупівлю.`);
+        supplyNote = await hooks.supplyAdd(c, supplyId, add);
+      }
+    }
+    const before = o.pending ? JSON.parse(o.pending).before : await snapOf(o);
     const cur = await supplyOf(o.supply_id);
-    const before = await db.all(`SELECT product_id, name, qty FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
     const it = await buildItems(p, b, o.id, { openId: cur?.status === 'open' ? cur.id : null, total: o.total }, { skipLimits: true });
     if (it.toOpen) it.openId = await ensureOpen(p);
+    const wasCrm = o.status === 'crm';
+    const oldCrm = o.crm_id || o.crm_ext || '';
+    const now = nowIso();
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, it.items),
       [`UPDATE b2b_orders SET supply_id = ?, client_name = ?, client_phone = ?, ttn = ?, total = ?, comment = ?, updated_at = ? WHERE id = ?`,
-        [it.supplyId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, nowIso(), o.id]],
+        [it.supplyId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, now, o.id]],
+      // Було в CRM — старе замовлення анульоване: знову «Нове», після підтвердження партнером передається в CRM як нове.
+      ...(wasCrm ? [[`UPDATE b2b_orders SET status = 'new', crm_id = '', crm_ext = '', crm_status = '', crm_sent_at = '', crm_old = ? WHERE id = ?`, [oldCrm, o.id]]] : []),
     ]);
     if (it.openId) await rebuildOpen(it.openId);
     if (cur?.status === 'open' && cur.id !== it.openId) await rebuildOpen(cur.id);
-    const changes = [];
-    if (f.client_name !== o.client_name) changes.push(`ПІБ: ${o.client_name} → ${f.client_name}`);
-    if (f.client_phone !== o.client_phone) changes.push(`телефон: ${o.client_phone} → ${f.client_phone}`);
-    if (f.ttn !== (o.ttn || '')) changes.push(`ТТН: ${o.ttn || '—'} → ${f.ttn || '—'}`);
-    if (f.comment !== (o.comment || '')) changes.push('коментар');
-    const newSupply = it.supplyId || it.openId;
-    if (newSupply !== o.supply_id) changes.push(`закупівля: ${o.supply_id ? orderNo(o.supply_id) : '—'} → ${orderNo(newSupply)}`);
-    const bm = new Map(before.map((i) => [i.product_id, i]));
-    for (const i of it.items) { const x = bm.get(i.product_id); if (!x) changes.push(`+ ${i.name} × ${i.qty}`); else if (x.qty !== i.qty) changes.push(`${i.name}: ${x.qty} → ${i.qty} шт`); }
-    for (const x of before) if (!it.items.some((i) => i.product_id === x.product_id)) changes.push(`− ${x.name} × ${x.qty}`);
-    await log(o.id, c.get('user'), `змінив менеджер: ${changes.join('; ') || 'без змін'} — ${uah(it.total)}`.slice(0, 1800));
-    if (changes.length) {
-      await tgPartner(o.partner_id, `✏️ <b>Замовлення клієнта ${orderNo(o.id)} змінив менеджер</b> (${h(f.client_name)})\n${changes.slice(0, 15).map(h).join('\n')}\n${link(c, `pclients/${o.id}`)}`);
+    o = await orderOf(o.id);
+    const after = await snapOf(o);
+    const changes = diffOf(before, after);
+    const crmOld = wasCrm ? oldCrm : (o.pending ? JSON.parse(o.pending).crm_old || '' : '');
+    const by = userName(c.get('user'));
+    await db.run(`UPDATE b2b_orders SET pending = ? WHERE id = ?`,
+      [changes.length || crmOld ? JSON.stringify({ before, changes, by, at: now, crm_old: crmOld }) : '', o.id]);
+    await log(o.id, c.get('user'), `змінив менеджер: ${changes.join('; ') || 'без змін'} — ${uah(it.total)}${wasCrm ? ` · старе замовлення в CRM № ${oldCrm} анульовано` : ''}${changes.length ? ' · чекає підтвердження партнера' : ''}`.slice(0, 1800));
+    if (changes.length || wasCrm) {
+      const url = link(c, `pclients/${o.id}`);
+      if (wasCrm) {
+        const text = `♻️ <b>Замовлення ${orderNo(o.id)} змінив менеджер</b>\n\n`
+          + `❌ Старе замовлення в LP-CRM № <b>${h(oldCrm)}</b> анульовано (утилізовано):\n<pre>${h(brief(before))}</pre>\n`
+          + `✅ Буде створене нове замовлення з новою інформацією:\n<pre>${h(brief(after))}</pre>\n`
+          + 'Підтвердіть зміни в кабінеті — після цього нове замовлення піде в роботу.';
+        await tgPartner(o.partner_id, `${text}\n${url}`);
+        await tgGroup(o.partner_id, text);
+        await tgAdmins(`♻️ ${orderNo(o.id)} змінено: <b>скасуйте в LP-CRM старе замовлення № ${h(oldCrm)}</b>. Після підтвердження партнером передайте нове («Додати в CRM»).\n${link(c, `b2bclients/${o.id}`)}`);
+      } else {
+        await tgPartner(o.partner_id, `✏️ <b>Замовлення клієнта ${orderNo(o.id)} змінив менеджер</b> (${h(f.client_name)})\n${changes.slice(0, 15).map(h).join('\n')}\n\nПідтвердіть або відхиліть зміни в кабінеті.\n${url}`);
+      }
     }
-    return c.json({ ok: true, total: it.total, inCrm: o.status === 'crm' ? (o.crm_id || 'так') : '' });
+    return c.json({ ok: true, total: it.total, pending: changes.length > 0, crmOld: wasCrm ? oldCrm : '', supply: supplyNote });
+  });
+
+  // Партнер: підтвердити зміни менеджера або відхилити (повернути як було).
+  async function pendingOrder(c) {
+    const p = await myPartner(c);
+    const o = await myClientOrder(c, p);
+    if (!o.pending) throw fail(400, 'Немає змін, що чекають підтвердження.');
+    return { p, o, pend: JSON.parse(o.pending) };
+  }
+  app.post('/api/b2b/p/clients/:id/confirm', async (c) => {
+    const { p, o } = await pendingOrder(c);
+    await db.run(`UPDATE b2b_orders SET pending = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+    await log(o.id, c.get('user'), 'партнер підтвердив зміни менеджера');
+    await tgAdmins(`✅ «${h(p.name)}» підтвердив зміни в ${orderNo(o.id)} (${h(o.client_name)})${o.status === 'new' ? ' — можна передавати в CRM' : ''}.\n${link(c, `b2bclients/${o.id}`)}`);
+    return c.json({ ok: true });
+  });
+  app.post('/api/b2b/p/clients/:id/reject', async (c) => {
+    const { p, o, pend } = await pendingOrder(c);
+    const bf = pend.before;
+    const s = bf.supply_id ? await db.get(`SELECT id, status FROM b2b_orders WHERE id = ?`, [bf.supply_id]) : null;
+    if (bf.supply_id && (!s || s.status === 'cancelled')) throw fail(400, 'Попередньої закупівлі вже немає — повернути як було не вийде. Зверніться до менеджера.');
+    if (s && s.status !== 'open') {
+      const left = new Map((await supplyLeft(s.id, o.id)).map((r) => [r.product_id, r.left]));
+      for (const i of bf.items) if ((left.get(i.product_id) ?? 0) < i.qty) throw fail(400, `У закупівлі ${orderNo(s.id)} уже немає «${i.name}» (${i.qty} шт.) — повернути як було не вийде. Зверніться до менеджера.`);
+    }
+    const curSupply = o.supply_id;
+    await db.batch([
+      [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
+      ...itemRows(o.id, bf.items.map((i) => ({ ...i, article: i.article || '' }))),
+      [`UPDATE b2b_orders SET supply_id = ?, client_name = ?, client_phone = ?, ttn = ?, comment = ?, total = ?, status = ?, crm_id = ?, crm_ext = ?, crm_status = ?, crm_sent_at = ?,
+          crm_old = '', pending = '', updated_at = ? WHERE id = ?`,
+        [bf.supply_id, bf.client_name, bf.client_phone, bf.ttn, bf.comment, bf.total, bf.status, bf.crm_id, bf.crm_ext, bf.crm_status, bf.crm_sent_at, nowIso(), o.id]],
+    ]);
+    if (s?.status === 'open') await rebuildOpen(s.id);
+    if (curSupply && curSupply !== bf.supply_id) await rebuildOpen(curSupply);
+    await log(o.id, c.get('user'), 'партнер відхилив зміни менеджера — повернуто як було');
+    await tgAdmins(`↩️ «${h(p.name)}» <b>відхилив</b> зміни в ${orderNo(o.id)} (${h(bf.client_name)}) — повернуто як було.${pend.crm_old ? ` Старе замовлення в LP-CRM № ${h(pend.crm_old)} знову чинне — якщо ви його вже скасували, відновіть.` : ''}\n${link(c, `b2bclients/${o.id}`)}`);
+    return c.json({ ok: true });
   });
 
   app.post('/api/b2b/p/clients/:id/cancel', async (c) => {
@@ -600,6 +691,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     if (!k.on) throw fail(400, 'Передачу в LP-CRM ще не ввімкнено. Коли ключ LP-CRM отримає дозвіл на addNewOrder — увімкніть її в «Налаштуваннях CRM» (вкладка «Замовлення клієнтів»). Поки що створіть замовлення в CRM вручну і впишіть його номер.');
     if (!k.office) throw fail(400, 'Не вказано ID відділу B2B у «Налаштуваннях CRM».');
     if (!k.creds.subdomain || !k.creds.key) throw fail(400, 'Не налаштовано LP-CRM: піддомен і API-ключ у «Налаштуваннях».');
+    if (o.pending) throw fail(400, 'Партнер ще не підтвердив зміни в замовленні — передати в CRM можна після підтвердження.');
     const missing = await missingDocs(o);
     if (missing.length) throw fail(400, `Бракує документів: ${missing.join(', ')}. Попросіть партнера додати їх у замовленні (або прив’яжіть номер CRM вручну).`);
     // Захист від подвійного натискання: «бронюємо» відправку.
@@ -663,6 +755,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     const val = String(b.crm_id ?? '').replace(/\s/g, '');
     const isCode = CODE_RE.test(val);
     if (val && !isCode && !ID_RE.test(val)) throw fail(400, 'Номер замовлення LP-CRM — лише цифри.');
+    if (val && o.pending) throw fail(400, 'Партнер ще не підтвердив зміни в замовленні — прив’язати номер CRM можна після підтвердження.');
     const crmId = isCode ? '' : val;
     const crmExt = isCode ? val : '';
     const status = val ? 'crm' : 'new';
