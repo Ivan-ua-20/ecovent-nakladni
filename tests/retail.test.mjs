@@ -102,7 +102,7 @@ const status = async (fn) => { try { await fn(); return 200; } catch (e) { retur
 assert.match(await errOf(() => req('POST', '/api/rzs/accounts', { token: 'x'.repeat(30) })), /токен/, 'чужий токен — зрозуміла помилка');
 const acc = await req('POST', '/api/rzs/accounts', { name: 'Ековент', token: TOKEN, price_list_id: '123', crm_office: '7' });
 let accs = await req('GET', '/api/rzs/accounts');
-assert.equal(accs.length, 1);
+assert.equal(accs.length, 1, 'один кабінет');
 assert.ok(!JSON.stringify(accs).includes(TOKEN), 'токен не віддається в браузер');
 const hook = accs[0].hook;
 assert.equal(hook.url, `https://ecovent.test/api/rzs/hook/${acc.id}`);
@@ -111,8 +111,8 @@ assert.ok(hook.user && hook.pass.length >= 12);
 // ---------- 2. Синхронізація: замовлення, нові артикули, автозіставлення з каталогом ----------
 await req('POST', '/api/rzs/sync', { force: true });
 let list = await req('GET', '/api/rzs/orders');
-assert.equal(list.rows.length, 2);
-assert.equal(list.counts.new, 2);
+assert.equal(list.rows.length, 2, 'два замовлення');
+assert.equal(list.counts.new, 2, 'лічильник «Нове»');
 let prods = await req('GET', '/api/rzs/products');
 assert.deepEqual(prods.map((p) => p.code).sort(), ['EV-100', 'EV-200']);
 assert.equal(prods.find((p) => p.code === 'EV-100').product_id, 501, 'артикул знайдено в каталозі');
@@ -120,8 +120,9 @@ assert.equal(prods.find((p) => p.code === 'EV-100').name, 'Рекуперато�
 calls.list = 0;
 await req('POST', '/api/rzs/sync', {});
 assert.equal(calls.list, 0, 'повторне оновлення протягом 2 хв — без запиту до Розетки');
-assert.equal((await req('GET', '/api/rzs/orders?status=todo')).rows.length, 2);
-assert.equal((await req('GET', '/api/rzs/orders?q=коваль')).rows.length, 1);
+assert.equal((await req('GET', '/api/rzs/orders?status=todo')).rows.length, 2, 'фільтр «до підтвердження»');
+assert.equal((await req('GET', '/api/rzs/orders?q=коваль')).rows.length, 1, 'пошук кирилицею без регістру');
+assert.equal((await req('GET', '/api/rzs/orders?q=0501112233')).rows.length, 1, 'пошук за телефоном');
 
 // ---------- 3. Вебхук: Basic-логін, перечитування замовлення, позначка документів ----------
 const basic = (u, p) => ({ 'Content-Type': 'application/json', Authorization: `Basic ${btoa(`${u}:${p}`)}` });
@@ -129,13 +130,13 @@ assert.equal((await send('POST', `/api/rzs/hook/${acc.id}`, { orderId: ID1 }, ba
 ORDERS.get(ID1).documentLink = 'https://edo.vchasno.ua/doc/1';
 ORDERS.get(ID1).incomingInvoiceNumber = 'ВЧ-15';
 const hr = await req('POST', `/api/rzs/hook/${acc.id}`, { event: 'dropshipping.order.updated', data: { orderId: ID1 } }, basic(hook.user, hook.pass));
-assert.equal(hr.saved, 1);
+assert.equal(hr.saved, 1, 'вебхук перечитав замовлення');
 let o1 = await req('GET', `/api/rzs/orders/${ID1}`);
 assert.equal(o1.document_link, 'https://edo.vchasno.ua/doc/1');
 assert.equal(o1.invoice_no, 'ВЧ-15');
 assert.ok(o1.docs_at, 'час появи документів позначено');
 const docsAt = o1.docs_at;
-assert.equal((await req('GET', '/api/rzs/orders?status=docs')).rows.length, 1);
+assert.equal((await req('GET', '/api/rzs/orders?status=docs')).rows.length, 1, 'фільтр «з документами»');
 assert.ok((await req('GET', '/api/rzs/accounts'))[0].hook_at, 'час останнього вебхука');
 
 // ---------- 4. Підтвердження: серійні номери, повне підтвердження ----------
@@ -180,7 +181,7 @@ assert.equal(add.phone, '380501112233');
 assert.ok(add.comment.includes('900001') && add.comment.includes('20450000000001'), 'у коментарі — № Розетки і ТТН');
 assert.ok(decodeURIComponent(add.products.replace(/\+/g, ' ')).includes('s:5:"price";s:6:"7200.5"'), 'ціна — закупівельна');
 assert.match(await errOf(() => req('POST', `/api/rzs/orders/${ID1}/crm`, {})), /Уже в LP-CRM/, 'двічі — ні');
-assert.equal((await req('GET', '/api/rzs/orders?status=nocrm')).rows.length, 1);
+assert.equal((await req('GET', '/api/rzs/orders?status=nocrm')).rows.length, 1, 'фільтр «не в LP-CRM»');
 
 // ---------- 8. Прайс ----------
 await req('PUT', '/api/rzs/products/EV-200', { purchase_price: 3000, rrp: 4100, stock: 0 });

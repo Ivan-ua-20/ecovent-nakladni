@@ -228,7 +228,14 @@ export function mountRetail(app, { db, fetchFn }) {
     else if (st === 'nocrm') where.push(`o.crm_id = '' AND o.crm_code = '' AND o.status NOT IN ('deleted', 'closed', 'delivery_refused')`);
     else if (st === 'docs') where.push(`o.document_link != ''`);
     else if (st && RZS_STATUS[st]) { where.push('o.status = ?'); params.push(st); }
-    if (q) { where.push(`(LOWER(o.order_num) LIKE ? OR LOWER(o.customer) LIKE ? OR o.phone LIKE ? OR o.ttn LIKE ?)`); params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`); }
+    // LIKE у SQLite не зважає на регістр лише для латиниці — для кирилиці пробуємо «як є», малими і з великої.
+    if (q) {
+      const raw = String(c.req.query('q') || '').trim();
+      const cap = q.replace(/(^|[\s'-])(\S)/g, (m, a, b) => a + b.toUpperCase());
+      const vars = [...new Set([raw, q, cap])].map((v) => `%${v}%`);
+      where.push(`(o.order_num LIKE ? OR o.phone LIKE ? OR o.ttn LIKE ? OR ${vars.map(() => 'o.customer LIKE ?').join(' OR ')})`);
+      params.push(`%${q}%`, `%${q.replace(/\D/g, '') || q}%`, `%${q}%`, ...vars);
+    }
     const [rows, counts, accs] = await Promise.all([
       db.all(`SELECT o.*, a.name AS account FROM rzs_orders o LEFT JOIN rzs_accounts a ON a.id = o.account_id WHERE ${where.join(' AND ')} ORDER BY o.created_at DESC LIMIT 300`, params),
       db.all(`SELECT status, COUNT(*) AS n FROM rzs_orders WHERE created_at >= ? GROUP BY status`, [since]),
