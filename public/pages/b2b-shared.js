@@ -45,11 +45,16 @@ export const ROLE_HINT = {
   staff: 'каталог, закупівлі, замовлення клієнтів, юрособи (без команди)',
   viewer: 'лише перегляд, без змін',
 };
+// Хто підключив Telegram-бота і який акаунт.
+export const tgCell = (t) => (t?.connected
+  ? `<span class="badge ok">✓ підключено</span><div>${esc(t.name || '')}</div>${t.at ? `<div class="muted">${esc(fmtDT(t.at))}</div>` : ''}`
+  : '<span class="muted">не підключено</span>');
 export function teamTable(users, { me = 0, showAdded = true, editable = true } = {}) {
-  return `<table class="list"><thead><tr><th>Користувач</th><th>Роль</th>${showAdded ? '<th class="hide-m">Хто додав</th>' : ''}<th>Стан</th><th></th></tr></thead><tbody>
+  return `<table class="list"><thead><tr><th>Користувач</th><th>Роль</th><th class="hide-m">Telegram-бот</th>${showAdded ? '<th class="hide-m">Хто додав</th>' : ''}<th>Стан</th><th></th></tr></thead><tbody>
     ${users.map((u) => `<tr>
       <td><b>${esc(u.login)}</b>${u.id === me ? ' <span class="small muted">(ви)</span>' : ''}<div class="small muted">${esc(u.name || '')}</div></td>
       <td class="small">${esc(u.partner_role_name || '')}</td>
+      <td class="small hide-m">${tgCell(u.tg)}</td>
       ${showAdded ? `<td class="small hide-m">${u.added_by_partner ? `<span class="badge info">партнер</span> ${esc(u.added_by_name)}` : esc(u.added_by_name || 'Ековент')}
         <div class="muted">${esc(fmtDT(u.created_at))}</div></td>` : ''}
       <td>${u.active ? '<span class="badge ok">активний</span>' : '<span class="badge bad">вимкнений</span>'}</td>

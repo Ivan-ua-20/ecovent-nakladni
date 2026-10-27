@@ -6,7 +6,15 @@ export function createUsersPages(ctx) {
   const { can, loadBoot, activeFops, fopById, tplById } = ctx;
 
 async function viewUsers() {
-  const [{ users, roles }, vals] = await Promise.all([api('GET', '/api/users'), can('analytics') ? api('GET', '/api/an/values').catch(() => null) : null]);
+  const [{ users, roles }, vals, tgInfo] = await Promise.all([api('GET', '/api/users'), can('analytics') ? api('GET', '/api/an/values').catch(() => null) : null,
+    api('GET', '/api/users/tg').catch(() => null)]);
+  const tgOf = new Map((tgInfo?.users || []).map((t) => [String(t.id), t]));
+  const tgCell = (u) => {
+    const t = tgOf.get(String(u.id));
+    if (!t) return '';
+    return t.connected ? `<span class="badge ok">✓ підключено</span><div class="small">${esc(t.name || '')}</div>${t.at ? `<div class="small muted">${esc(fmtDateTime(t.at))}</div>` : ''}`
+      : '<span class="small muted">не підключено</span>';
+  };
   const crmUsers = (vals?.users || []).map((x) => x.v);
   const me = ctx.boot.user;
   const assignable = ['admin', 'admin_lite', 'manager', 'viewer'];
@@ -16,12 +24,14 @@ async function viewUsers() {
     <div class="alert info" style="margin-bottom:14px">
       <b>Адміністратор</b> — усе, включно з API, користувачами й аналітикою. <b>Менеджер</b> — накладні, рахунки, довідники і власна аналітика (лише замовлення його логінів LP-CRM, без таргетів).
       <b>Перегляд</b> — лише дивитися, друкувати й завантажувати.</div>
-    <table class="list"><thead><tr><th>Логін</th><th>Ім’я</th><th>Роль</th><th>Логіни LP-CRM</th><th>Аналітика</th><th>Стан</th><th></th></tr></thead><tbody>
+    ${tgInfo ? `<div class="small muted" style="margin-bottom:8px">Telegram-бот${tgInfo.bot ? ` <b>@${esc(tgInfo.bot)}</b>` : ''}: підключили ${tgInfo.users.filter((t) => t.connected).length} з ${tgInfo.users.length}. Кожен підключає себе сам — «Telegram» угорі сторінки.</div>` : ''}
+    <table class="list"><thead><tr><th>Логін</th><th>Ім’я</th><th>Роль</th><th>Логіни LP-CRM</th><th>Telegram-бот</th><th>Аналітика</th><th>Стан</th><th></th></tr></thead><tbody>
       ${users.map((u) => `<tr>
         <td><b>${esc(u.login)}</b>${String(u.id) === String(me.id) ? ' <span class="badge info">це ви</span>' : ''}</td>
         <td>${esc(u.name)}</td>
         <td>${u.role === 'owner' ? `<span class="badge ok">${esc(u.role_name)}</span>` : esc(u.role_name)}</td>
         <td class="small">${u.crm_logins.length ? u.crm_logins.map(esc).join(', ') : (u.role === 'manager' ? '<span class="muted">не прив’язано</span>' : '')}</td>
+        <td>${tgCell(u)}</td>
         <td>${me.role === 'owner' && u.role !== 'owner'
           ? `<label class="check" title="Доступ до розділу «Аналітика» (змінює лише власник)"><input type="checkbox" data-an="${u.id}" ${u.analytics ? 'checked' : ''}> ${u.analytics ? 'так' : 'ні'}</label>`
           : (u.analytics ? '<span class="badge ok">так</span>' : '<span class="badge">ні</span>')}</td>

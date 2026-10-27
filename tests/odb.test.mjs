@@ -48,6 +48,7 @@ const fetchFn = async (url, opts = {}) => {
     const ok = (result) => new Response(JSON.stringify({ ok: true, result }));
     if (m === 'getMe') return ok({ id: 1, is_bot: true, username: 'ecovent_pay_bot' });
     if (m === 'setWebhook') { tgHook = b; return ok(true); }
+    if (m === 'getChat') return ok({ id: b.chat_id, type: 'private', first_name: 'Олег', last_name: 'Петренко', username: 'oleg' });
     if (m === 'sendMessage') { tgSent.push(b); return ok({ message_id: tgSent.length }); }
     return ok(true);
   }
@@ -284,6 +285,15 @@ assert.match(tgSent.at(-1).text, /застаріло/);
 // власник: підключається і вмикає «усі оплати» + «усі надходження»
 await sendStart((await req('POST', '/api/tg/link')).url.split('start=')[1], 777);
 await req('PUT', '/api/tg/me', { allLinks: true, allTx: true });
+// хто підключив бота і який акаунт: назва зберігається при підключенні, для старих — з getChat
+let ut = await req('GET', '/api/users/tg');
+assert.equal(ut.bot, 'ecovent_pay_bot');
+assert.equal(ut.users.filter((x) => x.connected).length, 2);
+assert.ok(ut.users.every((x) => !x.connected || (x.name && x.at)));
+await db.run(`UPDATE users SET tg_name = '' WHERE tg_chat_id = '555'`);
+ut = await req('GET', '/api/users/tg');
+assert.ok(ut.users.some((x) => x.name === 'Олег Петренко (@oleg)'), 'назва акаунта з getChat');
+assert.equal(await status(() => req('GET', '/api/users/tg', null, MH)), 403, 'лише для того, хто керує користувачами');
 assert.equal(await status(() => req('PUT', '/api/tg/me', { allLinks: true }, MH)), 403, 'галочки — лише для адмінів');
 tgSent.length = 0;
 const ml2 = (await req('POST', '/api/odb/links', { account_id: 'a1', amount: 300, client: 'Олег' }, MH)).link;
