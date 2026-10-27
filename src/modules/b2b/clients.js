@@ -168,6 +168,8 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     if (s.status === 'open') throw fail(400, 'Для відкритої закупівлі оберіть «Без закупівлі».');
     if (s.status === 'draft') throw fail(400, `Закупівля ${orderNo(s.id)} ще чернетка — спершу керівник її відправляє.`);
     if (s.delivery === 'pickup') throw fail(400, `Закупівля ${orderNo(s.id)} — самовивіз: її товари партнер забирає сам, замовлення клієнтів з неї не оформлюються.`);
+    if (s.delivery === 'warehouse') throw fail(400, `Закупівля ${orderNo(s.id)} — відправка на склад партнера: замовлення клієнтів з неї не оформлюються.`);
+    if (s.status === 'confirm') throw fail(400, `Закупівля ${orderNo(s.id)} ще чекає вашого підтвердження.`);
     const left = new Map((await supplyLeft(s.id, exceptId)).map((r) => [r.product_id, r]));
     const want = new Map();
     for (const it of Array.isArray(items) ? items : []) {
@@ -328,7 +330,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
          COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci JOIN b2b_orders co ON co.id = ci.order_id
            WHERE co.supply_id = s.id AND co.kind = 'client' AND co.status != 'cancelled' AND ci.product_id = i.product_id), 0) AS used
        FROM b2b_orders s JOIN b2b_order_items i ON i.order_id = s.id
-       WHERE s.partner_id = ? AND s.kind = 'supply' AND s.status NOT IN ('cancelled', 'open', 'draft') AND COALESCE(s.delivery, 'np') != 'pickup' AND s.created_at > ? ORDER BY s.id DESC, i.id`, [p.id, since],
+       WHERE s.partner_id = ? AND s.kind = 'supply' AND s.status NOT IN ('cancelled', 'open', 'draft', 'confirm') AND COALESCE(s.delivery, 'np') NOT IN ('pickup', 'warehouse') AND s.created_at > ? ORDER BY s.id DESC, i.id`, [p.id, since],
     );
     const map = new Map();
     for (const r of rows) {
@@ -443,7 +445,7 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
          COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci JOIN b2b_orders co ON co.id = ci.order_id
            WHERE co.supply_id = s.id AND co.kind = 'client' AND co.status != 'cancelled' AND co.id != ? AND ci.product_id = i.product_id), 0) AS used
        FROM b2b_orders s JOIN b2b_order_items i ON i.order_id = s.id
-       WHERE s.partner_id = ? AND s.kind = 'supply' AND s.status NOT IN ('cancelled', 'open', 'draft') AND COALESCE(s.delivery, 'np') != 'pickup'
+       WHERE s.partner_id = ? AND s.kind = 'supply' AND s.status NOT IN ('cancelled', 'open', 'draft', 'confirm') AND COALESCE(s.delivery, 'np') NOT IN ('pickup', 'warehouse')
          AND (s.created_at > ? OR s.id = ?) ORDER BY s.id DESC, i.id`, [o.id, o.partner_id, since, o.supply_id || 0],
     );
     const map = new Map();
@@ -743,6 +745,64 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     await warnUnpaidShipped(c, o);
     await supplyInWork(o.supply_id, c).catch(() => 0);
     return c.json({ ok: true, crm_id: crmId, code });
+  });
+
+  // Закупівля «на склад партнера» → одне замовлення в LP-CRM (вкладка «Нові»): отримувач — склад партнера, ціни партнера.
+  app.post('/api/b2b/orders/:id/crm', async (c) => {
+    need(c, 'b2b.admin');
+    const s = await orderOf(c.req.param('id'));
+    if (s.kind !== 'supply' || s.delivery !== 'warehouse') throw fail(400, 'У LP-CRM одним замовленням передається лише закупівля «на склад партнера».');
+    if (s.crm_id || s.crm_ext) throw fail(400, `Уже в LP-CRM${s.crm_id ? `: № ${s.crm_id}` : ''}.`);
+    if (s.status === 'confirm') throw fail(400, 'Партнер ще не підтвердив закупівлю.');
+    if (['cancelled', 'draft', 'open'].includes(s.status)) throw fail(400, 'Закупівлю скасовано або вона ще не оформлена.');
+    const k = await crmConfig();
+    if (!k.on) throw fail(400, 'Передачу в LP-CRM ще не ввімкнено («Замовлення клієнтів» → «Налаштування CRM»).');
+    if (!k.office) throw fail(400, 'Не вказано ID відділу B2B у «Налаштуваннях CRM».');
+    if (!k.creds.subdomain || !k.creds.key) throw fail(400, 'Не налаштовано LP-CRM: піддомен і API-ключ у «Налаштуваннях».');
+    const ship = orders.parseShipTo(s.ship_to);
+    if (!ship?.name || !ship?.address) throw fail(400, 'Не вказано склад партнера (отримувач і адреса) — змініть спосіб отримання в закупівлі.');
+    const code = newCode();
+    const now = nowIso();
+    const stale = new Date(Date.now() - SENDING_TTL_MS).toISOString();
+    const claim = await db.run(
+      `UPDATE b2b_orders SET crm_ext = ?, crm_sent_at = ? WHERE id = ? AND crm_id = '' AND COALESCE(crm_ext, '') = '' AND (crm_sent_at = '' OR crm_sent_at IS NULL OR crm_sent_at < ?)`,
+      [code, `sending:${now}`, s.id, `sending:${stale}`],
+    );
+    if (!claim.changes) throw fail(409, 'Закупівля вже надсилається в CRM — оновіть сторінку за хвилину.');
+    const [items, p] = await Promise.all([
+      db.all(`SELECT product_id, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [s.id]),
+      db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [s.partner_id]),
+    ]);
+    const pay = await payText({ supply_id: s.id }, p?.name || '');
+    const comment = [`${orderNo(s.id)} · закупівля B2B на склад партнера «${p?.name || ''}»`, pay.text, s.comment || ''].filter(Boolean).join('\n');
+    const undo = () => db.run(`UPDATE b2b_orders SET crm_ext = '', crm_sent_at = '' WHERE id = ?`, [s.id]);
+    let res;
+    try {
+      res = await addNewOrder(fetchFn, k.addCreds, {
+        code, office: k.office, bayer_name: ship.name, phone: ship.phone.replace(/\D/g, ''), comment,
+        delivery: k.delivery, payment: pay.paid ? k.paymentPaid : k.payment, notification: k.notification,
+        delivery_adress: ship.address, sender: senderOf(c, k.site), site: k.site || new URL(c.req.url).host,
+        products: items.map((i) => ({ product_id: i.product_id, price: i.price, count: i.qty })),
+      });
+    } catch (e) {
+      await undo();
+      if (e.pending) throw e;
+      throw fail(502, e.message);
+    }
+    if (!res.ok) {
+      await undo();
+      await log(s.id, c.get('user'), `LP-CRM не прийняла закупівлю: ${res.error.slice(0, 200)}`);
+      throw fail(400, `LP-CRM не прийняла замовлення: ${res.error}`);
+    }
+    let crmId = res.crmId || '';
+    if (!crmId) {
+      const found = await getOrdersBatch(fetchFn, k.creds, [code]).catch(() => []);
+      crmId = String(found.find((x) => String(x.order_id) === code)?.id || '');
+    }
+    await db.run(`UPDATE b2b_orders SET crm_id = ?, crm_sent_at = ?, crm_status = 'Передано', updated_at = ? WHERE id = ?`, [crmId, nowIso(), nowIso(), s.id]);
+    await log(s.id, c.get('user'), `передано в LP-CRM на відправку на склад партнера${crmId ? `: № ${crmId}` : ` (код ${code})`}`);
+    await tgPartner(s.partner_id, `🚚 Закупівлю ${orderNo(s.id)} передано на відправку на ваш склад${crmId ? ` (№ ${crmId})` : ''}: ${h(ship.name)}, ${h(ship.address)}.\n${link(c, `porders/${s.id}`)}`);
+    return c.json({ ok: true, crm_id: crmId, code, paid: pay.paid });
   });
 
   // Ручне прив'язування номера замовлення з LP-CRM (якщо створили в CRM самі або номер не повернувся).

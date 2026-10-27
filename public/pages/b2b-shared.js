@@ -3,7 +3,7 @@ import { esc, money } from '../invoice.js';
 import { fmtDateTime as fmtDT, $, $$, toast, modal } from '../core/ui.js';
 
 export const uah = (n) => `${money(n)} грн`;
-const ST_CLS = { invoice_wait: 'warn', pay_wait: 'warn', partial: 'info', paid: 'ok', done: 'ok', cancelled: 'bad', new: 'warn', crm: 'info' };
+const ST_CLS = { confirm: 'warn', invoice_wait: 'warn', pay_wait: 'warn', partial: 'info', paid: 'ok', done: 'ok', cancelled: 'bad', new: 'warn', crm: 'info' };
 export const statusBadge = (o) => `<span class="badge ${ST_CLS[o.status] || ''}">${esc(o.status_name || o.status)}</span>`;
 // Замовлення клієнта: оплата (за закупівлею) і «без закупівлі».
 const PAY_CLS = { paid: 'ok', partial: 'info', unpaid: 'warn' };

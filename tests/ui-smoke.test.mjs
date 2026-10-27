@@ -22,6 +22,7 @@ const errors = [];
 globalThis.fetch = async (url) => {
   const u = String(url);
   const RZO = { id: 'u1', order_num: '900001', created_at: '2026-10-27 10:00:00', status: 'new', status_name: 'Нове', uzd_status: 'skipped', uzd_name: 'ЮЗД пропущено', customer: 'Іван', city: 'Київ', street: '', phone: '380501112233', cod: 100, ttn: '', tracking_status: '', return_ttn: '', document_link: 'https://x', invoice_no: '1', docs_at: '2026-10-27T10:00:00Z', crm_id: '', crm_code: '', note: '', account: 'R', sn_required: 1, products: [{ supplierCode: 'A', rzCode: 1, quantity: 1, confirmedQuantity: null, serialNumbers: [], cargoSeats: [{ lengthCm: 1, widthCm: 1, heightCm: 1, weightKg: 1 }], name: 'T', product_id: 1, purchase_price: 10, own_seats: [] }] };
+  if (u.includes('/supply-options')) return { status: 200, ok: true, json: async () => ({ partner: { id: 1, name: 'P', active: true, paused: false, postpay_days: 0, tg_group: true, entities: 0, warehouse: { name: '', phone: '', address: '' } }, brands: [{ id: 1, name: 'B', margin: 20, products: 1 }], products: [{ product_id: 1, name: 'T', article: 'A', brand_id: 1, rrp: 100, margin: 20, price: 80 }] }) };
   if (u.startsWith('/api/rzs/')) {
     const rz = u.startsWith('/api/rzs/orders/') ? RZO : u.startsWith('/api/rzs/orders') ? { rows: [RZO, { ...RZO, id: 'u2', ttn: '204', status: 'shipping', status_name: 'Відправляється' }], counts: { new: 1, shipping: 1 }, statuses: { new: 'Нове', shipping: 'Відправляється' }, accounts: [{ id: 1, name: 'R', synced_at: '2026-10-27T10:00:00Z', hook_at: '' }] }
       : u.startsWith('/api/rzs/products') ? [{ code: 'A', rz_code: '1', product_id: null, name: 'T', purchase_price: 10, rrp: null, stock: 1, seats: [{ lengthCm: 1, widthCm: 1, heightCm: 1, weightKg: 1 }] }]
@@ -36,7 +37,7 @@ globalThis.fetch = async (url) => {
 process.on('unhandledRejection', (e) => errors.push(e));
 await import(new URL('../public/app.js', import.meta.url));
 await new Promise((r) => setTimeout(r, 30));
-const routes = ['invoice', 'history', 'fops', 'fops/1', 'fops/new', 'offices', 'templates', 'templates/1', 'nsettings', 'rahunky', 'rlist', 'invfops', 'invfops/1', 'invfops/new', 'rsettings', 'settings', 'errors', 'users', 'b2bpartners', 'b2bpartners/1', 'b2bcatalog', 'pcatalog', 'phelp', 'b2borders', 'b2borders/1', 'porders', 'porders/new', 'porders/1', 'porders/1/edit', 'pentities', 'pclients', 'pclients/new', 'pclients/new/1', 'pclients/2', 'pclients/2/edit', 'b2bclients', 'b2bclients/2', 'pteam', 'psettings', 'pstats', 'b2bstats', 'b2bstats/1', 'ansettings', 'b2btrash', 'ptrash', 'np', 'rzorders', 'rzproducts', 'rzsettings'];
+const routes = ['invoice', 'history', 'fops', 'fops/1', 'fops/new', 'offices', 'templates', 'templates/1', 'nsettings', 'rahunky', 'rlist', 'invfops', 'invfops/1', 'invfops/new', 'rsettings', 'settings', 'errors', 'users', 'b2bpartners', 'b2bpartners/1', 'b2bcatalog', 'pcatalog', 'phelp', 'b2borders', 'b2borders/1', 'porders', 'porders/new', 'porders/1', 'porders/1/edit', 'pentities', 'pclients', 'pclients/new', 'pclients/new/1', 'pclients/2', 'pclients/2/edit', 'b2bclients', 'b2bclients/2', 'pteam', 'psettings', 'pstats', 'b2bstats', 'b2bstats/1', 'ansettings', 'b2btrash', 'ptrash', 'np', 'rzorders', 'rzproducts', 'rzsettings', 'b2borders/new'];
 for (const r of routes) {
   location.hash = `#/${r}`;
   mainHtml = '';

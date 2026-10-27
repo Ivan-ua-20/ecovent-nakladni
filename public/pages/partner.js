@@ -250,7 +250,7 @@ export function createPartnerPages(ctx = {}) {
       ${filterBar(supFilter, { placeholder: '№, юрособа, № рахунку…' })}
       ${rows.length ? `<table class="list"><thead><tr><th>№</th><th class="hide-m">Дата</th><th>Сума</th><th>Статус</th><th class="hide-m">Рахунок</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click" data-o="${o.id}">
-          <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? ' <span class="badge info">🚗 самовивіз</span>' : ''}${o.pay_terms === 'postpay' ? ` <span class="badge ${o.overdue ? 'bad' : 'warn'}">відстрочка${o.due_date ? ` до ${esc(fmtDay(o.due_date))}` : ''}</span>` : ''}<div class="small muted">${esc(o.entity.split('\n')[0].split(',')[0])}</div></td>
+          <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? ' <span class="badge info">🚗 самовивіз</span>' : o.delivery === 'warehouse' ? ' <span class="badge info">🏬 на ваш склад</span>' : ''}${o.status === 'confirm' ? ' <span class="badge warn">👉 підтвердіть</span>' : ''}${o.pay_terms === 'postpay' ? ` <span class="badge ${o.overdue ? 'bad' : 'warn'}">відстрочка${o.due_date ? ` до ${esc(fmtDay(o.due_date))}` : ''}</span>` : ''}<div class="small muted">${esc(o.entity.split('\n')[0].split(',')[0])}</div></td>
           <td class="small hide-m">${esc(fmtDateTime(o.created_at))}</td>
           <td><b>${uah(o.total)}</b></td>
           <td>${statusBadge(o)}</td>
@@ -267,8 +267,10 @@ export function createPartnerPages(ctx = {}) {
     const isDraft = o.status === 'draft';
     const editable = ['invoice_wait', 'draft'].includes(o.status) && canEdit();
     const head = ctx.can ? ctx.can('b2b.team') : true;
-    const pickup = o.delivery === 'pickup';
-    const hasLeft = !pickup && !['cancelled', 'open'].includes(o.status) && left.some((r) => r.left > 0);
+    const pickup = o.delivery === 'pickup' || o.delivery === 'warehouse';
+    const toConfirm = o.status === 'confirm';
+    const ents = toConfirm && head ? await api('GET', '/api/b2b/p/entities').catch(() => []) : [];
+    const hasLeft = !pickup && !['cancelled', 'open', 'confirm'].includes(o.status) && left.some((r) => r.left > 0);
     const ob = o.status === 'open' ? await openBanner() : { html: '', wire: () => {} };
     main.innerHTML = `
       ${ob.html}
@@ -276,14 +278,23 @@ export function createPartnerPages(ctx = {}) {
         <div class="btn-row"><a class="btn" href="#/porders">← До списку</a>
           ${isDraft && head ? '<button class="btn primary" id="oSend">Відправити закупівлю</button>' : ''}
           ${editable ? `<a class="btn" href="#/porders/${o.id}/edit">Змінити</a><button class="btn danger" id="oCancel">${isDraft ? 'Видалити чернетку' : 'Скасувати'}</button>` : ''}</div></div>
+      ${toConfirm ? `<div class="card form-stack" style="margin-bottom:12px;border-color:var(--warn)">
+        <h3 style="margin:0">📝 Цю закупівлю підготував наш менеджер — підтвердіть її</h3>
+        <div class="small">${o.pay_terms === 'postpay' ? `Оплата: <b>відстрочка ${o.pay_days} дн.</b> від дати рахунку.` : 'Оплата: передоплата за рахунком.'} Отримання: <b>${esc(o.delivery_name || '')}</b>${o.ship_to ? ` — ${esc([o.ship_to.name, o.ship_to.phone, o.ship_to.address].filter(Boolean).join(', '))}` : ''}.</div>
+        ${head ? (ents.length ? `<label class="f" style="max-width:480px"><span>Юрособа, на яку виставити рахунок</span><select id="oEntSel">${ents.map((e) => `<option value="${e.id}" ${e.is_default ? 'selected' : ''}>${esc(e.name)} · ${esc(e.code)}</option>`).join('')}</select></label>
+            <div class="btn-row"><button class="btn primary" id="oConfirm">✅ Підтвердити закупівлю</button><button class="btn danger" id="oReject">Відхилити</button></div>`
+          : '<div class="alert warn small">Щоб підтвердити, спершу додайте юрособу в «Мої юрособи».</div><div class="btn-row"><a class="btn primary" href="#/pentities">Додати юрособу</a><button class="btn danger" id="oReject">Відхилити</button></div>')
+          : '<div class="small muted">Підтвердити або відхилити може керівник вашої команди.</div>'}
+      </div>` : ''}
       ${isDraft ? `<div class="alert warn" style="margin-bottom:12px"><b>Чернетка</b> — її бачить лише ваша команда, нам вона ще не надійшла.
         Менеджери додають товари (у «Нова закупівля» → «Додати до чернетки» або «Змінити»), ${head ? 'а ви натискаєте «Відправити закупівлю», коли все зібрано.' : 'а керівник вашої команди відправляє її нам.'}</div>` : ''}
       <div class="form-page">
         <div class="form-stack">
           <div class="card">${itemsTable(items)}</div>
           ${o.comment ? `<div class="card small"><b>Коментар:</b> ${esc(o.comment)}</div>` : ''}
-          ${pickup ? '<div class="alert info">🚗 <b>Самовивіз</b> — усю закупівлю ви забираєте зі складу самі; замовлення клієнтів з неї не оформлюються.</div>' : ''}
-          ${o.status !== 'cancelled' && !pickup ? `<div class="card form-stack">
+          ${o.delivery === 'pickup' ? '<div class="alert info">🚗 <b>Самовивіз</b> — усю закупівлю ви забираєте зі складу самі; замовлення клієнтів з неї не оформлюються.</div>' : ''}
+          ${o.delivery === 'warehouse' ? `<div class="alert info">🏬 <b>Відправка на ваш склад</b> — усю закупівлю відправимо Новою поштою${o.ship_to ? `: ${esc([o.ship_to.name, o.ship_to.phone, o.ship_to.address].filter(Boolean).join(', '))}` : ''}; замовлення клієнтів з неї не оформлюються.${o.crm_id || o.crm_ext ? ' <b>Передано на відправку.</b>' : ''}</div>` : ''}
+          ${!['cancelled', 'confirm'].includes(o.status) && !pickup ? `<div class="card form-stack">
             <div class="head-row"><h3>Замовлення клієнтів із цієї закупівлі</h3>${hasLeft && canEdit() ? `<a class="btn sm primary" href="#/pclients/new/${o.id}">+ Замовлення клієнта</a>` : ''}</div>
             <table class="list"><thead><tr><th>Товар</th><th class="r">Закуплено</th><th class="r">Розписано</th><th class="r">Залишок</th></tr></thead><tbody>
               ${left.map((r) => `<tr><td>${esc(r.name)}</td><td class="r">${r.qty}</td><td class="r">${r.used}</td><td class="r"><b>${r.left}</b></td></tr>`).join('')}</tbody></table>
@@ -293,7 +304,7 @@ export function createPartnerPages(ctx = {}) {
         <div class="form-stack">
           <div class="card form-stack">
             <h3>Рахунок</h3>
-            <div class="small" style="white-space:pre-line"><b>Платник:</b> ${esc(o.entity)}</div>
+            <div class="small" style="white-space:pre-line"><b>Платник:</b> ${esc(o.entity || (toConfirm ? 'оберіть при підтвердженні' : '—'))}</div>
             <div class="small"><b>Отримання:</b> ${esc(o.delivery_name || '')}</div>
             ${o.reinvoice ? `<div class="alert warn small">Закупівлю змінив менеджер — рахунок № ${esc(o.reinvoice)} перевиставляється, новий надійде в Telegram і з’явиться тут.${o.paid_amount ? ` Уже оплачено: ${uah(o.paid_amount)}.` : ''}</div>` : ''}
             ${o.pay_terms === 'postpay' ? `<div class="small"><b>Оплата:</b> відстрочка ${o.pay_days} дн.${o.due_date ? ` — до <b>${esc(fmtDay(o.due_date))}</b>` : ' від дати рахунку'}${o.overdue ? ` <span class="badge bad">прострочено ${o.overdue} дн.</span>` : ''}</div>` : ''}
@@ -315,6 +326,16 @@ export function createPartnerPages(ctx = {}) {
       }
       if (!(await confirmDanger(`Скасувати закупівлю ${o.number}?`, 'Замовлення буде скасовано, менеджер отримає сповіщення.', 'Скасувати закупівлю'))) return;
       try { await api('POST', `/api/b2b/p/orders/${o.id}/cancel`); toast('Скасовано'); viewOrder(o.id); } catch (e) { toast(e.message, true); }
+    });
+    $('#oConfirm') && ($('#oConfirm').onclick = async (e) => {
+      const ent = ents.find((x) => String(x.id) === $('#oEntSel').value);
+      if (!(await confirmDanger(`Підтвердити закупівлю ${o.number} на ${uah(o.total)}?`, `Рахунок буде виставлено на ${esc(ent?.name || '')}.`, 'Підтвердити закупівлю'))) return;
+      e.currentTarget.disabled = true;
+      try { await api('POST', `/api/b2b/p/orders/${o.id}/confirm`, { entity_id: ent.id }); toast('Закупівлю підтверджено — готуємо рахунок'); viewOrder(o.id); } catch (er) { toast(er.message, true); viewOrder(o.id); }
+    });
+    $('#oReject') && ($('#oReject').onclick = async () => {
+      if (!(await confirmDanger(`Відхилити закупівлю ${o.number}?`, 'Менеджер отримає сповіщення. Якщо потрібні зміни — напишіть йому, він підготує нову.', 'Відхилити закупівлю'))) return;
+      try { await api('POST', `/api/b2b/p/orders/${o.id}/cancel`); toast('Закупівлю відхилено'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
     });
     $('#oSend') && ($('#oSend').onclick = async () => {
       if (!(await confirmDanger(`Відправити закупівлю ${o.number} на ${uah(o.total)}?`, 'Ми підготуємо рахунок на вибрану юрособу; змінити закупівлю можна, доки рахунку немає.', 'Відправити закупівлю'))) return;

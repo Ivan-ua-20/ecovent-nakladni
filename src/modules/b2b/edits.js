@@ -125,7 +125,7 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
         + `${invoiced ? `\n\n🔁 Рахунок № ${h(o.invoice_no)} буде перевиставлено — новий рахунок надійде сюди.${Number(o.paid_amount) > 0 ? ` Оплата ${uah(o.paid_amount)} зарахована.` : ''}` : ''}`;
       await tgPartner(o.partner_id, `${text}\n${link(c, `porders/${o.id}`)}`);
       if (invoiced) await tgGroup(o.partner_id, text);
-      await hooks.finRequest?.(o.id, invoiced ? 'reinvoice' : 'changed').catch(() => 0);
+      if (o.status !== 'confirm') await hooks.finRequest?.(o.id, invoiced ? 'reinvoice' : 'changed').catch(() => 0); // ще не підтверджено — рахунок не просимо
     }
     return { ok: true, changed: true, total, reinvoice: invoiced };
   }
