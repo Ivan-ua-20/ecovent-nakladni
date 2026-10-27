@@ -372,18 +372,40 @@ export function createPayUI(ctx) {
         if (!connected) { box.innerHTML = '<div class="small muted">Вкажіть ключ і назву клієнта — список рахунків підтягнеться автоматично.</div>'; return; }
         const main = accounts.filter((x) => !x.seen);
         const others = accounts.filter((x) => x.seen);
-        const row = (a) => `<tr><td>${a.seen ? '' : `<label class="switch"><input type="checkbox" data-acc="${esc(a.id)}" ${a.enabled ? 'checked' : ''} aria-label="Формувати рахунки на ${esc(a.alias)}"><span></span></label>`}</td>
+        const row = (a) => `<tr><td>${a.seen ? `<button type="button" class="btn sm" data-reg="${esc(a.id)}" data-code="${esc(a.code)}" data-name="${esc(a.name || '')}" data-iban="${esc(a.iban)}">➕ Для рахунків</button>` : `<label class="switch"><input type="checkbox" data-acc="${esc(a.id)}" ${a.enabled ? 'checked' : ''} aria-label="Формувати рахунки на ${esc(a.alias)}"><span></span></label>`}</td>
             <td><b>${esc(a.name || a.odb_alias || '')}</b>${!a.name && !a.odb_alias ? '<span class="muted small">без назви</span>' : ''}
               <button type="button" class="linkbtn ap-ren" data-ren="${esc(a.id)}" data-name="${esc(a.name || a.odb_alias || '')}" aria-label="Перейменувати">✎</button></td>
             <td class="small">${esc(a.bank || '')}</td><td>${KIND[a.kind] || ''}</td><td class="small mono">${esc(a.iban)}</td><td class="small">${esc(a.code)}</td></tr>`;
         const head = (first) => `<thead><tr><th>${first}</th><th>Назва</th><th>Банк</th><th>Тип</th><th>IBAN</th><th>Код</th></tr></thead>`;
         box.innerHTML = `${main.length ? `<div class="table-wrap"><table class="list odb-accs">${head('Формувати')}<tbody>${main.map(row).join('')}</tbody></table></div>`
           : '<div class="small muted">У розділі «Рахунки QR IBAN» на головній Opendatabot ще немає рахунків.</div>'}
-          <div class="small muted">Тут — рахунки з розділу «Рахунки QR IBAN» на головній сторінці Opendatabot. Щоб додати рахунок для формування, додайте його там і натисніть «Оновити список».</div>
-          ${others.length ? `<details class="odb-others"><summary class="small">Інші рахунки, з яких приходять платежі «Автоклієнтів» (${others.length}) — лише назви для платежів і аналітики</summary>
+          <div class="small muted">Тут — рахунки з розділу «Рахунки QR IBAN» в Opendatabot: увімкніть перемикач «Формувати». Новий рахунок, підключений в Opendatabot як «Автоклієнт», з’являється нижче після «Оновити список» — натисніть «➕ Для рахунків».</div>
+          ${others.length ? `<details class="odb-others" open><summary class="small">Рахунки, з яких лише приходять платежі «Автоклієнтів» (${others.length}). Щоб формувати на них рахунки й посилання — «➕ Для рахунків»</summary>
             <div class="table-wrap"><table class="list odb-accs">${head('')}<tbody>${others.map(row).join('')}</tbody></table></div></details>` : ''}`;
         $$('[data-acc]', box).forEach((i) => (i.onchange = async () => {
           try { await api('PUT', `/api/odb/accounts/${encodeURIComponent(i.dataset.acc)}`, { enabled: i.checked }); toast(i.checked ? 'Рахунок увімкнено' : 'Рахунок вимкнено'); await ctx.reloadBoot?.(); } catch (er) { i.checked = !i.checked; toast(er.message, true); }
+        }));
+        // Рахунок «лише платежі» → налаштування IBAN в Opendatabot (запит через API) і одразу «Формувати».
+        $$('[data-reg]', box).forEach((b) => (b.onclick = () => {
+          const m = modal('Формувати рахунки на цей рахунок', `<form id="rgF" class="form-stack">
+            <div class="small">IBAN <b class="mono">${esc(b.dataset.iban)}</b> буде додано в Opendatabot у «Рахунки QR IBAN» — після цього на нього можна формувати посилання на оплату
+              і (для ФОП) Word-рахунки з QR. Платежі по ньому вже відстежуються.</div>
+            <label class="f"><span>Код власника: РНОКПП ФОП (10 цифр) або ЄДРПОУ ТОВ/ПП (8 цифр)</span><input name="code" value="${esc(b.dataset.code)}" inputmode="numeric" maxlength="10" required></label>
+            <label class="f"><span>Назва (видно в посиланнях і рахунках)</span><input name="name" value="${esc(b.dataset.name)}" maxlength="120" placeholder="Напр. ФОП Іваненко (Приват)"></label></form>`,
+          { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="rgGo">Додати й увімкнути</button>' });
+          $('#rgGo', m.el).onclick = async (e) => {
+            const f = $('#rgF', m.el);
+            e.currentTarget.disabled = true;
+            try {
+              if (f.name.value.trim() && f.name.value.trim() !== b.dataset.name) await api('PUT', `/api/odb/accounts/${encodeURIComponent(b.dataset.reg)}`, { name: f.name.value.trim() });
+              const r = await api('POST', `/api/odb/accounts/${encodeURIComponent(b.dataset.reg)}/register`, { code: f.code.value.trim() });
+              await api('PUT', `/api/odb/accounts/${encodeURIComponent(r.id)}`, { enabled: true });
+              m.close();
+              toast('Рахунок додано в Opendatabot і увімкнено для формування');
+              await ctx.reloadBoot?.();
+              drawAccs(true);
+            } catch (er) { toast(er.message, true); e.currentTarget.disabled = false; }
+          };
         }));
         $$('[data-ren]', box).forEach((b) => (b.onclick = () => {
           const m = modal('Назва рахунку', `<form id="anF" class="form-stack"><label class="f"><span>Назва (видно в посиланнях, платежах і аналітиці)</span>
