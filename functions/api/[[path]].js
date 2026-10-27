@@ -5558,6 +5558,7 @@ var modelTokens = (s) => new Set(String(s || "").toLowerCase().replace(/\[\d+\]/
 // src/modules/b2b/orders.js
 var ORDER_STATUS = {
   draft: "\u0427\u0435\u0440\u043D\u0435\u0442\u043A\u0430",
+  confirm: "\u041E\u0447\u0456\u043A\u0443\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430",
   open: "\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0430 (\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0435 \u0441\u0444\u043E\u0440\u043C\u043E\u0432\u0430\u043D\u043E)",
   invoice_wait: "\u041E\u0447\u0456\u043A\u0443\u0454 \u0440\u0430\u0445\u0443\u043D\u043E\u043A",
   pay_wait: "\u041E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443",
@@ -5591,11 +5592,24 @@ var SHIP_NOINV = `('open', 'invoice_wait')`;
 var today = () => kyivDayOf((/* @__PURE__ */ new Date()).toISOString());
 var addDaysTo = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 var overdueDays = (o) => o.due_date && ["pay_wait", "partial"].includes(o.status) && o.due_date < today() ? Math.round((Date.parse(`${today()}T12:00:00Z`) - Date.parse(`${o.due_date}T12:00:00Z`)) / 864e5) : 0;
-var CLOSED_SQL = `(o.kind = 'supply' AND o.status NOT IN ('open', 'cancelled', 'draft')
+var CLOSED_SQL = `(o.kind = 'supply' AND o.status NOT IN ('open', 'cancelled', 'draft', 'confirm')
   AND EXISTS (SELECT 1 FROM b2b_order_items i WHERE i.order_id = o.id)
   AND NOT EXISTS (SELECT 1 FROM b2b_order_items i WHERE i.order_id = o.id AND i.qty > COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci
     JOIN b2b_orders co ON co.id = ci.order_id WHERE co.supply_id = o.id AND co.kind = 'client' AND co.status != 'cancelled' AND ci.product_id = i.product_id), 0)))`;
-var DELIVERY = { np: "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0430 \u043A\u043B\u0456\u0454\u043D\u0442\u0430\u043C (\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430)", pickup: "\u0421\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437 \u2014 \u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0437\u0430\u0431\u0438\u0440\u0430\u0454 \u0432\u0441\u044E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443" };
+var DELIVERY = {
+  np: "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0430 \u043A\u043B\u0456\u0454\u043D\u0442\u0430\u043C (\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430)",
+  pickup: "\u0421\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437 \u2014 \u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0437\u0430\u0431\u0438\u0440\u0430\u0454 \u0432\u0441\u044E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443",
+  warehouse: "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0430 \u0432\u0441\u0456\u0454\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 (\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430)"
+};
+var WHOLE = `('pickup', 'warehouse')`;
+var parseShipTo = (v) => {
+  try {
+    const x2 = JSON.parse(v || "");
+    return x2 && typeof x2 === "object" ? { name: String(x2.name || ""), phone: String(x2.phone || ""), address: String(x2.address || "") } : null;
+  } catch {
+    return null;
+  }
+};
 var deliveryOf = (v) => DELIVERY[v] ? v : "np";
 var LIST_STATUSES = { ...ORDER_STATUS, closed: "\u0417\u0430\u043A\u0440\u0438\u0442\u043E (\u0443\u0441\u0435 \u0440\u043E\u0437\u043F\u0438\u0441\u0430\u043D\u043E)" };
 var ENTITY_KIND = { fop: "\u0424\u041E\u041F", tov: "\u0422\u041E\u0412", other: "\u0406\u043D\u0448\u0430 \u044E\u0440\u043E\u0441\u043E\u0431\u0430" };
@@ -5657,7 +5671,7 @@ function mountB2bOrders(app, { db, services, myPartner, partnerPrice: partnerPri
 
 <b>\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u0456 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0430 \u043D\u0430:</b>
 ${h3(o.entity || "\u2014")}
-<b>\u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430:</b> ${o.delivery === "pickup" ? "\u{1F697} <b>\u0421\u0410\u041C\u041E\u0412\u0418\u0412\u0406\u0417</b> \u2014 \u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0437\u0430\u0431\u0438\u0440\u0430\u0454 \u0432\u0441\u044E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443" : "\u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0430 \u043A\u043B\u0456\u0454\u043D\u0442\u0430\u043C (\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430)"}
+<b>\u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430:</b> ${o.delivery === "pickup" ? "\u{1F697} <b>\u0421\u0410\u041C\u041E\u0412\u0418\u0412\u0406\u0417</b> \u2014 \u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0437\u0430\u0431\u0438\u0440\u0430\u0454 \u0432\u0441\u044E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443" : o.delivery === "warehouse" ? `\u{1F3EC} <b>\u041D\u0410 \u0421\u041A\u041B\u0410\u0414 \u041F\u0410\u0420\u0422\u041D\u0415\u0420\u0410</b> (\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430)${parseShipTo(o.ship_to) ? `: ${h3([parseShipTo(o.ship_to).name, parseShipTo(o.ship_to).phone, parseShipTo(o.ship_to).address].filter(Boolean).join(", "))}` : ""}` : "\u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0430 \u043A\u043B\u0456\u0454\u043D\u0442\u0430\u043C (\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430)"}
 ${o.pay_terms === "postpay" ? `<b>\u041E\u043F\u043B\u0430\u0442\u0430:</b> \u23F3 <b>\u0412\u0406\u0414\u0421\u0422\u0420\u041E\u0427\u041A\u0410 ${o.pay_days} \u0434\u043D.</b> \u0432\u0456\u0434 \u0434\u0430\u0442\u0438 \u0440\u0430\u0445\u0443\u043D\u043A\u0443
 ` : ""}
 <b>\u0422\u043E\u0432\u0430\u0440\u0438:</b>
@@ -5939,6 +5953,7 @@ ${link(c, `b2borders/${open.id}`)}`);
     if (o.kind === "supply") {
       out.delivery = deliveryOf(o.delivery);
       out.delivery_name = DELIVERY[out.delivery];
+      out.ship_to = parseShipTo(o.ship_to);
     }
     if (o.kind === "supply" && ["partial", "pay_wait"].includes(o.status)) out.due = round2(o.total - (o.paid_amount || 0));
     if (o.kind === "supply" && o.status === "partial") out.status_name = `\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E \xB7 \u0449\u0435 ${uah2(out.due)}`;
@@ -6020,6 +6035,7 @@ ${link(c, `b2borders/${open.id}`)}`);
     const p = await myPartner(c);
     const o = await orderOf(c.req.param("id"), p.id);
     if (o.kind !== "supply") throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    if (o.status === "confirm") throw fail(400, "\u0426\u044E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043F\u0456\u0434\u0433\u043E\u0442\u0443\u0432\u0430\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u2014 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0456\u0442\u044C \u0457\u0457 \u0430\u0431\u043E \u0432\u0456\u0434\u0445\u0438\u043B\u0456\u0442\u044C; \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u0441\u043A\u043B\u0430\u0434 \u043C\u043E\u0436\u0435 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440.");
     if (!["invoice_wait", "draft"].includes(o.status)) throw fail(400, "\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u0443\u0436\u0435 \u0432\u0438\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E \u2014 \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043C\u043E\u0436\u0435 \u043B\u0438\u0448\u0435 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440.");
     const isDraft = o.status === "draft";
     const b = await c.req.json();
@@ -6037,6 +6053,7 @@ ${link(c, `b2borders/${open.id}`)}`);
     }
     const delivery = b.delivery === void 0 ? deliveryOf(o.delivery) : deliveryOf(b.delivery);
     if (delivery === "pickup" && left.some((r) => r.used > 0)) throw fail(400, "\u0417 \u0446\u0456\u0454\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0432\u0436\u0435 \u0454 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u2014 \u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437 \u043D\u0435\u043C\u043E\u0436\u043B\u0438\u0432\u0438\u0439.");
+    if (delivery === "warehouse" && deliveryOf(o.delivery) !== "warehouse") throw fail(400, "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0441\u0442\u0430\u0432\u0438\u0442\u044C \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440.");
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, items),
@@ -6092,6 +6109,16 @@ ${link(c, `b2borders/${o.id}`)}`);
       await hooks.toTrash(o, c.get("user"), { byPartner: true });
       return c.json({ ok: true, deleted: true });
     }
+    if (o.status === "confirm") {
+      const claim = await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ? AND status = 'confirm'`, [nowIso(), o.id]);
+      if (!claim.changes) throw fail(409, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0432\u0436\u0435 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E \u0430\u0431\u043E \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443.");
+      const why = String((await c.req.json().catch(() => ({}))).reason || "").trim().slice(0, 300);
+      await log(o.id, c.get("user"), `\u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0432\u0456\u0434\u0445\u0438\u043B\u0438\u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E${why ? `: ${why}` : ""}`);
+      await tgAdmins(`\u274C \xAB${h3(p.name)}\xBB <b>\u0432\u0456\u0434\u0445\u0438\u043B\u0438\u0432</b> \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)} \u043D\u0430 ${uah2(o.total)}${why ? `
+\u041F\u0440\u0438\u0447\u0438\u043D\u0430: ${h3(why)}` : ""}
+${link(c, `b2borders/${o.id}`)}`);
+      return c.json({ ok: true });
+    }
     if (o.status !== "invoice_wait") throw fail(400, "\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u0443\u0436\u0435 \u0432\u0438\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E \u2014 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043C\u043E\u0436\u0435 \u043B\u0438\u0448\u0435 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440.");
     if (Number(o.paid_amount) > 0) throw fail(400, "\u0417\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0435\u044E \u0432\u0436\u0435 \u0454 \u043E\u043F\u043B\u0430\u0442\u0430 \u2014 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438 \u0457\u0457 \u043C\u043E\u0436\u0435 \u043B\u0438\u0448\u0435 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440.");
     if (await db.get(`SELECT id FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled' LIMIT 1`, [o.id])) {
@@ -6102,6 +6129,102 @@ ${link(c, `b2borders/${o.id}`)}`);
     await tgAdmins(`\u274C <b>\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)}</b> (\xAB${h3(p.name)}\xBB)
 ${link(c, `b2borders/${o.id}`)}`);
     await hooks.finClosed?.(o.id, "\u274C \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u043E\u043C").catch(() => 0);
+    return c.json({ ok: true });
+  });
+  const clean = (v, n) => String(v ?? "").trim().slice(0, n);
+  function shipToOf(b, p) {
+    const x2 = b && typeof b === "object" ? b : {};
+    const r = { name: clean(x2.name ?? p?.wh_name, 120), phone: clean(x2.phone ?? p?.wh_phone, 40).replace(/[^\d+]/g, ""), address: clean(x2.address ?? p?.wh_address, 300) };
+    if (!r.name || !r.address) throw fail(400, "\u0421\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0447\u0430 (\u041F\u0406\u0411) \u0456 \u0430\u0434\u0440\u0435\u0441\u0443 \u2014 \u043C\u0456\u0441\u0442\u043E \u0439 \u0432\u0456\u0434\u0434\u0456\u043B\u0435\u043D\u043D\u044F \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438.");
+    if (!/^\+?\d{10,13}$/.test(r.phone)) throw fail(400, "\u0421\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430: \u0442\u0435\u043B\u0435\u0444\u043E\u043D \u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0447\u0430 \u2014 10\u201312 \u0446\u0438\u0444\u0440.");
+    return r;
+  }
+  app.get("/api/b2b/partners/:id/supply-options", async (c) => {
+    need(c, "b2b.admin");
+    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ? AND COALESCE(deleted_at, '') = ''`, [c.req.param("id")]);
+    if (!p) throw fail(404, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const [rows, brands, ents] = await Promise.all([
+      db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.brand_id, m.margin FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id
+        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [p.id]),
+      db.all(`SELECT id, name FROM an_brands`).catch(() => []),
+      db.get(`SELECT COUNT(*) AS n FROM b2b_entities WHERE partner_id = ? AND active = 1`, [p.id])
+    ]);
+    const bn = new Map(brands.map((b) => [b.id, b.name]));
+    const used = /* @__PURE__ */ new Map();
+    for (const r of rows) used.set(r.brand_id, { id: r.brand_id, name: bn.get(r.brand_id) || "\u0406\u043D\u0448\u0456", margin: r.margin, products: (used.get(r.brand_id)?.products || 0) + 1 });
+    return c.json({
+      partner: {
+        id: p.id,
+        name: p.name,
+        active: !!p.active,
+        paused: !!p.paused,
+        postpay_days: Number(p.postpay_days) || 0,
+        tg_group: !!p.tg_group,
+        entities: ents?.n || 0,
+        warehouse: { name: p.wh_name || "", phone: p.wh_phone || "", address: p.wh_address || "" }
+      },
+      brands: [...used.values()].sort((a, b) => a.name.localeCompare(b.name, "uk")),
+      products: rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || "", brand_id: r.brand_id, rrp: r.rrp, margin: r.margin, price: partnerPrice2(r.rrp, r.margin) }))
+    });
+  });
+  app.post("/api/b2b/orders", async (c) => {
+    need(c, "b2b.admin");
+    const b = await c.req.json();
+    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ? AND COALESCE(deleted_at, '') = ''`, [parseInt(b.partner_id, 10) || 0]);
+    if (!p) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430.");
+    if (!p.active) throw fail(400, "\u041A\u0430\u0431\u0456\u043D\u0435\u0442 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E \u2014 \u0432\u0456\u043D \u043D\u0435 \u0437\u043C\u043E\u0436\u0435 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0438 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E.");
+    const items = await priceItems(p, b.items);
+    const total = totalOf(items);
+    const terms = b.pay_terms === "postpay" ? "postpay" : "prepay";
+    const payDays = terms === "postpay" ? parseInt(b.pay_days, 10) || 0 : 0;
+    if (terms === "postpay" && !(payDays >= 1 && payDays <= 90)) throw fail(400, "\u0412\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 \u2014 \u0432\u0456\u0434 1 \u0434\u043E 90 \u0434\u043D\u0456\u0432.");
+    const delivery = deliveryOf(b.delivery);
+    const ship = delivery === "warehouse" ? shipToOf(b.ship_to, p) : null;
+    const now = nowIso();
+    const u = c.get("user");
+    const r = await db.run(
+      `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days, ship_to)
+       VALUES (?, 'supply', 'confirm', NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [p.id, total, clean(b.comment, 1e3), userName2(u), now, now, delivery, terms, payDays, ship ? JSON.stringify(ship) : ""]
+    );
+    await db.batch([
+      ...itemRows(r.lastId, items),
+      [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [
+        r.lastId,
+        now,
+        userName2(u),
+        `\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0441\u0442\u0432\u043E\u0440\u0438\u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah2(total)} (${terms === "postpay" ? `\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 ${payDays} \u0434\u043D.` : "\u043F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0430"}; ${DELIVERY[delivery]}) \u2014 \u0447\u0435\u043A\u0430\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430`
+      ]],
+      ...ship ? [[`UPDATE b2b_partners SET wh_name = ?, wh_phone = ?, wh_address = ? WHERE id = ?`, [ship.name, ship.phone, ship.address, p.id]]] : []
+    ]);
+    const o = { id: r.lastId, entity: "\u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u043E\u0431\u0435\u0440\u0435 \u043F\u0440\u0438 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u0456", total, comment: b.comment, delivery, pay_terms: terms, pay_days: payDays, ship_to: ship ? JSON.stringify(ship) : "" };
+    const full = orderText("\u{1F4DD} \u041C\u0438 \u043F\u0456\u0434\u0433\u043E\u0442\u0443\u0432\u0430\u043B\u0438 \u0434\u043B\u044F \u0432\u0430\u0441 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E", o, p, items);
+    const ask = `
+
+\u{1F449} <b>\u041F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0456\u0442\u044C</b> \u0457\u0457 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 (\u043E\u0431\u0435\u0440\u0456\u0442\u044C \u044E\u0440\u043E\u0441\u043E\u0431\u0443 \u0434\u043B\u044F \u0440\u0430\u0445\u0443\u043D\u043A\u0443) \u0430\u0431\u043E \u0432\u0456\u0434\u0445\u0438\u043B\u0456\u0442\u044C:
+${link(c, `porders/${r.lastId}`)}`;
+    await tgPartner(p.id, `${full}${ask}`);
+    await tgGroup(p.id, `${full}${ask}`);
+    return c.json({ id: r.lastId, number: orderNo(r.lastId), total });
+  });
+  app.post("/api/b2b/p/orders/:id/confirm", async (c) => {
+    const p = await myPartner(c);
+    if (!isHead(c)) throw fail(403, "\u041F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0438 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043C\u043E\u0436\u0435 \u043A\u0435\u0440\u0456\u0432\u043D\u0438\u043A \u0432\u0430\u0448\u043E\u0457 \u043A\u043E\u043C\u0430\u043D\u0434\u0438.");
+    const o = await orderOf(c.req.param("id"), p.id);
+    if (o.kind !== "supply" || o.status !== "confirm") throw fail(400, "\u0426\u044E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0432\u0436\u0435 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E \u0430\u0431\u043E \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443.");
+    const b = await c.req.json().catch(() => ({}));
+    const e = await myEntity(p, b.entity_id);
+    const now = nowIso();
+    const claim = await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity_id = ?, entity = ?, updated_at = ? WHERE id = ? AND status = 'confirm'`, [e.id, entityText(e), now, o.id]);
+    if (!claim.changes) throw fail(409, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0432\u0436\u0435 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E.");
+    await log(o.id, c.get("user"), `\u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E; \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430 ${e.name}`);
+    const items = await db.all(`SELECT product_id, name, article, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
+    const full = orderText("\u2705 \u041F\u0430\u0440\u0442\u043D\u0435\u0440 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E", { ...o, entity: entityText(e) }, p, items);
+    await tgAdmins(`${full}${o.delivery === "warehouse" ? "\n\n\u{1F3EC} \u041C\u043E\u0436\u043D\u0430 \u043F\u0435\u0440\u0435\u0434\u0430\u0442\u0438 \u0432 LP-CRM \u043D\u0430 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 (\u043A\u043D\u043E\u043F\u043A\u0430 \u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456)." : ""}
+
+${link(c, `b2borders/${o.id}`)}`);
+    await tgGroup(p.id, full);
+    await hooks.finRequest?.(o.id).catch(() => 0);
     return c.json({ ok: true });
   });
   app.get("/api/b2b/orders", async (c) => {
@@ -6184,13 +6307,19 @@ ${link(c, `${o.kind === "client" ? "pclients" : "porders"}/${o.id}`)}`);
     need(c, "b2b.admin");
     const o = await orderOf(c.req.param("id"));
     if (o.kind !== "supply" || o.status === "open") throw fail(400, "\u0421\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u2014 \u043B\u0438\u0448\u0435 \u0434\u043B\u044F \u0437\u0432\u0438\u0447\u0430\u0439\u043D\u043E\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456.");
-    const { delivery } = await c.req.json();
+    const { delivery, ship_to: shipIn } = await c.req.json();
     if (!DELIVERY[delivery]) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F.");
-    if (delivery === deliveryOf(o.delivery)) return c.json({ ok: true });
-    if (delivery === "pickup" && await db.get(`SELECT id FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled' LIMIT 1`, [o.id])) {
-      throw fail(400, "\u0417 \u0446\u0456\u0454\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0432\u0436\u0435 \u0454 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0441\u043A\u0430\u0441\u0443\u0439\u0442\u0435 \u0457\u0445, \u043F\u043E\u0442\u0456\u043C \u0441\u0442\u0430\u0432\u0442\u0435 \u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437.");
+    let ship = o.ship_to || "";
+    if (delivery === "warehouse") {
+      const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [o.partner_id]);
+      ship = JSON.stringify(shipToOf(shipIn, p));
     }
-    await db.run(`UPDATE b2b_orders SET delivery = ?, updated_at = ? WHERE id = ?`, [delivery, nowIso(), o.id]);
+    if (delivery === deliveryOf(o.delivery) && ship === (o.ship_to || "")) return c.json({ ok: true });
+    if (o.crm_ext || o.crm_id) throw fail(400, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0432\u0436\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 LP-CRM \u043D\u0430 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u2014 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u043D\u0435 \u0437\u043C\u0456\u043D\u0438\u0442\u0438.");
+    if (delivery !== "np" && await db.get(`SELECT id FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled' LIMIT 1`, [o.id])) {
+      throw fail(400, "\u0417 \u0446\u0456\u0454\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0432\u0436\u0435 \u0454 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0441\u043A\u0430\u0441\u0443\u0439\u0442\u0435 \u0457\u0445, \u043F\u043E\u0442\u0456\u043C \u0441\u0442\u0430\u0432\u0442\u0435 \u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437 \u0430\u0431\u043E \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434.");
+    }
+    await db.run(`UPDATE b2b_orders SET delivery = ?, ship_to = ?, updated_at = ? WHERE id = ?`, [delivery, delivery === "warehouse" ? ship : "", nowIso(), o.id]);
     await log(o.id, c.get("user"), `\u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F: \xAB${DELIVERY[delivery]}\xBB (\u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440)`);
     await tgPartner(o.partner_id, `\u{1F501} \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}: \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u0437\u043C\u0456\u043D\u0435\u043D\u043E \u043D\u0430 \xAB${DELIVERY[delivery]}\xBB.
 ${link(c, `porders/${o.id}`)}`);
@@ -6361,7 +6490,7 @@ ${link(c, `porders/${o.id}`)}`);
     if (!f) throw fail(404, "\u0424\u0430\u0439\u043B \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (\u0437\u0431\u0435\u0440\u0456\u0433\u0430\u044E\u0442\u044C\u0441\u044F 30 \u0434\u043D\u0456\u0432).");
     return sendFile(f);
   });
-  return { crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah2, h: h3 };
+  return { WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah2, h: h3 };
 }
 
 // src/modules/b2b/clients.js
@@ -6534,6 +6663,8 @@ function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {} }) {
     if (s.status === "open") throw fail(400, "\u0414\u043B\u044F \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u043E\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \xAB\u0411\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456\xBB.");
     if (s.status === "draft") throw fail(400, `\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(s.id)} \u0449\u0435 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0430 \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u043A\u0435\u0440\u0456\u0432\u043D\u0438\u043A \u0457\u0457 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u044F\u0454.`);
     if (s.delivery === "pickup") throw fail(400, `\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(s.id)} \u2014 \u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437: \u0457\u0457 \u0442\u043E\u0432\u0430\u0440\u0438 \u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0437\u0430\u0431\u0438\u0440\u0430\u0454 \u0441\u0430\u043C, \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u0437 \u043D\u0435\u0457 \u043D\u0435 \u043E\u0444\u043E\u0440\u043C\u043B\u044E\u044E\u0442\u044C\u0441\u044F.`);
+    if (s.delivery === "warehouse") throw fail(400, `\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(s.id)} \u2014 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0430 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u0437 \u043D\u0435\u0457 \u043D\u0435 \u043E\u0444\u043E\u0440\u043C\u043B\u044E\u044E\u0442\u044C\u0441\u044F.`);
+    if (s.status === "confirm") throw fail(400, `\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(s.id)} \u0449\u0435 \u0447\u0435\u043A\u0430\u0454 \u0432\u0430\u0448\u043E\u0433\u043E \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F.`);
     const left = new Map((await supplyLeft(s.id, exceptId)).map((r) => [r.product_id, r]));
     const want = /* @__PURE__ */ new Map();
     for (const it of Array.isArray(items) ? items : []) {
@@ -6701,7 +6832,7 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
          COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci JOIN b2b_orders co ON co.id = ci.order_id
            WHERE co.supply_id = s.id AND co.kind = 'client' AND co.status != 'cancelled' AND ci.product_id = i.product_id), 0) AS used
        FROM b2b_orders s JOIN b2b_order_items i ON i.order_id = s.id
-       WHERE s.partner_id = ? AND s.kind = 'supply' AND s.status NOT IN ('cancelled', 'open', 'draft') AND COALESCE(s.delivery, 'np') != 'pickup' AND s.created_at > ? ORDER BY s.id DESC, i.id`,
+       WHERE s.partner_id = ? AND s.kind = 'supply' AND s.status NOT IN ('cancelled', 'open', 'draft', 'confirm') AND COALESCE(s.delivery, 'np') NOT IN ('pickup', 'warehouse') AND s.created_at > ? ORDER BY s.id DESC, i.id`,
       [p.id, since]
     );
     const map = /* @__PURE__ */ new Map();
@@ -6818,7 +6949,7 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
          COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci JOIN b2b_orders co ON co.id = ci.order_id
            WHERE co.supply_id = s.id AND co.kind = 'client' AND co.status != 'cancelled' AND co.id != ? AND ci.product_id = i.product_id), 0) AS used
        FROM b2b_orders s JOIN b2b_order_items i ON i.order_id = s.id
-       WHERE s.partner_id = ? AND s.kind = 'supply' AND s.status NOT IN ('cancelled', 'open', 'draft') AND COALESCE(s.delivery, 'np') != 'pickup'
+       WHERE s.partner_id = ? AND s.kind = 'supply' AND s.status NOT IN ('cancelled', 'open', 'draft', 'confirm') AND COALESCE(s.delivery, 'np') NOT IN ('pickup', 'warehouse')
          AND (s.created_at > ? OR s.id = ?) ORDER BY s.id DESC, i.id`,
       [o.id, o.partner_id, since, o.supply_id || 0]
     );
@@ -7152,6 +7283,71 @@ ${link(c, `pclients/${o.id}`)}`);
     await supplyInWork(o.supply_id, c).catch(() => 0);
     return c.json({ ok: true, crm_id: crmId, code });
   });
+  app.post("/api/b2b/orders/:id/crm", async (c) => {
+    need(c, "b2b.admin");
+    const s = await orderOf(c.req.param("id"));
+    if (s.kind !== "supply" || s.delivery !== "warehouse") throw fail(400, "\u0423 LP-CRM \u043E\u0434\u043D\u0438\u043C \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F\u043C \u043F\u0435\u0440\u0435\u0434\u0430\u0454\u0442\u044C\u0441\u044F \u043B\u0438\u0448\u0435 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F \xAB\u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430\xBB.");
+    if (s.crm_id || s.crm_ext) throw fail(400, `\u0423\u0436\u0435 \u0432 LP-CRM${s.crm_id ? `: \u2116 ${s.crm_id}` : ""}.`);
+    if (s.status === "confirm") throw fail(400, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440 \u0449\u0435 \u043D\u0435 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E.");
+    if (["cancelled", "draft", "open"].includes(s.status)) throw fail(400, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0430\u0431\u043E \u0432\u043E\u043D\u0430 \u0449\u0435 \u043D\u0435 \u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u0430.");
+    const k = await crmConfig();
+    if (!k.on) throw fail(400, "\u041F\u0435\u0440\u0435\u0434\u0430\u0447\u0443 \u0432 LP-CRM \u0449\u0435 \u043D\u0435 \u0432\u0432\u0456\u043C\u043A\u043D\u0435\u043D\u043E (\xAB\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432\xBB \u2192 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F CRM\xBB).");
+    if (!k.office) throw fail(400, "\u041D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E ID \u0432\u0456\u0434\u0434\u0456\u043B\u0443 B2B \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 CRM\xBB.");
+    if (!k.creds.subdomain || !k.creds.key) throw fail(400, "\u041D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E LP-CRM: \u043F\u0456\u0434\u0434\u043E\u043C\u0435\u043D \u0456 API-\u043A\u043B\u044E\u0447 \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445\xBB.");
+    const ship = orders.parseShipTo(s.ship_to);
+    if (!ship?.name || !ship?.address) throw fail(400, "\u041D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 (\u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0447 \u0456 \u0430\u0434\u0440\u0435\u0441\u0430) \u2014 \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456.");
+    const code = newCode();
+    const now = nowIso();
+    const stale = new Date(Date.now() - SENDING_TTL_MS).toISOString();
+    const claim = await db.run(
+      `UPDATE b2b_orders SET crm_ext = ?, crm_sent_at = ? WHERE id = ? AND crm_id = '' AND COALESCE(crm_ext, '') = '' AND (crm_sent_at = '' OR crm_sent_at IS NULL OR crm_sent_at < ?)`,
+      [code, `sending:${now}`, s.id, `sending:${stale}`]
+    );
+    if (!claim.changes) throw fail(409, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F \u0432\u0436\u0435 \u043D\u0430\u0434\u0441\u0438\u043B\u0430\u0454\u0442\u044C\u0441\u044F \u0432 CRM \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443 \u0437\u0430 \u0445\u0432\u0438\u043B\u0438\u043D\u0443.");
+    const [items, p] = await Promise.all([
+      db.all(`SELECT product_id, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [s.id]),
+      db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [s.partner_id])
+    ]);
+    const pay = await payText({ supply_id: s.id }, p?.name || "");
+    const comment = [`${orderNo(s.id)} \xB7 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F B2B \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \xAB${p?.name || ""}\xBB`, pay.text, s.comment || ""].filter(Boolean).join("\n");
+    const undo = () => db.run(`UPDATE b2b_orders SET crm_ext = '', crm_sent_at = '' WHERE id = ?`, [s.id]);
+    let res;
+    try {
+      res = await addNewOrder(fetchFn, k.addCreds, {
+        code,
+        office: k.office,
+        bayer_name: ship.name,
+        phone: ship.phone.replace(/\D/g, ""),
+        comment,
+        delivery: k.delivery,
+        payment: pay.paid ? k.paymentPaid : k.payment,
+        notification: k.notification,
+        delivery_adress: ship.address,
+        sender: senderOf(c, k.site),
+        site: k.site || new URL(c.req.url).host,
+        products: items.map((i) => ({ product_id: i.product_id, price: i.price, count: i.qty }))
+      });
+    } catch (e) {
+      await undo();
+      if (e.pending) throw e;
+      throw fail(502, e.message);
+    }
+    if (!res.ok) {
+      await undo();
+      await log(s.id, c.get("user"), `LP-CRM \u043D\u0435 \u043F\u0440\u0438\u0439\u043D\u044F\u043B\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E: ${res.error.slice(0, 200)}`);
+      throw fail(400, `LP-CRM \u043D\u0435 \u043F\u0440\u0438\u0439\u043D\u044F\u043B\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F: ${res.error}`);
+    }
+    let crmId = res.crmId || "";
+    if (!crmId) {
+      const found = await getOrdersBatch(fetchFn, k.creds, [code]).catch(() => []);
+      crmId = String(found.find((x2) => String(x2.order_id) === code)?.id || "");
+    }
+    await db.run(`UPDATE b2b_orders SET crm_id = ?, crm_sent_at = ?, crm_status = '\u041F\u0435\u0440\u0435\u0434\u0430\u043D\u043E', updated_at = ? WHERE id = ?`, [crmId, nowIso(), nowIso(), s.id]);
+    await log(s.id, c.get("user"), `\u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 LP-CRM \u043D\u0430 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430${crmId ? `: \u2116 ${crmId}` : ` (\u043A\u043E\u0434 ${code})`}`);
+    await tgPartner(s.partner_id, `\u{1F69A} \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(s.id)} \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u043D\u0430 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0432\u0430\u0448 \u0441\u043A\u043B\u0430\u0434${crmId ? ` (\u2116 ${crmId})` : ""}: ${h6(ship.name)}, ${h6(ship.address)}.
+${link(c, `porders/${s.id}`)}`);
+    return c.json({ ok: true, crm_id: crmId, code, paid: pay.paid });
+  });
   app.put("/api/b2b/clients/:id", async (c) => {
     need(c, "b2b.admin");
     const o = await clientOrder(c);
@@ -7240,7 +7436,7 @@ function mountB2bStats(app, { db, myPartner }) {
     const orders = await db.all(
       `SELECT o.id, o.partner_id, o.kind, o.status, o.supply_id, o.total, o.paid_amount, o.paid_at, o.created_at, o.crm_status, s.status AS supply_status
        FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id
-       WHERE o.created_at >= ? AND o.created_at < ? AND o.status NOT IN ('cancelled', 'draft') ${byPartner}`,
+       WHERE o.created_at >= ? AND o.created_at < ? AND o.status NOT IN ('cancelled', 'draft', 'confirm') ${byPartner}`,
       [kyivDayStartIso(prevFrom), kyivDayStartIso(nextDay(to)), ...pp]
     );
     for (const o of orders) {
@@ -7330,7 +7526,7 @@ function mountB2bStats(app, { db, myPartner }) {
           SUM(CASE WHEN o.status IN ('pay_wait', 'partial') THEN 1 ELSE 0 END) AS due_cnt
         FROM b2b_orders o WHERE o.kind = 'supply' AND o.status IN ('invoice_wait', 'pay_wait', 'partial') ${byPartner}`, pp),
       db.get(`SELECT SUM(i.qty) AS units, SUM(i.qty * i.price) AS sum FROM b2b_order_items i JOIN b2b_orders o ON o.id = i.order_id
-        WHERE o.kind = 'supply' AND o.status NOT IN ('cancelled', 'draft') ${byPartner}`, pp),
+        WHERE o.kind = 'supply' AND o.status NOT IN ('cancelled', 'draft', 'confirm') ${byPartner}`, pp),
       db.get(`SELECT SUM(i.qty) AS units, SUM(i.qty * i.price) AS sum FROM b2b_order_items i JOIN b2b_orders o ON o.id = i.order_id
         WHERE o.kind = 'client' AND o.status != 'cancelled' AND o.supply_id IS NOT NULL ${byPartner}`, pp)
     ]);
@@ -7679,7 +7875,7 @@ function mountB2bTgDocs(app, { db, services, orders, hooks }) {
     const rows = await db.all(
       `SELECT o.id, o.kind, o.status, o.partner_id, o.total, o.entity, o.invoice_no, o.waybill_no, o.client_name, o.created_at, p.name AS partner
        FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id
-       WHERE o.status NOT IN ('cancelled', 'open', 'draft') AND o.created_at > ? AND (o.kind = 'supply' OR o.supply_id IS NULL) ORDER BY o.id DESC LIMIT 200`,
+       WHERE o.status NOT IN ('cancelled', 'open', 'draft', 'confirm') AND o.created_at > ? AND (o.kind = 'supply' OR o.supply_id IS NULL) ORDER BY o.id DESC LIMIT 200`,
       [since]
     );
     const ents = await db.all(`SELECT partner_id, name FROM b2b_entities`);
@@ -8555,7 +8751,7 @@ ${lines}
       await tgPartner(o.partner_id, `${text}
 ${link(c, `porders/${o.id}`)}`);
       if (invoiced) await tgGroup(o.partner_id, text);
-      await hooks.finRequest?.(o.id, invoiced ? "reinvoice" : "changed").catch(() => 0);
+      if (o.status !== "confirm") await hooks.finRequest?.(o.id, invoiced ? "reinvoice" : "changed").catch(() => 0);
     }
     return { ok: true, changed: true, total, reinvoice: invoiced };
   }
@@ -9180,7 +9376,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     ]);
     const freq = new Map((await db.all(
       `SELECT i.product_id, COUNT(DISTINCT o.id) AS n, SUM(i.qty) AS q FROM b2b_orders o JOIN b2b_order_items i ON i.order_id = o.id
-       WHERE o.partner_id = ? AND o.kind IN ('supply', 'client') AND o.status NOT IN ('cancelled', 'open', 'draft') GROUP BY i.product_id`,
+       WHERE o.partner_id = ? AND o.kind IN ('supply', 'client') AND o.status NOT IN ('cancelled', 'open', 'draft', 'confirm') GROUP BY i.product_id`,
       [p.id]
     )).map((r) => [r.product_id, r]));
     const catName = new Map(cats.map((x2) => [x2.id, x2.name]));
@@ -11789,7 +11985,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 24,
+  version: 25,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -12058,7 +12254,13 @@ var schema11 = {
     ["b2b_tg_docs", "choices", "TEXT DEFAULT ''"],
     // Ліміти партнера (порожньо — типові): відкрита закупівля і всі неоплачені закупівлі.
     ["b2b_partners", "open_limit", "REAL"],
-    ["b2b_partners", "unpaid_limit", "REAL"]
+    ["b2b_partners", "unpaid_limit", "REAL"],
+    // Закупівля, яку створили ми: відправка всієї закупівлі на склад партнера — отримувач (JSON: name, phone, address);
+    // склад партнера за замовчуванням (підставляється в нові такі закупівлі).
+    ["b2b_orders", "ship_to", "TEXT DEFAULT ''"],
+    ["b2b_partners", "wh_name", "TEXT DEFAULT ''"],
+    ["b2b_partners", "wh_phone", "TEXT DEFAULT ''"],
+    ["b2b_partners", "wh_address", "TEXT DEFAULT ''"]
   ],
   // Індекси на нові колонки — після ALTER TABLE (у старих базах колонок ще немає, коли створюються таблиці).
   async seed(db) {
