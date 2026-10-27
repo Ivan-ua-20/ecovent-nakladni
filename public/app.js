@@ -3,7 +3,7 @@ import { esc } from './invoice.js';
 import { createAnalyticsUI } from './an.js';
 import { createPayUI } from './pay.js';
 import { createPayStatsUI } from './anpay.js';
-import { $, $$, main, api, setPending, setUnauthorized, toast, modal, fmtDateTime } from './core/ui.js';
+import { $, $$, main, api, setPending, setUnauthorized, toast, modal, fmtDateTime, confirmDanger } from './core/ui.js';
 import { createNakladnaPages } from './pages/nakladna.js';
 import { createRefsPages } from './pages/refs.js';
 import { createSettingsPages } from './pages/settings.js';
@@ -272,7 +272,7 @@ window.addEventListener('hashchange', route);
 // =====================================================================
 const PAY = createPayUI({ api, $, $$, esc, toast, modal, can, get main() { return main; }, reloadBoot: () => loadBoot() });
 const PAYSTATS = createPayStatsUI({ api, $, $$, esc, toast, modal, get main() { return main; } });
-const AN = createAnalyticsUI({ api, $, $$, esc, toast, modal, can, get boot() { return boot; }, get main() { return main; }, fmtDateTime, setPending });
+const AN = createAnalyticsUI({ api, $, $$, esc, toast, modal, confirmDanger, can, get boot() { return boot; }, get main() { return main; }, fmtDateTime, setPending });
 
 // ---------- старт ----------
 async function start() {

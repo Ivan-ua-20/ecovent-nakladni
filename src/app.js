@@ -44,9 +44,13 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   // ---------- Строк зберігання: модулі реєструють свою чистку, вона йде не частіше разу на годину ----------
   const cleanupTasks = [];
   const onCleanup = (fn) => cleanupTasks.push(fn);
+  // Легкі фонові задачі на запитах (кожна сама вирішує, чи вже час), напр. перевірка дублів ТТН кожні 10 хв.
+  const tickTasks = [];
+  const onTick = (fn) => tickTasks.push(fn);
   // На Cloudflare екземплярів (ізолятів) багато й вони короткоживучі, тож пам'ятати час чистки лише в пам'яті
   // замало: кожен новий екземпляр чистив би знову. Тому «бронюємо» чистку в базі — один запит, раз на годину на всі.
-  async function runCleanup() {
+  async function runCleanup(c = null) {
+    for (const t of tickTasks) { try { t(c); } catch { /* фонова задача не заважає запиту */ } }
     if (Date.now() - (shared.lastCleanup || 0) < 60 * 60 * 1000) return;
     shared.lastCleanup = Date.now();
     const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
@@ -63,7 +67,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
 
   // Публічні входи модулів для інших модулів.
   const services = {};
-  const ctx = { db, fetchFn, services, onCleanup, runCleanup, shared };
+  const ctx = { db, fetchFn, services, onCleanup, onTick, runCleanup, shared };
 
   // Порядок важливий: auth першим (його маршрути входу не потребують сесії, а далі стоїть перевірка входу).
   mountAuth(app, ctx);
