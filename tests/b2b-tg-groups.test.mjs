@@ -109,10 +109,12 @@ assert.match((await mk().request(`/api/b2b/orders/${o.id}`, { method: 'DELETE', 
 assert.equal(await status(() => req('DELETE', `/api/b2b/orders/${cl.id}`, null, A)), 403, 'партнер не видаляє');
 await req('DELETE', `/api/b2b/orders/${cl.id}`);
 await req('DELETE', `/api/b2b/orders/${o.id}`);
-for (const t of ['b2b_orders', 'b2b_order_items', 'b2b_order_log', 'b2b_files', 'b2b_file_parts']) {
+for (const t of ['b2b_orders', 'b2b_order_items', 'b2b_order_log']) {
   assert.equal((await db.get(`SELECT COUNT(*) AS n FROM ${t}`)).n, 0, `${t} порожня`);
 }
-assert.ok((await db.get(`SELECT COUNT(*) AS n FROM audit_log WHERE action LIKE 'видалено закупівлю%'`)).n === 1, 'видалення — у журналі змін');
+// у кошик: знімок для відновлення; файли лишаються (до 30 днів) — повернуться з відновленням
+assert.deepEqual((await db.all(`SELECT kind, order_id FROM b2b_trash ORDER BY id`)).map((r) => [r.kind, r.order_id]), [['client', cl.id], ['supply', o.id]]);
+assert.ok((await db.get(`SELECT COUNT(*) AS n FROM audit_log WHERE action LIKE 'видалено в кошик закупівлю%'`)).n === 1, 'видалення — у журналі змін');
 
 // ---------- 4а. Усі замовлення закупівлі в роботі (у CRM з номерами) — один підсумок у групу ----------
 const o2 = await req('POST', '/api/b2b/p/orders', { entity_id: ea.id, items: [{ product_id: 11, qty: 2 }, { product_id: 12, qty: 1 }] }, A);
