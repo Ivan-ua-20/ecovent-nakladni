@@ -1851,7 +1851,7 @@ var publicUser = (u) => u ? {
   partner_id: u.partner_id || null,
   ...u.role === "partner" ? { partner_role: partnerRole(u), partner_role_name: PARTNER_ROLES[partnerRole(u)] } : {}
 } : null;
-var crmLogins = (v) => [...new Set((Array.isArray(v) ? v : String(v || "").split(",")).map((x2) => String(x2).trim().toLowerCase()).filter(Boolean))].slice(0, 20);
+var crmLogins = (v) => [...new Set((Array.isArray(v) ? v : String(v || "").split(",")).map((x) => String(x).trim().toLowerCase()).filter(Boolean))].slice(0, 20);
 async function resetOwnerPassword(db, newPassword) {
   const owner = await db.get(`SELECT id, login FROM users WHERE role = 'owner' LIMIT 1`);
   if (!owner) return null;
@@ -2754,8 +2754,8 @@ function phpSerialize(v) {
   if (typeof v === "number" && Number.isInteger(v)) return `i:${v};`;
   if (typeof v === "number") return `d:${v};`;
   if (typeof v === "string") return `s:${utf8Len(v)}:"${v}";`;
-  const entries = Array.isArray(v) ? v.map((x2, i) => [i, x2]) : Object.entries(v);
-  return `a:${entries.length}:{${entries.map(([k, x2]) => (typeof k === "number" ? `i:${k};` : phpSerialize(String(k))) + phpSerialize(x2)).join("")}}`;
+  const entries = Array.isArray(v) ? v.map((x, i) => [i, x]) : Object.entries(v);
+  return `a:${entries.length}:{${entries.map(([k, x]) => (typeof k === "number" ? `i:${k};` : phpSerialize(String(k))) + phpSerialize(x)).join("")}}`;
 }
 var phpUrlencode = (s) => encodeURIComponent(s).replace(/[!'()*~]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`).replace(/%20/g, "+");
 var CRM_ID_KEYS = ["crm_id", "order_crm_id", "lp_order_id", "id"];
@@ -2767,8 +2767,8 @@ function findNewOrderId(node, sentCode, depth = 0) {
   }
   const oid = node.order_id;
   if ((typeof oid === "number" || typeof oid === "string") && /^[1-9]\d{0,9}$/.test(String(oid)) && String(oid) !== String(sentCode)) return String(oid);
-  for (const x2 of Object.values(node)) {
-    const r = findNewOrderId(x2, sentCode, depth + 1);
+  for (const x of Object.values(node)) {
+    const r = findNewOrderId(x, sentCode, depth + 1);
     if (r) return r;
   }
   return "";
@@ -2955,7 +2955,7 @@ function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {}, serv
   const ID_RE2 = /^[1-9]\d{0,8}$/;
   shared2.acceptedCodes ||= /* @__PURE__ */ new Map();
   const orderKeys = (o) => {
-    const ks = [o.id, o.order_id, o.ttn].map((x2) => String(x2 ?? "").trim()).filter(Boolean);
+    const ks = [o.id, o.order_id, o.ttn].map((x) => String(x ?? "").trim()).filter(Boolean);
     const p = digits(o.phone);
     if (p.length >= 9) ks.push(`p:${p.slice(-9)}`);
     return [...new Set(ks)];
@@ -3092,7 +3092,7 @@ function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {}, serv
     let channelFop = null;
     let ch = null;
     if (crmOrder.channel) {
-      ch = (await db.all(`SELECT * FROM channels`)).find((x2) => x2.name.trim().toLowerCase() === crmOrder.channel.toLowerCase());
+      ch = (await db.all(`SELECT * FROM channels`)).find((x) => x.name.trim().toLowerCase() === crmOrder.channel.toLowerCase());
       channelFop = ch?.fop_id ? byId(ch.fop_id) : null;
       if (!ch) warnings.push(`\u0417\u043D\u0430\u0447\u0435\u043D\u043D\u044F \u043F\u043E\u043B\u044F 1 \xAB${crmOrder.channel}\xBB \u043D\u0435 \u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u0435 \u0434\u043E \u0424\u041E\u041F (\u0440\u043E\u0437\u0434\u0456\u043B \xAB\u0412\u0456\u0434\u0434\u0456\u043B\u0438 \u2192 \u0424\u041E\u041F\xBB).`);
     }
@@ -3321,7 +3321,7 @@ function mountAdmin(app, { db }) {
     for (const t of EXPORT_TABLES) {
       const rows = b.tables[t];
       if (!Array.isArray(rows)) continue;
-      const cols = new Set((await db.all(`PRAGMA table_info(${t})`)).map((x2) => x2.name));
+      const cols = new Set((await db.all(`PRAGMA table_info(${t})`)).map((x) => x.name));
       st.push([`DELETE FROM ${t}`, []]);
       for (const r0 of rows) {
         const r = dropUnsafeImages(r0 || {});
@@ -3556,13 +3556,13 @@ function brandOf(name, brands) {
 async function remap(db, st, { dept = true, src = true } = {}) {
   if (src) {
     const one = (col) => `CASE WHEN an_orders.${col} != '' THEN (SELECT source_id FROM an_source_map s WHERE s.value = an_orders.${col}) END`;
-    const x2 = `COALESCE(${one("ch")}, ${one("site")}, ${one("utm")}, 0)`;
-    await db.run(`UPDATE an_orders SET src = ${x2} WHERE src IS NOT ${x2}`);
+    const x = `COALESCE(${one("ch")}, ${one("site")}, ${one("utm")}, 0)`;
+    await db.run(`UPDATE an_orders SET src = ${x} WHERE src IS NOT ${x}`);
   }
   if (dept || src) {
     const deptOff = `(SELECT dept_id FROM an_office_map f WHERE f.office = an_orders.office)`;
     const deptSrc = `(SELECT dept_id FROM an_sources s WHERE s.id = an_orders.src)`;
-    const inSet = (x2) => `(',' || m.depts || ',') LIKE ('%,' || ${x2} || ',%')`;
+    const inSet = (x) => `(',' || m.depts || ',') LIKE ('%,' || ${x} || ',%')`;
     const deptMgr = `(SELECT CASE
         WHEN m.depts LIKE '%,%' AND ${deptSrc} IS NOT NULL AND ${inSet(deptSrc)} THEN ${deptSrc}
         WHEN m.depts LIKE '%,%' AND ${deptOff} IS NOT NULL AND ${inSet(deptOff)} THEN ${deptOff}
@@ -3763,7 +3763,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const r = await idRange(db, day, day);
     if (!r) return cur;
     const rows = await db.all(`SELECT ch, site, utm, user, office FROM an_orders WHERE id BETWEEN ? AND ? AND day = ?`, [r[0], r[1], day]);
-    const has = (list, v, key = "v") => list.some((x2) => x2[key] === v);
+    const has = (list, v, key = "v") => list.some((x) => x[key] === v);
     for (const o of rows) {
       for (const [field, v] of [["\u041F\u043E\u043B\u0435 1", o.ch], ["\u0421\u0430\u0439\u0442", o.site], ["utm_source", o.utm]]) {
         if (v && !has(cur.values, v, "value")) cur.values.push({ value: v, n: 1, fields: [field] });
@@ -3852,16 +3852,16 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const today2 = kyivDay();
     const from = addDays(today2, -1);
     const listed = /* @__PURE__ */ new Map();
-    for (const x2 of [...st.okStatuses, ...st.refuseStatuses]) {
-      const j = await lp(cr, "getOrdersIdByStatus", { status: String(x2), date_start: from, date_end: today2 }).catch(() => null);
-      if (j?.status === "ok") for (const code of asList(j.data).map(String).filter(Boolean)) listed.set(code, x2);
+    for (const x of [...st.okStatuses, ...st.refuseStatuses]) {
+      const j = await lp(cr, "getOrdersIdByStatus", { status: String(x), date_start: from, date_end: today2 }).catch(() => null);
+      if (j?.status === "ok") for (const code of asList(j.data).map(String).filter(Boolean)) listed.set(code, x);
     }
     const codes = [...listed.keys()];
     let fetched = 0;
     let found = 0;
     if (codes.length) {
       const known = new Map((await db.all(`SELECT code, status FROM an_ttn_recent WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => [r.code, r.status]));
-      const todo = codes.filter((x2) => known.get(x2) !== listed.get(x2)).slice(0, 300);
+      const todo = codes.filter((x) => known.get(x) !== listed.get(x)).slice(0, 300);
       const got = [];
       for (let i = 0; i < todo.length; i += 100) {
         const j = await lp(cr, "getOrdersByID", { order_id: todo.slice(i, i + 100).join(",") }).catch(() => null);
@@ -3922,7 +3922,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
   });
   app.post("/api/an/cron-key", async (c) => {
     need(c, "users");
-    const key = [...crypto.getRandomValues(new Uint8Array(24))].map((x2) => x2.toString(16).padStart(2, "0")).join("");
+    const key = [...crypto.getRandomValues(new Uint8Array(24))].map((x) => x.toString(16).padStart(2, "0")).join("");
     await putSetting2("an_cron_key", key);
     return c.json({ key });
   });
@@ -3985,9 +3985,9 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const known = new Set(mgrs.map((r) => r.login));
     const offs = new Set(omap.map((r) => String(r.office)));
     const out = {
-      values: vals.values.filter((x2) => !mapped.has(x2.value) && !ig.values.includes(x2.value)),
-      users: vals.users.filter((x2) => !known.has(x2.v) && !ig.users.includes(x2.v)),
-      offices: vals.offices.filter((x2) => x2.v !== "" && !offs.has(String(x2.v)) && !ig.offices.includes(String(x2.v))),
+      values: vals.values.filter((x) => !mapped.has(x.value) && !ig.values.includes(x.value)),
+      users: vals.users.filter((x) => !known.has(x.v) && !ig.users.includes(x.v)),
+      offices: vals.offices.filter((x) => x.v !== "" && !offs.has(String(x.v)) && !ig.offices.includes(String(x.v))),
       products: { fresh: prod?.fresh || 0, nobrand: prod?.nobrand || 0, nocat: prod?.nocat || 0 },
       ignored: ig
     };
@@ -3999,7 +3999,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     if (!["users", "values", "offices"].includes(b.kind)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u0442\u0438\u043F.");
     const ig = await ignored();
     const v = String(b.value ?? "");
-    ig[b.kind] = b.on ? [.../* @__PURE__ */ new Set([...ig[b.kind], v])] : ig[b.kind].filter((x2) => x2 !== v);
+    ig[b.kind] = b.on ? [.../* @__PURE__ */ new Set([...ig[b.kind], v])] : ig[b.kind].filter((x) => x !== v);
     await putSetting2("an_ignored", JSON.stringify(ig));
     return c.json({ ok: true, ignored: ig });
   });
@@ -4014,7 +4014,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
   });
   app.put("/api/an/products", async (c) => {
     const list = await c.req.json();
-    const norm = (x2) => x2 === "" || x2 == null ? null : parseInt(x2, 10);
+    const norm = (x) => x === "" || x == null ? null : parseInt(x, 10);
     const st = (Array.isArray(list) ? list : []).filter((r) => parseInt(r.id, 10)).map((r) => [
       `UPDATE an_products SET brand_manual = ?, cat_manual = ?, seen = 1 WHERE product_id = ?`,
       [norm(r.brand_manual), norm(r.cat_manual), parseInt(r.id, 10)]
@@ -4026,7 +4026,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
   });
   app.post("/api/an/products/seen", async (c) => {
     const b = await c.req.json().catch(() => ({}));
-    const ids = (Array.isArray(b.ids) ? b.ids : []).map((x2) => parseInt(x2, 10)).filter(Boolean);
+    const ids = (Array.isArray(b.ids) ? b.ids : []).map((x) => parseInt(x, 10)).filter(Boolean);
     if (ids.length) await db.run(`UPDATE an_products SET seen = 1 WHERE product_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(ids)]);
     else await db.run(`UPDATE an_products SET seen = 1 WHERE seen = 0`);
     return c.json({ ok: true });
@@ -4062,7 +4062,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       const name = String(d.name || "").trim();
       if (!name) continue;
       let id = parseInt(d.id, 10) || 0;
-      if (id && oldDepts.some((x2) => x2.id === id)) {
+      if (id && oldDepts.some((x) => x.id === id)) {
         await db.run(`UPDATE an_depts SET name = ?, sort = ? WHERE id = ?`, [name, di, id]);
       } else {
         id = (await db.run(`INSERT INTO an_depts (name, sort) VALUES (?, ?)`, [name, di])).lastId;
@@ -4074,7 +4074,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
         const sname = String(s.name || "").trim();
         if (!sname) continue;
         let sid = parseInt(s.id, 10) || 0;
-        if (sid && oldSources.some((x2) => x2.id === sid)) {
+        if (sid && oldSources.some((x) => x.id === sid)) {
           await db.run(`UPDATE an_sources SET name = ?, dept_id = ?, sort = ? WHERE id = ?`, [sname, id, si, sid]);
         } else {
           sid = (await db.run(`INSERT INTO an_sources (dept_id, name, sort) VALUES (?, ?, ?)`, [id, sname, si])).lastId;
@@ -4089,8 +4089,8 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
         }
       }
     }
-    const goneD = oldDepts.map((x2) => x2.id).filter((id) => !keepD.has(id));
-    const goneS = oldSources.map((x2) => x2.id).filter((id) => !keepS.has(id));
+    const goneD = oldDepts.map((x) => x.id).filter((id) => !keepD.has(id));
+    const goneS = oldSources.map((x) => x.id).filter((id) => !keepS.has(id));
     const del = [[`DELETE FROM an_source_map`, []]];
     for (const id of goneD) {
       del.push([`DELETE FROM an_depts WHERE id = ?`, [id]]);
@@ -4127,7 +4127,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       const login = low(r.login);
       if (!login) continue;
       const main = parseInt(r.dept_id, 10) || null;
-      const all = main ? [.../* @__PURE__ */ new Set([main, ...(Array.isArray(r.depts) ? r.depts : String(r.depts || "").split(",")).map((x2) => parseInt(x2, 10)).filter(Boolean)])] : [];
+      const all = main ? [.../* @__PURE__ */ new Set([main, ...(Array.isArray(r.depts) ? r.depts : String(r.depts || "").split(",")).map((x) => parseInt(x, 10)).filter(Boolean)])] : [];
       st.push([`INSERT OR REPLACE INTO an_managers (login, name, dept_id, depts) VALUES (?, ?, ?, ?)`, [login, String(r.name || "").trim(), main, all.join(",")]]);
     }
     await db.batch(st);
@@ -4145,12 +4145,12 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       if (!name) continue;
       const kws = String(r.keywords || name).split(",").map(low).filter(Boolean).join(", ");
       let id = parseInt(r.id, 10) || 0;
-      if (id && old.some((x2) => x2.id === id)) await db.run(`UPDATE an_brands SET name = ?, keywords = ?, sort = ? WHERE id = ?`, [name, kws, i, id]);
+      if (id && old.some((x) => x.id === id)) await db.run(`UPDATE an_brands SET name = ?, keywords = ?, sort = ? WHERE id = ?`, [name, kws, i, id]);
       else id = (await db.run(`INSERT INTO an_brands (name, keywords, sort) VALUES (?, ?, ?)`, [name, kws, i])).lastId;
       keep.add(id);
       i++;
     }
-    await db.batch(old.filter((x2) => !keep.has(x2.id)).map((x2) => [`DELETE FROM an_brands WHERE id = ?`, [x2.id]]));
+    await db.batch(old.filter((x) => !keep.has(x.id)).map((x) => [`DELETE FROM an_brands WHERE id = ?`, [x.id]]));
     const changed = await rebrand(db);
     await bump();
     return c.json({ ok: true, changed });
@@ -4321,7 +4321,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
                 else upd.push([`UPDATE an_orders SET status = 0 WHERE id = ?`, [r.id]]);
               }
             }
-            const rest = codes.filter((x2) => !known.has(x2));
+            const rest = codes.filter((x) => !known.has(x));
             const changedStatus = /* @__PURE__ */ new Set();
             if (rest.length) {
               const rows = await db.all(`SELECT id, code, day, status FROM an_orders WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(rest)]);
@@ -4336,7 +4336,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
             state.stats.changed += upd.length;
             await db.batch(upd);
             const queued = new Set(state.pending);
-            state.pending.push(...codes.filter((x2) => !queued.has(x2) && (!known.has(x2) || changedStatus.has(x2) || known.get(x2).day >= state.refetchFrom)));
+            state.pending.push(...codes.filter((x) => !queued.has(x) && (!known.has(x) || changedStatus.has(x) || known.get(x).day >= state.refetchFrom)));
             state.units.shift();
             continue;
           }
@@ -4413,11 +4413,11 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
           calls++;
           if (j.status === "ok") {
             const cats = flattenCategories(j.data);
-            await db.batch(cats.map((x2) => [
+            await db.batch(cats.map((x) => [
               `INSERT INTO an_categories (id, name, parent_id) VALUES (?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET name = excluded.name, parent_id = excluded.parent_id
                WHERE an_categories.name IS NOT excluded.name OR an_categories.parent_id IS NOT excluded.parent_id`,
-              [x2.id, x2.name, x2.parent_id]
+              [x.id, x.name, x.parent_id]
             ]));
           }
           state.phase = "cleanup";
@@ -4474,7 +4474,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const to = isDay(b.to) && b.to >= from ? b.to : today2;
     if (daysBetween(from, to) > 400) throw fail(400, "\u041F\u0435\u0440\u0456\u043E\u0434 \u0437\u0430\u0432\u0435\u043B\u0438\u043A\u0438\u0439 (\u043C\u0430\u043A\u0441\u0438\u043C\u0443\u043C 400 \u0434\u043D\u0456\u0432).");
     const cmp = st.compare && isDay(b.cmpFrom) && isDay(b.cmpTo) && b.cmpTo >= b.cmpFrom ? { from: b.cmpFrom, to: b.cmpTo } : null;
-    const ints = (a) => Array.isArray(a) ? a.map((x2) => parseInt(x2, 10)).filter((x2) => Number.isFinite(x2)).slice(0, 40) : [];
+    const ints = (a) => Array.isArray(a) ? a.map((x) => parseInt(x, 10)).filter((x) => Number.isFinite(x)).slice(0, 40) : [];
     const f = {
       depts: ints(b.depts),
       sources: ints(b.sources),
@@ -4544,38 +4544,38 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
           topJob
         ]);
         const add = (m, k, init) => {
-          let x2 = m.get(k);
-          if (!x2) {
-            x2 = init();
-            m.set(k, x2);
+          let x = m.get(k);
+          if (!x) {
+            x = init();
+            m.set(k, x);
           }
-          return x2;
+          return x;
         };
         const dm = /* @__PURE__ */ new Map();
         const gm = /* @__PURE__ */ new Map();
         for (const r2 of rows) {
           const d = add(dm, r2.day, () => ({ day: r2.day, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
           const g = add(gm, `${r2.dept}|${r2.src}|${r2.user}|${r2.status}|${r2.deliv}`, () => ({ dept: r2.dept, src: r2.src, user: r2.user, status: r2.status, deliv: r2.deliv, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
-          for (const x2 of [d, g]) {
-            x2.rev += r2.rev || 0;
-            x2.net += r2.net || 0;
-            x2.cnt += r2.cnt || 0;
-            x2.rcnt += r2.rcnt || 0;
+          for (const x of [d, g]) {
+            x.rev += r2.rev || 0;
+            x.net += r2.net || 0;
+            x.cnt += r2.cnt || 0;
+            x.rcnt += r2.rcnt || 0;
           }
         }
         const bm = /* @__PURE__ */ new Map();
         const cm = /* @__PURE__ */ new Map();
         for (const r2 of oi) {
           for (const [m, k] of [[bm, r2.b], [cm, r2.c]]) {
-            const x2 = add(m, k, () => ({ id: k, rev: 0, net: 0, qty: 0, orders: /* @__PURE__ */ new Set(), rorders: /* @__PURE__ */ new Set() }));
-            x2.rev += r2.rev || 0;
-            x2.qty += r2.qty || 0;
-            if (!r2.rf) x2.net += r2.rev || 0;
-            x2.orders.add(r2.oid);
-            if (r2.rf) x2.rorders.add(r2.oid);
+            const x = add(m, k, () => ({ id: k, rev: 0, net: 0, qty: 0, orders: /* @__PURE__ */ new Set(), rorders: /* @__PURE__ */ new Set() }));
+            x.rev += r2.rev || 0;
+            x.qty += r2.qty || 0;
+            if (!r2.rf) x.net += r2.rev || 0;
+            x.orders.add(r2.oid);
+            if (r2.rf) x.rorders.add(r2.oid);
           }
         }
-        const fin = (m) => [...m.values()].map(({ orders, rorders, ...x2 }) => ({ ...x2, cnt: orders.size, rcnt: rorders.size }));
+        const fin = (m) => [...m.values()].map(({ orders, rorders, ...x }) => ({ ...x, cnt: orders.size, rcnt: rorders.size }));
         return { daily: [...dm.values()], groups: [...gm.values()], brands: fin(bm), cats: fin(cm), top: top3 };
       }
       const [daily, groups, brands2, cats, top2] = await Promise.all([
@@ -4684,7 +4684,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     let target = { applicable: false, note: own ? "" : targetNote, base: factKey };
     if (scopeFn) {
       const perDay = curDaily.map((d) => round2(scopeFn(d.day.slice(0, 7)) / daysInMonth(d.day)));
-      const plan = round2(perDay.reduce((a, x2) => a + x2, 0));
+      const plan = round2(perDay.reduce((a, x) => a + x, 0));
       if (plan > 0) {
         const fact = round2(curDaily.reduce((a, d) => a + d[factKey], 0));
         target = { applicable: true, base: factKey, perDay, plan, fact, diff: round2(fact - plan), pct: round2(fact / plan * 100) };
@@ -4782,7 +4782,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
         prevCnt: dvPrev ? p?.cnt || 0 : null
       };
     }).filter((r) => r.cnt || r.prevCnt).sort((a, b2) => b2.cnt - a.cnt);
-    const bName = new Map(brands.map((x2) => [x2.id, x2.name]));
+    const bName = new Map(brands.map((x) => [x.id, x.name]));
     const prevBrands = new Map((prev?.brands || []).map((r) => [r.id, r]));
     const byBrand = cur.brands.map((r) => ({
       id: r.id,
@@ -4796,7 +4796,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       prevRev: prev ? round2(prevBrands.get(r.id)?.rev || 0) : null,
       prevNet: prev ? round2(prevBrands.get(r.id)?.net || 0) : null
     })).sort((a, b2) => b2.rev - a.rev);
-    const cName = new Map(categories.map((x2) => [x2.id, x2.name]));
+    const cName = new Map(categories.map((x) => [x.id, x.name]));
     const prevCats = new Map((prev?.cats || []).map((r) => [r.id, r]));
     const byCategory = cur.cats.map((r) => ({
       id: r.id,
@@ -4835,7 +4835,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
           ...managers.map((m) => [m.login, { login: m.login, name: m.name || m.login, dept_id: m.dept_id }]),
           ...byManager.filter((m) => !mgrNames.has(m.login)).map((m) => [m.login, { login: m.login, name: m.login, dept_id: null }])
         ]).values()],
-        brands: [...brands.map((x2) => ({ id: x2.id, name: x2.name })), { id: 0, name: "\u0406\u043D\u0448\u0456" }],
+        brands: [...brands.map((x) => ({ id: x.id, name: x.name })), { id: 0, name: "\u0406\u043D\u0448\u0456" }],
         cats: catOptions.map((r) => ({ id: r.id, name: r.id ? cName.get(r.id) || `\u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044F ${r.id}` : "\u0411\u0435\u0437 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457" })).sort((a, b2) => (a.id === 0) - (b2.id === 0) || a.name.localeCompare(b2.name, "uk"))
       },
       lastSync: last?.value || ""
@@ -4849,11 +4849,11 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
 }
 async function hashKey(str) {
   const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(str));
-  return [...new Uint8Array(buf)].map((x2) => x2.toString(16).padStart(2, "0")).join("");
+  return [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
 // src/modules/notify/index.js
-var tgName = (x2) => `${[x2?.first_name, x2?.last_name].filter(Boolean).join(" ")}${x2?.username ? ` (@${x2.username})` : ""}`.trim().slice(0, 120) || `id ${x2?.id ?? ""}`;
+var tgName = (x) => `${[x?.first_name, x?.last_name].filter(Boolean).join(" ")}${x?.username ? ` (@${x.username})` : ""}`.trim().slice(0, 120) || `id ${x?.id ?? ""}`;
 var TG = "https://api.telegram.org";
 var ALLOWED_UPDATES = ["message", "callback_query"];
 var HOOK_V = "2";
@@ -5370,7 +5370,7 @@ function parseCMap(txt) {
       if (m[3]) {
         const base = parseInt(m[3], 16);
         for (let c = a; c <= b && c - a < 5e3; c++) map.set(c, String.fromCodePoint(base + c - a));
-      } else [...m[4].matchAll(/<([0-9A-Fa-f]+)>/g)].forEach((x2, i) => map.set(a + i, hexToStr(x2[1])));
+      } else [...m[4].matchAll(/<([0-9A-Fa-f]+)>/g)].forEach((x, i) => map.set(a + i, hexToStr(x[1])));
     }
   }
   return map;
@@ -5481,8 +5481,8 @@ function parseBasDoc(text) {
   const buyer = /Покупець:\s*([^\n]+)/.exec(t);
   const mon = MONTHS[head[4].toLowerCase()];
   const items = [];
-  const lines = t.split("\n").map((x2) => x2.trim());
-  let i = lines.findIndex((x2) => /^Сума з ПДВ$/i.test(x2));
+  const lines = t.split("\n").map((x) => x.trim());
+  let i = lines.findIndex((x) => /^Сума з ПДВ$/i.test(x));
   if (i >= 0) {
     for (i += 1; i < lines.length; i++) {
       if (/^Всього/.test(lines[i])) break;
@@ -5512,21 +5512,21 @@ function parseNpLabel(text) {
   const t = String(text || "");
   const ttn = (/(?<![\d ])((?:20|59)(?:[ \n]?\d){12})(?![ \n]?\d)/.exec(t)?.[1] || "").replace(/\D/g, "");
   const phones = [...t.matchAll(/(?<!\d)(0\d{2})[ -]?(\d{3})[ -]?(\d{2})[ -]?(\d{2})(?!\d)/g)].map((m) => `38${m[1]}${m[2]}${m[3]}${m[4]}`);
-  const lines = t.split("\n").map((x2) => x2.trim());
+  const lines = t.split("\n").map((x) => x.trim());
   let recipient = "";
   let address = "";
-  const komu = lines.findIndex((x2) => /^КОМУ:?$/i.test(x2));
+  const komu = lines.findIndex((x) => /^КОМУ:?$/i.test(x));
   if (komu >= 0) {
     const after = lines.slice(komu + 1);
-    const priv = after.findIndex((x2) => /^Приватна особа$/i.test(x2));
+    const priv = after.findIndex((x) => /^Приватна особа$/i.test(x));
     if (priv >= 0) {
       const name = [];
-      for (const x2 of after.slice(priv + 1)) {
-        if (/Відділення|Поштомат|вул\.|\d{3} \d{3}/i.test(x2)) {
-          if (/Відділення|Поштомат|вул\./i.test(x2)) address = x2;
+      for (const x of after.slice(priv + 1)) {
+        if (/Відділення|Поштомат|вул\.|\d{3} \d{3}/i.test(x)) {
+          if (/Відділення|Поштомат|вул\./i.test(x)) address = x;
           break;
         }
-        name.push(x2);
+        name.push(x);
       }
       recipient = name.join(" ").trim();
     }
@@ -5544,11 +5544,11 @@ function nameKey(s) {
   return String(s || "").toLowerCase().replace(/товариство з обмеженою відповідальністю|приватне підприємство|фізична особа[\s-]*підприємець/g, " ").replace(/[«»"'’`.,()]/g, " ").split(/\s+/).filter((w) => w && !["\u0442\u043E\u0432", "\u0444\u043E\u043F", "\u043F\u043F", "\u0444\u043E-\u043F", "\u0444\u043E\u043F-"].includes(w)).sort().join(" ");
 }
 function sameName(a, b) {
-  const x2 = nameKey(a);
+  const x = nameKey(a);
   const y = nameKey(b);
-  if (!x2 || !y) return false;
-  if (x2 === y) return true;
-  const xs = new Set(x2.split(" "));
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const xs = new Set(x.split(" "));
   const ys = y.split(" ");
   const common = ys.filter((w) => xs.has(w)).length;
   return common >= Math.min(2, Math.min(xs.size, ys.length)) && common >= Math.min(xs.size, ys.length) * 0.66;
@@ -5604,8 +5604,8 @@ var DELIVERY = {
 var WHOLE = `('pickup', 'warehouse')`;
 var parseShipTo = (v) => {
   try {
-    const x2 = JSON.parse(v || "");
-    return x2 && typeof x2 === "object" ? { name: String(x2.name || ""), phone: String(x2.phone || ""), address: String(x2.address || "") } : null;
+    const x = JSON.parse(v || "");
+    return x && typeof x === "object" ? { name: String(x.name || ""), phone: String(x.phone || ""), address: String(x.address || "") } : null;
   } catch {
     return null;
   }
@@ -5856,7 +5856,7 @@ ${link(c, `b2borders/${r.lastId}`)}`);
     if (terms !== "postpay") return checkUnpaid(p, total, exceptId);
     const pi = await postpayInfo(p, exceptId);
     if (!pi.days) throw fail(403, "\u0412\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0443 \u043E\u043F\u043B\u0430\u0442\u0438 \u0432\u0430\u043C \u0449\u0435 \u043D\u0435 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u043E \u2014 \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.");
-    if (pi.overdue.length) throw fail(400, `\u0404 \u043F\u0440\u043E\u0441\u0442\u0440\u043E\u0447\u0435\u043D\u0430 \u043E\u043F\u043B\u0430\u0442\u0430 (${pi.overdue.map((x2) => x2.number).join(", ")}) \u2014 \u043D\u043E\u0432\u0456 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0437 \u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u043E\u044E \u043F\u0456\u0441\u043B\u044F \u0457\u0457 \u043E\u043F\u043B\u0430\u0442\u0438.`);
+    if (pi.overdue.length) throw fail(400, `\u0404 \u043F\u0440\u043E\u0441\u0442\u0440\u043E\u0447\u0435\u043D\u0430 \u043E\u043F\u043B\u0430\u0442\u0430 (${pi.overdue.map((x) => x.number).join(", ")}) \u2014 \u043D\u043E\u0432\u0456 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0437 \u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u043E\u044E \u043F\u0456\u0441\u043B\u044F \u0457\u0457 \u043E\u043F\u043B\u0430\u0442\u0438.`);
     if (pi.limit != null && pi.used + total > pi.limit + 4e-3) {
       throw fail(400, `\u041B\u0456\u043C\u0456\u0442 \u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0438 \u2014 ${uah2(pi.limit)}: \u0437\u0430\u0440\u0430\u0437 \u0437\u0430 \u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u043E\u044E ${uah2(pi.used)}, \u043D\u043E\u0432\u0430 \u0441\u0443\u043C\u0430 ${uah2(total)}.`);
     }
@@ -5998,8 +5998,8 @@ ${link(c, `porders/${open.id}`)}`);
       let pend = null;
       if (o.pending) {
         try {
-          const x2 = JSON.parse(o.pending);
-          pend = { changes: x2.changes || [], by: x2.by || "", at: x2.at || "", crm_old: x2.crm_old || "" };
+          const x = JSON.parse(o.pending);
+          pend = { changes: x.changes || [], by: x.by || "", at: x.at || "", crm_old: x.crm_old || "" };
         } catch {
           pend = { changes: [] };
         }
@@ -6031,7 +6031,7 @@ ${link(c, `porders/${open.id}`)}`);
     ]);
     const out = { order: publicOrder(o), items, files: files.map((f) => ({ ...f, kind_name: f.doc_name || FILE_KIND[f.kind] || f.kind })), history };
     if (o.kind === "supply") {
-      out.clients = clients.map((x2) => ({ ...x2, number: orderNo(x2.id), status_name: CLIENT_STATUS[x2.status] || x2.status }));
+      out.clients = clients.map((x) => ({ ...x, number: orderNo(x.id), status_name: CLIENT_STATUS[x.status] || x.status }));
       out.left = clients.length ? await supplyLeft(o.id) : items.map((i) => ({ ...i, used: 0, left: i.qty }));
       if (!["open", "cancelled"].includes(o.status) && out.left.length && out.left.every((l) => l.left <= 0)) out.order = publicOrder({ ...o, closed: 1 });
     }
@@ -6161,8 +6161,8 @@ ${link(c, `b2borders/${o.id}`)}`);
   });
   const clean = (v, n) => String(v ?? "").trim().slice(0, n);
   function shipToOf(b, p) {
-    const x2 = b && typeof b === "object" ? b : {};
-    const r = { name: clean(x2.name ?? p?.wh_name, 120), phone: clean(x2.phone ?? p?.wh_phone, 40).replace(/[^\d+]/g, ""), address: clean(x2.address ?? p?.wh_address, 300) };
+    const x = b && typeof b === "object" ? b : {};
+    const r = { name: clean(x.name ?? p?.wh_name, 120), phone: clean(x.phone ?? p?.wh_phone, 40).replace(/[^\d+]/g, ""), address: clean(x.address ?? p?.wh_address, 300) };
     if (!r.name || !r.address) throw fail(400, "\u0421\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0447\u0430 (\u041F\u0406\u0411) \u0456 \u0430\u0434\u0440\u0435\u0441\u0443 \u2014 \u043C\u0456\u0441\u0442\u043E \u0439 \u0432\u0456\u0434\u0434\u0456\u043B\u0435\u043D\u043D\u044F \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438.");
     if (!/^\+?\d{10,13}$/.test(r.phone)) throw fail(400, "\u0421\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430: \u0442\u0435\u043B\u0435\u0444\u043E\u043D \u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0447\u0430 \u2014 10\u201312 \u0446\u0438\u0444\u0440.");
     return r;
@@ -6413,7 +6413,7 @@ ${link(c, `porders/${o.id}`)}`);
     return storeFile(o, kind, { bytes, name, mime: c.req.header("content-type"), ...extra }, c.get("user"));
   }
   async function labelInfo(bytes) {
-    const hash2 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((x2) => x2.toString(16).padStart(2, "0")).join("");
+    const hash2 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((x) => x.toString(16).padStart(2, "0")).join("");
     let np = null;
     if (bytes[0] === 37 && bytes[1] === 80) np = parseNpLabel(await pdfText(bytes).catch(() => ""));
     return { hash: hash2, ttn: np?.ttn || "", np };
@@ -6459,7 +6459,7 @@ ${link(c, `porders/${o.id}`)}`);
     const parts = await db.all(`SELECT data FROM b2b_file_parts WHERE file_id = ? ORDER BY n`, [f.id]);
     if (parts.length !== f.parts) throw fail(410, "\u0424\u0430\u0439\u043B \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E (\u0437\u0431\u0435\u0440\u0456\u0433\u0430\u044E\u0442\u044C\u0441\u044F 30 \u0434\u043D\u0456\u0432).");
     const chunks = parts.map((p) => fromB64(p.data));
-    const out = new Uint8Array(chunks.reduce((t, x2) => t + x2.length, 0));
+    const out = new Uint8Array(chunks.reduce((t, x) => t + x.length, 0));
     let off = 0;
     for (const ch of chunks) {
       out.set(ch, off);
@@ -6496,7 +6496,7 @@ ${link(c, `porders/${o.id}`)}`);
   async function crmOrderInfo({ ids = [], comment = "" } = {}) {
     const m = /B2B-(\d+)\s*·\s*B2B «/.exec(String(comment || ""));
     let o = m ? await db.get(`SELECT * FROM b2b_orders WHERE id = ? AND kind = 'client'`, [Number(m[1])]) : null;
-    const list = [...new Set(ids.map((x2) => String(x2 || "").trim()).filter(Boolean))];
+    const list = [...new Set(ids.map((x) => String(x || "").trim()).filter(Boolean))];
     if (!o && list.length) {
       o = await db.get(
         `SELECT * FROM b2b_orders WHERE kind = 'client' AND id IN (
@@ -6905,8 +6905,8 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     if (new Set(rows.map((t) => t.name.toLowerCase())).size !== rows.length) throw fail(400, "\u041D\u0430\u0437\u0432\u0438 \u0432\u0438\u0434\u0456\u0432 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0456\u0432 \u043C\u0430\u044E\u0442\u044C \u0432\u0456\u0434\u0440\u0456\u0437\u043D\u044F\u0442\u0438\u0441\u044F.");
     if (rows.some((t) => /^маркуван/i.test(t.name))) throw fail(400, "\u041C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F \u0432\u0436\u0435 \u0454 \u0437\u0430\u0432\u0436\u0434\u0438 \u2014 \u0434\u043E\u0434\u0430\u0439\u0442\u0435 \u0456\u043D\u0448\u0456 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0438.");
     const cur = await db.all(`SELECT id FROM b2b_doc_types WHERE partner_id = ? AND active = 1`, [p.id]);
-    const keep = new Set(rows.filter((t) => t.id && cur.some((x2) => x2.id === t.id)).map((t) => t.id));
-    const st = cur.filter((x2) => !keep.has(x2.id)).map((x2) => [`UPDATE b2b_doc_types SET active = 0 WHERE id = ?`, [x2.id]]);
+    const keep = new Set(rows.filter((t) => t.id && cur.some((x) => x.id === t.id)).map((t) => t.id));
+    const st = cur.filter((x) => !keep.has(x.id)).map((x) => [`UPDATE b2b_doc_types SET active = 0 WHERE id = ?`, [x.id]]);
     rows.forEach((t, i) => st.push(keep.has(t.id) ? [`UPDATE b2b_doc_types SET name = ?, required = ?, print = ?, sort = ? WHERE id = ? AND partner_id = ?`, [t.name, t.required, t.print, i, t.id, p.id]] : [`INSERT INTO b2b_doc_types (partner_id, name, required, print, sort, active) VALUES (?, ?, ?, ?, ?, 1)`, [p.id, t.name, t.required, t.print, i]]));
     if (st.length) await db.batch(st);
     return c.json({ ok: true, types: await docTypes(p.id) });
@@ -7012,16 +7012,16 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     if (a.supply_id !== b.supply_id) ch.push(`\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F: ${a.supply_id ? orderNo(a.supply_id) : "\u2014"} \u2192 ${b.supply_id ? orderNo(b.supply_id) : "\u2014"}`);
     const am = new Map(a.items.map((i) => [i.product_id, i]));
     for (const i of b.items) {
-      const x2 = am.get(i.product_id);
-      if (!x2) ch.push(`+ ${i.name} \xD7 ${i.qty}`);
-      else if (x2.qty !== i.qty) ch.push(`${i.name}: ${x2.qty} \u2192 ${i.qty} \u0448\u0442`);
+      const x = am.get(i.product_id);
+      if (!x) ch.push(`+ ${i.name} \xD7 ${i.qty}`);
+      else if (x.qty !== i.qty) ch.push(`${i.name}: ${x.qty} \u2192 ${i.qty} \u0448\u0442`);
     }
-    for (const x2 of a.items) if (!b.items.some((i) => i.product_id === x2.product_id)) ch.push(`\u2212 ${x2.name} \xD7 ${x2.qty}`);
+    for (const x of a.items) if (!b.items.some((i) => i.product_id === x.product_id)) ch.push(`\u2212 ${x.name} \xD7 ${x.qty}`);
     return ch;
   }
-  const brief = (x2) => `${x2.client_name}, ${phoneTxt(x2.client_phone)}${x2.ttn ? `, \u0422\u0422\u041D ${x2.ttn}` : ""}
-${x2.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah3(i.price)}`).join("\n")}
-   ${x2.supply_id ? `\u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(x2.supply_id)}` : "\u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456"} \xB7 \u0440\u0430\u0437\u043E\u043C ${uah3(x2.total)}`;
+  const brief = (x) => `${x.client_name}, ${phoneTxt(x.client_phone)}${x.ttn ? `, \u0422\u0422\u041D ${x.ttn}` : ""}
+${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah3(i.price)}`).join("\n")}
+   ${x.supply_id ? `\u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(x.supply_id)}` : "\u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456"} \xB7 \u0440\u0430\u0437\u043E\u043C ${uah3(x.total)}`;
   const phoneTxt = (ph) => String(ph).length === 12 ? `+${ph}` : ph;
   app.put("/api/b2b/clients/:id/edit", async (c) => {
     need(c, "b2b.admin");
@@ -7368,7 +7368,7 @@ ${link(c, `pclients/${o.id}`)}`);
     let crmId = res.crmId || "";
     if (!crmId) {
       const found = await getOrdersBatch(fetchFn, k.creds, [code]).catch(() => []);
-      crmId = String(found.find((x2) => String(x2.order_id) === code)?.id || "");
+      crmId = String(found.find((x) => String(x.order_id) === code)?.id || "");
     }
     await db.run(`UPDATE b2b_orders SET crm_id = ?, crm_sent_at = ?, crm_status = '\u041F\u0435\u0440\u0435\u0434\u0430\u043D\u043E', updated_at = ? WHERE id = ?`, [crmId, nowIso(), nowIso(), s.id]);
     await log(s.id, c.get("user"), `\u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 LP-CRM \u043D\u0430 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430${crmId ? `: \u2116 ${crmId}` : ` (\u043A\u043E\u0434 ${code})`}`);
@@ -7636,7 +7636,7 @@ function mountB2bPrices(app, { db, services, partnerPrice: partnerPrice2 }) {
       else if (old != null && now != null && round2(old) !== round2(now)) marginChanged.push({ brand, name: names.get(brand) || "\u0406\u043D\u0448\u0456", old, now });
     }
     const oldMargin = (brand) => {
-      const mc = marginChanged.find((x2) => x2.brand === brand);
+      const mc = marginChanged.find((x) => x.brand === brand);
       return mc ? mc.old : cur.get(brand);
     };
     const brands = [...cur.keys()].filter((b) => !opened.some((o) => o.brand === b));
@@ -7648,7 +7648,7 @@ function mountB2bPrices(app, { db, services, partnerPrice: partnerPrice2 }) {
     );
     const oldRrp = /* @__PURE__ */ new Map();
     for (const r of plog) if (!oldRrp.has(r.product_id)) oldRrp.set(r.product_id, r.old_rrp);
-    const mcBrands = marginChanged.map((x2) => x2.brand);
+    const mcBrands = marginChanged.map((x) => x.brand);
     const rows = oldRrp.size || mcBrands.length ? await db.all(
       `SELECT product_id, name, article, rrp, brand_id FROM b2b_catalog WHERE hidden = 0 AND rrp > 0
          AND (product_id IN (SELECT value FROM json_each(?)) OR brand_id IN (SELECT value FROM json_each(?)))
@@ -7670,12 +7670,12 @@ function mountB2bPrices(app, { db, services, partnerPrice: partnerPrice2 }) {
     const head = `\u{1F4B2} <b>\u0417\u043C\u0456\u043D\u0430 \u0446\u0456\u043D</b> \u2014 \xAB${h4(p.name)}\xBB`;
     const blocks = [];
     if (ch.marginChanged.length) blocks.push(`<b>\u0412\u0430\u0448\u0430 \u0437\u043D\u0438\u0436\u043A\u0430 \u0432\u0456\u0434 \u0420\u0420\u0426:</b>
-${ch.marginChanged.map((x2) => `${h4(x2.name)}: ${pct(x2.old)} \u2192 <b>${pct(x2.now)}</b>`).join("\n")}`);
+${ch.marginChanged.map((x) => `${h4(x.name)}: ${pct(x.old)} \u2192 <b>${pct(x.now)}</b>`).join("\n")}`);
     if (ch.opened.length) blocks.push(`<b>\u041D\u043E\u0432\u0456 \u0431\u0440\u0435\u043D\u0434\u0438 \u0434\u043B\u044F \u0432\u0430\u0441:</b>
-${ch.opened.map((x2) => `${h4(x2.name)} \u2014 \u0437\u043D\u0438\u0436\u043A\u0430 ${pct(x2.margin)} \u0432\u0456\u0434 \u0420\u0420\u0426 (\u0442\u043E\u0432\u0430\u0440\u0438 \u2014 \u0443 \u043A\u0430\u0442\u0430\u043B\u043E\u0437\u0456)`).join("\n")}`);
-    if (ch.closed.length) blocks.push(`<b>\u0411\u0456\u043B\u044C\u0448\u0435 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0456:</b> ${ch.closed.map((x2) => h4(x2.name)).join(", ")}`);
-    const lines = ch.products.map((x2) => `${h4(x2.name)}${x2.article ? ` (${h4(x2.article)})` : ""}
-   \u0420\u0420\u0426 ${m2(x2.oldRrp)} \u2192 <b>${m2(x2.newRrp)}</b> ${arrow(x2.oldRrp, x2.newRrp)} \xB7 \u0432\u0430\u0448\u0430 \u0446\u0456\u043D\u0430 ${m2(x2.oldPrice)} \u2192 <b>${m2(x2.newPrice)}</b> \u0433\u0440\u043D ${arrow(x2.oldPrice, x2.newPrice)}`);
+${ch.opened.map((x) => `${h4(x.name)} \u2014 \u0437\u043D\u0438\u0436\u043A\u0430 ${pct(x.margin)} \u0432\u0456\u0434 \u0420\u0420\u0426 (\u0442\u043E\u0432\u0430\u0440\u0438 \u2014 \u0443 \u043A\u0430\u0442\u0430\u043B\u043E\u0437\u0456)`).join("\n")}`);
+    if (ch.closed.length) blocks.push(`<b>\u0411\u0456\u043B\u044C\u0448\u0435 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0456:</b> ${ch.closed.map((x) => h4(x.name)).join(", ")}`);
+    const lines = ch.products.map((x) => `${h4(x.name)}${x.article ? ` (${h4(x.article)})` : ""}
+   \u0420\u0420\u0426 ${m2(x.oldRrp)} \u2192 <b>${m2(x.newRrp)}</b> ${arrow(x.oldRrp, x.newRrp)} \xB7 \u0432\u0430\u0448\u0430 \u0446\u0456\u043D\u0430 ${m2(x.oldPrice)} \u2192 <b>${m2(x.newPrice)}</b> \u0433\u0440\u043D ${arrow(x.oldPrice, x.newPrice)}`);
     const out = [];
     let cur = [head, ...blocks].join("\n\n");
     if (lines.length) cur += `
@@ -7922,7 +7922,7 @@ function mountB2bTgDocs(app, { db, services, orders, hooks }) {
   }
   async function ranked(doc, kind) {
     const list = await candidates();
-    return list.map((o) => ({ o, s: score(o, doc, kind) })).sort((a, b) => b.s - a.s || b.o.id - a.o.id).map((x2) => x2.o);
+    return list.map((o) => ({ o, s: score(o, doc, kind) })).sort((a, b) => b.s - a.s || b.o.id - a.o.id).map((x) => x.o);
   }
   async function autoPick(doc, kind) {
     if (!doc) return null;
@@ -7965,7 +7965,7 @@ function mountB2bTgDocs(app, { db, services, orders, hooks }) {
         lines.push(`\u26A0\uFE0F ${short} \u2014 \u0443 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0456 <b>${d.qty} \u0448\u0442 \xD7 ${m22(d.price)}</b>, \u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 <b>${hit.qty} \u0448\u0442 \xD7 ${m22(hit.price)}</b>`);
       }
     }
-    for (const i of left.filter((x2) => !x2.used)) {
+    for (const i of left.filter((x) => !x.used)) {
       bad++;
       lines.push(`\u274C ${h5(i.name.slice(0, 60))} \u2014 ${i.qty} \u0448\u0442 \xD7 ${m22(i.price)} \u2014 <b>\u043D\u0435\u043C\u0430\u0454 \u0432 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0456</b>`);
     }
@@ -8008,7 +8008,7 @@ function mountB2bTgDocs(app, { db, services, orders, hooks }) {
       return render({ ...d, order_id: null });
     }
     const items = await db.all(`SELECT name, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
-    const names = o.kind === "supply" ? [String(o.entity || "").split("\n")[0].split(",")[0]] : (await db.all(`SELECT name FROM b2b_entities WHERE partner_id = ?`, [o.partner_id])).map((x2) => x2.name);
+    const names = o.kind === "supply" ? [String(o.entity || "").split("\n")[0].split(",")[0]] : (await db.all(`SELECT name FROM b2b_entities WHERE partner_id = ?`, [o.partner_id])).map((x) => x.name);
     const checks = [];
     let bad = 0;
     if (doc?.buyer) {
@@ -8634,7 +8634,7 @@ ${link(base, `b2borders/${pool[0].id}`)}` : ""}`);
     const elsewhere = new Map((await db.all(
       `SELECT tx_id, order_id FROM b2b_payments WHERE order_id IS NOT NULL AND tx_id IN (SELECT value FROM json_each(?))`,
       [JSON.stringify(fromPayer.map((t) => t.id))]
-    )).map((x2) => [x2.tx_id, x2.order_id]));
+    )).map((x) => [x.tx_id, x.order_id]));
     const others = fromPayer.filter((t) => !linked.some((l) => l.tx_id === t.id) && !elsewhere.has(t.id) && !foreignInvoice(t.purpose, o.invoice_no)).map((t) => ({
       tx_id: t.id,
       amount: t.amount,
@@ -8883,7 +8883,7 @@ ${link(c, `porders/${o.id}`)}`);
         `INSERT INTO b2b_order_items (order_id, product_id, name, article, qty, price, rrp) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [o.id, i.product_id, i.name, i.article || "", i.qty, i.price, i.rrp ?? 0]
       ]),
-      ...(d.history || []).map((x2) => [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [o.id, x2.at, x2.user_name, x2.action]]),
+      ...(d.history || []).map((x) => [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [o.id, x.at, x.user_name, x.action]]),
       [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [o.id, now, userName4(u), `\u0432\u0456\u0434\u043D\u043E\u0432\u043B\u0435\u043D\u043E \u0437 \u043A\u043E\u0448\u0438\u043A\u0430${openId ? ` (\u0443 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(openId)})` : ""}`]],
       [`UPDATE b2b_trash SET restored_at = ?, restored_by = ? WHERE id = ?`, [now, userName4(u), t.id]]
     ]);
@@ -8988,8 +8988,8 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       brandNames(),
       db.all(`SELECT * FROM b2b_entities WHERE partner_id = ? ORDER BY active DESC, name`, [p.id])
     ]);
-    const m = new Map(margins.map((x2) => [x2.brand_id, x2.margin]));
-    const cnt = new Map(counts.map((x2) => [x2.brand_id, x2]));
+    const m = new Map(margins.map((x) => [x.brand_id, x.margin]));
+    const cnt = new Map(counts.map((x) => [x.brand_id, x]));
     const brands = [...names].map(([id, name]) => ({
       id,
       name,
@@ -9054,7 +9054,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       }
     }
     if (st.length) await db.batch(st);
-    for (const x2 of log) await audit(c, p.id, x2);
+    for (const x of log) await audit(c, p.id, x);
     return log.length;
   }
   async function applyPause(c, p, b) {
@@ -9086,7 +9086,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     return c.json({ ok: true });
   });
   async function applyMargins(c, p, build, names = null) {
-    const cur = new Map((await db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id])).map((x2) => [x2.brand_id, x2.margin]));
+    const cur = new Map((await db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id])).map((x) => [x.brand_id, x.margin]));
     const next = build(cur);
     names = names || await brandNames();
     const at = nowIso();
@@ -9111,7 +9111,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   app.post("/api/b2b/partners/bulk", async (c) => {
     need(c, "b2b.admin");
     const b = await c.req.json().catch(() => ({}));
-    const ids = [...new Set((Array.isArray(b.ids) ? b.ids : []).map(Number).filter((x2) => x2 > 0))];
+    const ids = [...new Set((Array.isArray(b.ids) ? b.ids : []).map(Number).filter((x) => x > 0))];
     if (!ids.length) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432.");
     if (ids.length > 200) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 200 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432 \u0437\u0430 \u0440\u0430\u0437.");
     const list = await db.all(`SELECT * FROM b2b_partners WHERE COALESCE(deleted_at, '') = '' AND id IN (SELECT value FROM json_each(?))`, [JSON.stringify(ids)]);
@@ -9236,7 +9236,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     }
     const willBeHead = (b.partner_role !== void 0 ? roleOf(b.partner_role) : partnerRole(u)) === "head" && (b.active !== void 0 ? !!b.active : !!u.active);
     if (!willBeHead && partnerRole(u) === "head" && u.active) {
-      const heads = (await db.all(`SELECT id, partner_role FROM users WHERE partner_id = ? AND role = 'partner' AND active = 1 AND id != ?`, [p.id, u.id])).filter((x2) => partnerRole(x2) === "head").length;
+      const heads = (await db.all(`SELECT id, partner_role FROM users WHERE partner_id = ? AND role = 'partner' AND active = 1 AND id != ?`, [p.id, u.id])).filter((x) => partnerRole(x) === "head").length;
       if (!heads) throw fail(400, "\u0423 \u043A\u043E\u043C\u0430\u043D\u0434\u0456 \u043C\u0430\u0454 \u043B\u0438\u0448\u0438\u0442\u0438\u0441\u044F \u0445\u043E\u0447\u0430 \u0431 \u043E\u0434\u0438\u043D \u0430\u043A\u0442\u0438\u0432\u043D\u0438\u0439 \u043A\u0435\u0440\u0456\u0432\u043D\u0438\u043A.");
     }
     if (sets.length) await db.run(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`, [...vals, u.id]);
@@ -9296,7 +9296,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   app.post("/api/b2b/catalog/add", async (c) => {
     need(c, "b2b.admin");
     const b = await c.req.json();
-    const ids = [...new Set(String(b.ids || "").split(/[\s,;]+/).map((x2) => parseInt(x2, 10)).filter((x2) => x2 > 0))].slice(0, 200);
+    const ids = [...new Set(String(b.ids || "").split(/[\s,;]+/).map((x) => parseInt(x, 10)).filter((x) => x > 0))].slice(0, 200);
     if (!ids.length) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C ID \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0437 LP-CRM \u0447\u0435\u0440\u0435\u0437 \u043A\u043E\u043C\u0443.");
     await db.batch(ids.map((id) => [
       `INSERT INTO b2b_catalog (product_id, manual, checked_at) VALUES (?, 1, '') ON CONFLICT(product_id) DO UPDATE SET manual = 1, hidden = 0, checked_at = ''`,
@@ -9329,7 +9329,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const names = todo.length ? await brandNames() : /* @__PURE__ */ new Map();
     for (let i = 0; i < todo.length; i += BATCH) {
       const part = todo.slice(i, i + BATCH);
-      const j = await call(fetchFn, s.lpcrm_subdomain, s.lpcrm_key, "getProduct", { product_id: part.map((x2) => x2.product_id).join(","), status_ignore: "1" });
+      const j = await call(fetchFn, s.lpcrm_subdomain, s.lpcrm_key, "getProduct", { product_id: part.map((x) => x.product_id).join(","), status_ignore: "1" });
       if (j.status !== "ok" && !j.data) throw fail(502, `LP-CRM (\u043A\u0430\u0442\u0430\u043B\u043E\u0433): ${j.message || "\u043D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u043E\u0442\u0440\u0438\u043C\u0430\u0442\u0438 \u0442\u043E\u0432\u0430\u0440\u0438"}`);
       const got = new Map(collectProducts(j.data).map((p) => [parseInt(p.id ?? p.product_id, 10), p]));
       const st = [];
@@ -9408,7 +9408,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
        WHERE o.partner_id = ? AND o.kind IN ('supply', 'client') AND o.status NOT IN ('cancelled', 'open', 'draft', 'confirm') GROUP BY i.product_id`,
       [p.id]
     )).map((r) => [r.product_id, r]));
-    const catName = new Map(cats.map((x2) => [x2.id, x2.name]));
+    const catName = new Map(cats.map((x) => [x.id, x.name]));
     const brands = [...new Map(rows.map((r) => [r.brand_id, { id: r.brand_id, name: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456", margin: r.margin }])).values()].sort((a, b) => a.name.localeCompare(b.name, "uk"));
     const categories = [...rows.reduce((m, r) => m.set(r.cat, (m.get(r.cat) || 0) + 1), /* @__PURE__ */ new Map())].map(([id, n]) => ({ id, name: catName.get(id) || "\u0406\u043D\u0448\u0435", n })).sort((a, b) => a.name.localeCompare(b.name, "uk"));
     return c.json({
@@ -9487,7 +9487,7 @@ async function npCall(fetchFn, apiKey, modelName, calledMethod, methodProperties
   const j = await res.json().catch(() => null);
   if (!j) throw Object.assign(new Error(`\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430: \u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${res.status}`), { status: 502 });
   if (!j.success) {
-    const msg = [...j.errors || [], ...j.warnings || []].filter((x2) => typeof x2 === "string").join("; ");
+    const msg = [...j.errors || [], ...j.warnings || []].filter((x) => typeof x === "string").join("; ");
     throw Object.assign(new Error(`\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430: ${msg || "\u0437\u0430\u043F\u0438\u0442 \u043D\u0435 \u0432\u0438\u043A\u043E\u043D\u0430\u043D\u043E"}`), { status: 400, npErrors: j.errorCodes || [] });
   }
   return Array.isArray(j.data) ? j.data : [];
@@ -9702,7 +9702,7 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
       return answer(known || { ttn, account_id: null }, "crm");
     }
     const phone = phone9(b.phone);
-    const refs = (Array.isArray(b.refs) ? b.refs : []).map((x2) => String(x2 || "").trim()).filter((x2) => x2.length >= 3).slice(0, 3);
+    const refs = (Array.isArray(b.refs) ? b.refs : []).map((x) => String(x || "").trim()).filter((x) => x.length >= 3).slice(0, 3);
     if (phone.length < 9 && !refs.length) throw fail(400, "\u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043D\u0435\u043C\u0430\u0454 \u043D\u0456 \u0422\u0422\u041D, \u043D\u0456 \u0442\u0435\u043B\u0435\u0444\u043E\u043D\u0443 \u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0447\u0430 \u2014 \u0448\u0443\u043A\u0430\u0442\u0438 \u043D\u0435\u043C\u0430 \u0437\u0430 \u0447\u0438\u043C.");
     const today2 = kyivDay();
     const from = /^\d{4}-\d{2}-\d{2}/.test(String(b.date || "")) ? String(b.date).slice(0, 10) : today2;
@@ -9928,7 +9928,7 @@ async function rq(fetchFn, token, method, path, { json, xml, raw: raw2 = false }
   return j || {};
 }
 var rzsDateTime = (d = /* @__PURE__ */ new Date()) => {
-  const p = Object.fromEntries(new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).formatToParts(d).map((x2) => [x2.type, x2.value]));
+  const p = Object.fromEntries(new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).formatToParts(d).map((x) => [x.type, x.value]));
   return `${p.year}-${p.month}-${p.day} ${p.hour === "24" ? "00" : p.hour}:${p.minute}:${p.second}`;
 };
 async function rzsOrdersPage(fetchFn, token, { dateFrom, page = 1, status = "" }) {
@@ -9959,29 +9959,6 @@ async function rzsCreateTtn(fetchFn, token, id, cargoSeats, { replaceExisting = 
 async function rzsMarkings(fetchFn, token, orders, size = "100x100") {
   const res = await rq(fetchFn, token, "POST", "/dropshipping/orders/print-markings", { json: { deliveryService: "nova_poshta", format: "pdf", size, orders }, raw: true });
   return { bytes: new Uint8Array(await res.arrayBuffer()), printed: Number(res.headers.get("X-Markings-Printed")) || 0, skipped: Number(res.headers.get("X-Markings-Skipped")) || 0 };
-}
-var x = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-function priceXml({ priceListId, partial = true, items }) {
-  const tag = (k, v) => v === void 0 || v === null || v === "" ? "" : `<${k}>${x(v)}</${k}>`;
-  return `<?xml version="1.0" encoding="UTF-8"?><price_list>${tag("price_list_id", priceListId)}<currency>UAH</currency><partial>${partial ? 1 : 0}</partial><skip_row_errors>1</skip_row_errors><items>` + items.map((i) => `<item>${tag("product_id", i.product_id)}${tag("article", i.article)}${tag("title", i.title)}${tag("purchase_price", i.purchase_price)}${tag("recommended_inet_price", i.recommended_inet_price)}${tag("stock", i.stock)}</item>`).join("") + "</items></price_list>";
-}
-async function rzsPriceCreate(fetchFn, token, priceListId, items, { test = false } = {}) {
-  let res;
-  try {
-    res = await fetchFn(`${RZS_API}/prices/price-lists/create`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "Content-Type": "application/xml", ...test ? { "X-Test-Request": "1" } : {} },
-      body: priceXml({ priceListId, items })
-    });
-  } catch (e) {
-    if (e.pending) throw e;
-    throw Object.assign(new Error("\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u043D\u0435 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0430\u0454. \u0421\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0449\u0435 \u0440\u0430\u0437 \u0437\u0430 \u0445\u0432\u0438\u043B\u0438\u043D\u0443."), { status: 502 });
-  }
-  const j = await res.json().catch(() => null);
-  if (!res.ok && res.status !== 400) throw rzsError(res.status, j);
-  const r = j?.data && !Array.isArray(j.data) ? j.data : j || {};
-  const errors = (Array.isArray(r.errors) ? r.errors : Array.isArray(j?.errors) ? j.errors : []).map((e) => typeof e === "string" ? e : e?.message || JSON.stringify(e));
-  return { ok: res.ok && r.success !== false, count: Number(r.count ?? r.total ?? r.items ?? 0) || 0, errors };
 }
 function csvRows(text) {
   const src = String(text || "").replace(/^﻿/, "");
@@ -10244,7 +10221,7 @@ function mountRetail(app, { db, fetchFn }) {
     });
     const codes = [...new Set(rows.flatMap((r) => (r.products || []).map((p) => String(p.supplierCode || "").trim()).filter(Boolean)))];
     for (const code of codes) {
-      const p = rows.flatMap((r) => r.products || []).find((x2) => String(x2.supplierCode).trim() === code);
+      const p = rows.flatMap((r) => r.products || []).find((x) => String(x.supplierCode).trim() === code);
       st.push([
         `INSERT INTO rzs_products (code, rz_code, updated_at) VALUES (?, ?, ?) ON CONFLICT(code) DO UPDATE SET rz_code = CASE WHEN rzs_products.rz_code = '' THEN excluded.rz_code ELSE rzs_products.rz_code END`,
         [code, String(p?.rzCode ?? ""), now]
@@ -10261,7 +10238,7 @@ function mountRetail(app, { db, fetchFn }) {
     const found = await db.all(`SELECT product_id, name, article, rrp FROM b2b_catalog WHERE article IN (SELECT value FROM json_each(?)) OR CAST(product_id AS TEXT) IN (SELECT value FROM json_each(?))`, [list, list]).catch(() => []);
     const st = [];
     for (const r of todo) {
-      const m = found.find((x2) => String(x2.article) === r.code) || found.find((x2) => String(x2.product_id) === r.code);
+      const m = found.find((x) => String(x.article) === r.code) || found.find((x) => String(x.product_id) === r.code);
       if (m) st.push([`UPDATE rzs_products SET product_id = ?, name = CASE WHEN name = '' THEN ? ELSE name END, rrp = COALESCE(rrp, ?) WHERE code = ?`, [m.product_id, m.name || "", m.rrp || null, r.code]]);
     }
     if (st.length) await db.batch(st);
@@ -10408,13 +10385,13 @@ function mountRetail(app, { db, fetchFn }) {
     const o = publicOrder(r);
     const serials = b.serials || {};
     const products = o.products.map((p) => {
-      const sn = (Array.isArray(serials[p.supplierCode]) ? serials[p.supplierCode] : String(serials[p.supplierCode] || "").split(/[\s,;]+/)).map((x2) => String(x2).trim()).filter(Boolean);
+      const sn = (Array.isArray(serials[p.supplierCode]) ? serials[p.supplierCode] : String(serials[p.supplierCode] || "").split(/[\s,;]+/)).map((x) => String(x).trim()).filter(Boolean);
       if (r.sn_required && sn.length !== p.quantity) throw fail(400, `\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u0432\u0438\u043C\u0430\u0433\u0430\u0454 \u0441\u0435\u0440\u0456\u0439\u043D\u0456 \u043D\u043E\u043C\u0435\u0440\u0438: \xAB${p.name || p.supplierCode}\xBB \u2014 ${p.quantity} \u0448\u0442.`);
       return { supplierCode: p.supplierCode, confirmedQuantity: p.quantity, ...sn.length ? { serialNumbers: sn } : {} };
     });
     const res = await rzsConfirm(fetchFn, a.token, r.id, products);
     const sent = new Map(products.map((p) => [p.supplierCode, p]));
-    const confirmed = JSON.parse(r.products || "[]").map((x2) => ({ ...x2, ...sent.get(String(x2.supplierCode)) }));
+    const confirmed = JSON.parse(r.products || "[]").map((x) => ({ ...x, ...sent.get(String(x.supplierCode)) }));
     await db.run(
       `UPDATE rzs_orders SET status = ?, products = ?, confirmed_at = COALESCE(NULLIF(confirmed_at, ''), ?), note = ? WHERE id = ?`,
       [res.status || "confirmed", JSON.stringify(confirmed), nowIso(), `\u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432(\u043B\u0430) ${userName5(c.get("user"))}`, r.id]
@@ -10539,7 +10516,7 @@ function mountRetail(app, { db, fetchFn }) {
     let crmId = res.crmId || "";
     if (!crmId) {
       const found = await getOrdersBatch(fetchFn, { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key }, [code]).catch(() => []);
-      crmId = String(found.find((x2) => String(x2.order_id) === code)?.id || "");
+      crmId = String(found.find((x) => String(x.order_id) === code)?.id || "");
     }
     await db.run(`UPDATE rzs_orders SET crm_id = ?, crm_at = ?, note = ? WHERE id = ?`, [crmId, nowIso(), `\u0443 LP-CRM \u043F\u0435\u0440\u0435\u0434\u0430\u0432(\u043B\u0430) ${userName5(c.get("user"))}`, r.id]);
     return c.json({ ok: true, crm_id: crmId, code });
@@ -10609,23 +10586,6 @@ function mountRetail(app, { db, fetchFn }) {
     await logAudit(db, { user: c.get("user"), kind: "rzs", refId: 0, action: `\u0456\u043C\u043F\u043E\u0440\u0442 \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0437 \u041A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u0420\u043E\u0437\u0435\u0442\u043A\u0438: ${uniq.length} (\u043D\u043E\u0432\u0438\u0445 ${uniq.filter((r) => !have.has(r.code)).length})` }).catch(() => 0);
     return c.json({ ok: true, total: uniq.length, added: uniq.filter((r) => !have.has(r.code)).length, updated: uniq.filter((r) => have.has(r.code)).length, skipped, unmapped });
   });
-  app.post("/api/rzs/price", async (c) => {
-    need(c, "api");
-    const b = await c.req.json().catch(() => ({}));
-    const a = await accOf(b.account_id || (await db.get(`SELECT id FROM rzs_accounts WHERE active = 1 ORDER BY id LIMIT 1`))?.id || 0);
-    if (!a.price_list_id) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C ID \u043F\u0440\u0430\u0439\u0441\u0443 \u0432 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 (\u041A\u0430\u0431\u0456\u043D\u0435\u0442 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u2192 \u0422\u043E\u0432\u0430\u0440\u043D\u0456 \u043F\u043E\u0437\u0438\u0446\u0456\u0457 \u2192 \u041F\u0440\u0430\u0439\u0441\u0438).");
-    const rows = await db.all(`SELECT * FROM rzs_products WHERE purchase_price > 0 AND stock IS NOT NULL ORDER BY code LIMIT 1000`);
-    if (!rows.length) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0456\u0437 \u0446\u0456\u043D\u043E\u044E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0439 \u0437\u0430\u043B\u0438\u0448\u043A\u043E\u043C.");
-    const r = await rzsPriceCreate(fetchFn, a.token, a.price_list_id, rows.map((p) => ({
-      article: p.code,
-      product_id: p.rz_code || void 0,
-      purchase_price: p.purchase_price,
-      recommended_inet_price: p.rrp || void 0,
-      stock: p.stock
-    })), { test: Boolean(b.test) });
-    await logAudit(db, { user: c.get("user"), kind: "rzs", refId: a.id, action: `\u043F\u0440\u0430\u0439\u0441 \u043D\u0430 \u0420\u043E\u0437\u0435\u0442\u043A\u0443${b.test ? " (\u0442\u0435\u0441\u0442)" : ""}: ${rows.length} \u043F\u043E\u0437.${r.errors.length ? `, \u043F\u043E\u043C\u0438\u043B\u043E\u043A: ${r.errors.length}` : ""}` }).catch(() => 0);
-    return c.json({ ok: r.ok, sent: rows.length, count: r.count, errors: r.errors.slice(0, 50), test: Boolean(b.test) });
-  });
 }
 
 // src/modules/payments/index.js
@@ -10647,12 +10607,12 @@ function normDate(v) {
 }
 async function sha1(str) {
   const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(str));
-  return [...new Uint8Array(buf)].map((x2) => x2.toString(16).padStart(2, "0")).join("");
+  return [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 async function hmacHex(key, body) {
   const k = await crypto.subtle.importKey("raw", new TextEncoder().encode(key), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const sig = await crypto.subtle.sign("HMAC", k, new TextEncoder().encode(body));
-  return [...new Uint8Array(sig)].map((x2) => x2.toString(16).padStart(2, "0")).join("");
+  return [...new Uint8Array(sig)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 var sameHex = (a, b) => {
   a = String(a || "").trim().toLowerCase();
@@ -10686,13 +10646,13 @@ async function txRow(item) {
     config_id: item.autoclientConfigId ? String(item.autoclientConfigId) : ""
   };
 }
-function pickName(x2) {
+function pickName(x) {
   for (const k of ["alias", "name", "recipient", "recipientName", "receiver", "receiverName", "title", "companyName", "ownerName", "fullName", "counterpartyName"]) {
-    const v = x2?.[k];
+    const v = x?.[k];
     if (typeof v === "string" && v.trim()) return v.trim();
     if (v && typeof v === "object" && typeof v.name === "string" && v.name.trim()) return v.name.trim();
   }
-  for (const [k, v] of Object.entries(x2 || {})) {
+  for (const [k, v] of Object.entries(x || {})) {
     if (["id", "iban", "code", "fileId", "logoUrl"].includes(k) || typeof v !== "string") continue;
     if (/[A-Za-zА-Яа-яІіЇїЄєҐґ]{2,}\s+[A-Za-zА-Яа-яІіЇїЄєҐґ«"]/.test(v) && !/^https?:/.test(v)) return v.trim();
   }
@@ -10742,7 +10702,7 @@ function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, notify = a
     const empty = await db.all(`SELECT id, iban, code, alias FROM odb_accounts WHERE name = ''`);
     if (!empty.length) return;
     const known = await db.all(`SELECT full_name, short_name, ipn, iban FROM inv_fops UNION ALL SELECT full_name, short_name, ipn, iban FROM fops`);
-    const norm = (x2) => String(x2 || "").replace(/\s/g, "").toUpperCase();
+    const norm = (x) => String(x || "").replace(/\s/g, "").toUpperCase();
     const st = [];
     for (const a of empty) {
       const f = known.find((k) => norm(k.iban) === a.iban) || (a.code ? known.find((k) => String(k.ipn || "").trim() === a.code) : null);
@@ -10761,11 +10721,11 @@ function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, notify = a
       const cr = await creds();
       const j = await odb(cr, "GET", "/api/iban-settings");
       const list = Array.isArray(j.ibanSettings) ? j.ibanSettings : Array.isArray(j) ? j : [];
-      const ids = list.map((x2) => String(x2.id));
-      const st = list.map((x2, i) => [
+      const ids = list.map((x) => String(x.id));
+      const st = list.map((x, i) => [
         `INSERT INTO odb_accounts (id, iban, code, alias, kind, sort) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET iban = excluded.iban, code = excluded.code, alias = excluded.alias, kind = excluded.kind, sort = excluded.sort`,
-        [String(x2.id), String(x2.iban || "").replace(/\s/g, "").toUpperCase(), String(x2.code || ""), pickName(x2), kindOf2(x2.code), i]
+        [String(x.id), String(x.iban || "").replace(/\s/g, "").toUpperCase(), String(x.code || ""), pickName(x), kindOf2(x.code), i]
       ]);
       st.push([`UPDATE odb_accounts SET id = 'iban:' || iban, enabled = 0, seen = 1 WHERE id NOT LIKE 'iban:%' AND id NOT IN (SELECT value FROM json_each(?))
         AND NOT EXISTS (SELECT 1 FROM odb_accounts b WHERE b.id = 'iban:' || odb_accounts.iban)`, [JSON.stringify(ids)]]);
@@ -11123,7 +11083,7 @@ function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, notify = a
     const open = await db.get(`SELECT COUNT(*) AS n FROM pay_links WHERE status IN ('pending', 'check')`);
     if (open?.n) {
       const j = await odb(cr, "GET", `/api/invoices?status=paid&limit=${PAGE2}&offset=0`);
-      const paidIds = (Array.isArray(j.items) ? j.items : []).filter((x2) => String(x2.paymentStatus || "paid") === "paid").map((x2) => String(x2.id));
+      const paidIds = (Array.isArray(j.items) ? j.items : []).filter((x) => String(x.paymentStatus || "paid") === "paid").map((x) => String(x.id));
       if (paidIds.length) {
         const hit = await db.all(`SELECT id FROM pay_links WHERE odb_paid = 0 AND odb_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(paidIds)]);
         if (hit.length) {
@@ -11201,7 +11161,7 @@ function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, notify = a
     if (!admin) {
       const tx = await db.get(`SELECT t.link_id, l.created_by_id FROM odb_tx t LEFT JOIN pay_links l ON l.id = t.link_id WHERE t.id = ?`, [c.req.param("id")]);
       if (!tx) throw fail(404, "\u041F\u043B\u0430\u0442\u0456\u0436 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
-      const mine = (x2) => String(x2 ?? "") === String(me.id);
+      const mine = (x) => String(x ?? "") === String(me.id);
       if (link && !mine(link.created_by_id) || tx.link_id && !mine(tx.created_by_id)) {
         throw fail(403, "\u041F\u0440\u0438\u0432\u2019\u044F\u0437\u0443\u0432\u0430\u0442\u0438 \u043F\u043B\u0430\u0442\u0435\u0436\u0456 \u0434\u043E \u0447\u0443\u0436\u0438\u0445 \u043F\u043E\u0441\u0438\u043B\u0430\u043D\u044C \u043C\u043E\u0436\u0443\u0442\u044C \u043B\u0438\u0448\u0435 \u0432\u043B\u0430\u0441\u043D\u0438\u043A \u0456 \u0430\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0438.");
       }
@@ -11272,7 +11232,7 @@ function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, notify = a
       byAccount: byAcc.map((r) => {
         const a = accBy.get(r.iban);
         return { id: a?.id || "", iban: r.iban, name: a?.alias || r.iban || "\u2014", kind: a?.kind || "", sum: round2(r.sum), cnt: r.cnt, prevSum: prev ? round2(pA.get(r.iban) || 0) : null };
-      }).sort((x2, y) => y.sum - x2.sum),
+      }).sort((x, y) => y.sum - x.sum),
       byPayer: byPayer.map((r) => ({
         key: r.k,
         name: r.k === PERSON ? "\u0424\u0456\u0437\u0438\u0447\u043D\u0456 \u043E\u0441\u043E\u0431\u0438" : nameBy.get(r.k) || r.name || "\u2014",
@@ -11898,20 +11858,20 @@ async function upgradeV9(db) {
   st.push([`UPDATE offices SET name = TRIM(SUBSTR(name, 17)) WHERE name LIKE 'Techno-Expert / %'`, []]);
   const depts = await db.all(`SELECT id, name FROM an_depts`);
   const sources = await db.all(`SELECT id, dept_id, name FROM an_sources`);
-  const byName = (list, n) => list.find((x2) => x2.name.trim().toLowerCase() === n.toLowerCase());
+  const byName = (list, n) => list.find((x) => x.name.trim().toLowerCase() === n.toLowerCase());
   let nextDept = Math.max(0, ...depts.map((d) => d.id)) + 1;
-  let nextSrc = Math.max(0, ...sources.map((x2) => x2.id)) + 1;
+  let nextSrc = Math.max(0, ...sources.map((x) => x.id)) + 1;
   let mp = byName(depts, "\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438");
   if (!mp) {
     mp = { id: nextDept++, name: "\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438" };
     st.push([`INSERT INTO an_depts (id, name, sort) VALUES (?, ?, 0)`, [mp.id, mp.name]]);
   }
   const sites = byName(depts, "\u0421\u0430\u0439\u0442\u0438");
-  for (const x2 of sources) {
-    const n = x2.name.trim().toLowerCase();
+  for (const x of sources) {
+    const n = x.name.trim().toLowerCase();
     if (["rozetka", "prom", "epicentr"].includes(n) || n.includes("techno")) {
-      st.push([`DELETE FROM an_source_map WHERE source_id = ?`, [x2.id]]);
-      st.push([`DELETE FROM an_sources WHERE id = ?`, [x2.id]]);
+      st.push([`DELETE FROM an_source_map WHERE source_id = ?`, [x.id]]);
+      st.push([`DELETE FROM an_sources WHERE id = ?`, [x.id]]);
     }
   }
   st.push([`DELETE FROM an_source_map WHERE value LIKE 'techno-expert%'`, []]);
@@ -11963,7 +11923,7 @@ async function upgradeV12(db) {
 async function upgradeV11(db) {
   if (await db.get(`SELECT value FROM settings WHERE key = 'an_v11'`)) return;
   const depts = await db.all(`SELECT id, name FROM an_depts`);
-  const old = depts.filter((d) => SOCIAL_NAMES.map((x2) => x2.toLowerCase()).includes(d.name.trim().toLowerCase()));
+  const old = depts.filter((d) => SOCIAL_NAMES.map((x) => x.toLowerCase()).includes(d.name.trim().toLowerCase()));
   const st = [];
   if (old.length && !depts.some((d) => d.name === "\u0421\u043E\u0446\u043C\u0435\u0440\u0435\u0436\u0456")) {
     const keep = old.find((d) => d.name === "\u0406\u043D\u0441\u0442\u0430\u0433\u0440\u0430\u043C") || old[0];
@@ -11979,7 +11939,7 @@ async function upgradeV11(db) {
     const srcs = await db.all(`SELECT id, name FROM an_sources`);
     let next = ((await db.get(`SELECT MAX(id) AS m FROM an_sources`))?.m || 0) + 1;
     SOCIAL_SOURCES.forEach(([name, values], i) => {
-      let id = srcs.find((x2) => x2.name.trim().toLowerCase() === name.toLowerCase())?.id;
+      let id = srcs.find((x) => x.name.trim().toLowerCase() === name.toLowerCase())?.id;
       if (id) st.push([`UPDATE an_sources SET dept_id = ? WHERE id = ?`, [keep.id, id]]);
       else {
         id = next++;
@@ -12576,7 +12536,7 @@ async function migrate(db, modules = MODULE_SCHEMAS) {
   await db.batch(todo.flatMap((m) => m.tables.map((sql) => [sql, []])));
   const cols = todo.flatMap((m) => m.columns);
   const alters = [];
-  for (const table of [...new Set(cols.map((x2) => x2[0]))]) {
+  for (const table of [...new Set(cols.map((x) => x[0]))]) {
     const existing = new Set((await db.all(`PRAGMA table_info(${table})`)).map((r) => r.name));
     for (const [t, col, type] of cols) if (t === table && !existing.has(col)) alters.push([`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`, []]);
   }
