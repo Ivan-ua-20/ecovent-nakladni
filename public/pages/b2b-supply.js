@@ -128,7 +128,7 @@ export async function viewAdminSupplyForm(preset = '') {
     const terms = st.terms === 'postpay' ? `відстрочка ${st.days} дн.` : 'передоплата';
     const deliv = DELIV.find((d) => d[0] === st.delivery)[1];
     if (!(await confirmDanger(`Надіслати закупівлю «${p.name}» на ${uah(total())}?`, `${items.length} поз. · ${esc(terms)} · ${esc(deliv)}. Партнер отримає її на підтвердження.`, 'Надіслати партнеру'))) return;
-    const btn = e.currentTarget;
+    const btn = e.target.closest("button");
     btn.disabled = true;
     try {
       const r = await api('POST', '/api/b2b/orders', { partner_id: p.id, items, pay_terms: st.terms, pay_days: st.days, delivery: st.delivery, ship_to: st.delivery === 'warehouse' ? st.ship : undefined, comment: st.comment });
