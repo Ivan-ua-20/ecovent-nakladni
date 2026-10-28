@@ -120,4 +120,26 @@ assert.ok(tg.some((m) => m.text.includes('відхилив') && m.text.includes(
 assert.equal(await status(() => req('POST', '/api/b2b/orders', { partner_id: pa.id, items: [{ product_id: 11, qty: 1 }] }, A)), 403, 'партнер не створює «від нас»');
 assert.equal(await status(() => req('GET', `/api/b2b/partners/${pa.id}/supply-options`, null, A)), 403);
 
+// ---------- 8. Відкрита закупівля (замовлення клієнтів без закупівлі) — формуємо ми ----------
+const cl = await req('POST', '/api/b2b/p/clients', { client_name: 'Без закупівлі', client_phone: '0501112233', items: [{ product_id: 12, qty: 2 }] }, A);
+const openId = (await db.get(`SELECT supply_id FROM b2b_orders WHERE id = ?`, [cl.id])).supply_id;
+assert.ok(openId, 'замовлення без закупівлі — у відкритій закупівлі');
+assert.equal((await req('GET', `/api/b2b/orders/${openId}`)).order.status, 'open');
+assert.match(await errOf(() => req('POST', `/api/b2b/orders/${openId}/form`, { entity_id: 999 })), /юрособу/);
+const eo = await req('GET', `/api/b2b/orders/${openId}/edit-options`);
+assert.equal(eo.entities.length, 1);
+tg.length = 0;
+await req('POST', `/api/b2b/orders/${openId}/form`, { entity_id: ea.id, pay_terms: 'postpay', pay_days: '10' });
+d = await req('GET', `/api/b2b/orders/${openId}`);
+assert.equal(d.order.status, 'invoice_wait');
+assert.equal(d.order.pay_days, 10);
+assert.ok(d.order.entity.startsWith('ФОП А'));
+assert.ok(tg.some((m) => String(m.chat_id) === '200' && m.text.includes('сформував наш менеджер')), 'партнеру — сповіщення');
+assert.equal(await status(() => req('POST', `/api/b2b/orders/${openId}/form`, { entity_id: ea.id })), 400, 'двічі — ні');
+assert.equal(await status(() => req('POST', `/api/b2b/orders/${openId}/form`, { entity_id: ea.id }, A)), 403, 'партнер — своєю кнопкою в кабінеті');
+// наступне замовлення без закупівлі — у нову відкриту
+const cl2 = await req('POST', '/api/b2b/p/clients', { client_name: 'Ще один', client_phone: '0501112234', items: [{ product_id: 12, qty: 1 }] }, A);
+const open2 = (await db.get(`SELECT supply_id FROM b2b_orders WHERE id = ?`, [cl2.id])).supply_id;
+assert.ok(open2 && open2 !== openId);
+
 console.log('OK — закупівля від нас: створення, підтвердження партнером, на склад партнера в LP-CRM');
