@@ -9,6 +9,7 @@ import { MASK, fail, need, nowIso, round2, loadSettings } from '../../core/commo
 import { randomToken } from '../../core/auth.js';
 import { logAudit } from '../../core/requisites.js';
 import { addNewOrder, getOrdersBatch, phpSerialize, phpUrlencode } from '../../integrations/lpcrm.js';
+import { ttnOf } from '../analytics/index.js';
 import { rzsOrdersPage, rzsOrder, rzsConfirm, rzsCreateTtn, rzsMarkings, rzsDateTime, parseRzsProductsCsv } from '../../integrations/rozetka-supplier.js';
 
 export const RZS_STATUS = {
@@ -28,7 +29,7 @@ const goodSeat = (s) => ['lengthCm', 'widthCm', 'heightCm', 'weightKg'].every((k
 const seatOf = (s) => ({ lengthCm: round2(Number(s.lengthCm)), widthCm: round2(Number(s.widthCm)), heightCm: round2(Number(s.heightCm)), weightKg: round2(Number(s.weightKg)) });
 const userName = (u) => u?.name || u?.login || '';
 
-export function mountRetail(app, { db, fetchFn }) {
+export function mountRetail(app, { db, fetchFn, services = {} }) {
   // ================================================================ кабінети
   const publicAcc = (a, origin = '') => ({
     id: a.id, name: a.name, token: keyHint(a.token), price_list_id: a.price_list_id, crm_office: a.crm_office, crm_delivery: a.crm_delivery,
@@ -172,6 +173,12 @@ export function mountRetail(app, { db, fetchFn }) {
     for (const a of accs) {
       if (!b.force && a.synced_at && Date.now() - Date.parse(a.synced_at) < SYNC_GAP_MS) { out.push({ id: a.id, skipped: true }); continue; }
       try { out.push({ id: a.id, ...(await syncAccount(a)) }); } catch (e) { out.push({ id: a.id, error: e.message }); }
+    }
+    // Нові ТТН — одразу шукаємо їх у LP-CRM (лише точний збіг ТТН).
+    if (out.some((x) => x.saved)) {
+      const since = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+      const todo = await db.all(`SELECT * FROM rzs_orders WHERE created_at >= ? AND ttn != '' AND crm_id = '' AND crm_code = '' AND status != 'deleted' LIMIT 200`, [since]);
+      if (todo.length) out.push({ crm: (await findCrm(todo, { suggest: false }).catch(() => null))?.linked?.length || 0 });
     }
     return c.json({ ok: true, accounts: accs.length, results: out });
   });
@@ -381,6 +388,88 @@ export function mountRetail(app, { db, fetchFn }) {
     }
     await db.run(`UPDATE rzs_orders SET crm_id = ?, crm_at = ?, note = ? WHERE id = ?`, [crmId, nowIso(), `у LP-CRM передав(ла) ${userName(c.get('user'))}`, r.id]);
     return c.json({ ok: true, crm_id: crmId, code });
+  });
+
+  // ================================================================ прив'язка до замовлень LP-CRM
+  // Замовлення Розетки, які вже внесли в LP-CRM вручну: шукаємо за ТТН у даних LP-CRM, що сервіс уже має (аналітика,
+  // перевірка дублів ТТН, індекс пошуку накладних), і перевіряємо одним запитом до LP-CRM. Збіг ТТН — прив'язуємо одразу;
+  // збіг лише телефону — пропонуємо (прив'язує людина).
+  const normTtn = (v) => String(v ?? '').replace(/\s/g, '').toUpperCase();
+  const phone9 = (v) => String(v ?? '').replace(/\D/g, '').slice(-9);
+  async function findCrm(rows, { suggest = true } = {}) {
+    rows = rows.filter((r) => !r.crm_id && !r.crm_code && r.status !== 'deleted');
+    const out = { checked: rows.length, linked: [], suggest: [], notFound: 0 };
+    if (!rows.length) return out;
+    const s = await loadSettings(db);
+    if (!s.lpcrm_subdomain || !s.lpcrm_key) throw fail(400, 'Не налаштовано LP-CRM у «Налаштуваннях».');
+    if (rows.some((r) => r.ttn)) await services.analytics?.ttnQuick?.().catch(() => 0); // нові ТТН з LP-CRM (раз на 10 хв)
+    const ttns = [...new Set(rows.map((r) => normTtn(r.ttn)).filter(Boolean))];
+    const phones = suggest ? [...new Set(rows.map((r) => phone9(r.phone)).filter((p) => p.length === 9))] : [];
+    const J = (a) => JSON.stringify(a);
+    const [a, b, k] = await Promise.all([
+      ttns.length ? db.all(`SELECT code FROM an_ttn_recent WHERE ttn IN (SELECT value FROM json_each(?))`, [J(ttns)]).catch(() => []) : [],
+      ttns.length ? db.all(`SELECT code FROM an_orders WHERE ttn IN (SELECT value FROM json_each(?))`, [J(ttns)]).catch(() => []) : [],
+      db.all(`SELECT code FROM order_keys WHERE k IN (SELECT value FROM json_each(?))`, [J([...ttns, ...phones.map((p) => `p:${p}`)])]).catch(() => []),
+    ]);
+    let codes = [...new Set([...a, ...b, ...k].map((r) => String(r.code)))];
+    const used = new Set(codes.length ? (await db.all(`SELECT crm_code FROM rzs_orders WHERE crm_code IN (SELECT value FROM json_each(?))`, [J(codes)])).map((r) => r.crm_code) : []);
+    codes = codes.filter((c) => !used.has(c)).slice(0, 300);
+    const crm = codes.length ? await getOrdersBatch(fetchFn, { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key }, codes).catch((e) => { throw fail(502, `LP-CRM: ${e.message}`); }) : [];
+    const list = crm.map((o) => ({ id: String(o.id ?? ''), code: String(o.order_id ?? ''), ttn: ttnOf(o), phone: phone9(o.phone), name: String(o.bayer_name ?? ''), status: String(o.status ?? '') }))
+      .filter((o) => /^\d+$/.test(o.id) && o.code);
+    const taken = new Set();
+    const now = nowIso();
+    const st = [];
+    for (const r of rows) {
+      const t = normTtn(r.ttn);
+      const hit = t ? list.filter((o) => o.ttn === t && !taken.has(o.code)) : [];
+      if (hit.length === 1) {
+        taken.add(hit[0].code);
+        st.push([`UPDATE rzs_orders SET crm_id = ?, crm_code = ?, crm_at = ?, note = ? WHERE id = ? AND crm_id = '' AND crm_code = ''`, [hit[0].id, hit[0].code, now, `знайдено в LP-CRM за ТТН ${t}`, r.id]]);
+        out.linked.push({ id: r.id, order_num: r.order_num, crm_id: hit[0].id });
+        continue;
+      }
+      const p = phone9(r.phone);
+      const maybe = [...hit, ...(suggest && p.length === 9 ? list.filter((o) => o.phone === p && !hit.includes(o)) : [])].filter((o) => !taken.has(o.code)).slice(0, 3);
+      if (maybe.length) out.suggest.push({ id: r.id, order_num: r.order_num, customer: r.customer, phone: r.phone, ttn: r.ttn, crm: maybe.map((o) => ({ id: o.id, name: o.name, ttn: o.ttn, phone: o.phone, by: o.ttn && o.ttn === t ? 'ТТН' : 'телефон' })) });
+      else out.notFound++;
+    }
+    if (st.length) await db.batch(st);
+    return out;
+  }
+  app.post('/api/rzs/crm-find', async (c) => {
+    need(c, 'docs.edit');
+    const b = await c.req.json().catch(() => ({}));
+    const ids = Array.isArray(b.ids) ? [...new Set(b.ids.map(String))].slice(0, 300) : null;
+    const since = new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
+    const rows = ids ? await db.all(`SELECT * FROM rzs_orders WHERE id IN (SELECT value FROM json_each(?))`, [JSON.stringify(ids)])
+      : await db.all(`SELECT * FROM rzs_orders WHERE created_at >= ? AND crm_id = '' AND crm_code = '' AND status != 'deleted' ORDER BY created_at DESC LIMIT 300`, [since]);
+    return c.json(await findCrm(rows));
+  });
+  // Ручна прив'язка: № замовлення LP-CRM (як у картці) або його код; порожньо — відв'язати.
+  app.put('/api/rzs/orders/:id/crm-link', async (c) => {
+    need(c, 'docs.edit');
+    const r = await orderRow(c.req.param('id'));
+    const val = String((await c.req.json().catch(() => ({}))).crm ?? '').replace(/\s/g, '');
+    if (!val) {
+      await db.run(`UPDATE rzs_orders SET crm_id = '', crm_code = '', crm_at = '', note = ? WHERE id = ?`, [`відв'язав(ла) від LP-CRM ${userName(c.get('user'))}`, r.id]);
+      return c.json({ ok: true, crm_id: '' });
+    }
+    if (!/^\d{1,20}$/.test(val)) throw fail(400, 'Номер замовлення LP-CRM — лише цифри.');
+    let id = val.length <= 10 ? val : '';
+    let code = val.length > 10 ? val : '';
+    if (!code) code = String((await db.get(`SELECT code FROM an_orders WHERE id = ?`, [Number(id)]).catch(() => null))?.code
+      || (await db.get(`SELECT code FROM order_keys WHERE k = ? LIMIT 1`, [id]).catch(() => null))?.code || '');
+    const s = await loadSettings(db);
+    if (code && s.lpcrm_subdomain && s.lpcrm_key) {
+      const o = (await getOrdersBatch(fetchFn, { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key }, [code]).catch(() => [])).find((x) => String(x.order_id) === code);
+      if (o && /^\d+$/.test(String(o.id ?? ''))) id = String(o.id);
+      else if (!id) throw fail(404, 'Замовлення з таким кодом у LP-CRM не знайдено.');
+    }
+    const other = await db.get(`SELECT order_num FROM rzs_orders WHERE id != ? AND ((crm_id != '' AND crm_id = ?) OR (crm_code != '' AND crm_code = ?)) LIMIT 1`, [r.id, id, code]);
+    if (other) throw fail(400, `Це замовлення LP-CRM уже прив'язане до ${other.order_num}.`);
+    await db.run(`UPDATE rzs_orders SET crm_id = ?, crm_code = ?, crm_at = ?, note = ? WHERE id = ?`, [id, code, nowIso(), `прив'язав(ла) до LP-CRM ${userName(c.get('user'))}`, r.id]);
+    return c.json({ ok: true, crm_id: id, code });
   });
 
   // ================================================================ товари

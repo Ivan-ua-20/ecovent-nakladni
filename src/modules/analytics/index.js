@@ -453,6 +453,8 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
     await putSetting('an_ttn_last', JSON.stringify(res));
     return res;
   }
+  // Іншим модулям (Розетка: пошук замовлень LP-CRM за ТТН) — освіжити ТТН нових замовлень (не частіше разу на 10 хв).
+  services.analytics = { ...(services.analytics || {}), ttnQuick };
   // Сам на запитах до сайту — у фоні (після відповіді), коли перевірка вже потрібна.
   onTick((c) => {
     if (Date.now() - (shared.ttnTry || 0) < 60e3) return; // не частіше разу на хвилину на екземпляр — щоб не читати базу щозапиту
