@@ -73,10 +73,6 @@ const fetchFn = async (url, opts = {}) => {
   }
   m = path.match(/^\/dropshipping\/orders\/(.+)$/);
   if (m) { const o = ORDERS.get(m[1]); return o ? json(o) : json({ message: 'not found' }, 404); }
-  if (path === '/prices/price-lists/create') {
-    calls.price.push({ body: opts.body, test: opts.headers['X-Test-Request'] });
-    return json({ success: true, count: (opts.body.match(/<item>/g) || []).length });
-  }
   throw new Error(`неочікуваний запит ${url}`);
 };
 
@@ -102,7 +98,7 @@ const status = async (fn) => { try { await fn(); return 200; } catch (e) { retur
 
 // ---------- 1. Кабінет: перевірка токена, маска, вебхук ----------
 assert.match(await errOf(() => req('POST', '/api/rzs/accounts', { token: 'x'.repeat(30) })), /токен/, 'чужий токен — зрозуміла помилка');
-const acc = await req('POST', '/api/rzs/accounts', { name: 'Ековент', token: TOKEN, price_list_id: '123', crm_office: '7' });
+const acc = await req('POST', '/api/rzs/accounts', { name: 'Ековент', token: TOKEN, crm_office: '7' });
 let accs = await req('GET', '/api/rzs/accounts');
 assert.equal(accs.length, 1, 'один кабінет');
 assert.ok(!JSON.stringify(accs).includes(TOKEN), 'токен не віддається в браузер');
@@ -187,13 +183,7 @@ assert.ok(decodeURIComponent(add.products.replace(/\+/g, ' ')).includes('s:5:"pr
 assert.match(await errOf(() => req('POST', `/api/rzs/orders/${ID1}/crm`, {})), /Уже в LP-CRM/, 'двічі — ні');
 assert.equal((await req('GET', '/api/rzs/orders?status=nocrm')).rows.length, 1, 'фільтр «не в LP-CRM»');
 
-// ---------- 8. Прайс ----------
 await req('PUT', '/api/rzs/products/EV-200', { purchase_price: 3000, rrp: 4100, stock: 0 });
-const pr = await req('POST', '/api/rzs/price', { test: true });
-assert.equal(pr.sent, 2);
-assert.equal(calls.price[0].test, '1', 'тестовий режим');
-assert.ok(calls.price[0].body.includes('<purchase_price>7200.5</purchase_price>') && calls.price[0].body.includes('<price_list_id>123</price_list_id>'));
-assert.ok(calls.price[0].body.includes('<recommended_inet_price>4100</recommended_inet_price>'));
 
 // ---------- 8а. Імпорт товарів з Кабінету постачальника (CSV як у вивантаженні Розетки) ----------
 const CSV = '﻿Товар;"ID товару";Контрагент;"Артикул товару";Категорія;Бренд;"Статус на сайті";"Статус в прайсі";"Оновлення прайсу";"Ціна в прайсі";"РРЦ від постачальника";"Ціна на сайті";"Залишки товару";"Ціна закупівлі";"Менеджер по контенту"\n'
@@ -225,7 +215,6 @@ assert.equal((await req('GET', '/api/rzs/orders', undefined, VH)).rows.length, 2
 assert.equal(await status(() => req('GET', '/api/rzs/accounts', undefined, VH)), 403, 'кабінети — лише власник/адміни');
 assert.equal(await status(() => req('POST', `/api/rzs/orders/${ID2}/crm`, {}, VH)), 403);
 assert.equal(await status(() => req('PUT', '/api/rzs/products/EV-200', { purchase_price: 1 }, VH)), 403);
-assert.equal(await status(() => req('POST', '/api/rzs/price', {}, VH)), 403);
 assert.equal((await send('POST', '/api/rzs/products/import', CSV, { ...VH, 'Content-Type': 'text/csv' })).status, 403, 'імпорт — лише з правом довідників');
 
 // ---------- 10. Новий пароль вебхука, видалення ----------

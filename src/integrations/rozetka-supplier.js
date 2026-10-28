@@ -78,34 +78,6 @@ export async function rzsMarkings(fetchFn, token, orders, size = '100x100') {
   return { bytes: new Uint8Array(await res.arrayBuffer()), printed: Number(res.headers.get('X-Markings-Printed')) || 0, skipped: Number(res.headers.get('X-Markings-Skipped')) || 0 };
 }
 
-// Прайс (до 1000 позицій, синхронно). items: [{ article, product_id?, purchase_price, recommended_inet_price?, stock }].
-const x = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-export function priceXml({ priceListId, partial = true, items }) {
-  const tag = (k, v) => (v === undefined || v === null || v === '' ? '' : `<${k}>${x(v)}</${k}>`);
-  return `<?xml version="1.0" encoding="UTF-8"?><price_list>${tag('price_list_id', priceListId)}<currency>UAH</currency><partial>${partial ? 1 : 0}</partial><skip_row_errors>1</skip_row_errors><items>`
-    + items.map((i) => `<item>${tag('product_id', i.product_id)}${tag('article', i.article)}${tag('title', i.title)}${tag('purchase_price', i.purchase_price)}`
-      + `${tag('recommended_inet_price', i.recommended_inet_price)}${tag('stock', i.stock)}</item>`).join('')
-    + '</items></price_list>';
-}
-export async function rzsPriceCreate(fetchFn, token, priceListId, items, { test = false } = {}) {
-  let res;
-  try {
-    res = await fetchFn(`${RZS_API}/prices/price-lists/create`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/xml', ...(test ? { 'X-Test-Request': '1' } : {}) },
-      body: priceXml({ priceListId, items }),
-    });
-  } catch (e) {
-    if (e.pending) throw e;
-    throw Object.assign(new Error('Розетка не відповідає. Спробуйте ще раз за хвилину.'), { status: 502 });
-  }
-  const j = await res.json().catch(() => null);
-  if (!res.ok && res.status !== 400) throw rzsError(res.status, j);
-  const r = j?.data && !Array.isArray(j.data) ? j.data : (j || {});
-  const errors = (Array.isArray(r.errors) ? r.errors : Array.isArray(j?.errors) ? j.errors : []).map((e) => (typeof e === 'string' ? e : e?.message || JSON.stringify(e)));
-  return { ok: res.ok && r.success !== false, count: Number(r.count ?? r.total ?? r.items ?? 0) || 0, errors };
-}
-
 // Вивантаження товарів з Кабінету постачальника (CSV, «;», UTF-8 з BOM): артикул, ID товару Розетки, назва, РРЦ,
 // ціна закупівлі (історія «дата - UAH 5,679.20 | …» — беремо найновішу; порожньо — «Ціна в прайсі»), залишок, статус, бренд.
 function csvRows(text) {
