@@ -28,7 +28,7 @@ const ORDERS = new Map([
 ]);
 let tooMany = false;
 // Замовлення LP-CRM (код → номер, ТТН, телефон) — для пошуку прив'язки за ТТН.
-const CRM = new Map([['1761400000000111', { id: '70001', ttn: '20400558101410', phone: '0971089181', bayer_name: 'Попелянська' }], ['1761400000000222', { id: '70002', ttn: '', phone: '0508846132', bayer_name: 'Підопличко' }]]);
+const CRM = new Map([['1761400000000111', { id: '70001', status: '1', ttn: '20400558101410', phone: '0971089181', bayer_name: 'Попелянська' }], ['1761400000000222', { id: '70002', ttn: '', phone: '0508846132', bayer_name: 'Підопличко' }]]);
 const calls = { list: 0, confirm: [], ttn: [], print: [], price: [], crm: [] };
 const json = (o, status = 200) => new Response(JSON.stringify(o), { status });
 const fetchFn = async (url, opts = {}) => {
@@ -38,6 +38,7 @@ const fetchFn = async (url, opts = {}) => {
     const p = Object.fromEntries(new URLSearchParams(opts.body));
     calls.crm.push({ method, p });
     if (method === 'addNewOrder') return json({ status: 'ok', data: { order_id: p.order_id }, message: 'ok' });
+    if (method === 'getStatuses') return json({ status: 'ok', data: { 1: { name: 'Прийнято' }, 4: { name: 'Відправлено' } } });
     if (method === 'getOrdersByID' && p.order_id.split(',').some((c) => CRM.has(c))) return json({ status: 'ok', data: p.order_id.split(',').filter((c) => CRM.has(c)).map((c) => ({ order_id: c, ...CRM.get(c), products: [] })) });
     if (method === 'getOrdersByID') return json({ status: 'ok', data: [{ order_id: p.order_id, id: '88001', products: [], bayer_name: 'x' }] });
     return json({ status: 'ok', data: [] });
@@ -235,6 +236,16 @@ assert.match(await errOf(() => req('PUT', `/api/rzs/orders/${R5}/crm-link`, { cr
 assert.match(await errOf(() => req('PUT', `/api/rzs/orders/${R5}/crm-link`, { crm: 'abc' })), /цифри/);
 await req('PUT', `/api/rzs/orders/${R4}/crm-link`, { crm: '' });
 assert.equal((await req('GET', `/api/rzs/orders/${R4}`)).crm_id, '', 'відв’язано');
+// «Накладні»: замовлення LP-CRM, прив'язане до Розетки, — не накладна ФОП, а маркування й документи Розетки.
+await raw.batch([
+  [`INSERT INTO orders_index (code, datetime, ttn) VALUES ('1761400000000111', ?, '20400558101410')`, [`${now} 12:00:00`]],
+  [`INSERT OR IGNORE INTO order_keys (k, code, day) VALUES ('70001', '1761400000000111', ?)`, [now]],
+]);
+const invR = await send('GET', '/api/invoice/70001');
+const inv = await invR.json();
+assert.equal(invR.status, 200, inv.error);
+assert.equal(inv.rzs?.order_num, 'PO3', 'вкладка «Накладні» впізнає замовлення Розетки');
+assert.equal(inv.versionsCount, 0, 'версії накладної не зберігаються');
 const fr2 = await req('POST', '/api/rzs/crm-find', { ids: [R3] });
 assert.equal(fr2.checked, 0, 'вже прив’язані не перевіряються');
 

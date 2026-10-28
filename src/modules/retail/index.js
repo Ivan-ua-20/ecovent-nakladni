@@ -536,4 +536,26 @@ export function mountRetail(app, { db, fetchFn, services = {} }) {
     await logAudit(db, { user: c.get('user'), kind: 'rzs', refId: 0, action: `імпорт товарів з Кабінету Розетки: ${uniq.length} (нових ${uniq.filter((r) => !have.has(r.code)).length})` }).catch(() => 0);
     return c.json({ ok: true, total: uniq.length, added: uniq.filter((r) => !have.has(r.code)).length, updated: uniq.filter((r) => have.has(r.code)).length, skipped, unmapped });
   });
+
+  // Для вкладки «Накладні»: чи замовлення LP-CRM — це замовлення Розетки (за прив'язкою № / кодом, «Rozetka …» у коментарі
+  // або за ТТН). Тоді накладну ФОП не формуємо — маркування й супровідні документи беремо з Розетки.
+  async function orderInfo({ ids = [], comment = '', ttn = '' } = {}) {
+    const list = [...new Set(ids.map((x) => String(x ?? '').trim()).filter((x) => /^\d+$/.test(x)))];
+    let r = null;
+    if (list.length) {
+      r = await db.get(`SELECT * FROM rzs_orders WHERE (crm_id != '' AND crm_id IN (SELECT value FROM json_each(?))) OR (crm_code != '' AND crm_code IN (SELECT value FROM json_each(?)))
+        ORDER BY created_at DESC LIMIT 1`, [JSON.stringify(list), JSON.stringify(list)]);
+    }
+    const m = /Rozetka\s+([A-Za-zА-Яа-я]*\d{5,})/.exec(String(comment || ''));
+    if (!r && m) r = await db.get(`SELECT * FROM rzs_orders WHERE order_num = ? LIMIT 1`, [m[1]]);
+    const t = normTtn(ttn);
+    if (!r && t.length >= 10) r = await db.get(`SELECT * FROM rzs_orders WHERE REPLACE(ttn, ' ', '') = ? ORDER BY created_at DESC LIMIT 1`, [t]);
+    if (!r) return null;
+    const a = await db.get(`SELECT name FROM rzs_accounts WHERE id = ?`, [r.account_id]);
+    return {
+      id: r.id, order_num: r.order_num, account: a?.name || '', status: r.status, status_name: RZS_STATUS[r.status] || r.status, customer: r.customer,
+      ttn: r.ttn, tracking_status: r.tracking_status, document_link: r.document_link, invoice_no: r.invoice_no, docs_at: r.docs_at, crm_id: r.crm_id,
+    };
+  }
+  return { orderInfo };
 }
