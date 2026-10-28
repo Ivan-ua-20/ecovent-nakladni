@@ -323,6 +323,9 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, shared = {}, servic
     // Замовлення від B2B-партнера: накладна не формується (версії не зберігаємо) — лише маркування, яке додав партнер.
     const b2b = await services.b2b?.crmOrderInfo?.({ ids: [orderId, inv.crmOrder?.orderId, inv.crmOrder?.shortId, inv.crmCode], comment: inv.crmOrder?.comment }).catch(() => null);
     if (b2b) return c.json({ ...inv, b2b, versionsCount: 0 });
+    // Замовлення Розетки (дропшипінг): накладну ФОП не формуємо — маркування й супровідні документи з Розетки.
+    const rzs = await services.retail?.orderInfo?.({ ids: [orderId, inv.crmOrder?.orderId, inv.crmOrder?.shortId, inv.crmCode], comment: inv.crmOrder?.comment, ttn: inv.order?.delivery?.ttn || inv.crmOrder?.delivery?.ttn }).catch(() => null);
+    if (rzs) return c.json({ ...inv, rzs, versionsCount: 0 });
     await trackChanges(orderId, inv, userName(c));
     const n = await db.get(`SELECT COUNT(*) AS n FROM versions WHERE order_id = ?`, [orderId]);
     return c.json({ ...inv, versionsCount: n?.n || 0 });

@@ -235,6 +235,12 @@ assert.match(await errOf(() => req('PUT', `/api/rzs/orders/${R5}/crm-link`, { cr
 assert.match(await errOf(() => req('PUT', `/api/rzs/orders/${R5}/crm-link`, { crm: 'abc' })), /цифри/);
 await req('PUT', `/api/rzs/orders/${R4}/crm-link`, { crm: '' });
 assert.equal((await req('GET', `/api/rzs/orders/${R4}`)).crm_id, '', 'відв’язано');
+// «Накладні»: замовлення LP-CRM, прив'язане до Розетки, — не накладна ФОП, а маркування й документи Розетки.
+const invR = await send('GET', '/api/invoice/1761400000000111');
+const inv = await invR.json();
+assert.equal(invR.status, 200, inv.error);
+assert.equal(inv.rzs?.order_num, 'PO3', 'вкладка «Накладні» впізнає замовлення Розетки');
+assert.equal(inv.versionsCount, 0, 'версії накладної не зберігаються');
 const fr2 = await req('POST', '/api/rzs/crm-find', { ids: [R3] });
 assert.equal(fr2.checked, 0, 'вже прив’язані не перевіряються');
 

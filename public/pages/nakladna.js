@@ -50,7 +50,7 @@ async function loadInvoice(orderId, fresh = false, wide = false) {
     const qs = [fresh ? 'fresh=1' : '', wide ? 'wide=1' : ''].filter(Boolean).join('&');
     current = await api('GET', `/api/invoice/${encodeURIComponent(orderId)}${qs ? `?${qs}` : ''}`);
     current.requestedId = orderId;
-    if (current.b2b) renderB2bView(); else renderInvoiceView();
+    if (current.b2b) renderB2bView(); else if (current.rzs) renderRzsView(); else renderInvoiceView();
   } catch (e) {
     current = null;
     if ($('#invActions')) $('#invActions').innerHTML = '';
@@ -78,6 +78,29 @@ function renderB2bView() {
       ${can('b2b.admin') ? `<div><a class="btn sm" href="#/b2bclients/${b.id}">Відкрити ${esc(b.number)} у B2B</a></div>` : ''}
     </div>`;
   $('#invActions').innerHTML = `<button class="btn primary" id="actNp" ${b.label ? '' : 'disabled'}>Маркування</button><button class="btn" id="actRefresh">Оновити з CRM</button>`;
+  $('#actNp').onclick = () => npMarking($('#actNp'));
+  $('#actRefresh').onclick = () => loadInvoice(current.requestedId, true);
+}
+
+// Замовлення Розетки (дропшипінг): накладну ФОП не формуємо — маркування (PDF з Розетки) і супровідні документи від Розетки.
+function renderRzsView() {
+  const r = current.rzs;
+  const o = current.order;
+  $('#invArea').innerHTML = `<div class="card form-stack" style="max-width:760px">
+      <h3 style="margin:0">🛒 Замовлення Розетки</h3>
+      <div class="alert info">Накладна ФОП для замовлень Розетки не формується: маркування — з Розетки, супровідні документи — від Розетки (видаткова з «Вчасно»).</div>
+      <dl class="kv">
+        <dt>Замовлення LP-CRM</dt><dd>№${esc(o.orderId)}${o.shortId ? ` · ${esc(o.shortId)}` : ''}</dd>
+        <dt>Розетка</dt><dd><b>${esc(r.order_num)}</b>${r.account ? ` · ${esc(r.account)}` : ''} · ${esc(r.status_name)}</dd>
+        <dt>Клієнт</dt><dd>${esc(r.customer || o.buyer?.name || '')}</dd>
+        <dt>ТТН</dt><dd>${r.ttn ? `<b>${esc(r.ttn)}</b>${r.tracking_status ? ` <span class="small muted">· ${esc(r.tracking_status)}</span>` : ''}` : '<span class="badge bad">ще не створено — «Рітейл → Розетка»</span>'}</dd>
+        <dt>Документи</dt><dd>${r.document_link ? `📄 є${r.docs_at ? ` <span class="small muted">· з ${esc(fmtDateTime(r.docs_at))}</span>` : ''}` : '<span class="badge warn">Розетка ще не сформувала</span>'}${r.invoice_no ? ` · рахунок ${esc(r.invoice_no)}` : ''}</dd>
+      </dl>
+      ${can('docs.view') ? `<div><a class="btn sm" href="#/rzorders">Відкрити «Рітейл → Розетка»</a></div>` : ''}
+    </div>`;
+  $('#invActions').innerHTML = `<button class="btn primary" id="actNp" ${r.ttn ? '' : 'disabled'}>Маркування</button>
+    ${r.document_link ? `<a class="btn" href="${esc(r.document_link)}" target="_blank" rel="noopener">📄 Документи</a>` : '<button class="btn" disabled>📄 Документи</button>'}
+    <button class="btn" id="actRefresh">Оновити з CRM</button>`;
   $('#actNp').onclick = () => npMarking($('#actNp'));
   $('#actRefresh').onclick = () => loadInvoice(current.requestedId, true);
 }
@@ -232,6 +255,14 @@ async function npMarking(btn) {
       const url = URL.createObjectURL(await res.blob());
       if (win) win.location.href = url; else window.open(url, '_blank');
       toast(`Маркування партнера «${current.b2b.partner}» · ${current.b2b.number}`);
+      return;
+    }
+    if (current.rzs) { // замовлення Розетки — маркування з кабінету постачальника
+      const res = await fetch('/api/rzs/markings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [current.rzs.id] }) });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Маркування Розетки не отримано.');
+      const url = URL.createObjectURL(await res.blob());
+      if (win) win.location.href = url; else window.open(url, '_blank');
+      toast(`Маркування Розетки · ${current.rzs.order_num}`);
       return;
     }
     const rzTtn = String(o.delivery?.ttn || '').toUpperCase().replace(/\s/g, '');
