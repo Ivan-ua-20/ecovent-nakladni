@@ -105,3 +105,61 @@ export async function rzsPriceCreate(fetchFn, token, priceListId, items, { test 
   const errors = (Array.isArray(r.errors) ? r.errors : Array.isArray(j?.errors) ? j.errors : []).map((e) => (typeof e === 'string' ? e : e?.message || JSON.stringify(e)));
   return { ok: res.ok && r.success !== false, count: Number(r.count ?? r.total ?? r.items ?? 0) || 0, errors };
 }
+
+// Вивантаження товарів з Кабінету постачальника (CSV, «;», UTF-8 з BOM): артикул, ID товару Розетки, назва, РРЦ,
+// ціна закупівлі (історія «дата - UAH 5,679.20 | …» — беремо найновішу; порожньо — «Ціна в прайсі»), залишок, статус, бренд.
+function csvRows(text) {
+  const src = String(text || '').replace(/^﻿/, '');
+  const first = src.split(/\r?\n/, 1)[0] || '';
+  const delim = [';', '\t', ','].sort((a, b) => first.split(b).length - first.split(a).length)[0];
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let q = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (q) {
+      if (ch === '"') { if (src[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += ch;
+    } else if (ch === '"' && cell === '') q = true;
+    else if (ch === delim) { row.push(cell); cell = ''; }
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && src[i + 1] === '\n') i++;
+      row.push(cell); rows.push(row); row = []; cell = '';
+    } else cell += ch;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter((r) => r.some((c) => String(c).trim() !== ''));
+}
+const numOf = (v) => {
+  const s = String(v ?? '').replace(/\s| /g, '');
+  if (!s) return null;
+  // «5,679.20» (кома — тисячі) або «5679,2» (кома — дробова)
+  const n = Number(/,\d{3}(\.|$)/.test(s) && s.includes('.') ? s.replace(/,/g, '') : s.replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
+};
+const COLS = {
+  code: ['артикул товару', 'артикул'], rz_code: ['id товару'], name: ['товар', 'назва товару', 'назва'], rrp: ['ррц від постачальника', 'ррц'],
+  buy: ['ціна закупівлі'], list: ['ціна в прайсі'], stock: ['залишки товару', 'залишок', 'залишки'], status: ['статус на сайті'], brand: ['бренд'],
+};
+export function parseRzsProductsCsv(text) {
+  const rows = csvRows(text);
+  if (!rows.length) throw Object.assign(new Error('Файл порожній.'), { status: 400 });
+  const head = rows[0].map((h) => String(h).trim().toLowerCase());
+  const idx = Object.fromEntries(Object.entries(COLS).map(([k, names]) => [k, names.map((n) => head.indexOf(n)).find((i) => i >= 0) ?? -1]));
+  if (idx.code < 0) throw Object.assign(new Error('У файлі немає колонки «Артикул товару» — завантажте вивантаження товарів з Кабінету постачальника Розетки (CSV).'), { status: 400 });
+  const get = (r, k) => (idx[k] >= 0 ? String(r[idx[k]] ?? '').trim() : '');
+  const out = [];
+  let skipped = 0;
+  for (const r of rows.slice(1)) {
+    const code = get(r, 'code').slice(0, 60);
+    if (!code) { skipped++; continue; }
+    const hist = /UAH\s*([\d.,\s]+)/.exec(get(r, 'buy'));
+    const buy = hist ? numOf(hist[1]) : numOf(get(r, 'buy'));
+    out.push({
+      code, rz_code: get(r, 'rz_code').replace(/\D/g, '').slice(0, 20), name: get(r, 'name').slice(0, 200),
+      rrp: numOf(get(r, 'rrp')), purchase_price: buy ?? numOf(get(r, 'list')), stock: idx.stock >= 0 && get(r, 'stock') !== '' ? Math.max(0, Math.round(numOf(get(r, 'stock')) || 0)) : null,
+      status: get(r, 'status').split(' - ')[0].trim().slice(0, 30), brand: get(r, 'brand').slice(0, 60),
+    });
+  }
+  return { rows: out, skipped };
+}

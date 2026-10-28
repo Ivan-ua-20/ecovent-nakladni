@@ -194,26 +194,59 @@ export function createRetailPages(ctx) {
   }
 
   // ---------------------------------------------------------------- товари й ціни
+  const RZ_ST = { available: ['є на сайті', 'ok'], unavailable: ['немає в наявності', 'warn'], archive: ['архів', 'bad'] };
+  const PV = { '': 'Усі', nomap: 'Не прив’язані до LP-CRM', available: 'Є на сайті', noprice: 'Без ціни закупівлі' };
+  const pf = { v: '', q: '' };
   async function viewProducts() {
-    const rows = await api('GET', '/api/rzs/products');
+    const all = await api('GET', '/api/rzs/products');
     const edit = can('refs.edit');
+    const q = pf.q.trim().toLowerCase();
+    const rows = all.filter((p) => (!pf.v || (pf.v === 'nomap' && !p.product_id) || (pf.v === 'available' && p.rz_status === 'available') || (pf.v === 'noprice' && !(p.purchase_price > 0)))
+      && (!q || [p.code, p.rz_code, p.name, p.brand, p.product_id].some((x) => String(x ?? '').toLowerCase().includes(q))));
+    const lastImport = all.map((p) => p.imported_at).filter(Boolean).sort().pop();
     main.innerHTML = `
-      <div class="head-row"><h2>Розетка — товари й ціни закупівлі</h2><div class="btn-row">${edit ? '<button class="btn" id="rpAdd">+ Товар</button>' : ''}${can('api') ? '<button class="btn" id="rpTest">Перевірити прайс (тест)</button><button class="btn primary" id="rpPush">Надіслати прайс на Розетку</button>' : ''}</div></div>
-      <div class="alert info" style="margin-bottom:12px">Артикули з замовлень Розетки з’являються тут самі. <b>Ціна закупівлі</b> — ціна, за якою ми продаємо Розетці: вона йде в LP-CRM у замовлення (не роздрібна) і в прайс Розетки.
-        <b>Товар LP-CRM</b> підставляється сам за артикулом (з каталогу), інакше — впишіть ID товару з LP-CRM. Габарити товару потрібні для ТТН, якщо в каталозі Розетки їх немає.
-        У прайс ідуть лише товари з ціною закупівлі й залишком.</div>
-      ${rows.length ? `<div class="table-wrap"><table class="list"><thead><tr><th>Артикул</th><th>Товар LP-CRM (ID)</th><th>Назва</th><th class="r">Ціна закупівлі</th><th class="r">РІЦ</th><th class="r">Залишок</th><th>Габарити (на 1 шт.)</th></tr></thead><tbody>
+      <div class="head-row"><h2>Розетка — товари й ціни закупівлі</h2><div class="btn-row">
+        ${edit ? '<label class="btn primary">📥 Завантажити товари з Розетки (CSV)<input type="file" id="rpImp" accept=".csv,text/csv" hidden></label><button class="btn" id="rpAdd">+ Товар</button>' : ''}
+        ${can('api') ? '<button class="btn" id="rpTest">Перевірити прайс (тест)</button><button class="btn" id="rpPush">Надіслати прайс на Розетку</button>' : ''}</div></div>
+      <div class="alert info" style="margin-bottom:12px"><b>Як оновити:</b> Кабінет постачальника Розетки → вивантажте товари в CSV → «📥 Завантажити товари з Розетки». Нові артикули додадуться,
+        у наявних оновляться назва, код Розетки, РРЦ, ціна закупівлі, залишок і статус; прив’язка до LP-CRM і габарити лишаються.
+        <b>Ціна закупівлі</b> йде в LP-CRM у замовлення Розетки (не роздрібна). <b>Товар LP-CRM (ID)</b> підставляється сам, якщо артикул збігається з артикулом у каталозі, інакше — впишіть ID товару з LP-CRM.
+        ${lastImport ? `<div class="small" style="margin-top:4px">Останнє завантаження: ${esc(fmtDateTime(lastImport))}</div>` : ''}</div>
+      <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap">${Object.entries(PV).map(([k, v]) => `<button class="chip ${pf.v === k ? 'on' : ''}" data-pv="${k}">${esc(v)}${k === 'nomap' ? ` · ${all.filter((p) => !p.product_id).length}` : ''}</button>`).join('')}
+        <input id="rpQ" placeholder="Артикул, код Розетки, назва, бренд" value="${esc(pf.q)}" style="max-width:300px" aria-label="Пошук товару"></div>
+      ${rows.length ? `<div class="table-wrap"><table class="list"><thead><tr><th>Артикул</th><th>Товар LP-CRM (ID)</th><th>Назва</th><th class="r">Ціна закупівлі</th><th class="r">РРЦ</th><th class="r">Залишок</th><th>Габарити (на 1 шт.)</th></tr></thead><tbody>
         ${rows.map((p) => `<tr data-code="${esc(p.code)}">
-          <td><b>${esc(p.code)}</b>${p.rz_code ? `<div class="small muted">Розетка ${esc(p.rz_code)}</div>` : ''}</td>
+          <td><b>${esc(p.code)}</b>${p.rz_code ? `<div class="small muted">Розетка ${esc(p.rz_code)}</div>` : ''}${RZ_ST[p.rz_status] ? `<div><span class="badge ${RZ_ST[p.rz_status][1]}" style="font-size:11px">${RZ_ST[p.rz_status][0]}</span></div>` : ''}</td>
           <td><input data-f="product_id" value="${esc(p.product_id ?? '')}" inputmode="numeric" style="width:90px" ${edit ? '' : 'disabled'} class="${p.product_id ? '' : 'bad-input'}" aria-label="ID товару LP-CRM"></td>
-          <td><input data-f="name" value="${esc(p.name || '')}" style="min-width:180px" ${edit ? '' : 'disabled'} aria-label="Назва"></td>
+          <td><input data-f="name" value="${esc(p.name || '')}" style="min-width:220px" ${edit ? '' : 'disabled'} aria-label="Назва">${p.brand ? `<div class="small muted">${esc(p.brand)}</div>` : ''}</td>
           <td class="r"><input data-f="purchase_price" value="${esc(p.purchase_price ?? '')}" inputmode="decimal" style="width:100px" ${edit ? '' : 'disabled'} aria-label="Ціна закупівлі"></td>
-          <td class="r"><input data-f="rrp" value="${esc(p.rrp ?? '')}" inputmode="decimal" style="width:100px" ${edit ? '' : 'disabled'} aria-label="РІЦ"></td>
+          <td class="r"><input data-f="rrp" value="${esc(p.rrp ?? '')}" inputmode="decimal" style="width:100px" ${edit ? '' : 'disabled'} aria-label="РРЦ"></td>
           <td class="r"><input data-f="stock" value="${esc(p.stock ?? '')}" inputmode="numeric" style="width:70px" ${edit ? '' : 'disabled'} aria-label="Залишок"></td>
-          <td class="small">${p.seats.length ? p.seats.map((s) => `${s.lengthCm}×${s.widthCm}×${s.heightCm} см, ${s.weightKg} кг`).join('<br>') : '<span class="muted">з каталогу Розетки</span>'}
-            ${edit ? `<button class="btn sm" data-seats="${esc(p.code)}">✎</button>` : ''}</td>
+          <td class="small">${p.seats.length ? p.seats.map((x) => `${x.lengthCm}×${x.widthCm}×${x.heightCm} см, ${x.weightKg} кг`).join('<br>') : '<span class="muted">з каталогу Розетки</span>'}
+            ${edit ? `<button class="btn sm" data-seats="${esc(p.code)}" aria-label="Габарити">✎</button>` : ''}</td>
         </tr>`).join('')}</tbody></table></div>`
-        : '<div class="card empty"><div class="big">Товарів ще немає</div>Вони з’являться з першими замовленнями Розетки або додайте вручну.</div>'}`;
+        : all.length ? '<div class="card empty"><div class="big">Нічого не знайдено</div>Змініть фільтр або пошук.</div>'
+          : '<div class="card empty"><div class="big">Товарів ще немає</div>Завантажте вивантаження товарів з Кабінету постачальника (CSV) — або вони з’являться з першими замовленнями.</div>'}`;
+    $$('[data-pv]').forEach((b) => (b.onclick = () => { pf.v = b.dataset.pv; viewProducts(); }));
+    let qt;
+    $('#rpQ').oninput = (e) => { clearTimeout(qt); qt = setTimeout(async () => { pf.q = e.target.value; await viewProducts(); const el = $('#rpQ'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 300); };
+    $('#rpImp') && ($('#rpImp').onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        const buf = await file.arrayBuffer();
+        let text;
+        try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { text = new TextDecoder('windows-1251').decode(buf); }
+        const res = await fetch('/api/rzs/products/import', { method: 'POST', headers: { 'Content-Type': 'text/csv; charset=utf-8' }, body: text });
+        const r = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(r.error || 'Не вдалося завантажити файл.');
+        modal('Товари завантажено', `<div class="form-stack"><div>✅ У файлі: <b>${r.total}</b> товарів — нових <b>${r.added}</b>, оновлено <b>${r.updated}</b>${r.skipped ? `, пропущено без артикула: ${r.skipped}` : ''}.</div>
+          ${r.unmapped ? `<div class="alert warn small">Не прив’язано до товару LP-CRM: <b>${r.unmapped}</b> — впишіть ID у другій колонці (фільтр «Не прив’язані до LP-CRM»). Без цього такі замовлення не передадуться в LP-CRM.</div>` : '<div class="small">Усі товари прив’язані до LP-CRM.</div>'}</div>`,
+        { footer: '<button class="btn primary" data-close>Зрозуміло</button>' });
+        if (r.unmapped) pf.v = 'nomap';
+        viewProducts();
+      } catch (er) { toast(er.message, true); e.target.value = ''; }
+    });
     $$('[data-f]').forEach((i) => (i.onchange = async () => {
       const code = i.closest('tr').dataset.code;
       try { await api('PUT', `/api/rzs/products/${encodeURIComponent(code)}`, { [i.dataset.f]: i.value }); toast('Збережено'); if (i.dataset.f === 'product_id') viewProducts(); }

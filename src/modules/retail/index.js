@@ -9,7 +9,7 @@ import { MASK, fail, need, nowIso, round2, loadSettings } from '../../core/commo
 import { randomToken } from '../../core/auth.js';
 import { logAudit } from '../../core/requisites.js';
 import { addNewOrder, getOrdersBatch, phpSerialize, phpUrlencode } from '../../integrations/lpcrm.js';
-import { rzsOrdersPage, rzsOrder, rzsConfirm, rzsCreateTtn, rzsMarkings, rzsPriceCreate, rzsDateTime } from '../../integrations/rozetka-supplier.js';
+import { rzsOrdersPage, rzsOrder, rzsConfirm, rzsCreateTtn, rzsMarkings, rzsPriceCreate, rzsDateTime, parseRzsProductsCsv } from '../../integrations/rozetka-supplier.js';
 
 export const RZS_STATUS = {
   new: 'Нове', updated: 'Оновлене', confirmed: 'Підтверджене', shipping: 'Відправляється', problem: 'Проблема',
@@ -125,9 +125,9 @@ export function mountRetail(app, { db, fetchFn }) {
       [r.id, accountId, r.order_num, r.status, r.uzd_status, r.created_at, r.updated_at, r.delivery_type, r.delivery_company, r.address_id, r.customer, r.city, r.street,
         r.phone, r.cod, r.ttn, r.tracking_code, r.tracking_status, r.return_ttn, r.document_link, r.invoice_no, r.sn_required, products, docsAt, confAt, ttnAt, now]];
     });
-    const codes = [...new Set(rows.flatMap((r) => (r.products || []).map((p) => String(p.supplierCode || '')).filter(Boolean)))];
+    const codes = [...new Set(rows.flatMap((r) => (r.products || []).map((p) => String(p.supplierCode || '').trim()).filter(Boolean)))];
     for (const code of codes) {
-      const p = rows.flatMap((r) => r.products || []).find((x) => String(x.supplierCode) === code);
+      const p = rows.flatMap((r) => r.products || []).find((x) => String(x.supplierCode).trim() === code);
       st.push([`INSERT INTO rzs_products (code, rz_code, updated_at) VALUES (?, ?, ?) ON CONFLICT(code) DO UPDATE SET rz_code = CASE WHEN rzs_products.rz_code = '' THEN excluded.rz_code ELSE rzs_products.rz_code END`,
         [code, String(p?.rzCode ?? ''), now]]);
     }
@@ -205,7 +205,7 @@ export function mountRetail(app, { db, fetchFn }) {
     try { products = JSON.parse(r.products || '[]'); } catch { /* */ }
     return {
       ...r, products: products.map((p) => {
-        const m = prods.get(String(p.supplierCode));
+        const m = prods.get(String(p.supplierCode).trim());
         return { supplierCode: String(p.supplierCode || ''), rzCode: p.rzCode ?? '', quantity: Number(p.quantity) || 0, confirmedQuantity: p.confirmedQuantity ?? null,
           serialNumbers: p.serialNumbers || [], cargoSeats: Array.isArray(p.cargoSeats) ? p.cargoSeats : [],
           name: m?.name || '', product_id: m?.product_id ?? null, purchase_price: m?.purchase_price ?? null, own_seats: m?.seats ? JSON.parse(m.seats) : [] };
@@ -214,7 +214,7 @@ export function mountRetail(app, { db, fetchFn }) {
     };
   };
   const prodMap = async (rows) => {
-    const codes = [...new Set(rows.flatMap((r) => { try { return JSON.parse(r.products || '[]').map((p) => String(p.supplierCode)); } catch { return []; } }))];
+    const codes = [...new Set(rows.flatMap((r) => { try { return JSON.parse(r.products || '[]').map((p) => String(p.supplierCode).trim()); } catch { return []; } }))];
     if (!codes.length) return new Map();
     return new Map((await db.all(`SELECT * FROM rzs_products WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((p) => [p.code, p]));
   };
@@ -423,6 +423,31 @@ export function mountRetail(app, { db, fetchFn }) {
       [pid, name || '', price ?? null, rrp ?? null, stock, seats, nowIso(), code]);
     return c.json({ ok: true });
   });
+  // Імпорт вивантаження товарів з Кабінету постачальника (CSV): нові артикули додаються, наявні — оновлюються назва, код Розетки,
+  // РРЦ, ціна закупівлі, залишок, статус; прив'язку до товару LP-CRM і габарити не чіпаємо. Тіло запиту — текст файлу.
+  app.post('/api/rzs/products/import', async (c) => {
+    need(c, 'refs.edit');
+    const text = await c.req.text();
+    if (text.length > 5 * 1024 * 1024) throw fail(400, 'Файл завеликий (понад 5 МБ).');
+    const { rows, skipped } = parseRzsProductsCsv(text);
+    if (!rows.length) throw fail(400, 'У файлі немає жодного товару з артикулом.');
+    if (rows.length > 5000) throw fail(400, 'Не більше 5000 товарів за раз.');
+    const uniq = [...new Map(rows.map((r) => [r.code, r])).values()];
+    const have = new Set((await db.all(`SELECT code FROM rzs_products WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(uniq.map((r) => r.code))])).map((r) => r.code));
+    const now = nowIso();
+    const st = uniq.map((r) => [`INSERT INTO rzs_products (code, rz_code, name, purchase_price, rrp, stock, rz_status, brand, imported_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(code) DO UPDATE SET rz_code = CASE WHEN excluded.rz_code != '' THEN excluded.rz_code ELSE rzs_products.rz_code END,
+        name = CASE WHEN excluded.name != '' THEN excluded.name ELSE rzs_products.name END,
+        purchase_price = COALESCE(excluded.purchase_price, rzs_products.purchase_price), rrp = COALESCE(excluded.rrp, rzs_products.rrp),
+        stock = COALESCE(excluded.stock, rzs_products.stock), rz_status = excluded.rz_status, brand = excluded.brand, imported_at = excluded.imported_at, updated_at = excluded.updated_at`,
+    [r.code, r.rz_code, r.name, r.purchase_price, r.rrp, r.stock, r.status, r.brand, now, now]]);
+    for (let i = 0; i < st.length; i += 100) await db.batch(st.slice(i, i + 100));
+    await autoMap(uniq.map((r) => r.code));
+    const unmapped = (await db.get(`SELECT COUNT(*) AS n FROM rzs_products WHERE product_id IS NULL`))?.n || 0;
+    await logAudit(db, { user: c.get('user'), kind: 'rzs', refId: 0, action: `імпорт товарів з Кабінету Розетки: ${uniq.length} (нових ${uniq.filter((r) => !have.has(r.code)).length})` }).catch(() => 0);
+    return c.json({ ok: true, total: uniq.length, added: uniq.filter((r) => !have.has(r.code)).length, updated: uniq.filter((r) => have.has(r.code)).length, skipped, unmapped });
+  });
+
   // Прайс на Розетку: товари з ціною закупівлі й залишком (часткове оновлення — лише ці позиції), до 1000.
   app.post('/api/rzs/price', async (c) => {
     need(c, 'api');
