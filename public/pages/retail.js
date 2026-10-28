@@ -341,6 +341,7 @@ export function createRetailPages(ctx) {
           <label class="f"><span>ID відділу LP-CRM для замовлень</span><input name="crm_office" value="${esc(a?.crm_office || '')}" inputmode="numeric"></label>
           <div class="grid2"><label class="f"><span>ID доставки в LP-CRM (Нова пошта — 1)</span><input name="crm_delivery" value="${esc(a?.crm_delivery ?? '1')}" inputmode="numeric"></label>
             <label class="f"><span>Сайт-джерело в LP-CRM</span><input name="crm_site" value="${esc(a?.crm_site || '')}" placeholder="rozetka.com.ua"></label></div>
+          <label class="f"><span>«Додаткове поле 1» в LP-CRM</span><input name="crm_field1" value="${esc(a ? a.crm_field1 ?? '' : 'Riteil(Rozetka)')}" placeholder="Riteil(Rozetka)"><span class="small muted">Заповнюється в кожному замовленні Розетки, переданому в LP-CRM (порожньо — не заповнювати).</span></label>
           ${a ? `<label class="check"><input type="checkbox" name="active" ${a.active ? 'checked' : ''}> Увімкнено</label><label class="check"><input type="checkbox" name="new_hook_pass"> Новий пароль вебхука</label>` : ''}
         </form>`, { footer: `${a ? '<button class="btn danger" id="raDel" style="margin-right:auto">Видалити</button>' : ''}<button class="btn" data-close>Скасувати</button><button class="btn primary" id="raSave">Зберегти</button>` });
       $('#raSave', m.el).onclick = async (e) => {
