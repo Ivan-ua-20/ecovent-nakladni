@@ -3203,6 +3203,8 @@ function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {}, serv
     const inv = await buildInvoice(orderId, { fresh: c.req.query("fresh") === "1" });
     const b2b = await services.b2b?.crmOrderInfo?.({ ids: [orderId, inv.crmOrder?.orderId, inv.crmOrder?.shortId, inv.crmCode], comment: inv.crmOrder?.comment }).catch(() => null);
     if (b2b) return c.json({ ...inv, b2b, versionsCount: 0 });
+    const rzs = await services.retail?.orderInfo?.({ ids: [orderId, inv.crmOrder?.orderId, inv.crmOrder?.shortId, inv.crmCode], comment: inv.crmOrder?.comment, ttn: inv.order?.delivery?.ttn || inv.crmOrder?.delivery?.ttn }).catch(() => null);
+    if (rzs) return c.json({ ...inv, rzs, versionsCount: 0 });
     await trackChanges(orderId, inv, userName(c));
     const n = await db.get(`SELECT COUNT(*) AS n FROM versions WHERE order_id = ?`, [orderId]);
     return c.json({ ...inv, versionsCount: n?.n || 0 });
@@ -10667,6 +10669,35 @@ function mountRetail(app, { db, fetchFn, services = {} }) {
     await logAudit(db, { user: c.get("user"), kind: "rzs", refId: 0, action: `\u0456\u043C\u043F\u043E\u0440\u0442 \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0437 \u041A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u0420\u043E\u0437\u0435\u0442\u043A\u0438: ${uniq.length} (\u043D\u043E\u0432\u0438\u0445 ${uniq.filter((r) => !have.has(r.code)).length})` }).catch(() => 0);
     return c.json({ ok: true, total: uniq.length, added: uniq.filter((r) => !have.has(r.code)).length, updated: uniq.filter((r) => have.has(r.code)).length, skipped, unmapped });
   });
+  async function orderInfo({ ids = [], comment = "", ttn = "" } = {}) {
+    const list = [...new Set(ids.map((x) => String(x ?? "").trim()).filter((x) => /^\d+$/.test(x)))];
+    let r = null;
+    if (list.length) {
+      r = await db.get(`SELECT * FROM rzs_orders WHERE (crm_id != '' AND crm_id IN (SELECT value FROM json_each(?))) OR (crm_code != '' AND crm_code IN (SELECT value FROM json_each(?)))
+        ORDER BY created_at DESC LIMIT 1`, [JSON.stringify(list), JSON.stringify(list)]);
+    }
+    const m = /Rozetka\s+([A-Za-zА-Яа-я]*\d{5,})/.exec(String(comment || ""));
+    if (!r && m) r = await db.get(`SELECT * FROM rzs_orders WHERE order_num = ? LIMIT 1`, [m[1]]);
+    const t = normTtn(ttn);
+    if (!r && t.length >= 10) r = await db.get(`SELECT * FROM rzs_orders WHERE REPLACE(ttn, ' ', '') = ? ORDER BY created_at DESC LIMIT 1`, [t]);
+    if (!r) return null;
+    const a = await db.get(`SELECT name FROM rzs_accounts WHERE id = ?`, [r.account_id]);
+    return {
+      id: r.id,
+      order_num: r.order_num,
+      account: a?.name || "",
+      status: r.status,
+      status_name: RZS_STATUS[r.status] || r.status,
+      customer: r.customer,
+      ttn: r.ttn,
+      tracking_status: r.tracking_status,
+      document_link: r.document_link,
+      invoice_no: r.invoice_no,
+      docs_at: r.docs_at,
+      crm_id: r.crm_id
+    };
+  }
+  return { orderInfo };
 }
 
 // src/modules/payments/index.js
@@ -11399,7 +11430,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   services.b2b = mountB2b(app, ctx);
   mountRahunky(app, ctx);
   mountMarking(app, ctx);
-  mountRetail(app, ctx);
+  services.retail = mountRetail(app, ctx);
   mountAnalytics(app, ctx);
   services.notify = mountTg(app, ctx);
   services.payments = mountOdb(app, { ...ctx, base: odbBase, notify: (...a) => services.notify.notify(...a), onTx: (ids, origin) => services.b2b?.onPayments?.(ids, origin) });
