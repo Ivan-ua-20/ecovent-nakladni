@@ -9983,6 +9983,88 @@ async function rzsPriceCreate(fetchFn, token, priceListId, items, { test = false
   const errors = (Array.isArray(r.errors) ? r.errors : Array.isArray(j?.errors) ? j.errors : []).map((e) => typeof e === "string" ? e : e?.message || JSON.stringify(e));
   return { ok: res.ok && r.success !== false, count: Number(r.count ?? r.total ?? r.items ?? 0) || 0, errors };
 }
+function csvRows(text) {
+  const src = String(text || "").replace(/^﻿/, "");
+  const first = src.split(/\r?\n/, 1)[0] || "";
+  const delim = [";", "	", ","].sort((a, b) => first.split(b).length - first.split(a).length)[0];
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let q = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (q) {
+      if (ch === '"') {
+        if (src[i + 1] === '"') {
+          cell += '"';
+          i++;
+        } else q = false;
+      } else cell += ch;
+    } else if (ch === '"' && cell === "") q = true;
+    else if (ch === delim) {
+      row.push(cell);
+      cell = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && src[i + 1] === "\n") i++;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else cell += ch;
+  }
+  if (cell !== "" || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows.filter((r) => r.some((c) => String(c).trim() !== ""));
+}
+var numOf = (v) => {
+  const s = String(v ?? "").replace(/\s| /g, "");
+  if (!s) return null;
+  const n = Number(/,\d{3}(\.|$)/.test(s) && s.includes(".") ? s.replace(/,/g, "") : s.replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+};
+var COLS = {
+  code: ["\u0430\u0440\u0442\u0438\u043A\u0443\u043B \u0442\u043E\u0432\u0430\u0440\u0443", "\u0430\u0440\u0442\u0438\u043A\u0443\u043B"],
+  rz_code: ["id \u0442\u043E\u0432\u0430\u0440\u0443"],
+  name: ["\u0442\u043E\u0432\u0430\u0440", "\u043D\u0430\u0437\u0432\u0430 \u0442\u043E\u0432\u0430\u0440\u0443", "\u043D\u0430\u0437\u0432\u0430"],
+  rrp: ["\u0440\u0440\u0446 \u0432\u0456\u0434 \u043F\u043E\u0441\u0442\u0430\u0447\u0430\u043B\u044C\u043D\u0438\u043A\u0430", "\u0440\u0440\u0446"],
+  buy: ["\u0446\u0456\u043D\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456"],
+  list: ["\u0446\u0456\u043D\u0430 \u0432 \u043F\u0440\u0430\u0439\u0441\u0456"],
+  stock: ["\u0437\u0430\u043B\u0438\u0448\u043A\u0438 \u0442\u043E\u0432\u0430\u0440\u0443", "\u0437\u0430\u043B\u0438\u0448\u043E\u043A", "\u0437\u0430\u043B\u0438\u0448\u043A\u0438"],
+  status: ["\u0441\u0442\u0430\u0442\u0443\u0441 \u043D\u0430 \u0441\u0430\u0439\u0442\u0456"],
+  brand: ["\u0431\u0440\u0435\u043D\u0434"]
+};
+function parseRzsProductsCsv(text) {
+  const rows = csvRows(text);
+  if (!rows.length) throw Object.assign(new Error("\u0424\u0430\u0439\u043B \u043F\u043E\u0440\u043E\u0436\u043D\u0456\u0439."), { status: 400 });
+  const head = rows[0].map((h6) => String(h6).trim().toLowerCase());
+  const idx = Object.fromEntries(Object.entries(COLS).map(([k, names]) => [k, names.map((n) => head.indexOf(n)).find((i) => i >= 0) ?? -1]));
+  if (idx.code < 0) throw Object.assign(new Error("\u0423 \u0444\u0430\u0439\u043B\u0456 \u043D\u0435\u043C\u0430\u0454 \u043A\u043E\u043B\u043E\u043D\u043A\u0438 \xAB\u0410\u0440\u0442\u0438\u043A\u0443\u043B \u0442\u043E\u0432\u0430\u0440\u0443\xBB \u2014 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0442\u0435 \u0432\u0438\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043D\u044F \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0437 \u041A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u043F\u043E\u0441\u0442\u0430\u0447\u0430\u043B\u044C\u043D\u0438\u043A\u0430 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (CSV)."), { status: 400 });
+  const get = (r, k) => idx[k] >= 0 ? String(r[idx[k]] ?? "").trim() : "";
+  const out = [];
+  let skipped = 0;
+  for (const r of rows.slice(1)) {
+    const code = get(r, "code").slice(0, 60);
+    if (!code) {
+      skipped++;
+      continue;
+    }
+    const hist = /UAH\s*([\d.,\s]+)/.exec(get(r, "buy"));
+    const buy = hist ? numOf(hist[1]) : numOf(get(r, "buy"));
+    out.push({
+      code,
+      rz_code: get(r, "rz_code").replace(/\D/g, "").slice(0, 20),
+      name: get(r, "name").slice(0, 200),
+      rrp: numOf(get(r, "rrp")),
+      purchase_price: buy ?? numOf(get(r, "list")),
+      stock: idx.stock >= 0 && get(r, "stock") !== "" ? Math.max(0, Math.round(numOf(get(r, "stock")) || 0)) : null,
+      status: get(r, "status").split(" - ")[0].trim().slice(0, 30),
+      brand: get(r, "brand").slice(0, 60)
+    });
+  }
+  return { rows: out, skipped };
+}
 
 // src/modules/retail/index.js
 var RZS_STATUS = {
@@ -10160,9 +10242,9 @@ function mountRetail(app, { db, fetchFn }) {
         ]
       ];
     });
-    const codes = [...new Set(rows.flatMap((r) => (r.products || []).map((p) => String(p.supplierCode || "")).filter(Boolean)))];
+    const codes = [...new Set(rows.flatMap((r) => (r.products || []).map((p) => String(p.supplierCode || "").trim()).filter(Boolean)))];
     for (const code of codes) {
-      const p = rows.flatMap((r) => r.products || []).find((x2) => String(x2.supplierCode) === code);
+      const p = rows.flatMap((r) => r.products || []).find((x2) => String(x2.supplierCode).trim() === code);
       st.push([
         `INSERT INTO rzs_products (code, rz_code, updated_at) VALUES (?, ?, ?) ON CONFLICT(code) DO UPDATE SET rz_code = CASE WHEN rzs_products.rz_code = '' THEN excluded.rz_code ELSE rzs_products.rz_code END`,
         [code, String(p?.rzCode ?? ""), now]
@@ -10248,7 +10330,7 @@ function mountRetail(app, { db, fetchFn }) {
     return {
       ...r,
       products: products.map((p) => {
-        const m = prods.get(String(p.supplierCode));
+        const m = prods.get(String(p.supplierCode).trim());
         return {
           supplierCode: String(p.supplierCode || ""),
           rzCode: p.rzCode ?? "",
@@ -10269,7 +10351,7 @@ function mountRetail(app, { db, fetchFn }) {
   const prodMap = async (rows) => {
     const codes = [...new Set(rows.flatMap((r) => {
       try {
-        return JSON.parse(r.products || "[]").map((p) => String(p.supplierCode));
+        return JSON.parse(r.products || "[]").map((p) => String(p.supplierCode).trim());
       } catch {
         return [];
       }
@@ -10502,6 +10584,30 @@ function mountRetail(app, { db, fetchFn }) {
       [pid, name || "", price ?? null, rrp ?? null, stock, seats, nowIso(), code]
     );
     return c.json({ ok: true });
+  });
+  app.post("/api/rzs/products/import", async (c) => {
+    need(c, "refs.edit");
+    const text = await c.req.text();
+    if (text.length > 5 * 1024 * 1024) throw fail(400, "\u0424\u0430\u0439\u043B \u0437\u0430\u0432\u0435\u043B\u0438\u043A\u0438\u0439 (\u043F\u043E\u043D\u0430\u0434 5 \u041C\u0411).");
+    const { rows, skipped } = parseRzsProductsCsv(text);
+    if (!rows.length) throw fail(400, "\u0423 \u0444\u0430\u0439\u043B\u0456 \u043D\u0435\u043C\u0430\u0454 \u0436\u043E\u0434\u043D\u043E\u0433\u043E \u0442\u043E\u0432\u0430\u0440\u0443 \u0437 \u0430\u0440\u0442\u0438\u043A\u0443\u043B\u043E\u043C.");
+    if (rows.length > 5e3) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 5000 \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0437\u0430 \u0440\u0430\u0437.");
+    const uniq = [...new Map(rows.map((r) => [r.code, r])).values()];
+    const have = new Set((await db.all(`SELECT code FROM rzs_products WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(uniq.map((r) => r.code))])).map((r) => r.code));
+    const now = nowIso();
+    const st = uniq.map((r) => [
+      `INSERT INTO rzs_products (code, rz_code, name, purchase_price, rrp, stock, rz_status, brand, imported_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(code) DO UPDATE SET rz_code = CASE WHEN excluded.rz_code != '' THEN excluded.rz_code ELSE rzs_products.rz_code END,
+        name = CASE WHEN excluded.name != '' THEN excluded.name ELSE rzs_products.name END,
+        purchase_price = COALESCE(excluded.purchase_price, rzs_products.purchase_price), rrp = COALESCE(excluded.rrp, rzs_products.rrp),
+        stock = COALESCE(excluded.stock, rzs_products.stock), rz_status = excluded.rz_status, brand = excluded.brand, imported_at = excluded.imported_at, updated_at = excluded.updated_at`,
+      [r.code, r.rz_code, r.name, r.purchase_price, r.rrp, r.stock, r.status, r.brand, now, now]
+    ]);
+    for (let i = 0; i < st.length; i += 100) await db.batch(st.slice(i, i + 100));
+    await autoMap(uniq.map((r) => r.code));
+    const unmapped = (await db.get(`SELECT COUNT(*) AS n FROM rzs_products WHERE product_id IS NULL`))?.n || 0;
+    await logAudit(db, { user: c.get("user"), kind: "rzs", refId: 0, action: `\u0456\u043C\u043F\u043E\u0440\u0442 \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0437 \u041A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u0420\u043E\u0437\u0435\u0442\u043A\u0438: ${uniq.length} (\u043D\u043E\u0432\u0438\u0445 ${uniq.filter((r) => !have.has(r.code)).length})` }).catch(() => 0);
+    return c.json({ ok: true, total: uniq.length, added: uniq.filter((r) => !have.has(r.code)).length, updated: uniq.filter((r) => have.has(r.code)).length, skipped, unmapped });
   });
   app.post("/api/rzs/price", async (c) => {
     need(c, "api");
@@ -12379,7 +12485,7 @@ var schema12 = {
 // src/modules/retail/schema.js
 var schema13 = {
   name: "retail",
-  version: 1,
+  version: 2,
   tables: [
     // Кабінети постачальника Розетки: токен (JWT) бачить лише сервер; прайс і параметри передачі замовлень у LP-CRM.
     `CREATE TABLE IF NOT EXISTS rzs_accounts (
@@ -12447,7 +12553,12 @@ var schema13 = {
     updated_at TEXT DEFAULT ''
   )`
   ],
-  columns: []
+  columns: [
+    // З вивантаження товарів Кабінету постачальника: статус на сайті Розетки, бренд, коли востаннє оновлено з файлу.
+    ["rzs_products", "rz_status", "TEXT DEFAULT ''"],
+    ["rzs_products", "brand", "TEXT DEFAULT ''"],
+    ["rzs_products", "imported_at", "TEXT DEFAULT ''"]
+  ]
 };
 
 // src/migrate.js

@@ -195,6 +195,28 @@ assert.equal(calls.price[0].test, '1', 'тестовий режим');
 assert.ok(calls.price[0].body.includes('<purchase_price>7200.5</purchase_price>') && calls.price[0].body.includes('<price_list_id>123</price_list_id>'));
 assert.ok(calls.price[0].body.includes('<recommended_inet_price>4100</recommended_inet_price>'));
 
+// ---------- 8а. Імпорт товарів з Кабінету постачальника (CSV як у вивантаженні Розетки) ----------
+const CSV = '﻿Товар;"ID товару";Контрагент;"Артикул товару";Категорія;Бренд;"Статус на сайті";"Статус в прайсі";"Оновлення прайсу";"Ціна в прайсі";"РРЦ від постачальника";"Ціна на сайті";"Залишки товару";"Ціна закупівлі";"Менеджер по контенту"\n'
+  + '"Осушувач EvoAir Dryora 12";625022078;"ЕКОВЕНТ";EV-100;"Осушувачі";evoair;"available - Є в наявності, доступний для продажу";Y;"2026-10-27 16:05:33";5679.2;7099;6899;3;"28/10/2026 10:16 - UAH 5,679.20 | 27/10/2026 16:17 - UAH 5,519.20 |";"М"\n'
+  + '"Зволожувач ""Levoit"" Dual";624710471;"ЕКОВЕНТ";"NEW-1 ";"Зволожувачі";Levoit;"unavailable - Немає в наявності";N;"2026-10-27";3960;4950;4399;0;;\n'
+  + '"Без артикула";1;"Е";;"К";B;"archive - Архів";Y;"";1;2;3;0;;\n';
+const imp = await send('POST', '/api/rzs/products/import', CSV, { ...H, 'Content-Type': 'text/csv' });
+const ir = await imp.json();
+assert.equal(imp.status, 200, ir.error);
+assert.deepEqual([ir.total, ir.added, ir.updated, ir.skipped], [2, 1, 1, 1], 'новий артикул додано, наявний оновлено, рядок без артикула пропущено');
+prods = await req('GET', '/api/rzs/products');
+const ev = prods.find((p) => p.code === 'EV-100');
+assert.equal(ev.product_id, 501, 'прив’язка до LP-CRM лишилась');
+assert.equal(ev.purchase_price, 5679.2, 'ціна закупівлі — найновіша з історії');
+assert.deepEqual([ev.rrp, ev.stock, ev.rz_status, ev.rz_code], [7099, 3, 'available', '625022078']);
+assert.ok(ev.seats.length === 0 || ev.seats, 'габарити не зачеплено');
+const nw = prods.find((p) => p.code === 'NEW-1');
+assert.equal(nw.name, 'Зволожувач "Levoit" Dual', 'лапки в CSV');
+assert.equal(nw.purchase_price, 3960, 'без історії — «Ціна в прайсі»');
+assert.equal(nw.product_id, null, 'новий — без прив’язки, впишемо вручну');
+assert.equal(ir.unmapped, 2, 'не прив’язані: EV-200 і NEW-1');
+assert.match(await errOf(() => req('POST', '/api/rzs/products/import', { a: 1 })), /Артикул товару/, 'чужий файл — зрозуміла помилка');
+
 // ---------- 9. Права ----------
 await req('POST', '/api/users', { login: 'viewer', password: 'pass1234', role: 'viewer' });
 const vl = await mk().request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: 'viewer', password: 'pass1234' }) });
@@ -204,6 +226,7 @@ assert.equal(await status(() => req('GET', '/api/rzs/accounts', undefined, VH)),
 assert.equal(await status(() => req('POST', `/api/rzs/orders/${ID2}/crm`, {}, VH)), 403);
 assert.equal(await status(() => req('PUT', '/api/rzs/products/EV-200', { purchase_price: 1 }, VH)), 403);
 assert.equal(await status(() => req('POST', '/api/rzs/price', {}, VH)), 403);
+assert.equal((await send('POST', '/api/rzs/products/import', CSV, { ...VH, 'Content-Type': 'text/csv' })).status, 403, 'імпорт — лише з правом довідників');
 
 // ---------- 10. Новий пароль вебхука, видалення ----------
 await req('PUT', `/api/rzs/accounts/${acc.id}`, { new_hook_pass: true });
