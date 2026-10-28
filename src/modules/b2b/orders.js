@@ -402,6 +402,31 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return c.json({ ok: true, id: open.id, number: orderNo(open.id) });
   });
 
+  // Те саме з нашого боку: адмін формує відкриту закупівлю на юрособу партнера (і, за потреби, з відстрочкою оплати).
+  app.post('/api/b2b/orders/:id/form', async (c) => {
+    need(c, 'b2b.admin');
+    const open = await orderOf(c.req.param('id'));
+    if (open.kind !== 'supply' || open.status !== 'open') throw fail(400, 'Це не відкрита закупівля — її вже сформовано.');
+    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [open.partner_id]);
+    const b = await c.req.json().catch(() => ({}));
+    const e = await db.get(`SELECT * FROM b2b_entities WHERE id = ? AND partner_id = ? AND active = 1`, [b.entity_id, p.id]);
+    if (!e) throw fail(400, 'Оберіть юрособу партнера (якщо їх немає — партнер додає юрособу в кабінеті, «Мої юрособи»).');
+    const terms = b.pay_terms === 'postpay' ? 'postpay' : 'prepay';
+    const payDays = terms === 'postpay' ? parseInt(b.pay_days, 10) || 0 : 0;
+    if (terms === 'postpay' && !(payDays >= 1 && payDays <= 90)) throw fail(400, 'Відстрочка — від 1 до 90 днів.');
+    const comment = b.comment === undefined ? (open.comment || '') : String(b.comment).trim().slice(0, 1000);
+    const claim = await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity_id = ?, entity = ?, comment = ?, pay_terms = ?, pay_days = ?, updated_at = ? WHERE id = ? AND status = 'open'`,
+      [e.id, entityText(e), comment, terms, payDays, nowIso(), open.id]);
+    if (!claim.changes) throw fail(409, 'Закупівлю вже сформовано — оновіть сторінку.');
+    await log(open.id, c.get('user'), `менеджер сформував закупівлю із замовлень клієнтів: ${uah(open.total)}, юрособа ${e.name}${terms === 'postpay' ? `, відстрочка ${payDays} дн.` : ''}`);
+    const items = await db.all(`SELECT product_id, name, article, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [open.id]);
+    const full = orderText('🆕 Сформовано закупівлю (з замовлень клієнтів)', { id: open.id, entity: entityText(e), total: open.total, comment, pay_terms: terms, pay_days: payDays }, p, items);
+    await tgPartner(p.id, `${full}\n\nЗакупівлю сформував наш менеджер — рахунок надійде сюди.\n${link(c, `porders/${open.id}`)}`);
+    await tgGroup(p.id, full);
+    await hooks.finRequest?.(open.id).catch(() => 0);
+    return c.json({ ok: true, id: open.id, number: orderNo(open.id) });
+  });
+
   async function orderOf(id, partnerId = null) {
     const o = await db.get(`SELECT * FROM b2b_orders WHERE id = ? ${partnerId ? 'AND partner_id = ?' : ''}`, partnerId ? [id, partnerId] : [id]);
     if (!o) throw fail(404, 'Замовлення не знайдено.');

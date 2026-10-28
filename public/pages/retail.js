@@ -291,7 +291,7 @@ export function createRetailPages(ctx) {
         if (a) { d.active = f.active.checked; d.new_hook_pass = f.new_hook_pass.checked; }
         e.currentTarget.disabled = true;
         try { await api(a ? 'PUT' : 'POST', a ? `/api/rzs/accounts/${a.id}` : '/api/rzs/accounts', d); m.close(); toast('Збережено'); viewSettings(); }
-        catch (er) { toast(er.message, true); e.currentTarget.disabled = false; }
+        catch (er) { toast(er.message, true); e.target.closest('button').disabled = false; }
       };
       $('#raDel', m.el) && ($('#raDel', m.el).onclick = async () => {
         if (!(await confirmDanger(`Видалити кабінет «${a.name}»?`, 'Його замовлення зникнуть зі списку (на Розетці нічого не зміниться).', 'Видалити'))) return;

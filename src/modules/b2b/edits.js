@@ -24,11 +24,12 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
   app.get('/api/b2b/orders/:id/edit-options', async (c) => {
     need(c, 'b2b.admin');
     const o = await orderOf(c.req.param('id'));
-    const [catalog, entities] = await Promise.all([
+    const [catalog, entities, partner] = await Promise.all([
       partnerCatalog(o.partner_id),
       db.all(`SELECT id, name, code FROM b2b_entities WHERE partner_id = ? AND (active = 1 OR id = ?) ORDER BY name`, [o.partner_id, o.entity_id || 0]),
+      db.get(`SELECT default_entity, postpay_days FROM b2b_partners WHERE id = ?`, [o.partner_id]),
     ]);
-    return c.json({ catalog, entities, invoiced: Boolean(o.invoice_no) && INVOICED.includes(o.status) });
+    return c.json({ catalog, entities, default_entity: partner?.default_entity || null, postpay_days: Number(partner?.postpay_days) || 0, invoiced: Boolean(o.invoice_no) && INVOICED.includes(o.status) });
   });
 
   // ---------------------------------------------------------------- зміна закупівлі адміном
