@@ -5943,6 +5943,34 @@ ${link(c, `b2borders/${open.id}`)}`);
     await hooks.finRequest?.(open.id).catch(() => 0);
     return c.json({ ok: true, id: open.id, number: orderNo(open.id) });
   });
+  app.post("/api/b2b/orders/:id/form", async (c) => {
+    need(c, "b2b.admin");
+    const open = await orderOf(c.req.param("id"));
+    if (open.kind !== "supply" || open.status !== "open") throw fail(400, "\u0426\u0435 \u043D\u0435 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F \u2014 \u0457\u0457 \u0432\u0436\u0435 \u0441\u0444\u043E\u0440\u043C\u043E\u0432\u0430\u043D\u043E.");
+    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [open.partner_id]);
+    const b = await c.req.json().catch(() => ({}));
+    const e = await db.get(`SELECT * FROM b2b_entities WHERE id = ? AND partner_id = ? AND active = 1`, [b.entity_id, p.id]);
+    if (!e) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u044E\u0440\u043E\u0441\u043E\u0431\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 (\u044F\u043A\u0449\u043E \u0457\u0445 \u043D\u0435\u043C\u0430\u0454 \u2014 \u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0434\u043E\u0434\u0430\u0454 \u044E\u0440\u043E\u0441\u043E\u0431\u0443 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456, \xAB\u041C\u043E\u0457 \u044E\u0440\u043E\u0441\u043E\u0431\u0438\xBB).");
+    const terms = b.pay_terms === "postpay" ? "postpay" : "prepay";
+    const payDays = terms === "postpay" ? parseInt(b.pay_days, 10) || 0 : 0;
+    if (terms === "postpay" && !(payDays >= 1 && payDays <= 90)) throw fail(400, "\u0412\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 \u2014 \u0432\u0456\u0434 1 \u0434\u043E 90 \u0434\u043D\u0456\u0432.");
+    const comment = b.comment === void 0 ? open.comment || "" : String(b.comment).trim().slice(0, 1e3);
+    const claim = await db.run(
+      `UPDATE b2b_orders SET status = 'invoice_wait', entity_id = ?, entity = ?, comment = ?, pay_terms = ?, pay_days = ?, updated_at = ? WHERE id = ? AND status = 'open'`,
+      [e.id, entityText(e), comment, terms, payDays, nowIso(), open.id]
+    );
+    if (!claim.changes) throw fail(409, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0432\u0436\u0435 \u0441\u0444\u043E\u0440\u043C\u043E\u0432\u0430\u043D\u043E \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443.");
+    await log(open.id, c.get("user"), `\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0441\u0444\u043E\u0440\u043C\u0443\u0432\u0430\u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0456\u0437 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432: ${uah2(open.total)}, \u044E\u0440\u043E\u0441\u043E\u0431\u0430 ${e.name}${terms === "postpay" ? `, \u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 ${payDays} \u0434\u043D.` : ""}`);
+    const items = await db.all(`SELECT product_id, name, article, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [open.id]);
+    const full = orderText("\u{1F195} \u0421\u0444\u043E\u0440\u043C\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E (\u0437 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432)", { id: open.id, entity: entityText(e), total: open.total, comment, pay_terms: terms, pay_days: payDays }, p, items);
+    await tgPartner(p.id, `${full}
+
+\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0441\u0444\u043E\u0440\u043C\u0443\u0432\u0430\u0432 \u043D\u0430\u0448 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u2014 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430\u0434\u0456\u0439\u0434\u0435 \u0441\u044E\u0434\u0438.
+${link(c, `porders/${open.id}`)}`);
+    await tgGroup(p.id, full);
+    await hooks.finRequest?.(open.id).catch(() => 0);
+    return c.json({ ok: true, id: open.id, number: orderNo(open.id) });
+  });
   async function orderOf(id, partnerId = null) {
     const o = await db.get(`SELECT * FROM b2b_orders WHERE id = ? ${partnerId ? "AND partner_id = ?" : ""}`, partnerId ? [id, partnerId] : [id]);
     if (!o) throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
@@ -8648,11 +8676,12 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
   app.get("/api/b2b/orders/:id/edit-options", async (c) => {
     need(c, "b2b.admin");
     const o = await orderOf(c.req.param("id"));
-    const [catalog, entities] = await Promise.all([
+    const [catalog, entities, partner] = await Promise.all([
       partnerCatalog(o.partner_id),
-      db.all(`SELECT id, name, code FROM b2b_entities WHERE partner_id = ? AND (active = 1 OR id = ?) ORDER BY name`, [o.partner_id, o.entity_id || 0])
+      db.all(`SELECT id, name, code FROM b2b_entities WHERE partner_id = ? AND (active = 1 OR id = ?) ORDER BY name`, [o.partner_id, o.entity_id || 0]),
+      db.get(`SELECT default_entity, postpay_days FROM b2b_partners WHERE id = ?`, [o.partner_id])
     ]);
-    return c.json({ catalog, entities, invoiced: Boolean(o.invoice_no) && INVOICED.includes(o.status) });
+    return c.json({ catalog, entities, default_entity: partner?.default_entity || null, postpay_days: Number(partner?.postpay_days) || 0, invoiced: Boolean(o.invoice_no) && INVOICED.includes(o.status) });
   });
   app.put("/api/b2b/orders/:id/edit", async (c) => {
     need(c, "b2b.admin");
