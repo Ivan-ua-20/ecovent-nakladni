@@ -3892,6 +3892,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     await putSetting2("an_ttn_last", JSON.stringify(res));
     return res;
   }
+  services.analytics = { ...services.analytics || {}, ttnQuick };
   onTick((c) => {
     if (Date.now() - (shared2.ttnTry || 0) < 6e4) return;
     shared2.ttnTry = Date.now();
@@ -10069,7 +10070,7 @@ var normSeat = (s) => Object.fromEntries(["lengthCm", "widthCm", "heightCm", "we
 var goodSeat = (s) => ["lengthCm", "widthCm", "heightCm", "weightKg"].every((k) => Number(s?.[k]) > 0);
 var seatOf = (s) => ({ lengthCm: round2(Number(s.lengthCm)), widthCm: round2(Number(s.widthCm)), heightCm: round2(Number(s.heightCm)), weightKg: round2(Number(s.weightKg)) });
 var userName5 = (u) => u?.name || u?.login || "";
-function mountRetail(app, { db, fetchFn }) {
+function mountRetail(app, { db, fetchFn, services = {} }) {
   const publicAcc = (a, origin = "") => ({
     id: a.id,
     name: a.name,
@@ -10272,6 +10273,11 @@ function mountRetail(app, { db, fetchFn }) {
       } catch (e) {
         out.push({ id: a.id, error: e.message });
       }
+    }
+    if (out.some((x) => x.saved)) {
+      const since = new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10);
+      const todo = await db.all(`SELECT * FROM rzs_orders WHERE created_at >= ? AND ttn != '' AND crm_id = '' AND crm_code = '' AND status != 'deleted' LIMIT 200`, [since]);
+      if (todo.length) out.push({ crm: (await findCrm(todo, { suggest: false }).catch(() => null))?.linked?.length || 0 });
     }
     return c.json({ ok: true, accounts: accs.length, results: out });
   });
@@ -10520,6 +10526,81 @@ function mountRetail(app, { db, fetchFn }) {
     }
     await db.run(`UPDATE rzs_orders SET crm_id = ?, crm_at = ?, note = ? WHERE id = ?`, [crmId, nowIso(), `\u0443 LP-CRM \u043F\u0435\u0440\u0435\u0434\u0430\u0432(\u043B\u0430) ${userName5(c.get("user"))}`, r.id]);
     return c.json({ ok: true, crm_id: crmId, code });
+  });
+  const normTtn = (v) => String(v ?? "").replace(/\s/g, "").toUpperCase();
+  const phone92 = (v) => String(v ?? "").replace(/\D/g, "").slice(-9);
+  async function findCrm(rows, { suggest = true } = {}) {
+    rows = rows.filter((r) => !r.crm_id && !r.crm_code && r.status !== "deleted");
+    const out = { checked: rows.length, linked: [], suggest: [], notFound: 0 };
+    if (!rows.length) return out;
+    const s = await loadSettings(db);
+    if (!s.lpcrm_subdomain || !s.lpcrm_key) throw fail(400, "\u041D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E LP-CRM \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445\xBB.");
+    if (rows.some((r) => r.ttn)) await services.analytics?.ttnQuick?.().catch(() => 0);
+    const ttns = [...new Set(rows.map((r) => normTtn(r.ttn)).filter(Boolean))];
+    const phones = suggest ? [...new Set(rows.map((r) => phone92(r.phone)).filter((p) => p.length === 9))] : [];
+    const J = (a2) => JSON.stringify(a2);
+    const [a, b, k] = await Promise.all([
+      ttns.length ? db.all(`SELECT code FROM an_ttn_recent WHERE ttn IN (SELECT value FROM json_each(?))`, [J(ttns)]).catch(() => []) : [],
+      ttns.length ? db.all(`SELECT code FROM an_orders WHERE ttn IN (SELECT value FROM json_each(?))`, [J(ttns)]).catch(() => []) : [],
+      db.all(`SELECT code FROM order_keys WHERE k IN (SELECT value FROM json_each(?))`, [J([...ttns, ...phones.map((p) => `p:${p}`)])]).catch(() => [])
+    ]);
+    let codes = [...new Set([...a, ...b, ...k].map((r) => String(r.code)))];
+    const used = new Set(codes.length ? (await db.all(`SELECT crm_code FROM rzs_orders WHERE crm_code IN (SELECT value FROM json_each(?))`, [J(codes)])).map((r) => r.crm_code) : []);
+    codes = codes.filter((c) => !used.has(c)).slice(0, 300);
+    const crm = codes.length ? await getOrdersBatch(fetchFn, { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key }, codes).catch((e) => {
+      throw fail(502, `LP-CRM: ${e.message}`);
+    }) : [];
+    const list = crm.map((o) => ({ id: String(o.id ?? ""), code: String(o.order_id ?? ""), ttn: ttnOf(o), phone: phone92(o.phone), name: String(o.bayer_name ?? ""), status: String(o.status ?? "") })).filter((o) => /^\d+$/.test(o.id) && o.code);
+    const taken = /* @__PURE__ */ new Set();
+    const now = nowIso();
+    const st = [];
+    for (const r of rows) {
+      const t = normTtn(r.ttn);
+      const hit = t ? list.filter((o) => o.ttn === t && !taken.has(o.code)) : [];
+      if (hit.length === 1) {
+        taken.add(hit[0].code);
+        st.push([`UPDATE rzs_orders SET crm_id = ?, crm_code = ?, crm_at = ?, note = ? WHERE id = ? AND crm_id = '' AND crm_code = ''`, [hit[0].id, hit[0].code, now, `\u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 LP-CRM \u0437\u0430 \u0422\u0422\u041D ${t}`, r.id]]);
+        out.linked.push({ id: r.id, order_num: r.order_num, crm_id: hit[0].id });
+        continue;
+      }
+      const p = phone92(r.phone);
+      const maybe = [...hit, ...suggest && p.length === 9 ? list.filter((o) => o.phone === p && !hit.includes(o)) : []].filter((o) => !taken.has(o.code)).slice(0, 3);
+      if (maybe.length) out.suggest.push({ id: r.id, order_num: r.order_num, customer: r.customer, phone: r.phone, ttn: r.ttn, crm: maybe.map((o) => ({ id: o.id, name: o.name, ttn: o.ttn, phone: o.phone, by: o.ttn && o.ttn === t ? "\u0422\u0422\u041D" : "\u0442\u0435\u043B\u0435\u0444\u043E\u043D" })) });
+      else out.notFound++;
+    }
+    if (st.length) await db.batch(st);
+    return out;
+  }
+  app.post("/api/rzs/crm-find", async (c) => {
+    need(c, "docs.edit");
+    const b = await c.req.json().catch(() => ({}));
+    const ids = Array.isArray(b.ids) ? [...new Set(b.ids.map(String))].slice(0, 300) : null;
+    const since = new Date(Date.now() - 45 * 864e5).toISOString().slice(0, 10);
+    const rows = ids ? await db.all(`SELECT * FROM rzs_orders WHERE id IN (SELECT value FROM json_each(?))`, [JSON.stringify(ids)]) : await db.all(`SELECT * FROM rzs_orders WHERE created_at >= ? AND crm_id = '' AND crm_code = '' AND status != 'deleted' ORDER BY created_at DESC LIMIT 300`, [since]);
+    return c.json(await findCrm(rows));
+  });
+  app.put("/api/rzs/orders/:id/crm-link", async (c) => {
+    need(c, "docs.edit");
+    const r = await orderRow(c.req.param("id"));
+    const val = String((await c.req.json().catch(() => ({}))).crm ?? "").replace(/\s/g, "");
+    if (!val) {
+      await db.run(`UPDATE rzs_orders SET crm_id = '', crm_code = '', crm_at = '', note = ? WHERE id = ?`, [`\u0432\u0456\u0434\u0432'\u044F\u0437\u0430\u0432(\u043B\u0430) \u0432\u0456\u0434 LP-CRM ${userName5(c.get("user"))}`, r.id]);
+      return c.json({ ok: true, crm_id: "" });
+    }
+    if (!/^\d{1,20}$/.test(val)) throw fail(400, "\u041D\u043E\u043C\u0435\u0440 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM \u2014 \u043B\u0438\u0448\u0435 \u0446\u0438\u0444\u0440\u0438.");
+    let id = val.length <= 10 ? val : "";
+    let code = val.length > 10 ? val : "";
+    if (!code) code = String((await db.get(`SELECT code FROM an_orders WHERE id = ?`, [Number(id)]).catch(() => null))?.code || (await db.get(`SELECT code FROM order_keys WHERE k = ? LIMIT 1`, [id]).catch(() => null))?.code || "");
+    const s = await loadSettings(db);
+    if (code && s.lpcrm_subdomain && s.lpcrm_key) {
+      const o = (await getOrdersBatch(fetchFn, { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key }, [code]).catch(() => [])).find((x) => String(x.order_id) === code);
+      if (o && /^\d+$/.test(String(o.id ?? ""))) id = String(o.id);
+      else if (!id) throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0437 \u0442\u0430\u043A\u0438\u043C \u043A\u043E\u0434\u043E\u043C \u0443 LP-CRM \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    }
+    const other = await db.get(`SELECT order_num FROM rzs_orders WHERE id != ? AND ((crm_id != '' AND crm_id = ?) OR (crm_code != '' AND crm_code = ?)) LIMIT 1`, [r.id, id, code]);
+    if (other) throw fail(400, `\u0426\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM \u0443\u0436\u0435 \u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u0435 \u0434\u043E ${other.order_num}.`);
+    await db.run(`UPDATE rzs_orders SET crm_id = ?, crm_code = ?, crm_at = ?, note = ? WHERE id = ?`, [id, code, nowIso(), `\u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u0432(\u043B\u0430) \u0434\u043E LP-CRM ${userName5(c.get("user"))}`, r.id]);
+    return c.json({ ok: true, crm_id: id, code });
   });
   app.get("/api/rzs/products", async (c) => {
     need(c, "docs.view");
