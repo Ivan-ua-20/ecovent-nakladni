@@ -33,7 +33,7 @@ export function mountRetail(app, { db, fetchFn, services = {} }) {
   // ================================================================ кабінети
   const publicAcc = (a, origin = '') => ({
     id: a.id, name: a.name, token: keyHint(a.token), price_list_id: a.price_list_id, crm_office: a.crm_office, crm_delivery: a.crm_delivery,
-    crm_site: a.crm_site, active: a.active, synced_at: a.synced_at, hook_at: a.hook_at,
+    crm_site: a.crm_site, crm_field1: a.crm_field1 ?? '', active: a.active, synced_at: a.synced_at, hook_at: a.hook_at,
     hook: { url: origin ? `${origin}/api/rzs/hook/${a.id}` : '', user: a.hook_user, pass: a.hook_pass },
   });
   const accOf = async (id) => {
@@ -52,6 +52,7 @@ export function mountRetail(app, { db, fetchFn, services = {} }) {
     crm_office: String(b.crm_office ?? cur.crm_office ?? '').replace(/\D/g, '').slice(0, 10),
     crm_delivery: String(b.crm_delivery ?? cur.crm_delivery ?? '1').replace(/\D/g, '').slice(0, 10),
     crm_site: String(b.crm_site ?? cur.crm_site ?? '').trim().slice(0, 100),
+    crm_field1: String(b.crm_field1 ?? cur.crm_field1 ?? 'Riteil(Rozetka)').trim().slice(0, 100),
     active: b.active === undefined ? (cur.active ?? 1) : (b.active ? 1 : 0),
   });
   app.post('/api/rzs/accounts', async (c) => {
@@ -61,8 +62,8 @@ export function mountRetail(app, { db, fetchFn, services = {} }) {
     if (token.length < 20) throw fail(400, 'Вставте токен з Кабінету постачальника Розетки: Налаштування → Токени → «Згенерувати токен».');
     await rzsOrdersPage(fetchFn, token, { dateFrom: rzsDateTime(new Date(Date.now() - 86400000)) }); // перевірка токена
     const f = accFields(b);
-    const r = await db.run(`INSERT INTO rzs_accounts (name, token, price_list_id, crm_office, crm_delivery, crm_site, active, hook_user, hook_pass, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`, [f.name || 'Розетка', token, f.price_list_id, f.crm_office, f.crm_delivery, f.crm_site, `rzs${randomToken(4)}`, randomToken(12), nowIso()]);
+    const r = await db.run(`INSERT INTO rzs_accounts (name, token, price_list_id, crm_office, crm_delivery, crm_site, crm_field1, active, hook_user, hook_pass, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`, [f.name || 'Розетка', token, f.price_list_id, f.crm_office, f.crm_delivery, f.crm_site, f.crm_field1, `rzs${randomToken(4)}`, randomToken(12), nowIso()]);
     await logAudit(db, { user: c.get('user'), kind: 'rzs', refId: r.lastId, action: 'додано кабінет постачальника Розетки', changes: [{ field: 'name', from: '', to: f.name }] });
     return c.json({ id: r.lastId });
   });
@@ -78,8 +79,8 @@ export function mountRetail(app, { db, fetchFn, services = {} }) {
       token = t;
     }
     const pass = b.new_hook_pass ? randomToken(12) : cur.hook_pass;
-    await db.run(`UPDATE rzs_accounts SET name = ?, token = ?, price_list_id = ?, crm_office = ?, crm_delivery = ?, crm_site = ?, active = ?, hook_pass = ? WHERE id = ?`,
-      [f.name || cur.name, token, f.price_list_id, f.crm_office, f.crm_delivery, f.crm_site, f.active, pass, cur.id]);
+    await db.run(`UPDATE rzs_accounts SET name = ?, token = ?, price_list_id = ?, crm_office = ?, crm_delivery = ?, crm_site = ?, crm_field1 = ?, active = ?, hook_pass = ? WHERE id = ?`,
+      [f.name || cur.name, token, f.price_list_id, f.crm_office, f.crm_delivery, f.crm_site, f.crm_field1, f.active, pass, cur.id]);
     if (token !== cur.token) await logAudit(db, { user: c.get('user'), kind: 'rzs', refId: cur.id, action: 'змінено токен Розетки', changes: [{ field: 'token', from: keyHint(cur.token), to: keyHint(token) }] });
     return c.json({ ok: true });
   });
@@ -369,7 +370,7 @@ export function mountRetail(app, { db, fetchFn, services = {} }) {
     try {
       res = await addNewOrder(fetchFn, { subdomain: s.lpcrm_subdomain, key: s.lpcrm_in_key || s.lpcrm_key }, {
         code, office: a.crm_office, bayer_name: r.customer, phone: String(r.phone).replace(/\D/g, ''), comment, delivery: a.crm_delivery || '',
-        delivery_adress: r.ttn || [r.city, r.street].filter(Boolean).join(', '), sender: senderOf(c, a.crm_site), site: a.crm_site || new URL(c.req.url).host,
+        delivery_adress: r.ttn || [r.city, r.street].filter(Boolean).join(', '), sender: senderOf(c, a.crm_site), site: a.crm_site || new URL(c.req.url).host, additional_1: a.crm_field1 || '',
         products: o.products.map((p) => ({ product_id: p.product_id, price: p.purchase_price, count: p.quantity })),
       });
     } catch (e) {

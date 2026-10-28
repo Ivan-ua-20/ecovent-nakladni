@@ -181,6 +181,7 @@ const cr = await req('POST', `/api/rzs/orders/${ID1}/crm`, {});
 assert.equal(cr.crm_id, '88001');
 const add = calls.crm.find((x) => x.method === 'addNewOrder').p;
 assert.equal(add.office, '7');
+assert.equal(add.additional_1, 'Riteil(Rozetka)', '«Додаткове поле 1» — за замовчуванням Riteil(Rozetka)');
 assert.equal(add.phone, '380501112233');
 assert.ok(add.comment.includes('900001') && add.comment.includes('20450000000001'), 'у коментарі — № Розетки і ТТН');
 assert.ok(decodeURIComponent(add.products.replace(/\+/g, ' ')).includes('s:5:"price";s:6:"7200.5"'), 'ціна — закупівельна');
