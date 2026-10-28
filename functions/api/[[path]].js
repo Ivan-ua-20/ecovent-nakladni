@@ -10081,6 +10081,7 @@ function mountRetail(app, { db, fetchFn, services = {} }) {
     crm_office: a.crm_office,
     crm_delivery: a.crm_delivery,
     crm_site: a.crm_site,
+    crm_field1: a.crm_field1 ?? "",
     active: a.active,
     synced_at: a.synced_at,
     hook_at: a.hook_at,
@@ -10102,6 +10103,7 @@ function mountRetail(app, { db, fetchFn, services = {} }) {
     crm_office: String(b.crm_office ?? cur.crm_office ?? "").replace(/\D/g, "").slice(0, 10),
     crm_delivery: String(b.crm_delivery ?? cur.crm_delivery ?? "1").replace(/\D/g, "").slice(0, 10),
     crm_site: String(b.crm_site ?? cur.crm_site ?? "").trim().slice(0, 100),
+    crm_field1: String(b.crm_field1 ?? cur.crm_field1 ?? "Riteil(Rozetka)").trim().slice(0, 100),
     active: b.active === void 0 ? cur.active ?? 1 : b.active ? 1 : 0
   });
   app.post("/api/rzs/accounts", async (c) => {
@@ -10111,8 +10113,8 @@ function mountRetail(app, { db, fetchFn, services = {} }) {
     if (token.length < 20) throw fail(400, "\u0412\u0441\u0442\u0430\u0432\u0442\u0435 \u0442\u043E\u043A\u0435\u043D \u0437 \u041A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u043F\u043E\u0441\u0442\u0430\u0447\u0430\u043B\u044C\u043D\u0438\u043A\u0430 \u0420\u043E\u0437\u0435\u0442\u043A\u0438: \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0422\u043E\u043A\u0435\u043D\u0438 \u2192 \xAB\u0417\u0433\u0435\u043D\u0435\u0440\u0443\u0432\u0430\u0442\u0438 \u0442\u043E\u043A\u0435\u043D\xBB.");
     await rzsOrdersPage(fetchFn, token, { dateFrom: rzsDateTime(new Date(Date.now() - 864e5)) });
     const f = accFields(b);
-    const r = await db.run(`INSERT INTO rzs_accounts (name, token, price_list_id, crm_office, crm_delivery, crm_site, active, hook_user, hook_pass, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`, [f.name || "\u0420\u043E\u0437\u0435\u0442\u043A\u0430", token, f.price_list_id, f.crm_office, f.crm_delivery, f.crm_site, `rzs${randomToken(4)}`, randomToken(12), nowIso()]);
+    const r = await db.run(`INSERT INTO rzs_accounts (name, token, price_list_id, crm_office, crm_delivery, crm_site, crm_field1, active, hook_user, hook_pass, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`, [f.name || "\u0420\u043E\u0437\u0435\u0442\u043A\u0430", token, f.price_list_id, f.crm_office, f.crm_delivery, f.crm_site, f.crm_field1, `rzs${randomToken(4)}`, randomToken(12), nowIso()]);
     await logAudit(db, { user: c.get("user"), kind: "rzs", refId: r.lastId, action: "\u0434\u043E\u0434\u0430\u043D\u043E \u043A\u0430\u0431\u0456\u043D\u0435\u0442 \u043F\u043E\u0441\u0442\u0430\u0447\u0430\u043B\u044C\u043D\u0438\u043A\u0430 \u0420\u043E\u0437\u0435\u0442\u043A\u0438", changes: [{ field: "name", from: "", to: f.name }] });
     return c.json({ id: r.lastId });
   });
@@ -10129,8 +10131,8 @@ function mountRetail(app, { db, fetchFn, services = {} }) {
     }
     const pass = b.new_hook_pass ? randomToken(12) : cur.hook_pass;
     await db.run(
-      `UPDATE rzs_accounts SET name = ?, token = ?, price_list_id = ?, crm_office = ?, crm_delivery = ?, crm_site = ?, active = ?, hook_pass = ? WHERE id = ?`,
-      [f.name || cur.name, token, f.price_list_id, f.crm_office, f.crm_delivery, f.crm_site, f.active, pass, cur.id]
+      `UPDATE rzs_accounts SET name = ?, token = ?, price_list_id = ?, crm_office = ?, crm_delivery = ?, crm_site = ?, crm_field1 = ?, active = ?, hook_pass = ? WHERE id = ?`,
+      [f.name || cur.name, token, f.price_list_id, f.crm_office, f.crm_delivery, f.crm_site, f.crm_field1, f.active, pass, cur.id]
     );
     if (token !== cur.token) await logAudit(db, { user: c.get("user"), kind: "rzs", refId: cur.id, action: "\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0442\u043E\u043A\u0435\u043D \u0420\u043E\u0437\u0435\u0442\u043A\u0438", changes: [{ field: "token", from: keyHint2(cur.token), to: keyHint2(token) }] });
     return c.json({ ok: true });
@@ -10510,6 +10512,7 @@ function mountRetail(app, { db, fetchFn, services = {} }) {
         delivery_adress: r.ttn || [r.city, r.street].filter(Boolean).join(", "),
         sender: senderOf(c, a.crm_site),
         site: a.crm_site || new URL(c.req.url).host,
+        additional_1: a.crm_field1 || "",
         products: o.products.map((p) => ({ product_id: p.product_id, price: p.purchase_price, count: p.quantity }))
       });
     } catch (e) {
@@ -12557,7 +12560,7 @@ var schema12 = {
 // src/modules/retail/schema.js
 var schema13 = {
   name: "retail",
-  version: 2,
+  version: 3,
   tables: [
     // Кабінети постачальника Розетки: токен (JWT) бачить лише сервер; прайс і параметри передачі замовлень у LP-CRM.
     `CREATE TABLE IF NOT EXISTS rzs_accounts (
@@ -12629,7 +12632,9 @@ var schema13 = {
     // З вивантаження товарів Кабінету постачальника: статус на сайті Розетки, бренд, коли востаннє оновлено з файлу.
     ["rzs_products", "rz_status", "TEXT DEFAULT ''"],
     ["rzs_products", "brand", "TEXT DEFAULT ''"],
-    ["rzs_products", "imported_at", "TEXT DEFAULT ''"]
+    ["rzs_products", "imported_at", "TEXT DEFAULT ''"],
+    // «Додаткове поле 1» замовлення в LP-CRM (канал продажу; за ним аналітика визначає джерело).
+    ["rzs_accounts", "crm_field1", "TEXT DEFAULT 'Riteil(Rozetka)'"]
   ]
 };
 
