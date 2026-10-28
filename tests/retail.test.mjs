@@ -27,6 +27,8 @@ const ORDERS = new Map([
     products: [{ supplierCode: 'EV-200', rzCode: 778, quantity: 1, cargoSeats: [] }] }],
 ]);
 let tooMany = false;
+// Замовлення LP-CRM (код → номер, ТТН, телефон) — для пошуку прив'язки за ТТН.
+const CRM = new Map([['1761400000000111', { id: '70001', ttn: '20400558101410', phone: '0971089181', bayer_name: 'Попелянська' }], ['1761400000000222', { id: '70002', ttn: '', phone: '0508846132', bayer_name: 'Підопличко' }]]);
 const calls = { list: 0, confirm: [], ttn: [], print: [], price: [], crm: [] };
 const json = (o, status = 200) => new Response(JSON.stringify(o), { status });
 const fetchFn = async (url, opts = {}) => {
@@ -36,6 +38,7 @@ const fetchFn = async (url, opts = {}) => {
     const p = Object.fromEntries(new URLSearchParams(opts.body));
     calls.crm.push({ method, p });
     if (method === 'addNewOrder') return json({ status: 'ok', data: { order_id: p.order_id }, message: 'ok' });
+    if (method === 'getOrdersByID' && p.order_id.split(',').some((c) => CRM.has(c))) return json({ status: 'ok', data: p.order_id.split(',').filter((c) => CRM.has(c)).map((c) => ({ order_id: c, ...CRM.get(c), products: [] })) });
     if (method === 'getOrdersByID') return json({ status: 'ok', data: [{ order_id: p.order_id, id: '88001', products: [], bayer_name: 'x' }] });
     return json({ status: 'ok', data: [] });
   }
@@ -207,14 +210,44 @@ assert.equal(nw.product_id, null, 'новий — без прив’язки, в
 assert.equal(ir.unmapped, 2, 'не прив’язані: EV-200 і NEW-1');
 assert.match(await errOf(() => req('POST', '/api/rzs/products/import', { a: 1 })), /Артикул товару/, 'чужий файл — зрозуміла помилка');
 
+// ---------- 8б. Пошук у LP-CRM за ТТН і ручна прив'язка ----------
+const R3 = 'aaaaaaaa-bbbb-4ccc-8ddd-000000000003';
+const R4 = 'aaaaaaaa-bbbb-4ccc-8ddd-000000000004';
+const R5 = 'aaaaaaaa-bbbb-4ccc-8ddd-000000000005';
+await raw.batch([
+  [`INSERT INTO rzs_orders (id, account_id, order_num, status, created_at, customer, phone, ttn, products) VALUES (?, ?, 'PO3', 'shipping', ?, 'Попелянська', '0971089181', '2040 0558 101410', '[]')`, [R3, acc.id, `${now} 12:00:00`]],
+  [`INSERT INTO rzs_orders (id, account_id, order_num, status, created_at, customer, phone, ttn, products) VALUES (?, ?, 'PO4', 'confirmed', ?, 'Підопличко', '+380508846132', '', '[]')`, [R4, acc.id, `${now} 12:00:00`]],
+  [`INSERT INTO rzs_orders (id, account_id, order_num, status, created_at, customer, phone, ttn, products) VALUES (?, ?, 'PO5', 'confirmed', ?, 'Ніхто', '0991112233', '20409999999999', '[]')`, [R5, acc.id, `${now} 12:00:00`]],
+  [`INSERT INTO an_orders (id, code, day, status, ttn) VALUES (70001, '1761400000000111', ?, 1, '20400558101410')`, [now]],
+  [`INSERT INTO order_keys (k, code, day) VALUES ('p:508846132', '1761400000000222', ?)`, [now]],
+]);
+const fr = await req('POST', '/api/rzs/crm-find', {});
+assert.deepEqual(fr.linked.map((x) => [x.order_num, x.crm_id]), [['PO3', '70001']], 'точний збіг ТТН — прив’язано одразу (пробіли в ТТН не заважають)');
+assert.deepEqual(fr.suggest.map((x) => [x.order_num, x.crm[0].id, x.crm[0].by]), [['PO4', '70002', 'телефон']], 'за телефоном — лише підказка');
+assert.ok(fr.notFound >= 1, 'PO5 не знайдено');
+let o3 = await req('GET', `/api/rzs/orders/${R3}`);
+assert.equal(o3.crm_id, '70001');
+assert.equal(o3.crm_code, '1761400000000111');
+assert.equal((await req('GET', `/api/rzs/orders/${R4}`)).crm_id, '', 'підказку не прив’язано без людини');
+await req('PUT', `/api/rzs/orders/${R4}/crm-link`, { crm: '70002' });
+assert.equal((await req('GET', `/api/rzs/orders/${R4}`)).crm_id, '70002');
+assert.match(await errOf(() => req('PUT', `/api/rzs/orders/${R5}/crm-link`, { crm: '70001' })), /уже прив/, 'один номер LP-CRM — до одного замовлення');
+assert.match(await errOf(() => req('PUT', `/api/rzs/orders/${R5}/crm-link`, { crm: 'abc' })), /цифри/);
+await req('PUT', `/api/rzs/orders/${R4}/crm-link`, { crm: '' });
+assert.equal((await req('GET', `/api/rzs/orders/${R4}`)).crm_id, '', 'відв’язано');
+const fr2 = await req('POST', '/api/rzs/crm-find', { ids: [R3] });
+assert.equal(fr2.checked, 0, 'вже прив’язані не перевіряються');
+
 // ---------- 9. Права ----------
 await req('POST', '/api/users', { login: 'viewer', password: 'pass1234', role: 'viewer' });
 const vl = await mk().request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: 'viewer', password: 'pass1234' }) });
 const VH = { 'Content-Type': 'application/json', Cookie: vl.headers.get('set-cookie').split(';')[0] };
-assert.equal((await req('GET', '/api/rzs/orders', undefined, VH)).rows.length, 2, 'перегляд бачить замовлення');
+assert.equal((await req('GET', '/api/rzs/orders', undefined, VH)).rows.length, 5, 'перегляд бачить замовлення');
 assert.equal(await status(() => req('GET', '/api/rzs/accounts', undefined, VH)), 403, 'кабінети — лише власник/адміни');
 assert.equal(await status(() => req('POST', `/api/rzs/orders/${ID2}/crm`, {}, VH)), 403);
 assert.equal(await status(() => req('PUT', '/api/rzs/products/EV-200', { purchase_price: 1 }, VH)), 403);
+assert.equal(await status(() => req('POST', '/api/rzs/crm-find', {}, VH)), 403);
+assert.equal(await status(() => req('PUT', `/api/rzs/orders/${R4}/crm-link`, { crm: '1' }, VH)), 403);
 assert.equal((await send('POST', '/api/rzs/products/import', CSV, { ...VH, 'Content-Type': 'text/csv' })).status, 403, 'імпорт — лише з правом довідників');
 
 // ---------- 10. Новий пароль вебхука, видалення ----------

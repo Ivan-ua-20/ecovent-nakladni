@@ -25,7 +25,7 @@ export function createRetailPages(ctx) {
     const lastSync = accounts.map((a) => a.synced_at).filter(Boolean).sort().pop();
     const lastHook = accounts.map((a) => a.hook_at).filter(Boolean).sort().pop();
     main.innerHTML = `
-      <div class="head-row"><h2>Розетка — замовлення</h2><div class="btn-row"><button class="btn primary" id="rzSync">Оновити з Розетки</button></div></div>
+      <div class="head-row"><h2>Розетка — замовлення</h2><div class="btn-row">${can('docs.edit') ? '<button class="btn" id="rzFind" title="Знайти за ТТН замовлення, які вже є в LP-CRM, і прив’язати">🔗 Знайти в LP-CRM</button>' : ''}<button class="btn primary" id="rzSync">Оновити з Розетки</button></div></div>
       ${accounts.length ? `<div class="small muted" style="margin-bottom:10px">${lastSync ? `Оновлено: ${esc(fmtDateTime(lastSync))}` : 'Ще не оновлювалось'}${lastHook ? ` · вебхук Розетки: ${esc(fmtDateTime(lastHook))}` : ' · вебхук ще не надходив'}</div>`
         : `<div class="alert warn" style="margin-bottom:12px">Кабінет постачальника Розетки ще не підключено${can('api') ? ' — «Налаштування Розетки»' : ' — зверніться до адміністратора'}.</div>`}
       <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap">
@@ -52,10 +52,11 @@ export function createRetailPages(ctx) {
     $('#rzSync').onclick = async (e) => {
       e.currentTarget.disabled = true;
       e.currentTarget.innerHTML = '<span class="spinner"></span> Оновлюю…';
-      try { const r = await api('POST', '/api/rzs/sync', { force: true }); const err = r.results?.find((x) => x.error); toast(err ? err.error : `Оновлено: ${r.results?.reduce((t, x) => t + (x.saved || 0), 0) || 0} замовлень`, !!err); } catch (er) { toast(er.message, true); }
+      try { const r = await api('POST', '/api/rzs/sync', { force: true }); const err = r.results?.find((x) => x.error); const lk = r.results?.reduce((t, x) => t + (x.crm || 0), 0) || 0; toast(err ? err.error : `Оновлено: ${r.results?.reduce((t, x) => t + (x.saved || 0), 0) || 0} замовлень${lk ? ` · знайдено в LP-CRM за ТТН: ${lk}` : ''}`, !!err); } catch (er) { toast(er.message, true); }
       viewOrders();
     };
     $$('[data-v]').forEach((b) => (b.onclick = () => { filter.view = b.dataset.v; viewOrders(); }));
+    $('#rzFind') && ($('#rzFind').onclick = () => findCrm(null));
     let qt;
     $('#rzQ').oninput = (e) => { clearTimeout(qt); qt = setTimeout(async () => { filter.q = e.target.value; await viewOrders(); const el = $('#rzQ'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 350); };
     $$('[data-nosel]').forEach((td) => (td.onclick = (e) => e.stopPropagation()));
@@ -74,7 +75,7 @@ export function createRetailPages(ctx) {
       bar.innerHTML = ids.length ? `<b>Обрано: ${ids.length}</b>
         ${can('docs.edit') ? '<button class="btn sm" data-b="confirm">✅ Підтвердити</button><button class="btn sm" data-b="ttn">🚚 Створити ТТН</button>' : ''}
         <button class="btn sm" data-b="mark">🏷 Маркування (PDF)</button>
-        ${can('docs.edit') ? '<button class="btn sm" data-b="crm">➕ У LP-CRM</button>' : ''}
+        ${can('docs.edit') ? '<button class="btn sm" data-b="crm">➕ У LP-CRM</button><button class="btn sm" data-b="find">🔗 Знайти в LP-CRM</button>' : ''}
         <button class="btn sm" data-b="_clear">Зняти вибір</button>` : '';
       $$('[data-b]', bar).forEach((b) => (b.onclick = () => run(b.dataset.b)));
       const all = $('#rzAll');
@@ -91,6 +92,7 @@ export function createRetailPages(ctx) {
       const ids = sel();
       if (k === '_clear') { $$('[data-sel]').forEach((x) => { x.checked = false; }); draw(); return; }
       if (k === 'mark') return markings(ids);
+      if (k === 'find') return findCrm(ids);
       const a = ACT[k];
       const todo = ids.filter((id) => a.ok(byId.get(id)));
       const skipped = ids.filter((id) => !a.ok(byId.get(id))).map((id) => `${byId.get(id).order_num}: ${a.why}`);
@@ -152,6 +154,8 @@ export function createRetailPages(ctx) {
             <div class="small">ТТН: ${o.ttn ? `<b>${esc(o.ttn)}</b>${o.tracking_status ? ` · ${esc(o.tracking_status)}` : ''}` : '—'}</div>
             <div class="small">Документи: ${o.document_link ? `<a href="${esc(o.document_link)}" target="_blank" rel="noopener">📄 відкрити</a>` : 'ще немає'}${o.docs_at ? ` · з ${esc(fmtDateTime(o.docs_at))}` : ''}${o.invoice_no ? ` · рахунок Вчасно № ${esc(o.invoice_no)}` : ''}</div>
             <div class="small">LP-CRM: ${o.crm_id ? `№ <b>${esc(o.crm_id)}</b>` : o.crm_code ? 'передано' : '—'}</div>
+            ${edit ? `<div class="btn-row" style="margin-top:4px"><input id="omCrmNo" value="${esc(o.crm_id || '')}" placeholder="№ замовлення в LP-CRM" inputmode="numeric" style="max-width:170px" aria-label="Номер замовлення в LP-CRM">
+              <button type="button" class="btn sm" id="omLink">${o.crm_id || o.crm_code ? 'Змінити' : '🔗 Прив’язати'}</button>${o.crm_id || o.crm_code ? '<button type="button" class="btn sm danger" id="omUnlink">Відв’язати</button>' : ''}</div>` : ''}
             ${o.note ? `<div class="small muted">${esc(o.note)}</div>` : ''}</div></div>
         <table class="list"><thead><tr><th>Товар</th><th class="r">К-сть</th><th class="r">Ціна закупівлі</th><th>Товар LP-CRM</th>${o.sn_required ? '<th>Серійні номери</th>' : ''}</tr></thead><tbody>
           ${o.products.map((p) => `<tr><td>${esc(p.name || '—')}<div class="small muted">арт. ${esc(p.supplierCode)}${p.rzCode ? ` · код Розетки ${esc(p.rzCode)}` : ''}</div></td>
@@ -191,6 +195,40 @@ export function createRetailPages(ctx) {
     });
     act('#omCrm', async () => { const r = await api('POST', `/api/rzs/orders/${o.id}/crm`, {}); toast(r.crm_id ? `Додано в LP-CRM: № ${r.crm_id}` : 'Додано в LP-CRM'); });
     $('#omMark', m.el) && ($('#omMark', m.el).onclick = () => markings([o.id]));
+    act('#omLink', async () => {
+      const v = $('#omCrmNo', m.el).value.trim();
+      if (!v) { toast('Впишіть номер замовлення з LP-CRM', true); return false; }
+      const r = await api('PUT', `/api/rzs/orders/${o.id}/crm-link`, { crm: v });
+      toast(`Прив’язано до LP-CRM № ${r.crm_id || v}`);
+    });
+    act('#omUnlink', async () => {
+      if (!(await confirmDanger('Відв’язати від LP-CRM?', 'Замовлення в LP-CRM не зміниться — лише зникне прив’язка тут.', 'Відв’язати'))) return false;
+      await api('PUT', `/api/rzs/orders/${o.id}/crm-link`, { crm: '' });
+      toast('Відв’язано');
+    });
+  }
+
+  // Пошук у LP-CRM за ТТН (і підказки за телефоном): точний збіг ТТН прив’язується одразу, решту — вибираєте самі.
+  async function findCrm(ids) {
+    toast('Шукаю в LP-CRM…');
+    let r;
+    try { r = await api('POST', '/api/rzs/crm-find', ids ? { ids } : {}); } catch (e) { toast(e.message, true); return; }
+    const m = modal('Пошук у LP-CRM', `<div class="form-stack">
+        <div>Перевірено замовлень без LP-CRM: <b>${r.checked}</b> · прив’язано за ТТН: <b>${r.linked.length}</b>${r.notFound ? ` · не знайдено: ${r.notFound}` : ''}</div>
+        ${r.linked.length ? `<div class="small">${r.linked.map((x) => `${esc(x.order_num)} → LP-CRM № <b>${esc(x.crm_id)}</b>`).join('<br>')}</div>` : ''}
+        ${r.suggest.length ? `<div><b>Можливі збіги — перевірте й прив’яжіть:</b></div>
+          <table class="list"><thead><tr><th>Розетка</th><th>LP-CRM</th><th></th></tr></thead><tbody>
+          ${r.suggest.flatMap((x) => x.crm.map((y) => `<tr><td><b>${esc(x.order_num)}</b><div class="small muted">${esc([x.customer, x.phone, x.ttn].filter(Boolean).join(' · '))}</div></td>
+            <td>№ <b>${esc(y.id)}</b> <span class="badge info">за ${esc(y.by)}</span><div class="small muted">${esc([y.name, y.ttn ? `ТТН ${y.ttn}` : 'без ТТН'].filter(Boolean).join(' · '))}</div></td>
+            <td class="r"><button class="btn sm" data-lk="${esc(x.id)}" data-crm="${esc(y.id)}">🔗 Прив’язати</button></td></tr>`)).join('')}</tbody></table>` : ''}
+        ${r.notFound ? '<div class="small muted">Не знайдені — ще не внесені в LP-CRM, без ТТН у LP-CRM, або ТТН інша. Їх можна прив’язати вручну в картці замовлення (№ з LP-CRM) або передати кнопкою «➕ У LP-CRM».</div>' : ''}
+      </div>`, { wide: true, footer: '<button class="btn primary" data-close>Готово</button>' });
+    $$('[data-lk]', m.el).forEach((b) => (b.onclick = async () => {
+      b.disabled = true;
+      try { await api('PUT', `/api/rzs/orders/${b.dataset.lk}/crm-link`, { crm: b.dataset.crm }); b.textContent = '✅ Прив’язано'; $$(`[data-lk="${b.dataset.lk}"]`, m.el).forEach((x) => { x.disabled = true; }); }
+      catch (e) { toast(e.message, true); b.disabled = false; }
+    }));
+    new MutationObserver((_, obs) => { if (!document.contains(m.el)) { obs.disconnect(); viewOrders(); } }).observe(document.body, { childList: true });
   }
 
   // ---------------------------------------------------------------- товари й ціни
