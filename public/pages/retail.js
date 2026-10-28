@@ -1,5 +1,5 @@
 // Рітейл → Розетка (кабінет постачальника): замовлення дропшипінгу з груповими діями (підтвердити, ТТН, маркування,
-// у LP-CRM), товари й ціни закупівлі, налаштування кабінетів і вебхука.
+// у LP-CRM), товари й ціни закупівлі (завантаження з Кабінету, прайс на Розетку не відправляємо), налаштування кабінетів і вебхука.
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 
@@ -207,7 +207,7 @@ export function createRetailPages(ctx) {
     main.innerHTML = `
       <div class="head-row"><h2>Розетка — товари й ціни закупівлі</h2><div class="btn-row">
         ${edit ? '<label class="btn primary">📥 Завантажити товари з Розетки (CSV)<input type="file" id="rpImp" accept=".csv,text/csv" hidden></label><button class="btn" id="rpAdd">+ Товар</button>' : ''}
-        ${can('api') ? '<button class="btn" id="rpTest">Перевірити прайс (тест)</button><button class="btn" id="rpPush">Надіслати прайс на Розетку</button>' : ''}</div></div>
+</div></div>
       <div class="alert info" style="margin-bottom:12px"><b>Як оновити:</b> Кабінет постачальника Розетки → вивантажте товари в CSV → «📥 Завантажити товари з Розетки». Нові артикули додадуться,
         у наявних оновляться назва, код Розетки, РРЦ, ціна закупівлі, залишок і статус; прив’язка до LP-CRM і габарити лишаються.
         <b>Ціна закупівлі</b> йде в LP-CRM у замовлення Розетки (не роздрібна). <b>Товар LP-CRM (ID)</b> підставляється сам, якщо артикул збігається з артикулом у каталозі, інакше — впишіть ID товару з LP-CRM.
@@ -278,18 +278,6 @@ export function createRetailPages(ctx) {
         try { await api('POST', '/api/rzs/products', { code }); m.close(); viewProducts(); } catch (e) { toast(e.message, true); }
       };
     });
-    const push = async (test, btn) => {
-      if (!test && !(await confirmDanger('Надіслати прайс на Розетку?', 'Ціни закупівлі, РІЦ і залишки товарів із цієї таблиці (часткове оновлення — лише ці позиції).', 'Надіслати'))) return;
-      btn.disabled = true;
-      try {
-        const r = await api('POST', '/api/rzs/price', { test });
-        modal(test ? 'Перевірка прайсу (тест)' : 'Прайс надіслано', `<div class="form-stack"><div>${r.ok ? '✅' : '⚠️'} Позицій: ${r.sent}${r.count ? ` · прийнято: ${r.count}` : ''}${test ? ' — тестовий режим, на Розетці нічого не змінено' : ''}</div>
-          ${r.errors.length ? `<div class="small">${r.errors.map((x) => `<div>${esc(x)}</div>`).join('')}</div>` : ''}</div>`, { footer: '<button class="btn primary" data-close>Зрозуміло</button>' });
-      } catch (e) { toast(e.message, true); }
-      btn.disabled = false;
-    };
-    $('#rpTest') && ($('#rpTest').onclick = (e) => push(true, e.currentTarget));
-    $('#rpPush') && ($('#rpPush').onclick = (e) => push(false, e.currentTarget));
   }
 
   // ---------------------------------------------------------------- налаштування кабінетів
@@ -301,7 +289,7 @@ export function createRetailPages(ctx) {
         Після підключення вставте адресу, логін і пароль вебхука в Кабінеті Розетки (<b>Налаштування → Вебхуки</b>), позначте «Дропшипінг» (додавання, зміна, видалення) — замовлення з’являтимуться тут одразу.</div>
       ${rows.length ? rows.map((a) => `<div class="card form-stack" style="max-width:900px;margin-bottom:12px">
           <div class="head-row" style="margin:0"><h3 style="margin:0">${esc(a.name)} ${a.active ? '' : '<span class="badge bad">вимкнено</span>'}</h3><button class="btn sm" data-ae="${a.id}">Змінити</button></div>
-          <div class="small">Токен ${esc(a.token)} · прайс ${esc(a.price_list_id || '—')} · відділ LP-CRM ${esc(a.crm_office || '<не вказано>')} · доставка LP-CRM ${esc(a.crm_delivery || '—')}
+          <div class="small">Токен ${esc(a.token)} · відділ LP-CRM ${esc(a.crm_office || '<не вказано>')} · доставка LP-CRM ${esc(a.crm_delivery || '—')}
             · оновлено ${a.synced_at ? esc(fmtDateTime(a.synced_at)) : '—'} · вебхук ${a.hook_at ? esc(fmtDateTime(a.hook_at)) : 'ще не надходив'}</div>
           <div class="f"><span>Вебхук для Кабінету Розетки (Налаштування → Вебхуки)</span>
             <div class="grid2"><div class="pl-url"><input readonly value="${esc(a.hook.url)}" aria-label="URL вебхука"><button type="button" class="btn sm" data-cp="${esc(a.hook.url)}">Копіювати</button></div>
@@ -312,8 +300,7 @@ export function createRetailPages(ctx) {
       const m = modal(a ? `Кабінет «${a.name}»` : 'Підключити кабінет постачальника Розетки', `<form id="raF" class="form-stack">
           <label class="f"><span>Назва</span><input name="name" value="${esc(a?.name || '')}" placeholder="Напр. Ековент на Розетці"></label>
           <label class="f"><span>Токен (JWT)</span><input name="token" value="${esc(a?.token || '')}" autocomplete="off" placeholder="Кабінет постачальника → Налаштування → Токени"></label>
-          <div class="grid2"><label class="f"><span>ID прайсу (для цін і залишків)</span><input name="price_list_id" value="${esc(a?.price_list_id || '')}" inputmode="numeric" placeholder="Товарні позиції → Прайси"></label>
-            <label class="f"><span>ID відділу LP-CRM для замовлень</span><input name="crm_office" value="${esc(a?.crm_office || '')}" inputmode="numeric"></label></div>
+          <label class="f"><span>ID відділу LP-CRM для замовлень</span><input name="crm_office" value="${esc(a?.crm_office || '')}" inputmode="numeric"></label>
           <div class="grid2"><label class="f"><span>ID доставки в LP-CRM (Нова пошта — 1)</span><input name="crm_delivery" value="${esc(a?.crm_delivery ?? '1')}" inputmode="numeric"></label>
             <label class="f"><span>Сайт-джерело в LP-CRM</span><input name="crm_site" value="${esc(a?.crm_site || '')}" placeholder="rozetka.com.ua"></label></div>
           ${a ? `<label class="check"><input type="checkbox" name="active" ${a.active ? 'checked' : ''}> Увімкнено</label><label class="check"><input type="checkbox" name="new_hook_pass"> Новий пароль вебхука</label>` : ''}

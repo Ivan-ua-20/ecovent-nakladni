@@ -3,13 +3,13 @@
 //  - замовлення: підтвердження (групою), ТТН Нової пошти (групою; місця — з каталогу Розетки або свої габарити товару),
 //    маркування PDF (групою), позначка, коли з'явились супровідні документи (посилання і № рахунку «Вчасно»);
 //  - передача в LP-CRM у «Нові»: ціна товару — ціна закупівлі для Розетки (не роздрібна);
-//  - товари: артикул постачальника → товар LP-CRM, ціна закупівлі, РІЦ, залишок; прайс на Розетку.
+//  - товари: артикул постачальника → товар LP-CRM, ціна закупівлі, РРЦ, залишок — з вивантаження Кабінету (CSV); прайс на Розетку не відправляємо.
 // Групові дії браузер виконує по одному замовленню за запит (ліміти Cloudflare), з прогресом.
 import { MASK, fail, need, nowIso, round2, loadSettings } from '../../core/common.js';
 import { randomToken } from '../../core/auth.js';
 import { logAudit } from '../../core/requisites.js';
 import { addNewOrder, getOrdersBatch, phpSerialize, phpUrlencode } from '../../integrations/lpcrm.js';
-import { rzsOrdersPage, rzsOrder, rzsConfirm, rzsCreateTtn, rzsMarkings, rzsPriceCreate, rzsDateTime, parseRzsProductsCsv } from '../../integrations/rozetka-supplier.js';
+import { rzsOrdersPage, rzsOrder, rzsConfirm, rzsCreateTtn, rzsMarkings, rzsDateTime, parseRzsProductsCsv } from '../../integrations/rozetka-supplier.js';
 
 export const RZS_STATUS = {
   new: 'Нове', updated: 'Оновлене', confirmed: 'Підтверджене', shipping: 'Відправляється', problem: 'Проблема',
@@ -383,7 +383,7 @@ export function mountRetail(app, { db, fetchFn }) {
     return c.json({ ok: true, crm_id: crmId, code });
   });
 
-  // ================================================================ товари й прайс
+  // ================================================================ товари
   app.get('/api/rzs/products', async (c) => {
     need(c, 'docs.view');
     const rows = await db.all(`SELECT * FROM rzs_products ORDER BY (product_id IS NULL) DESC, (purchase_price IS NULL) DESC, name, code LIMIT 2000`);
@@ -446,20 +446,5 @@ export function mountRetail(app, { db, fetchFn }) {
     const unmapped = (await db.get(`SELECT COUNT(*) AS n FROM rzs_products WHERE product_id IS NULL`))?.n || 0;
     await logAudit(db, { user: c.get('user'), kind: 'rzs', refId: 0, action: `імпорт товарів з Кабінету Розетки: ${uniq.length} (нових ${uniq.filter((r) => !have.has(r.code)).length})` }).catch(() => 0);
     return c.json({ ok: true, total: uniq.length, added: uniq.filter((r) => !have.has(r.code)).length, updated: uniq.filter((r) => have.has(r.code)).length, skipped, unmapped });
-  });
-
-  // Прайс на Розетку: товари з ціною закупівлі й залишком (часткове оновлення — лише ці позиції), до 1000.
-  app.post('/api/rzs/price', async (c) => {
-    need(c, 'api');
-    const b = await c.req.json().catch(() => ({}));
-    const a = await accOf(b.account_id || (await db.get(`SELECT id FROM rzs_accounts WHERE active = 1 ORDER BY id LIMIT 1`))?.id || 0);
-    if (!a.price_list_id) throw fail(400, 'Вкажіть ID прайсу в налаштуваннях кабінету (Кабінет Розетки → Товарні позиції → Прайси).');
-    const rows = await db.all(`SELECT * FROM rzs_products WHERE purchase_price > 0 AND stock IS NOT NULL ORDER BY code LIMIT 1000`);
-    if (!rows.length) throw fail(400, 'Немає товарів із ціною закупівлі й залишком.');
-    const r = await rzsPriceCreate(fetchFn, a.token, a.price_list_id, rows.map((p) => ({
-      article: p.code, product_id: p.rz_code || undefined, purchase_price: p.purchase_price, recommended_inet_price: p.rrp || undefined, stock: p.stock,
-    })), { test: Boolean(b.test) });
-    await logAudit(db, { user: c.get('user'), kind: 'rzs', refId: a.id, action: `прайс на Розетку${b.test ? ' (тест)' : ''}: ${rows.length} поз.${r.errors.length ? `, помилок: ${r.errors.length}` : ''}` }).catch(() => 0);
-    return c.json({ ok: r.ok, sent: rows.length, count: r.count, errors: r.errors.slice(0, 50), test: Boolean(b.test) });
   });
 }
