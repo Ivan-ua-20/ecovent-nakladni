@@ -330,7 +330,7 @@ export function createPartnerPages(ctx = {}) {
     $('#oConfirm') && ($('#oConfirm').onclick = async (e) => {
       const ent = ents.find((x) => String(x.id) === $('#oEntSel').value);
       if (!(await confirmDanger(`Підтвердити закупівлю ${o.number} на ${uah(o.total)}?`, `Рахунок буде виставлено на ${esc(ent?.name || '')}.`, 'Підтвердити закупівлю'))) return;
-      e.currentTarget.disabled = true;
+      e.target.closest("button").disabled = true;
       try { await api('POST', `/api/b2b/p/orders/${o.id}/confirm`, { entity_id: ent.id }); toast('Закупівлю підтверджено — готуємо рахунок'); viewOrder(o.id); } catch (er) { toast(er.message, true); viewOrder(o.id); }
     });
     $('#oReject') && ($('#oReject').onclick = async () => {

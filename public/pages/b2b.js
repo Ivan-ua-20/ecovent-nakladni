@@ -764,7 +764,7 @@ export function createB2bPages(ctx = {}) {
     if ($('#oCrm')) $('#oCrm').onclick = async (e) => {
       const unpaid = !['paid', 'done'].includes(o.status) && o.pay_terms !== 'postpay';
       if (!(await confirmDanger(`Додати ${o.number} у LP-CRM на відправку?`, `Одне замовлення в «Нові» на ${esc(uah(o.total))}: ${esc([o.ship_to?.name, o.ship_to?.address].filter(Boolean).join(', '))}.${unpaid ? ' <b>Закупівля ще не оплачена.</b>' : ''}`, 'Додати в LP-CRM'))) return;
-      const b = e.currentTarget;
+      const b = e.target.closest("button");
       b.disabled = true;
       try { const r = await api('POST', `/api/b2b/orders/${o.id}/crm`); toast(r.crm_id ? `Додано в LP-CRM: № ${r.crm_id}` : 'Додано в LP-CRM'); viewOrder(o.id); }
       catch (er) { toast(er.message, true); b.disabled = false; }
@@ -1082,7 +1082,7 @@ export function createB2bPages(ctx = {}) {
     $('#seSave', m.el).onclick = async (e) => {
       sync();
       if (opt.invoiced && !(await confirmDanger(`Змінити закупівлю з рахунком № ${o.invoice_no}?`, 'Рахунок доведеться переробити: бухгалтер отримає запит у «Фінансові питання», партнер — сповіщення.', 'Зберегти зміни'))) return;
-      e.currentTarget.disabled = true;
+      e.target.closest("button").disabled = true;
       try {
         const r = await api('PUT', `/api/b2b/orders/${o.id}/edit`, { items: rows.map((x) => ({ product_id: x.product_id, qty: x.qty, price: x.price })), entity_id: Number($('#seEnt', m.el).value) || undefined, comment: $('#seCom', m.el).value });
         m.close();
@@ -1160,7 +1160,7 @@ export function createB2bPages(ctx = {}) {
           addToSupply = true;
         }
       }
-      const btn = e.currentTarget;
+      const btn = e.target.closest("button");
       btn.disabled = true;
       try {
         const r = await api('PUT', `/api/b2b/clients/${o.id}/edit`, { ...f, supply_id: src || null, items: its, add_to_supply: addToSupply });
