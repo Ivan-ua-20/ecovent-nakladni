@@ -1,5 +1,6 @@
 // Оболонка інтерфейсу: вхід, меню розділів, роутер. Сторінки — у pages/, спільні функції — у core/ui.js.
 import { esc } from './invoice.js';
+import { iconize } from './core/icons.js';
 import { createAnalyticsUI } from './an.js';
 import { createPayUI } from './pay.js';
 import { createPayStatsUI } from './anpay.js';
@@ -407,8 +408,9 @@ let labelQueued = false;
 new MutationObserver(() => {
   if (labelQueued) return;
   labelQueued = true;
-  setTimeout(() => { labelQueued = false; labelTables(); foldHelp(); }, 0);
-}).observe(main, { childList: true, subtree: true });
+  setTimeout(() => { labelQueued = false; labelTables(); foldHelp(); iconize(document.body); }, 0);
+// Уся сторінка (шапка, вікна, підказки) — щоб емодзі ставали іконками й поза основним вмістом.
+}).observe(document.body, { childList: true, subtree: true, characterData: true });
 
 // =====================================================================
 // НАКЛАДНА

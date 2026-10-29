@@ -579,7 +579,7 @@ table.list tr.grp td { background: var(--accent-soft); padding-top: 7px; padding
   table.list:not(.an-table):not(.no-cards) > tbody > tr > td[data-label]::before {
     content: attr(data-label); grid-column: 1; grid-row: 1 / span 9; font-size: 11.5px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; color: var(--muted);
   }
-  table.list:not(.an-table):not(.no-cards) > tbody > tr > td[data-label] > * { grid-column: 2; }
+  table.list:not(.an-table):not(.no-cards) > tbody > tr > td[data-label] > * { grid-column: 2; justify-self: start; max-width: 100%; }
   table.list:not(.an-table):not(.no-cards) > tbody > tr > td.r { text-align: left; }
   table.list:not(.an-table):not(.no-cards) > tbody > tr > td, table.list:not(.an-table):not(.no-cards) > tbody > tr > td *:not(.btn):not(.badge) { white-space: normal; }
   /* Галочка вибору — компактно, без підпису */
@@ -644,3 +644,13 @@ tr.pg-hidden { display: none !important; }
 .aging-b.d1_7 { border-left-color: var(--warn); }
 .aging-b.d8_30, .aging-b.d30 { border-left-color: var(--bad); }
 .aging-b.d30 b { color: var(--bad); }
+
+/* SVG-іконки замість емодзі (core/icons.js): розмір і колір — як у тексту поруч */
+.ic { width: 1.05em; height: 1.05em; flex: none; vertical-align: -0.16em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ic-ok { color: var(--ok); }
+.ic-warn { color: var(--warn); }
+.ic-bad { color: var(--bad); }
+.ic-info { color: var(--info); }
+.ic-gold { color: #b7791f; fill: #f6c445; }
+.badge .ic, .btn.sm .ic { width: 1em; height: 1em; }
+.btn.primary .ic-ok, .btn.danger.solid .ic { color: inherit; }
