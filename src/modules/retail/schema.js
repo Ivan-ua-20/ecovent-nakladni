@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'retail',
-  version: 5,
+  version: 6,
   tables: [
   // Кабінети постачальника Розетки: токен (JWT) бачить лише сервер; прайс і параметри передачі замовлень у LP-CRM.
   `CREATE TABLE IF NOT EXISTS rzs_accounts (
@@ -88,5 +88,9 @@ export const schema = {
     // Остання помилка оновлення з Розетки (порожньо — останнє оновлення вдалося): показуємо на сторінці.
     ['rzs_accounts', 'sync_error', "TEXT DEFAULT ''"],
     ['rzs_accounts', 'sync_error_at', "TEXT DEFAULT ''"],
+    // Статус замовлення в LP-CRM (назва), чи це «Нове» (ще не взяли в роботу), коли перевіряли.
+    ['rzs_orders', 'crm_status', "TEXT DEFAULT ''"],
+    ['rzs_orders', 'crm_new', 'INTEGER DEFAULT 0'],
+    ['rzs_orders', 'crm_checked_at', "TEXT DEFAULT ''"],
   ],
 };

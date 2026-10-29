@@ -8,7 +8,7 @@
 import { MASK, fail, need, nowIso, round2, loadSettings } from '../../core/common.js';
 import { randomToken } from '../../core/auth.js';
 import { logAudit } from '../../core/requisites.js';
-import { addNewOrder, getOrdersBatch, phpSerialize, phpUrlencode } from '../../integrations/lpcrm.js';
+import { addNewOrder, getOrdersBatch, getStatuses, phpSerialize, phpUrlencode } from '../../integrations/lpcrm.js';
 import { ttnOf } from '../analytics/index.js';
 import { rzsOrdersPage, rzsOrder, rzsConfirm, rzsCreateTtn, rzsMarkings, rzsDateTime, parseRzsProductsCsv } from '../../integrations/rozetka-supplier.js';
 
@@ -259,6 +259,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     // Передані в LP-CRM, але номер ще не відомий (LP-CRM не встигла віддати) — дізнаємося за кодом.
     const noNum = await db.all(`SELECT id, crm_code FROM rzs_orders WHERE crm_code != '' AND crm_id = '' AND created_at >= ? LIMIT 100`, [new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)]);
     if (noNum.length) out.push({ crmNums: await fillCrmIds(noNum).catch(() => 0) });
+    out.push({ crmStatus: await refreshCrmStatus().catch(() => 0) });
     // Нові ТТН — одразу шукаємо їх у LP-CRM (лише точний збіг ТТН).
     if (out.some((x) => x.saved)) {
       const since = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
@@ -322,6 +323,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     else if (st === 'nocrm') where.push(`o.crm_id = '' AND o.crm_code = '' AND o.status NOT IN ('deleted', 'closed', 'delivery_refused')`);
     else if (st === 'docs') where.push(`o.document_link != ''`);
     else if (st === 'noinv') where.push(`o.status IN ('confirmed', 'problem') AND o.invoice_no = '' AND o.ttn = ''`);
+    else if (st === 'crmnew') where.push(`o.crm_new = 1`);
     else if (st === 'ready') where.push(`o.status IN ('confirmed', 'problem') AND o.ttn = '' AND o.uzd_status IN ('verified', 'skipped')`);
     else if (st && RZS_STATUS[st]) { where.push('o.status = ?'); params.push(st); }
     // LIKE у SQLite не зважає на регістр лише для латиниці — для кирилиці пробуємо «як є», малими і з великої.
@@ -334,7 +336,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     }
     const [rows, counts, accs] = await Promise.all([
       db.all(`SELECT o.*, a.name AS account FROM rzs_orders o LEFT JOIN rzs_accounts a ON a.id = o.account_id WHERE ${where.join(' AND ')} ORDER BY o.created_at DESC LIMIT 300`, params),
-      db.all(`SELECT status, COUNT(*) AS n FROM rzs_orders WHERE created_at >= ? GROUP BY status`, [since]),
+      db.all(`SELECT status, COUNT(*) AS n FROM rzs_orders WHERE created_at >= ? GROUP BY status UNION ALL SELECT 'crmnew', COUNT(*) FROM rzs_orders WHERE created_at >= ? AND crm_new = 1`, [since, since]),
       db.all(`SELECT id, name, synced_at, hook_at, sync_error, sync_error_at FROM rzs_accounts WHERE active = 1`),
     ]);
     const pm = await prodMap(rows);
@@ -524,6 +526,52 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     if (st.length) await db.batch(st);
     return out;
   }
+  // Статуси замовлень у LP-CRM для прив'язаних замовлень Розетки (один запит на 100; назви статусів — кеш на добу).
+  async function crmStatusNames(creds) {
+    const row = await db.get(`SELECT value FROM settings WHERE key = 'statuses_cache'`);
+    let cache = null;
+    try { cache = row?.value ? JSON.parse(row.value) : null; } catch { /* */ }
+    if (cache?.map && cache.sub === creds.subdomain && Date.now() - cache.at < 86400000) return cache.map;
+    const map = await getStatuses(fetchFn, creds);
+    await db.run(`INSERT INTO settings (key, value) VALUES ('statuses_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify({ at: Date.now(), sub: creds.subdomain, map })]);
+    return map;
+  }
+  const CRM_CHECK_MS = 10 * 60e3;
+  async function refreshCrmStatus({ force = false } = {}) {
+    const s = await loadSettings(db);
+    if (!s.lpcrm_subdomain || !s.lpcrm_key) return 0;
+    const creds = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
+    const border = new Date(Date.now() - (force ? 60e3 : CRM_CHECK_MS)).toISOString();
+    const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    const rows = await db.all(`SELECT id, crm_id, crm_code FROM rzs_orders WHERE (crm_code != '' OR crm_id != '') AND created_at >= ? AND crm_checked_at < ?
+      ORDER BY crm_checked_at LIMIT 100`, [since, border]);
+    if (!rows.length) return 0;
+    // Прив'язані вручну за номером — код дізнаємося з даних LP-CRM, що вже є в сервісі.
+    for (const r of rows.filter((x) => !x.crm_code)) {
+      r.crm_code = String((await db.get(`SELECT code FROM an_orders WHERE id = ?`, [Number(r.crm_id)]).catch(() => null))?.code
+        || (await db.get(`SELECT code FROM order_keys WHERE k = ? LIMIT 1`, [r.crm_id]).catch(() => null))?.code || '');
+    }
+    const known = rows.filter((r) => r.crm_code);
+    const [found, names] = await Promise.all([
+      known.length ? getOrdersBatch(fetchFn, creds, known.map((r) => r.crm_code)) : [],
+      crmStatusNames(creds).catch(() => ({})),
+    ]);
+    const now = nowIso();
+    const st = rows.filter((r) => !r.crm_code).map((r) => [`UPDATE rzs_orders SET crm_checked_at = ? WHERE id = ?`, [now, r.id]]);
+    for (const r of known) {
+      const o = found.find((x) => String(x.order_id) === r.crm_code);
+      const sid = o ? String(o.status ?? o.status_id ?? '') : '';
+      const name = o ? String((names[sid]?.name ?? names[sid]) || sid || '').trim() : 'не знайдено в LP-CRM';
+      const num = o && /^\d+$/.test(String(o.id ?? '')) ? String(o.id) : r.crm_id;
+      st.push([`UPDATE rzs_orders SET crm_status = ?, crm_new = ?, crm_checked_at = ?, crm_code = ?, crm_id = ? WHERE id = ?`, [name, /^нов/i.test(name) ? 1 : 0, now, r.crm_code, num || '', r.id]]);
+    }
+    if (st.length) await db.batch(st);
+    return known.length;
+  }
+  app.post('/api/rzs/crm-status', async (c) => {
+    need(c, 'docs.view');
+    return c.json({ checked: await refreshCrmStatus({ force: true }) });
+  });
   async function fillCrmIds(rows) {
     const s = await loadSettings(db);
     if (!s.lpcrm_subdomain || !s.lpcrm_key) return 0;
