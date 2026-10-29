@@ -5,7 +5,7 @@ import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../c
 
 const ST_CLS = { new: 'warn', updated: 'warn', confirmed: 'info', shipping: 'info', problem: 'bad', closed: 'ok', delivery_refused: 'bad', deleted: 'bad', shipped_from_rozetka: 'ok' };
 const UZD_CLS = { verified: 'ok', skipped: 'ok', problem: 'bad', not_uploaded: '' };
-const VIEWS = { '': 'Усі', todo: 'До підтвердження', nottn: 'Без ТТН', nocrm: 'Не в LP-CRM', docs: 'З документами' };
+const VIEWS = { '': 'Усі', todo: 'До підтвердження', noinv: 'Чекає рахунок', ready: 'Можна створити ТТН', nottn: 'Без ТТН', nocrm: 'Не в LP-CRM', docs: 'З документами' };
 const GAP_MS = 2000; // пауза між замовленнями в групових діях
 const RETRY_MS = [5000, 10000, 20000]; // якщо Розетка все ж відповіла «забагато запитів»
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -32,10 +32,10 @@ export function createRetailPages(ctx) {
         ${Object.entries(VIEWS).map(([k, v]) => `<button class="chip ${filter.view === k ? 'on' : ''}" data-v="${k}">${esc(v)}</button>`).join('')}
         ${Object.entries(statuses).filter(([k]) => counts[k]).map(([k, v]) => `<button class="chip ${filter.view === k ? 'on' : ''}" data-v="${k}">${esc(v)} · ${counts[k]}</button>`).join('')}
       </div>
-      <div class="btn-row" style="margin-bottom:10px"><input id="rzQ" placeholder="№ Розетки, клієнт, телефон, ТТН" value="${esc(filter.q)}" style="max-width:320px"></div>
+      <div class="btn-row" style="margin-bottom:10px"><input id="rzQ" placeholder="№ Розетки, клієнт, телефон, ТТН, рахунок" value="${esc(filter.q)}" style="max-width:320px"></div>
       <div id="rzBulk" class="btn-row card" hidden style="position:sticky;top:8px;z-index:5;margin-bottom:10px;padding:8px 12px;flex-wrap:wrap;align-items:center"></div>
       ${rows.length ? `<div class="table-wrap"><table class="list"><thead><tr><th style="width:34px"><input type="checkbox" id="rzAll" aria-label="Обрати всі"></th>
-        <th>№ / дата</th><th>Клієнт</th><th class="hide-m">Товари</th><th class="r">Післяплата</th><th>Статус</th><th>ТТН</th><th>Документи</th><th class="hide-m">LP-CRM</th></tr></thead><tbody>
+        <th>№ / дата</th><th>Клієнт</th><th class="hide-m">Товари</th><th class="r">Післяплата</th><th>Статус</th><th>ТТН</th><th>Рахунок (Вчасно)</th><th>Документи</th><th class="hide-m">LP-CRM</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click" data-o="${esc(o.id)}">
           <td data-nosel><input type="checkbox" data-sel="${esc(o.id)}" aria-label="Обрати"></td>
           <td><b>${esc(o.order_num || o.id.slice(0, 8))}</b><div class="small muted">${esc(fmtDateTime(o.created_at.replace(' ', 'T')))}</div>${accounts.length > 1 ? `<div class="small muted">${esc(o.account || '')}</div>` : ''}</td>
@@ -44,8 +44,9 @@ export function createRetailPages(ctx) {
           <td class="r nowrap">${o.cod ? money(o.cod) : '—'}</td>
           <td><span class="badge ${ST_CLS[o.status] || ''}">${esc(o.status_name)}</span>${o.uzd_name ? `<div><span class="badge ${UZD_CLS[o.uzd_status] || ''}" style="font-size:11px">${esc(o.uzd_name)}</span></div>` : ''}</td>
           <td class="small nowrap">${o.ttn ? `<b>${esc(o.ttn)}</b>${o.tracking_status ? `<div class="muted">${esc(o.tracking_status)}</div>` : ''}` : '—'}${o.return_ttn ? `<div class="badge bad">повернення ${esc(o.return_ttn)}</div>` : ''}</td>
-          <td class="small" data-nosel>${o.document_link ? `<a class="badge ok" href="${esc(o.document_link)}" target="_blank" rel="noopener">📄 є</a>` : o.invoice_no ? '<span class="badge ok">📄 є</span>' : '<span class="muted">ще немає</span>'}
-            ${o.docs_at ? `<div class="muted">${esc(fmtDateTime(o.docs_at))}</div>` : ''}${o.invoice_no ? `<div class="muted">рах. ${esc(o.invoice_no)}</div>` : ''}</td>
+          <td class="small nowrap">${o.invoice_no ? `<b>${esc(o.invoice_no)}</b>` : '<span class="muted">—</span>'}</td>
+          <td class="small" data-nosel>${o.document_link ? `<a class="badge ok" href="${esc(o.document_link)}" target="_blank" rel="noopener">📄 є</a>` : '<span class="muted">ще немає</span>'}
+            ${o.docs_at ? `<div class="muted">${esc(fmtDateTime(o.docs_at))}</div>` : ''}</td>
           <td class="small hide-m">${o.crm_id ? `№ <b>${esc(o.crm_id)}</b>` : o.crm_code ? 'передано' : '—'}</td>
         </tr>`).join('')}</tbody></table></div>`
         : '<div class="card empty"><div class="big">Замовлень немає</div>Нові замовлення Розетки з’являються тут автоматично (вебхук) або кнопкою «Оновити з Розетки».</div>'}`;
@@ -329,12 +330,15 @@ export function createRetailPages(ctx) {
           <div class="head-row" style="margin:0"><h3 style="margin:0">${esc(a.name)} ${a.active ? '' : '<span class="badge bad">вимкнено</span>'}</h3><button class="btn sm" data-ae="${a.id}">Змінити</button></div>
           <div class="small">Токен ${esc(a.token)} · відділ LP-CRM ${esc(a.crm_office || '<не вказано>')} · доставка LP-CRM ${esc(a.crm_delivery || '—')}
             · оновлено ${a.synced_at ? esc(fmtDateTime(a.synced_at)) : '—'} · вебхук ${a.hook_at ? esc(fmtDateTime(a.hook_at)) : 'ще не надходив'}</div>
+          <div class="small">🔔 Telegram: ${[a.notify_inv ? 'з’явився рахунок' : '', a.notify_ttn ? 'можна створити ТТН' : ''].filter(Boolean).join(', ') || 'вимкнено'}${(a.notify_inv || a.notify_ttn) ? ` → ${a.notify_users.length ? `${a.notify_users.length} корист.` : 'власник і адміністратори'}` : ''}</div>
           <div class="f"><span>Вебхук для Кабінету Розетки (Налаштування → Вебхуки)</span>
             <div class="grid2"><div class="pl-url"><input readonly value="${esc(a.hook.url)}" aria-label="URL вебхука"><button type="button" class="btn sm" data-cp="${esc(a.hook.url)}">Копіювати</button></div>
               <div class="pl-url"><input readonly value="${esc(a.hook.user)}" aria-label="Логін"><button type="button" class="btn sm" data-cp="${esc(a.hook.user)}">Логін</button><input readonly value="${esc(a.hook.pass)}" aria-label="Пароль"><button type="button" class="btn sm" data-cp="${esc(a.hook.pass)}">Пароль</button></div></div></div>
         </div>`).join('') : '<div class="card empty"><div class="big">Кабінет ще не підключено</div>Натисніть «Підключити кабінет» і вставте токен.</div>'}`;
     $$('[data-cp]').forEach((b) => (b.onclick = async () => { try { await navigator.clipboard.writeText(b.dataset.cp); toast('Скопійовано'); } catch { toast('Не вдалося скопіювати', true); } }));
-    const form = (a) => {
+    const form = async (a) => {
+      const users = await api('GET', '/api/rzs/notify-users').catch(() => []);
+      const sel = new Set((a?.notify_users || []).map(Number));
       const m = modal(a ? `Кабінет «${a.name}»` : 'Підключити кабінет постачальника Розетки', `<form id="raF" class="form-stack">
           <label class="f"><span>Назва</span><input name="name" value="${esc(a?.name || '')}" placeholder="Напр. Ековент на Розетці"></label>
           <label class="f"><span>Токен (JWT)</span><input name="token" value="${esc(a?.token || '')}" autocomplete="off" placeholder="Кабінет постачальника → Налаштування → Токени"></label>
@@ -342,12 +346,22 @@ export function createRetailPages(ctx) {
           <div class="grid2"><label class="f"><span>ID доставки в LP-CRM (Нова пошта — 1)</span><input name="crm_delivery" value="${esc(a?.crm_delivery ?? '1')}" inputmode="numeric"></label>
             <label class="f"><span>Сайт-джерело в LP-CRM</span><input name="crm_site" value="${esc(a?.crm_site || '')}" placeholder="rozetka.com.ua"></label></div>
           <label class="f"><span>«Додаткове поле 1» в LP-CRM</span><input name="crm_field1" value="${esc(a ? a.crm_field1 ?? '' : 'Riteil(Rozetka)')}" placeholder="Riteil(Rozetka)"><span class="small muted">Заповнюється в кожному замовленні Розетки, переданому в LP-CRM (порожньо — не заповнювати).</span></label>
+          <fieldset class="card form-stack" style="margin:0"><legend class="small"><b>🔔 Сповіщення в Telegram-бот</b></legend>
+            <label class="check"><input type="checkbox" name="notify_inv" ${a?.notify_inv ? 'checked' : ''}> З’явився вхідний рахунок (Вчасно) — після підтвердження замовлення</label>
+            <label class="check"><input type="checkbox" name="notify_ttn" ${a?.notify_ttn ? 'checked' : ''}> Можна створювати ТТН — документи звірено (ЮЗД)</label>
+            <div class="small muted">Кому (нікого не вибрано — власник і адміністратори з підключеним ботом):</div>
+            <div class="form-stack" style="gap:2px;max-height:180px;overflow:auto">${users.map((u) => `<label class="check"><input type="checkbox" name="nu" value="${u.id}" ${sel.has(u.id) ? 'checked' : ''}> ${esc(u.name)}${u.admin ? ' <span class="small muted">· адмін</span>' : ''}${u.tg ? '' : ' <span class="badge warn" style="font-size:11px">бот не підключено</span>'}</label>`).join('')}</div>
+          </fieldset>
           ${a ? `<label class="check"><input type="checkbox" name="active" ${a.active ? 'checked' : ''}> Увімкнено</label><label class="check"><input type="checkbox" name="new_hook_pass"> Новий пароль вебхука</label>` : ''}
         </form>`, { footer: `${a ? '<button class="btn danger" id="raDel" style="margin-right:auto">Видалити</button>' : ''}<button class="btn" data-close>Скасувати</button><button class="btn primary" id="raSave">Зберегти</button>` });
       $('#raSave', m.el).onclick = async (e) => {
         const f = $('#raF', m.el);
         const d = Object.fromEntries(new FormData(f));
         if (a) { d.active = f.active.checked; d.new_hook_pass = f.new_hook_pass.checked; }
+        d.notify_inv = f.notify_inv.checked;
+        d.notify_ttn = f.notify_ttn.checked;
+        d.notify_users = $$('[name=nu]', m.el).filter((x) => x.checked).map((x) => Number(x.value));
+        delete d.nu;
         e.currentTarget.disabled = true;
         try { await api(a ? 'PUT' : 'POST', a ? `/api/rzs/accounts/${a.id}` : '/api/rzs/accounts', d); m.close(); toast('Збережено'); viewSettings(); }
         catch (er) { toast(er.message, true); e.target.closest('button').disabled = false; }

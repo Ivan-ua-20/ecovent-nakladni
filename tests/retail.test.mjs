@@ -27,12 +27,14 @@ const ORDERS = new Map([
     products: [{ supplierCode: 'EV-200', rzCode: 778, quantity: 1, cargoSeats: [] }] }],
 ]);
 let tooMany = false;
+const tg = [];
 // Замовлення LP-CRM (код → номер, ТТН, телефон) — для пошуку прив'язки за ТТН.
 const CRM = new Map([['1761400000000111', { id: '70001', status: '1', ttn: '20400558101410', phone: '0971089181', bayer_name: 'Попелянська' }], ['1761400000000222', { id: '70002', ttn: '', phone: '0508846132', bayer_name: 'Підопличко' }]]);
 const calls = { list: 0, confirm: [], ttn: [], print: [], price: [], crm: [] };
 const json = (o, status = 200) => new Response(JSON.stringify(o), { status });
 const fetchFn = async (url, opts = {}) => {
   const u = new URL(url);
+  if (u.hostname === 'api.telegram.org') { tg.push(JSON.parse(opts.body)); return json({ ok: true, result: { message_id: 1 } }); }
   if (u.hostname.endsWith('lp-crm.biz')) {
     const method = u.pathname.match(/\/api\/(\w+)\.html/)[1];
     const p = Object.fromEntries(new URLSearchParams(opts.body));
@@ -250,11 +252,43 @@ assert.equal(inv.versionsCount, 0, 'версії накладної не збе�
 const fr2 = await req('POST', '/api/rzs/crm-find', { ids: [R3] });
 assert.equal(fr2.checked, 0, 'вже прив’язані не перевіряються');
 
+// ---------- 8в. Сповіщення в Telegram: з'явився вхідний рахунок; можна створювати ТТН ----------
+await raw.batch([
+  [`INSERT INTO settings (key, value) VALUES ('tg_token', '1:x') ON CONFLICT(key) DO UPDATE SET value = excluded.value`, []],
+  [`UPDATE users SET tg_chat_id = '100' WHERE login = 'o'`, []],
+]);
+const nu = await req('GET', '/api/rzs/notify-users');
+assert.ok(nu.some((u) => u.tg && u.admin), 'список отримувачів — з позначкою, чи підключено бота');
+await req('PUT', `/api/rzs/accounts/${acc.id}`, { notify_inv: true, notify_ttn: true });
+const ID6 = '11111111-aaaa-4bbb-8ccc-000000000006';
+ORDERS.set(ID6, { orderId: ID6, orderNum: '900006', createdAt: `${now} 13:00:00`, orderStatus: 'confirmed', uzdStatus: 'not_uploaded', customerName: 'Нотифікація Тест',
+  deliveryCity: 'Київ', deliveryPhone: '0501110006', products: [{ supplierCode: 'EV-100', quantity: 1, cargoSeats: [] }] });
+tg.length = 0;
+await req('POST', '/api/rzs/sync', { force: true });
+assert.equal(tg.length, 0, 'перше завантаження замовлення — без сповіщень');
+assert.equal((await req('GET', '/api/rzs/orders?status=noinv')).rows.some((r) => r.id === ID6), true, 'фільтр «Чекає рахунок»');
+ORDERS.get(ID6).incomingInvoiceNumber = 'РО360700001';
+await req('POST', '/api/rzs/sync', { force: true });
+assert.equal(tg.length, 1);
+assert.ok(tg[0].text.includes('вхідний рахунок') && tg[0].text.includes('РО360700001') && tg[0].text.includes('900006'), tg[0].text);
+assert.equal(String(tg[0].chat_id), '100', 'нікого не вибрано — власник і адміни');
+ORDERS.get(ID6).uzdStatus = 'verified';
+await req('POST', '/api/rzs/sync', { force: true });
+assert.equal(tg.length, 2);
+assert.ok(tg[1].text.includes('можна створювати ТТН') && tg[1].text.includes('900006'), tg[1].text);
+assert.equal((await req('GET', '/api/rzs/orders?status=ready')).rows.map((r) => r.id).join(), ID6, 'фільтр «Можна створити ТТН»');
+await req('POST', '/api/rzs/sync', { force: true });
+assert.equal(tg.length, 2, 'повторно не надсилається');
+assert.equal((await req('GET', '/api/rzs/orders?q=РО3607')).rows.length, 1, 'пошук за № рахунку');
+const accN = (await req('GET', '/api/rzs/accounts'))[0];
+assert.deepEqual([accN.notify_inv, accN.notify_ttn, accN.notify_users], [true, true, []]);
+ORDERS.delete(ID6);
+
 // ---------- 9. Права ----------
 await req('POST', '/api/users', { login: 'viewer', password: 'pass1234', role: 'viewer' });
 const vl = await mk().request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: 'viewer', password: 'pass1234' }) });
 const VH = { 'Content-Type': 'application/json', Cookie: vl.headers.get('set-cookie').split(';')[0] };
-assert.equal((await req('GET', '/api/rzs/orders', undefined, VH)).rows.length, 5, 'перегляд бачить замовлення');
+assert.equal((await req('GET', '/api/rzs/orders', undefined, VH)).rows.length, 6, 'перегляд бачить замовлення');
 assert.equal(await status(() => req('GET', '/api/rzs/accounts', undefined, VH)), 403, 'кабінети — лише власник/адміни');
 assert.equal(await status(() => req('POST', `/api/rzs/orders/${ID2}/crm`, {}, VH)), 403);
 assert.equal(await status(() => req('PUT', '/api/rzs/products/EV-200', { purchase_price: 1 }, VH)), 403);
