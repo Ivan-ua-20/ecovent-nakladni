@@ -1,7 +1,7 @@
 // Рітейл → Розетка (кабінет постачальника): замовлення дропшипінгу з груповими діями (підтвердити, ТТН, маркування,
 // у LP-CRM), товари й ціни закупівлі (завантаження з Кабінету, прайс на Розетку не відправляємо), налаштування кабінетів і вебхука.
 import { esc, money } from '../invoice.js';
-import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
+import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime, takeHashQuery } from '../core/ui.js';
 
 const ST_CLS = { new: 'warn', updated: 'warn', confirmed: 'info', shipping: 'info', problem: 'bad', closed: 'ok', delivery_refused: 'bad', deleted: 'bad', shipped_from_rozetka: 'ok' };
 const UZD_CLS = { verified: 'ok', skipped: 'ok', problem: 'bad', not_uploaded: '' };
@@ -63,6 +63,8 @@ export function createRetailPages(ctx) {
     }).catch(() => 0);
   }
   async function viewOrders() {
+    const hq = takeHashQuery();
+    if (hq != null) filter = { view: '', q: hq };
     bgSync();
     const qs = new URLSearchParams(Object.entries({ status: filter.view, q: filter.q }).filter(([, v]) => v)).toString();
     const d = await api('GET', `/api/rzs/orders${qs ? `?${qs}` : ''}`);

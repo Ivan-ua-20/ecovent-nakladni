@@ -14,9 +14,10 @@ export function createB2bPages(ctx = {}) {
   // ---------------------------------------------------------------- партнери
   // Список партнерів: фільтри, пошук, галочки і групові дії (зміни цін, оголошення, пауза, ліміти, маржа, Excel, видалення).
   const pFilter = { st: '', q: '' };
-  const P_ST = { '': 'Усі', active: 'Активні', paused: 'На паузі', debt: 'З боргом', overdue: 'Прострочено', postpay: 'З відстрочкою', off: 'Вимкнені' };
+  const P_ST = { '': 'Усі', mine: 'Мої', active: 'Активні', paused: 'На паузі', debt: 'З боргом', overdue: 'Прострочено', postpay: 'З відстрочкою', off: 'Вимкнені' };
   const pMatch = (p) => {
     const st = pFilter.st;
+    if (st === 'mine' && p.manager_id !== ctx.boot?.user?.id) return false;
     if (st === 'active' && !(p.active && !p.paused)) return false;
     if (st === 'paused' && !p.paused) return false;
     if (st === 'debt' && !p.debt) return false;
@@ -35,7 +36,7 @@ export function createB2bPages(ctx = {}) {
     const rows = all.filter(pMatch);
     const cnt = (k) => { const f = pFilter.st; pFilter.st = k; const n = all.filter(pMatch).length; pFilter.st = f; return n; };
     main.innerHTML = `
-      <div class="head-row"><h2>B2B партнери</h2><div class="btn-row"><button class="btn" id="pAnn">📢 Оголошення партнерам</button><button class="btn primary" id="pNew">+ Новий партнер</button></div></div>
+      <div class="head-row"><h2>B2B партнери</h2><div class="btn-row"><button class="btn" id="pAuto">Автопауза…</button><button class="btn" id="pAnn">📢 Оголошення партнерам</button><button class="btn primary" id="pNew">+ Новий партнер</button></div></div>
       <div class="alert info help" style="margin-bottom:14px">Партнер бачить лише свій кабінет: каталог увімкнених йому брендів з РРЦ і своєю ціною (РРЦ − маржа).
         За замовчуванням партнер не бачить жодного бренду — увімкніть бренди й задайте маржу в картці партнера. Позначте кількох партнерів галочками — з'являться групові дії.</div>
       ${all.length ? `<div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap">${Object.entries(P_ST).map(([k, v]) => {
@@ -62,6 +63,17 @@ export function createB2bPages(ctx = {}) {
     $$('[data-nosel]').forEach((td) => (td.onclick = (e) => e.stopPropagation()));
     $('#pNew').onclick = () => partnerForm(null);
     $('#pAnn').onclick = () => announce();
+    $('#pAuto').onclick = async () => {
+      const { days } = await api('GET', '/api/b2b/autopause');
+      const m = modal('Автопауза при простроченні', `<form id="apF" class="form-stack">
+          <p style="margin:0">Якщо оплату закупівлі прострочено довше, ніж вказано, партнер автоматично стає на паузу: кабінет працює, але нові закупівлі й замовлення не приймаються.
+            Після оплати пауза знімається сама. Знята вручну автопауза не ставиться знову 7 днів.</p>
+          <label class="f">Днів прострочки (0 — вимкнено)<input id="apDays" type="number" min="0" max="365" value="${days}"></label>
+        </form>`, { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="apSave">Зберегти</button>' });
+      $('#apSave', m.el).onclick = async () => {
+        try { const r = await api('PUT', '/api/b2b/autopause', { days: $('#apDays', m.el).value }); m.close(); toast(r.days ? `Автопауза: понад ${r.days} дн. прострочки` : 'Автопаузу вимкнено'); } catch (e) { toast(e.message, true); }
+      };
+    };
     $$('[data-pst]').forEach((b) => (b.onclick = () => { pFilter.st = b.dataset.pst; viewPartners(); }));
     let qt;
     $('#pQ') && ($('#pQ').oninput = (e) => { clearTimeout(qt); qt = setTimeout(async () => { pFilter.q = e.target.value; await viewPartners(); const el = $('#pQ'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 300); });
@@ -242,7 +254,7 @@ export function createB2bPages(ctx = {}) {
     const { partner: p, users, brands, entities = [], roles = {}, limits, postpay, debt } = await api('GET', `/api/b2b/partners/${id}`);
     const byPartner = users.filter((u) => u.added_by_partner).length;
     main.innerHTML = `
-      <div class="head-row"><h2>${esc(p.name)} ${p.active ? '' : '<span class="badge bad">вимкнений</span>'}${p.paused ? ' <span class="badge warn">⏸ пауза</span>' : ''}</h2>
+      <div class="head-row"><h2>${esc(p.name)} ${p.active ? '' : '<span class="badge bad">вимкнений</span>'}${p.paused ? ` <span class="badge warn">⏸ ${p.paused_auto ? 'автопауза: прострочка' : 'пауза'}</span>` : ''}</h2>
         <div class="btn-row"><a class="btn" href="#/b2bpartners">← До списку</a><button class="btn" id="pEdit">Змінити</button><button class="btn" id="pPause">${p.paused ? '▶ Зняти паузу' : '⏸ Пауза'}</button>${people() ? '<button class="btn danger" id="pDel">Видалити</button>' : ''}</div></div>
       <div class="form-page">
         <div class="form-stack">
@@ -290,6 +302,18 @@ export function createB2bPages(ctx = {}) {
             ${p.note ? `<div class="small muted">${esc(p.note)}</div>` : ''}
           </div>
           <div class="card form-stack">
+            <h3>Менеджер і нотатки</h3>
+            <label class="f">Відповідальний менеджер<select id="pMgr"><option value="">— не призначено —</option></select></label>
+            <form id="noteF" class="form-stack" style="gap:6px">
+              <textarea id="noteText" rows="2" placeholder="Домовленість, дзвінок, що треба зробити…" aria-label="Текст нотатки"></textarea>
+              <div class="btn-row" style="align-items:flex-end">
+                <label class="f" style="flex:0 1 170px">Нагадати<input type="date" id="noteDate"></label>
+                <button class="btn primary" type="submit">Додати нотатку</button>
+              </div>
+            </form>
+            <div id="notes" class="note-list"><span class="small muted">Завантаження…</span></div>
+          </div>
+          <div class="card form-stack">
             <div class="head-row" style="margin:0"><h3 style="margin:0">Користувачі партнера</h3>${people() ? '<button class="btn sm primary" id="uNew">+ Користувач</button>' : ''}</div>
             <div class="small muted">Усього: ${users.length}${byPartner ? ` · додав сам партнер: <b>${byPartner}</b>` : ''}. Керівник партнера може сам додавати колег у вкладці «Команда» свого кабінету.</div>
             ${users.length ? teamTable(users, { editable: people() })
@@ -314,6 +338,35 @@ export function createB2bPages(ctx = {}) {
         </div>
       </div>`;
     $('#pEdit').onclick = () => partnerForm(p);
+    // Менеджер і нотатки
+    api('GET', '/api/b2b/managers').then((list) => {
+      const sel = $('#pMgr');
+      if (!sel) return;
+      sel.insertAdjacentHTML('beforeend', list.map((m) => `<option value="${m.id}" ${m.id === p.manager_id ? 'selected' : ''}>${esc(m.name)}</option>`).join(''));
+      sel.onchange = async () => { try { await api('PUT', `/api/b2b/partners/${p.id}/manager`, { manager_id: sel.value || null }); toast('Менеджера збережено'); } catch (e) { toast(e.message, true); } };
+    }).catch(() => 0);
+    const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Kyiv' });
+    const drawNotes = async () => {
+      const box = $('#notes');
+      if (!box) return;
+      const list = await api('GET', `/api/b2b/partners/${p.id}/notes`);
+      box.innerHTML = list.length ? list.map((n) => `<div class="note ${n.done ? 'done' : ''} ${!n.done && n.remind_at && n.remind_at <= today ? 'due' : ''}">
+          <label class="check"><input type="checkbox" data-ndone="${n.id}" ${n.done ? 'checked' : ''} aria-label="Виконано"></label>
+          <div class="note-body"><div>${esc(n.text)}</div><div class="small muted">${esc(n.user_name)} · ${fmtDateTime(n.created_at)}${n.remind_at ? ` · нагадати ${n.remind_at.split('-').reverse().join('.')}` : ''}</div></div>
+          <button class="btn sm icon" data-ndel="${n.id}" aria-label="Видалити нотатку">✕</button></div>`).join('')
+        : '<span class="small muted">Нотаток ще немає.</span>';
+      for (const cb of box.querySelectorAll('[data-ndone]')) cb.onchange = async () => { await api('PUT', `/api/b2b/notes/${cb.dataset.ndone}`, { done: cb.checked }); drawNotes(); };
+      for (const b of box.querySelectorAll('[data-ndel]')) b.onclick = async () => { await api('DELETE', `/api/b2b/notes/${b.dataset.ndel}`); drawNotes(); };
+    };
+    drawNotes().catch((e) => toast(e.message, true));
+    $('#noteF').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        await api('POST', `/api/b2b/partners/${p.id}/notes`, { text: $('#noteText').value, remind_at: $('#noteDate').value });
+        $('#noteText').value = ''; $('#noteDate').value = '';
+        drawNotes();
+      } catch (er) { toast(er.message, true); }
+    };
     $('#tgGrp').onclick = async () => {
       try {
         const { code, bot } = await api('POST', `/api/b2b/partners/${p.id}/tg-group`);

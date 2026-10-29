@@ -17,6 +17,7 @@ import { mountB2bTgDocs } from './tgdocs.js';
 import { mountB2bPay } from './odbpay.js';
 import { mountB2bEdits } from './edits.js';
 import { mountB2bHome } from './home.js';
+import { mountB2bCrm } from './crm.js';
 
 export const partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 
@@ -187,7 +188,8 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     const v = b.paused ? 1 : 0;
     const note = v ? String(b.pause_note ?? p.pause_note ?? '').trim().slice(0, 300) : '';
     if (v === (Number(p.paused) || 0) && note === (p.pause_note || '')) return 0;
-    await db.run(`UPDATE b2b_partners SET paused = ?, pause_note = ? WHERE id = ?`, [v, note, p.id]);
+    // Ручна пауза чи зняття — вже не автоматична; зняту вручну автопауза не ставить знову 7 днів (pause_override).
+    await db.run(`UPDATE b2b_partners SET paused = ?, pause_note = ?, paused_auto = 0, pause_override = ? WHERE id = ?`, [v, note, v ? '' : kyivDay(), p.id]);
     await audit(c, p.id, v ? `партнера поставлено на паузу${note ? `: ${note}` : ''}` : 'паузу знято');
     return 1;
   }
@@ -565,6 +567,8 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   onCleanup(() => hooks.cleanup?.());
   mountB2bStats(app, { db, myPartner });
   const home = mountB2bHome(app, { db, myPartner, orders });
+  const crm = mountB2bCrm(app, { db, services, onCleanup });
+  const attention = async (user) => [...await home.attention(), ...await crm.attention(user)];
   mountB2bPrices(app, { db, services, partnerPrice });
 
   // ---------- Telegram-група партнера ----------
@@ -595,5 +599,5 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   const tgGroupMoved = (from, to) => db.run(`UPDATE b2b_partners SET tg_group = ? WHERE tg_group = ?`, [to, from]);
   const tgGroupLeft = (chat) => db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '' WHERE tg_group = ?`, [chat]);
 
-  return { attention: home.attention, crmOrderInfo: orders.crmOrderInfo, partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupMessage: tgdocs.tgGroupMessage, onPayments: pay.onPayments, payInfo: pay.payInfo };
+  return { attention, search: home.search, autopause: crm.autopause, crmOrderInfo: orders.crmOrderInfo, partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupMessage: tgdocs.tgGroupMessage, onPayments: pay.onPayments, payInfo: pay.payInfo };
 }

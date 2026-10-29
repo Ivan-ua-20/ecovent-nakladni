@@ -1,6 +1,6 @@
 // Головна B2B: що потребує дій адміністратора (для черги на головній сайту), головна кабінету партнера
 // і виписка взаєморозрахунків (рахунки закупівель і оплати з залишком на кожну дату).
-import { fail, need, round2, kyivDay } from '../../core/common.js';
+import { fail, need, round2, kyivDay, likeVariants } from '../../core/common.js';
 import { orderNo, DEBT } from './orders.js';
 
 const today = () => kyivDay();
@@ -97,5 +97,25 @@ export function mountB2bHome(app, { db, myPartner, orders }) {
     return c.json({ partner: p.name, ...(await statement(p.id, c.req.query('from') || '', c.req.query('to') || '')) });
   });
 
-  return { attention };
+  // ---------- пошук по сайту: закупівлі, замовлення клієнтів (№, клієнт, телефон, ТТН, рахунок), партнери ----------
+  async function search(q) {
+    const s = String(q || '').trim();
+    const digits = s.replace(/\D/g, '');
+    const v = likeVariants(s);
+    const id = Number((/^(?:b2b-?)?(\d{1,7})$/i.exec(s) || [])[1]) || 0; // «B2B-15» або «15» (у «B2B» теж є цифра)
+    const [orders, partners] = await Promise.all([
+      db.all(`SELECT o.id, o.kind, o.status, o.total, o.client_name, o.ttn, o.invoice_no, p.name AS partner FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id
+        WHERE o.id = ? OR o.invoice_no = ? ${digits.length >= 5 ? 'OR o.ttn LIKE ? OR o.client_phone LIKE ?' : ''} OR ${v.map(() => 'o.client_name LIKE ?').join(' OR ')}
+        ORDER BY o.id DESC LIMIT 8`, [id, s, ...(digits.length >= 5 ? [`%${digits}%`, `%${digits.slice(-9)}%`] : []), ...v]),
+      db.all(`SELECT id, name FROM b2b_partners WHERE COALESCE(deleted_at, '') = '' AND (${v.map(() => 'name LIKE ?').join(' OR ')}) ORDER BY name LIMIT 5`, v),
+    ]);
+    return [
+      ...partners.map((p) => ({ group: 'B2B партнери', title: p.name, sub: 'картка партнера', link: `#/b2bpartners/${p.id}` })),
+      ...orders.map((o) => ({ group: 'B2B', title: `${orderNo(o.id)} · ${o.partner}`,
+        sub: [o.kind === 'supply' ? 'закупівля' : `замовлення клієнта${o.client_name ? `: ${o.client_name}` : ''}`, o.invoice_no && `рахунок № ${o.invoice_no}`, o.ttn && `ТТН ${o.ttn}`].filter(Boolean).join(' · '),
+        link: `#/${o.kind === 'supply' ? 'b2borders' : 'b2bclients'}/${o.id}` })),
+    ];
+  }
+
+  return { attention, search };
 }

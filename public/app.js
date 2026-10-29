@@ -101,6 +101,11 @@ function renderNav(active = 'invoice') {
     <nav class="main-tabs" aria-label="Розділи">
       ${secs.map((sec) => `<a href="#/${homeOf(sec)}" class="${sec.id === cur.id ? 'active' : ''}">${esc(sec.label)}</a>`).join('')}
     </nav>
+    ${u?.role !== 'partner' ? `<div class="gsearch" role="search">
+      <label class="sr-only" for="gQ">Пошук по сайту</label>
+      <input id="gQ" type="search" autocomplete="off" placeholder="Пошук: №, ТТН, телефон, клієнт  ( / )">
+      <div id="gRes" class="gsearch-res" hidden></div>
+    </div>` : ''}
     <div class="top-user">
       ${can('api') && !s.lpcrm_key ? '<a href="#/settings" class="top-warn">LP-CRM не підключено</a>' : ''}
       <span><b>${esc(u?.name || '')}</b> · ${esc(u?.partner_role_name ? `Партнер · ${u.partner_role_name}` : (u?.role_name || ''))}</span>
@@ -118,7 +123,46 @@ function renderNav(active = 'invoice') {
   };
   $('#navPwd').onclick = (e) => { e.preventDefault(); changeOwnPassword(); };
   $('#navTg').onclick = (e) => { e.preventDefault(); tgDialog(); };
+  wireSearch();
 }
+
+// Пошук по всьому сайту: накладні, рахунки, B2B, Розетка (що видно за правами). «/» — перейти в поле пошуку.
+function wireSearch() {
+  const inp = $('#gQ');
+  const box = $('#gRes');
+  if (!inp) return;
+  let timer = 0;
+  let seq = 0;
+  const close = () => { box.hidden = true; };
+  const run = async () => {
+    const q = inp.value.trim();
+    if (q.length < 2) { close(); return; }
+    const my = ++seq;
+    let items = [];
+    try { ({ items } = await api('GET', `/api/search?q=${encodeURIComponent(q)}`)); } catch (e) { items = []; }
+    if (my !== seq) return;
+    const groups = [...new Set(items.map((x) => x.group))];
+    box.innerHTML = items.length
+      ? groups.map((g) => `<div class="gs-group">${esc(g)}</div>${items.filter((x) => x.group === g).map((x) => `<a class="gs-item" href="${esc(x.link)}"><b>${esc(x.title)}</b><span>${esc(x.sub || '')}</span></a>`).join('')}`).join('')
+      : `<div class="gs-empty">Нічого не знайдено за «${esc(q)}»${/^\d{4,}$/.test(q) ? ` · <a href="#/invoice/${encodeURIComponent(q)}">сформувати накладну за замовленням ${esc(q)}</a>` : ''}</div>`;
+    box.hidden = false;
+  };
+  inp.oninput = () => { clearTimeout(timer); timer = setTimeout(run, 250); };
+  inp.onfocus = () => { if (inp.value.trim().length >= 2 && box.innerHTML) box.hidden = false; };
+  inp.onkeydown = (e) => {
+    if (e.key === 'Escape') { close(); inp.blur(); }
+    if (e.key === 'Enter') { const first = box.querySelector('a'); if (first) { location.hash = first.getAttribute('href'); close(); } }
+  };
+  box.onclick = (e) => { if (e.target.closest('a')) { close(); inp.value = ''; } };
+}
+// Клік поза пошуком закриває результати (один обробник на всю сторінку — шапка перемальовується на кожному переході).
+document.addEventListener('click', (e) => { const box = $('#gRes'); if (box && !e.target.closest?.('.gsearch')) box.hidden = true; });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+  const inp = $('#gQ');
+  if (inp) { e.preventDefault(); inp.focus(); }
+});
 
 // Мій Telegram: підключення одним натисканням (бот сам отримує ID), для адмінів — що надсилати.
 async function tgDialog() {
@@ -126,7 +170,7 @@ async function tgDialog() {
   try { me = await api('GET', '/api/tg/me'); } catch (e) { toast(e.message, true); return; }
   const admin = can('users');
   const body = () => `
-    ${!me.bot ? `<div class="alert">Telegram-бота ще не підключено. ${can('api') ? 'Вставте токен бота в <a href="#/rsettings" data-close>«Рахунки Word → Налаштування рахунків»</a>.' : 'Зверніться до власника або адміністратора.'}</div>`
+    ${!me.bot ? `<div class="alert">Telegram-бота ще не підключено. ${can('api') ? 'Вставте токен бота в <a href="#/rsettings" data-close>«Налаштування → Налаштування рахунків»</a>.' : 'Зверніться до власника або адміністратора.'}</div>`
       : me.connected ? `<div class="alert info">✅ Telegram підключено до бота <b>@${esc(me.bot)}</b>. Сюди надходитимуть сповіщення про оплату рахунків, які ви створили.</div>`
         : `<p>Натисніть кнопку — відкриється бот <b>@${esc(me.bot)}</b>. Натисніть у ньому <b>«Start»</b> (або «Почати»), і ваш Telegram прив’яжеться до цього акаунта автоматично.</p>
           <div class="btn-row"><button class="btn primary" id="tgGo">Підключити Telegram</button></div><div class="small muted" id="tgWait"></div>`}
