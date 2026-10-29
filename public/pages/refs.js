@@ -18,7 +18,7 @@ async function viewFops(id) {
           <div class="name">${esc(f.short_name)}</div>
           <div class="muted small">${esc(f.full_name || 'ПІБ не вказано')}${f.ipn ? ' · ІПН ' + esc(f.ipn) : ''}</div>
           <div class="tags">
-            ${filled ? '<span class="badge ok">реквізити є</span>' : '<span class="badge warn">заповніть реквізити</span>'}
+            ${filled ? '<span class="badge ok">реквізити є</span>' : `<span class="badge warn">бракує: ${[!f.full_name && 'ПІБ', !f.ipn && 'ІПН', !f.iban && 'IBAN'].filter(Boolean).join(', ')}</span>`}
             ${f.has_checkbox ? '<span class="badge ok">Checkbox</span>' : '<span class="badge">без Checkbox</span>'}
             <span class="badge">${officeCount(f.id)} відд.</span>
             ${f.active ? '' : '<span class="badge bad">вимкнено</span>'}
@@ -342,7 +342,7 @@ async function viewInvFops(id) {
       return `<a class="card fop-card ${f.active ? '' : 'inactive'}" href="#/invfops/${f.id}" style="text-decoration:none;color:inherit">
         <div class="name">${esc(f.short_name)}</div>
         <div class="muted small">${esc(f.full_name || 'Повну назву не вказано')}</div>
-        <div class="tags">${ok ? '<span class="badge ok">реквізити є</span>' : '<span class="badge warn">заповніть реквізити</span>'}
+        <div class="tags">${ok ? '<span class="badge ok">реквізити є</span>' : `<span class="badge warn">бракує: ${[!f.full_name && 'повної назви', !f.ipn && 'ІПН', !f.iban && 'IBAN', !f.bank && 'банку', !f.address && 'адреси'].filter(Boolean).join(', ')}</span>`}
           ${f.signature ? '<span class="badge">підпис</span>' : ''}${f.stamp ? '<span class="badge">печатка</span>' : ''}
           ${f.odb_id ? '<span class="badge info">Opendatabot · QR</span>' : ''}${f.active ? '' : '<span class="badge bad">вимкнено</span>'}</div></a>`;
     }).join('')}</div>` : `<div class="card empty"><div class="big">Ще немає ФОПів для рахунків</div>Від цих ФОПів виставляються рахунки на оплату.${can('users') ? '<div class="btn-row" style="justify-content:center;margin-top:12px"><a class="btn primary" href="#/invfops/new">Додати ФОП</a></div>' : ''}</div>`}`;

@@ -88,12 +88,12 @@ export function createRetailPages(ctx) {
           <td>${esc(o.customer)}<div class="small muted">${esc([o.city, o.phone].filter(Boolean).join(' · '))}</div></td>
           <td class="small hide-m">${o.products.map((p) => `${esc(p.name || p.supplierCode)} × ${p.quantity}`).join('<br>')}</td>
           <td class="r nowrap">${o.cod ? money(o.cod) : '—'}</td>
-          <td><span class="badge ${ST_CLS[o.status] || ''}">${esc(o.status_name)}</span>${o.uzd_name ? `<div><span class="badge ${UZD_CLS[o.uzd_status] || ''}" style="font-size:11px">${esc(o.uzd_name)}</span></div>` : ''}</td>
+          <td><span class="badge ${ST_CLS[o.status] || ''}">${esc(o.status_name)}</span>${o.uzd_name ? `<div><span class="badge ${UZD_CLS[o.uzd_status] || ''}">${esc(o.uzd_name)}</span></div>` : ''}</td>
           <td class="small nowrap">${o.ttn ? `<b>${esc(o.ttn)}</b>${o.tracking_status ? `<div class="muted">${esc(o.tracking_status)}</div>` : ''}` : '—'}${o.return_ttn ? `<div class="badge bad">повернення ${esc(o.return_ttn)}</div>` : ''}</td>
           <td class="small nowrap">${o.invoice_no ? `<b>${esc(o.invoice_no)}</b>` : '<span class="muted">—</span>'}</td>
           <td class="small" data-nosel>${o.document_link ? `<a class="badge ok" href="${esc(o.document_link)}" target="_blank" rel="noopener">📄 є</a>` : '<span class="muted">ще немає</span>'}
             ${o.docs_at ? `<div class="muted">${esc(fmtDateTime(o.docs_at))}</div>` : ''}</td>
-          <td class="small hide-m">${o.crm_id ? `№ <b>${esc(o.crm_id)}</b>` : o.crm_code ? 'передано' : '—'}${o.crm_status ? `<div><span class="badge ${o.crm_new ? 'warn' : 'info'}" style="font-size:11px">${esc(o.crm_status)}</span></div>` : ''}</td>
+          <td class="small hide-m">${o.crm_id ? `№ <b>${esc(o.crm_id)}</b>` : o.crm_code ? 'передано' : '—'}${o.crm_status ? `<div><span class="badge ${o.crm_new ? 'warn' : 'info'}">${esc(o.crm_status)}</span></div>` : ''}</td>
         </tr>`).join('')}</tbody></table></div>`
         : '<div class="card empty"><div class="big">Замовлень немає</div>Нові замовлення Розетки з’являються тут автоматично (вебхук) або кнопкою «Оновити з Розетки».</div>'}`;
     $('#rzSync').onclick = async (e) => {
@@ -324,7 +324,7 @@ export function createRetailPages(ctx) {
         <input id="rpQ" placeholder="Артикул, код Розетки, назва, бренд" value="${esc(pf.q)}" style="max-width:300px" aria-label="Пошук товару"></div>
       ${rows.length ? `<div class="table-wrap"><table class="list"><thead><tr><th>Артикул</th><th>Товар LP-CRM (ID)</th><th>Назва</th><th class="r">Ціна закупівлі</th><th class="r">РРЦ</th><th class="r">Залишок</th><th>Габарити (на 1 шт.)</th></tr></thead><tbody>
         ${rows.map((p) => `<tr data-code="${esc(p.code)}">
-          <td><b>${esc(p.code)}</b>${p.rz_code ? `<div class="small muted">Розетка ${esc(p.rz_code)}</div>` : ''}${RZ_ST[p.rz_status] ? `<div><span class="badge ${RZ_ST[p.rz_status][1]}" style="font-size:11px">${RZ_ST[p.rz_status][0]}</span></div>` : ''}</td>
+          <td><b>${esc(p.code)}</b>${p.rz_code ? `<div class="small muted">Розетка ${esc(p.rz_code)}</div>` : ''}${RZ_ST[p.rz_status] ? `<div><span class="badge ${RZ_ST[p.rz_status][1]}">${RZ_ST[p.rz_status][0]}</span></div>` : ''}</td>
           <td><input data-f="product_id" value="${esc(p.product_id ?? '')}" inputmode="numeric" style="width:90px" ${edit ? '' : 'disabled'} class="${p.product_id ? '' : 'bad-input'}" aria-label="ID товару LP-CRM"></td>
           <td><input data-f="name" value="${esc(p.name || '')}" style="min-width:220px" ${edit ? '' : 'disabled'} aria-label="Назва">${p.brand ? `<div class="small muted">${esc(p.brand)}</div>` : ''}</td>
           <td class="r"><input data-f="purchase_price" value="${esc(p.purchase_price ?? '')}" inputmode="decimal" style="width:100px" ${edit ? '' : 'disabled'} aria-label="Ціна закупівлі"></td>
@@ -419,7 +419,7 @@ export function createRetailPages(ctx) {
             <label class="check"><input type="checkbox" name="notify_inv" ${a?.notify_inv ? 'checked' : ''}> З’явився вхідний рахунок (Вчасно) — після підтвердження замовлення</label>
             <label class="check"><input type="checkbox" name="notify_ttn" ${a?.notify_ttn ? 'checked' : ''}> Можна створювати ТТН — документи звірено (ЮЗД)</label>
             <div class="small muted">Кому (нікого не вибрано — власник і адміністратори з підключеним ботом):</div>
-            <div class="form-stack" style="gap:2px;max-height:180px;overflow:auto">${users.map((u) => `<label class="check"><input type="checkbox" name="nu" value="${u.id}" ${sel.has(u.id) ? 'checked' : ''}> ${esc(u.name)}${u.admin ? ' <span class="small muted">· адмін</span>' : ''}${u.tg ? '' : ' <span class="badge warn" style="font-size:11px">бот не підключено</span>'}</label>`).join('')}</div>
+            <div class="form-stack" style="gap:2px;max-height:180px;overflow:auto">${users.map((u) => `<label class="check"><input type="checkbox" name="nu" value="${u.id}" ${sel.has(u.id) ? 'checked' : ''}> ${esc(u.name)}${u.admin ? ' <span class="small muted">· адмін</span>' : ''}${u.tg ? '' : ' <span class="badge warn">бот не підключено</span>'}</label>`).join('')}</div>
           </fieldset>
           ${a ? `<label class="check"><input type="checkbox" name="active" ${a.active ? 'checked' : ''}> Увімкнено</label><label class="check"><input type="checkbox" name="new_hook_pass"> Новий пароль вебхука</label>` : ''}
         </form>`, { footer: `${a ? '<button class="btn danger" id="raDel" style="margin-right:auto">Видалити</button>' : ''}<button class="btn" data-close>Скасувати</button><button class="btn primary" id="raSave">Зберегти</button>` });

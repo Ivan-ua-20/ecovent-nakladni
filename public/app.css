@@ -2,7 +2,7 @@
   --bg: #f4f5f4;
   --surface: #ffffff;
   --ink: #17201d;
-  --muted: #5d6965;
+  --muted: #515d59;
   --line: #dfe3e1;
   --accent: #0f766e;
   --accent-ink: #ffffff;
@@ -21,6 +21,8 @@
   font-size: 14px;
 }
 * { box-sizing: border-box; }
+/* Атрибут hidden ховає завжди — навіть якщо клас задає display (напр. порожня панель групових дій) */
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); }
 a { color: var(--accent); }
 button, input, select, textarea { font: inherit; color: inherit; }
@@ -35,7 +37,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .main-tabs a.active { background: var(--accent); color: #fff; font-weight: 600; }
 .top-user { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 12.5px; }
 .top-user b { color: #fff; font-weight: 600; }
-.top-user a { color: #5eead4; }
+.top-user a { color: #5eead4; padding: 6px 2px; }
 .top-user .top-warn { color: #fde68a; }
 .subnav { background: var(--surface); border-bottom: 1px solid var(--line); padding: 0 24px; display: flex; flex-wrap: wrap; gap: 2px; }
 .subnav a { padding: 12px 14px; color: var(--muted); text-decoration: none; border-bottom: 3px solid transparent; font-weight: 500; }
@@ -48,7 +50,7 @@ main { padding: 18px 24px 60px; min-width: 0; width: 100%; max-width: 1560px; ma
 h2 { margin: 0 0 16px; font-size: 21px; }
 h3 { margin: 0 0 10px; font-size: 15px; }
 .muted { color: var(--muted); }
-.small { font-size: 12.5px; }
+.small { font-size: 13px; }
 
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
 .card + .card { margin-top: 12px; }
@@ -58,7 +60,7 @@ h3 { margin: 0 0 10px; font-size: 15px; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .btn.primary:hover { background: #0b5f58; }
 .btn.danger { color: var(--bad); }
-.btn.sm { padding: 5px 9px; font-size: 13px; }
+.btn.sm { padding: 5px 10px; font-size: 13px; min-height: 30px; }
 .btn:disabled { opacity: .55; cursor: default; }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
 
@@ -232,6 +234,7 @@ body.auth-mode .shell { display: none; }
 .chip { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; min-height: 32px; }
 .chip:hover { border-color: #a9c9c2; }
 .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip.on .muted, .chip.on small { color: inherit; opacity: .85; }
 .an-sync { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
 .an-sync-top { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; }
 .an-progress { height: 8px; background: #eef0ef; border-radius: 99px; overflow: hidden; }
