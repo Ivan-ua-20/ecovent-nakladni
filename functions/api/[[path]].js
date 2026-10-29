@@ -9908,7 +9908,20 @@ var rzsError = (status, j, fallback) => Object.assign(
   new Error(`\u0420\u043E\u0437\u0435\u0442\u043A\u0430: ${status === 401 ? "\u043D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u0430\u0431\u043E \u043F\u0440\u043E\u0441\u0442\u0440\u043E\u0447\u0435\u043D\u0438\u0439 \u0442\u043E\u043A\u0435\u043D (\u041A\u0430\u0431\u0456\u043D\u0435\u0442 \u043F\u043E\u0441\u0442\u0430\u0447\u0430\u043B\u044C\u043D\u0438\u043A\u0430 \u2192 \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0422\u043E\u043A\u0435\u043D\u0438)" : status === 429 ? "\u0437\u0430\u0431\u0430\u0433\u0430\u0442\u043E \u0437\u0430\u043F\u0438\u0442\u0456\u0432 \u043F\u043E\u0441\u043F\u0456\u043B\u044C \u2014 \u0437\u0430\u0447\u0435\u043A\u0430\u0439\u0442\u0435 \u043A\u0456\u043B\u044C\u043A\u0430 \u0441\u0435\u043A\u0443\u043D\u0434 \u0456 \u043F\u043E\u0432\u0442\u043E\u0440\u0456\u0442\u044C" : j?.message || fallback || `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${status}`}`),
   { status: status === 401 ? 400 : status === 429 ? 429 : status >= 500 ? 502 : 400, rzsStatus: status, rzs: j }
 );
-async function rq(fetchFn, token, method, path, { json, xml, raw: raw2 = false } = {}) {
+var RETRY_MS = [1500, 3500];
+var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+async function rq(fetchFn, token, method, path, opts = {}) {
+  for (let i = 0; ; i++) {
+    try {
+      return await rq1(fetchFn, token, method, path, opts);
+    } catch (e) {
+      if (e.rzsStatus !== 429 || i >= RETRY_MS.length) throw e;
+      const ra = Number(e.retryAfter) * 1e3;
+      await sleep2(ra > 0 ? Math.min(ra, 5e3) : RETRY_MS[i]);
+    }
+  }
+}
+async function rq1(fetchFn, token, method, path, { json, xml, raw: raw2 = false } = {}) {
   let res;
   try {
     res = await fetchFn(`${RZS_API}${path}`, {
@@ -9927,7 +9940,7 @@ async function rq(fetchFn, token, method, path, { json, xml, raw: raw2 = false }
   }
   if (raw2 && res.ok) return res;
   const j = await res.json().catch(() => null);
-  if (!res.ok) throw rzsError(res.status, j);
+  if (!res.ok) throw Object.assign(rzsError(res.status, j), { retryAfter: res.headers?.get?.("Retry-After") || "" });
   return j || {};
 }
 var rzsDateTime = (d = /* @__PURE__ */ new Date()) => {
@@ -10062,6 +10075,7 @@ var UZD_STATUS = { not_uploaded: "\u042E\u0417\u0414 \u043D\u0435 \u0437\u0430\u
 var SYNC_DAYS = 14;
 var SYNC_PAGES = 8;
 var SYNC_GAP_MS = 2 * 60 * 1e3;
+var PAGE_PAUSE_MS = 700;
 var keyHint2 = (k) => k ? `${MASK}${String(k).slice(-4)}` : "";
 var newCode2 = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Math.random() * 9e4))}`;
 var num4 = (v) => {
@@ -10085,6 +10099,8 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     crm_delivery: a.crm_delivery,
     crm_site: a.crm_site,
     crm_field1: a.crm_field1 ?? "",
+    sync_error: a.sync_error || "",
+    sync_error_at: a.sync_error_at || "",
     notify_inv: !!a.notify_inv,
     notify_ttn: !!a.notify_ttn,
     notify_users: (() => {
@@ -10314,13 +10330,19 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     const dateFrom = rzsDateTime(new Date(Date.now() - days * 864e5));
     let saved = 0;
     let more = false;
-    for (let page = 1; page <= SYNC_PAGES; page++) {
-      const r = await rzsOrdersPage(fetchFn, a.token, { dateFrom, page });
-      saved += await saveOrders2(r.orders, a.id);
-      if (!r.orders.length || page * 50 >= r.total) break;
-      if (page === SYNC_PAGES) more = true;
+    try {
+      for (let page = 1; page <= SYNC_PAGES; page++) {
+        if (page > 1) await new Promise((r2) => setTimeout(r2, PAGE_PAUSE_MS));
+        const r = await rzsOrdersPage(fetchFn, a.token, { dateFrom, page });
+        saved += await saveOrders2(r.orders, a.id);
+        if (!r.orders.length || page * 50 >= r.total) break;
+        if (page === SYNC_PAGES) more = true;
+      }
+    } catch (e) {
+      if (!e.pending) await db.run(`UPDATE rzs_accounts SET sync_error = ?, sync_error_at = ? WHERE id = ?`, [String(e.message || e).slice(0, 300), nowIso(), a.id]).catch(() => 0);
+      throw e;
     }
-    await db.run(`UPDATE rzs_accounts SET synced_at = ? WHERE id = ?`, [nowIso(), a.id]);
+    await db.run(`UPDATE rzs_accounts SET synced_at = ?, sync_error = '', sync_error_at = '' WHERE id = ?`, [nowIso(), a.id]);
     return { saved, more };
   }
   const TICK_MS = 10 * 6e4;
@@ -10357,6 +10379,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
       try {
         out.push({ id: a.id, ...await syncAccount(a) });
       } catch (e) {
+        if (e.pending) throw e;
         out.push({ id: a.id, error: e.message });
       }
     }
@@ -10387,7 +10410,10 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
         if (o && (o.orderId || o.id)) saved += await saveOrders2([o], a.id);
         else if (/delete/i.test(raw2)) await db.run(`UPDATE rzs_orders SET status = 'deleted' WHERE id = ?`, [id]);
       }
-    } else saved = (await syncAccount(a, { days: 2 })).saved;
+    } else saved = (await syncAccount(a, { days: 2 }).catch((e) => {
+      if (e.pending) throw e;
+      return { saved: 0 };
+    })).saved;
     return c.json({ ok: true, saved });
   });
   const publicOrder = (r, prods = /* @__PURE__ */ new Map()) => {
@@ -10455,7 +10481,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     const [rows, counts, accs] = await Promise.all([
       db.all(`SELECT o.*, a.name AS account FROM rzs_orders o LEFT JOIN rzs_accounts a ON a.id = o.account_id WHERE ${where.join(" AND ")} ORDER BY o.created_at DESC LIMIT 300`, params),
       db.all(`SELECT status, COUNT(*) AS n FROM rzs_orders WHERE created_at >= ? GROUP BY status`, [since]),
-      db.all(`SELECT id, name, synced_at, hook_at FROM rzs_accounts WHERE active = 1`)
+      db.all(`SELECT id, name, synced_at, hook_at, sync_error, sync_error_at FROM rzs_accounts WHERE active = 1`)
     ]);
     const pm = await prodMap(rows);
     return c.json({ rows: rows.map((r) => publicOrder(r, pm)), counts: Object.fromEntries(counts.map((r) => [r.status, r.n])), statuses: RZS_STATUS, accounts: accs });
@@ -12644,7 +12670,7 @@ var schema12 = {
 // src/modules/retail/schema.js
 var schema13 = {
   name: "retail",
-  version: 4,
+  version: 5,
   tables: [
     // Кабінети постачальника Розетки: токен (JWT) бачить лише сервер; прайс і параметри передачі замовлень у LP-CRM.
     `CREATE TABLE IF NOT EXISTS rzs_accounts (
@@ -12725,7 +12751,10 @@ var schema13 = {
     ["rzs_accounts", "notify_ttn", "INTEGER DEFAULT 0"],
     ["rzs_accounts", "notify_users", "TEXT DEFAULT ''"],
     ["rzs_orders", "inv_notified", "TEXT DEFAULT ''"],
-    ["rzs_orders", "ttn_notified", "TEXT DEFAULT ''"]
+    ["rzs_orders", "ttn_notified", "TEXT DEFAULT ''"],
+    // Остання помилка оновлення з Розетки (порожньо — останнє оновлення вдалося): показуємо на сторінці.
+    ["rzs_accounts", "sync_error", "TEXT DEFAULT ''"],
+    ["rzs_accounts", "sync_error_at", "TEXT DEFAULT ''"]
   ]
 };
 
