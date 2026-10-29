@@ -184,7 +184,7 @@ export function createPartnerPages(ctx = {}) {
     const rows = await api('GET', '/api/b2b/p/entities');
     main.innerHTML = `
       <div class="head-row"><h2>Мої юрособи</h2>${canEdit() ? '<button class="btn primary" id="eNew">+ Додати юрособу</button>' : ''}</div>
-      <div class="alert info" style="margin-bottom:14px">На ці юрособи виставляються рахунки за закупівлі. Оплату ми бачимо за кодом (ЄДРПОУ / ІПН) —
+      <div class="alert info help" style="margin-bottom:14px">На ці юрособи виставляються рахунки за закупівлі. Оплату ми бачимо за кодом (ЄДРПОУ / ІПН) —
         платіть, будь ласка, з рахунку тієї юрособи, на яку виставлено рахунок.</div>
       ${rows.length ? `<div class="fop-cards">${rows.map((e) => `<div class="card fop-card" ${e.is_default ? 'style="border-color:var(--accent, #0f766e);border-width:2px"' : ''}>
           <div class="name">${esc(e.name)}${e.is_default ? ' <span class="badge ok">за замовчуванням</span>' : ''}</div>
@@ -930,7 +930,7 @@ export function createPartnerPages(ctx = {}) {
     const rows = await api('GET', '/api/b2b/p/trash');
     const KIND = { supply: 'Закупівля', client: 'Замовлення клієнта', item: 'Товар прибрано з закупівлі' };
     main.innerHTML = `<div class="head-row"><h2>Кошик</h2></div>
-      <div class="alert info" style="margin-bottom:12px">Тут видно, що й коли видалив наш менеджер (а також чернетки, які видалила ваша команда). Якщо щось видалено помилково — напишіть менеджеру, він може відновити.</div>
+      <div class="alert info help" style="margin-bottom:12px">Тут видно, що й коли видалив наш менеджер (а також чернетки, які видалила ваша команда). Якщо щось видалено помилково — напишіть менеджеру, він може відновити.</div>
       ${rows.length ? `<table class="list"><thead><tr><th>Коли</th><th>Що</th><th class="r">Сума</th><th>Хто видалив</th></tr></thead><tbody>
         ${rows.map((r) => `<tr><td class="small nowrap">${esc(fmtDateTime(r.deleted_at))}</td><td><span class="small muted">${KIND[r.kind] || r.kind}</span><div>${esc(r.title)}</div>
           ${r.restored_at ? `<div class="small"><span class="badge ok">відновлено</span> ${esc(fmtDateTime(r.restored_at))}</div>` : ''}</td>

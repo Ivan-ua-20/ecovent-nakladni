@@ -25,18 +25,12 @@ const SECTIONS = [
   { id: 'nakladni', label: 'Накладні ФОП', perm: 'docs.view', home: 'invoice', tabs: [
     { id: 'invoice', label: 'Формування' },
     { id: 'history', label: 'Історія' },
-    { id: 'fops', label: 'ФОПи накладних', perm: 'refs.edit' },
-    { id: 'offices', label: 'Відділи, поле 1 → ФОП', perm: 'refs.edit' },
-    { id: 'templates', label: 'Шаблони', perm: 'refs.edit' },
-    { id: 'nsettings', label: 'Налаштування накладних', perm: 'refs.edit' },
   ] },
   { id: 'rahunky', label: 'Рахунки Word', perm: 'docs.view', home: 'rahunky', tabs: [
     { id: 'rahunky', label: 'Формування', perm: 'docs.edit' },
     { id: 'rlist', label: 'Сформовані рахунки' },
     { id: 'paylinks', label: 'Посилання на оплату', perm: 'docs.edit' },
     { id: 'payments', label: 'Платежі', perm: 'docs.edit' },
-    { id: 'invfops', label: 'ФОПи рахунків', perm: 'refs.edit' },
-    { id: 'rsettings', label: 'Налаштування рахунків', perm: 'refs.edit' },
   ] },
   { id: 'an', label: 'Аналітика', perm: 'an.view', home: 'an', tabs: [
     { id: 'an', label: 'Дашборд' },
@@ -65,10 +59,21 @@ const SECTIONS = [
   { id: 'retail', label: 'Рітейл', perm: 'docs.view', home: 'rzorders', tabs: [
     { id: 'rzorders', label: 'Розетка' },
     { id: 'rzproducts', label: 'Розетка: товари й ціни', perm: 'refs.edit' },
-    { id: 'rzsettings', label: 'Налаштування Розетки', perm: 'api' },
   ] },
-  { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [{ id: 'settings', label: 'Загальні налаштування' }, { id: 'np', label: 'Нова пошта і Розетка', perm: 'api' }, { id: 'errors', label: 'Журнал помилок', perm: 'users' }] },
-  { id: 'users', label: 'Користувачі', perm: 'people', home: 'users', tabs: [{ id: 'users', label: 'Користувачі' }] },
+  // Усі налаштування — в одному розділі: щоденна робота — в інших, рідкісні налаштування — тут.
+  { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [
+    { id: 'settings', label: 'Загальні налаштування' },
+    { id: 'fops', label: 'ФОПи накладних' },
+    { id: 'offices', label: 'Відділи, поле 1 → ФОП' },
+    { id: 'templates', label: 'Шаблони' },
+    { id: 'nsettings', label: 'Налаштування накладних' },
+    { id: 'invfops', label: 'ФОПи рахунків' },
+    { id: 'rsettings', label: 'Налаштування рахунків' },
+    { id: 'np', label: 'Нова пошта і Розетка', perm: 'api' },
+    { id: 'rzsettings', label: 'Налаштування Розетки', perm: 'api' },
+    { id: 'users', label: 'Користувачі', perm: 'people' },
+    { id: 'errors', label: 'Журнал помилок', perm: 'users' },
+  ] },
 ];
 const visibleTabs = (sec) => sec.tabs.filter((t) => !t.perm || can(t.perm));
 const sectionOf = (routeId) => SECTIONS.find((sec) => sec.tabs.some((t) => t.id === routeId)) || SECTIONS[0];
@@ -270,6 +275,8 @@ async function route() {
   activeRoute = name;
   document.body.classList.toggle('an-mode', sec.id === 'an');
   renderNav(name);
+  // На телефоні меню гортається вбік — активний пункт має бути видно
+  for (const a of $$('.main-tabs a.active, .subnav a.active')) a.scrollIntoView({ block: 'nearest', inline: 'center' });
   try {
     if ((sec.perm && !can(sec.perm)) || (tab?.perm && !can(tab.perm))) throw new Error('Немає доступу до цього розділу.');
     await routes[name](...args.map((x) => decodeURIComponent(x)));
@@ -279,6 +286,73 @@ async function route() {
   window.scrollTo(0, 0);
 }
 window.addEventListener('hashchange', route);
+
+// Таблиці на телефоні показуються картками (app.css): кожна клітинка отримує підпис зі свого заголовка.
+function labelTables() {
+  for (const t of main.querySelectorAll('table.list:not(.an-table):not(.no-cards)')) {
+    const heads = [...t.querySelectorAll(':scope > thead th')].map((th) => th.textContent.trim().replace(/\s*↕\s*$/, ''));
+    if (!heads.length) continue;
+    for (const tr of t.querySelectorAll(':scope > tbody > tr')) {
+      let i = 0;
+      for (const td of tr.children) {
+        if (!td.dataset.label && heads[i]) td.dataset.label = heads[i];
+        i += td.colSpan || 1;
+      }
+    }
+  }
+  // Довгі таблиці (платежі, каталог, Розетка…) — спершу PAGE рядків і кнопка «Показати ще».
+  for (const t of main.querySelectorAll('table.list:not(.no-paging)')) {
+    if (t.dataset.paged) continue;
+    const rows = [...t.querySelectorAll(':scope > tbody > tr')];
+    if (rows.length <= PAGE + 20) continue;
+    t.dataset.paged = '1';
+    let shown = PAGE;
+    rows.slice(shown).forEach((r) => r.classList.add('pg-hidden'));
+    const more = document.createElement('div');
+    more.className = 'pg-more';
+    const wrap = t.closest('.table-wrap') || t;
+    wrap.after(more);
+    const draw = () => {
+      const left = rows.length - shown;
+      more.innerHTML = left > 0
+        ? `<span class="muted small">Показано ${shown} з ${rows.length}</span><button class="btn" type="button" data-more>Показати ще ${Math.min(PAGE, left)}</button><button class="btn" type="button" data-all>Показати всі</button>`
+        : '';
+    };
+    more.onclick = (e) => {
+      const all = e.target.closest('[data-all]');
+      if (!all && !e.target.closest('[data-more]')) return;
+      shown = all ? rows.length : shown + PAGE;
+      rows.slice(0, shown).forEach((r) => r.classList.remove('pg-hidden'));
+      draw();
+    };
+    draw();
+  }
+}
+const PAGE = 50;
+
+// Інструкції (.alert.help) згортаються в рядок «Як це працює»; закрита інструкція лишається закритою на цій сторінці.
+function foldHelp() {
+  for (const box of main.querySelectorAll('.alert.help:not([data-folded])')) {
+    box.dataset.folded = '1';
+    const key = `help:${activeRoute}`;
+    let closed = false;
+    try { closed = localStorage.getItem(key) === '0'; } catch { /* приватний режим */ }
+    const d = document.createElement('details');
+    d.className = 'help-box';
+    d.open = !closed;
+    d.innerHTML = '<summary>Як це працює</summary>';
+    box.replaceWith(d);
+    box.style.margin = '';
+    d.append(box);
+    d.ontoggle = () => { try { localStorage.setItem(key, d.open ? '1' : '0'); } catch { /* */ } };
+  }
+}
+let labelQueued = false;
+new MutationObserver(() => {
+  if (labelQueued) return;
+  labelQueued = true;
+  requestAnimationFrame(() => { labelQueued = false; labelTables(); foldHelp(); });
+}).observe(main, { childList: true, subtree: true });
 
 // =====================================================================
 // НАКЛАДНА

@@ -180,7 +180,7 @@ async function viewOffices() {
   main.innerHTML = `
     <div class="head-row"><h2>Відділи і поле 1 → ФОП</h2>
       <div class="btn-row"><button class="btn primary" id="oSave">Зберегти все</button></div></div>
-    <div class="alert info" style="margin-bottom:14px">Порядок визначення ФОП: вибір вручну → чек Checkbox → <b>поле 1</b> → <b>відділ</b> → ФОП за замовчуванням.<br>
+    <div class="alert info help" style="margin-bottom:14px">Порядок визначення ФОП: вибір вручну → чек Checkbox → <b>поле 1</b> → <b>відділ</b> → ФОП за замовчуванням.<br>
       <b>Назва продавця в накладній</b> — повний текст замість «ФОП Прізвище І.П.» (можна кілька рядків), напр. «ФОП Лупу Віра Федорівна, інтернет-магазин OneDay». Реквізити (ІПН, IBAN) підставляються з картки ФОП. Порожньо — як у ФОП.</div>
     <div class="form-page" style="grid-template-columns:minmax(0,1fr)">
       <div style="min-width:0">

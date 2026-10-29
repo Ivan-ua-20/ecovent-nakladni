@@ -551,3 +551,50 @@ table.list tr.grp td { background: var(--accent-soft); padding-top: 7px; padding
 .drop-zone.drop-on { border-color: var(--accent); background: var(--accent-soft); }
 @media (prefers-reduced-motion: reduce) { .drop-zone { transition: none; } }
 .bad-input { border-color: var(--bad) !important; }
+
+/* ===== Телефон: таблиці картками, компактна шапка ===== */
+@media (max-width: 760px) {
+  /* Шапка: розділи й вкладки — в один рядок, що гортається вбік */
+  .topbar { gap: 6px; padding-top: 8px; padding-bottom: 8px; }
+  .main-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; min-width: 0; flex-basis: 100%; order: 3; }
+  .main-tabs::-webkit-scrollbar, .subnav::-webkit-scrollbar { display: none; }
+  .main-tabs a { white-space: nowrap; padding: 8px 12px; }
+  .subnav { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .subnav a { white-space: nowrap; padding: 10px 12px; }
+  main { padding-top: 12px; }
+
+  /* Таблиці → картки: кожен рядок — окрема картка, клітинка з підписом колонки */
+  table.list:not(.an-table):not(.no-cards) { display: block; overflow: visible; background: none; border: 0; }
+  table.list:not(.an-table):not(.no-cards) > thead { display: none; }
+  table.list:not(.an-table):not(.no-cards) > tbody { display: flex; flex-direction: column; gap: 10px; }
+  table.list:not(.an-table):not(.no-cards) > tbody > tr {
+    display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 14px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px;
+  }
+  table.list:not(.an-table):not(.no-cards) > tbody > tr > td { display: block; flex: 1 1 100%; min-width: 0; padding: 0; border: 0; font-size: 14px; }
+  table.list:not(.an-table):not(.no-cards) > tbody > tr > td:empty { display: none; }
+  table.list:not(.an-table):not(.no-cards) > tbody > tr > td.hide-m { display: none; }
+  table.list:not(.an-table):not(.no-cards) > tbody > tr > td[data-label]::before {
+    content: attr(data-label); display: block; font-size: 11.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px;
+  }
+  /* Галочка вибору — компактно, без підпису */
+  table.list:not(.an-table):not(.no-cards) > tbody > tr > td:has(> input[type="checkbox"]:only-child) { flex: 0 0 auto; order: -1; }
+  table.list:not(.an-table):not(.no-cards) > tbody > tr > td:has(> input[type="checkbox"]:only-child)::before { display: none; }
+  /* Кнопки в картці — в ряд, на всю ширину */
+  table.list:not(.an-table):not(.no-cards) > tbody > tr > td .btn-row,
+  table.list:not(.an-table):not(.no-cards) > tbody > tr > td:last-child { text-align: left; }
+  table.list:not(.an-table):not(.no-cards) tr.click:hover td { background: none; }
+  table.list:not(.an-table):not(.no-cards) tr.row-bad { background: var(--bad-soft); border-color: var(--bad); }
+  table.list:not(.an-table):not(.no-cards) tr.row-bad td { background: none; box-shadow: none; }
+}
+
+/* Довгі таблиці: сховані рядки і кнопка «Показати ще» */
+tr.pg-hidden { display: none !important; }
+.pg-more { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0 4px; }
+.pg-more:empty { display: none; }
+
+/* Інструкція, що згортається */
+.help-box { margin-bottom: 14px; }
+.help-box > summary { cursor: pointer; color: var(--info); font-size: 13px; font-weight: 600; padding: 4px 0; width: fit-content; list-style-position: inside; }
+.help-box[open] > summary { margin-bottom: 6px; }
+.help-box > .alert { margin: 0; }

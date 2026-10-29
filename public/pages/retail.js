@@ -130,10 +130,10 @@ export function createRetailPages(ctx) {
         <button class="btn sm" data-b="_clear">Зняти вибір</button>` : '';
       $$('[data-b]', bar).forEach((b) => (b.onclick = () => run(b.dataset.b)));
       const all = $('#rzAll');
-      if (all) all.checked = ids.length > 0 && ids.length === $$('[data-sel]').length;
+      if (all) all.checked = ids.length > 0 && ids.length === $$('[data-sel]').filter((x) => x.offsetParent).length;
     };
     $$('[data-sel]').forEach((x) => (x.onchange = draw));
-    $('#rzAll') && ($('#rzAll').onchange = (e) => { $$('[data-sel]').forEach((x) => { x.checked = e.target.checked; }); draw(); });
+    $('#rzAll') && ($('#rzAll').onchange = (e) => { $$('[data-sel]').filter((x) => x.offsetParent).forEach((x) => { x.checked = e.target.checked; }); draw(); });
     const ACT = {
       confirm: { label: 'Підтвердити', run: (id) => api('POST', `/api/rzs/orders/${id}/confirm`, {}) },
       ttn: { label: 'Створити ТТН', run: (id) => api('POST', `/api/rzs/orders/${id}/ttn`, {}) },
@@ -316,7 +316,7 @@ export function createRetailPages(ctx) {
       <div class="head-row"><h2>Розетка — товари й ціни закупівлі</h2><div class="btn-row">
         ${edit ? '<label class="btn primary">📥 Завантажити товари з Розетки (CSV)<input type="file" id="rpImp" accept=".csv,text/csv" hidden></label><button class="btn" id="rpAdd">+ Товар</button>' : ''}
 </div></div>
-      <div class="alert info" style="margin-bottom:12px"><b>Як оновити:</b> Кабінет постачальника Розетки → вивантажте товари в CSV → «📥 Завантажити товари з Розетки». Нові артикули додадуться,
+      <div class="alert info help" style="margin-bottom:12px"><b>Як оновити:</b> Кабінет постачальника Розетки → вивантажте товари в CSV → «📥 Завантажити товари з Розетки». Нові артикули додадуться,
         у наявних оновляться назва, код Розетки, РРЦ, ціна закупівлі, залишок і статус; прив’язка до LP-CRM і габарити лишаються.
         <b>Ціна закупівлі</b> йде в LP-CRM у замовлення Розетки (не роздрібна). <b>Товар LP-CRM (ID)</b> підставляється сам, якщо артикул збігається з артикулом у каталозі, інакше — впишіть ID товару з LP-CRM.
         ${lastImport ? `<div class="small" style="margin-top:4px">Останнє завантаження: ${esc(fmtDateTime(lastImport))}</div>` : ''}</div>
@@ -393,7 +393,7 @@ export function createRetailPages(ctx) {
     const rows = await api('GET', '/api/rzs/accounts');
     main.innerHTML = `
       <div class="head-row"><h2>Розетка — кабінети постачальника</h2><button class="btn primary" id="raNew">+ Підключити кабінет</button></div>
-      <div class="alert info" style="margin-bottom:14px">Токен: Кабінет постачальника Розетки → <b>Налаштування → Токени</b> → «Згенерувати токен».
+      <div class="alert info help" style="margin-bottom:14px">Токен: Кабінет постачальника Розетки → <b>Налаштування → Токени</b> → «Згенерувати токен».
         Після підключення вставте адресу, логін і пароль вебхука в Кабінеті Розетки (<b>Налаштування → Вебхуки</b>), позначте «Дропшипінг» (додавання, зміна, видалення) — замовлення з’являтимуться тут одразу.</div>
       ${rows.length ? rows.map((a) => `<div class="card form-stack" style="max-width:900px;margin-bottom:12px">
           <div class="head-row" style="margin:0"><h3 style="margin:0">${esc(a.name)} ${a.active ? '' : '<span class="badge bad">вимкнено</span>'}</h3><button class="btn sm" data-ae="${a.id}">Змінити</button></div>

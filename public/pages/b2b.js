@@ -36,7 +36,7 @@ export function createB2bPages(ctx = {}) {
     const cnt = (k) => { const f = pFilter.st; pFilter.st = k; const n = all.filter(pMatch).length; pFilter.st = f; return n; };
     main.innerHTML = `
       <div class="head-row"><h2>B2B партнери</h2><div class="btn-row"><button class="btn" id="pAnn">📢 Оголошення партнерам</button><button class="btn primary" id="pNew">+ Новий партнер</button></div></div>
-      <div class="alert info" style="margin-bottom:14px">Партнер бачить лише свій кабінет: каталог увімкнених йому брендів з РРЦ і своєю ціною (РРЦ − маржа).
+      <div class="alert info help" style="margin-bottom:14px">Партнер бачить лише свій кабінет: каталог увімкнених йому брендів з РРЦ і своєю ціною (РРЦ − маржа).
         За замовчуванням партнер не бачить жодного бренду — увімкніть бренди й задайте маржу в картці партнера. Позначте кількох партнерів галочками — з'являться групові дії.</div>
       ${all.length ? `<div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap">${Object.entries(P_ST).map(([k, v]) => {
         const n = cnt(k);
@@ -83,10 +83,10 @@ export function createB2bPages(ctx = {}) {
       bar.innerHTML = ids.length ? `<b>Обрано: ${ids.length}</b>${actions.map(([k, l]) => `<button class="btn sm ${k === 'del' ? 'danger' : ''}" data-pb="${k}">${esc(l)}</button>`).join('')}<button class="btn sm" data-pb="_clear">Зняти вибір</button>` : '';
       $$('[data-pb]', bar).forEach((b) => (b.onclick = () => run(b.dataset.pb)));
       const allBox = $('#pSelAll');
-      if (allBox) allBox.checked = ids.length && ids.length === $$('[data-psel]').length;
+      if (allBox) allBox.checked = ids.length && ids.length === $$('[data-psel]').filter((x) => x.offsetParent).length;
     };
     $$('[data-psel]').forEach((cb) => (cb.onchange = draw));
-    $('#pSelAll') && ($('#pSelAll').onchange = (e) => { $$('[data-psel]').forEach((x) => { x.checked = e.target.checked; }); draw(); });
+    $('#pSelAll') && ($('#pSelAll').onchange = (e) => { $$('[data-psel]').filter((x) => x.offsetParent).forEach((x) => { x.checked = e.target.checked; }); draw(); });
     const bulk = async (body, label) => {
       const { results } = await api('POST', '/api/b2b/partners/bulk', { ids: sel(), ...body });
       const bad = results.filter((r) => !r.ok);
@@ -541,7 +541,7 @@ export function createB2bPages(ctx = {}) {
     const [{ rows, state }, brands] = await Promise.all([api('GET', `/api/b2b/catalog${qs ? `?${qs}` : ''}`), api('GET', '/api/b2b/brands')]);
     main.innerHTML = `
       <div class="head-row"><h2>Каталог і ціни</h2><div class="btn-row"><button class="btn" id="cAdd">+ Товари за ID</button><button class="btn" id="cSend">Надіслати зміни цін</button><button class="btn" id="cAnn">📢 Оголошення</button><button class="btn primary" id="cSync">Оновити з LP-CRM</button></div></div>
-      <div class="alert info" style="margin-bottom:14px">Товари — з аналітики (усе, що продавалося) і додані вручну за ID з LP-CRM. Назва, РРЦ і фото оновлюються з LP-CRM
+      <div class="alert info help" style="margin-bottom:14px">Товари — з аналітики (усе, що продавалося) і додані вручну за ID з LP-CRM. Назва, РРЦ і фото оновлюються з LP-CRM
         для брендів, увімкнених хоча б одному партнеру. ${state.lastSync ? `Останнє оновлення: ${esc(fmtDateTime(state.lastSync))}.` : 'Ще не оновлювався.'}
         ${state.stale ? `<b>Чекають оновлення: ${state.stale}.</b>` : ''}</div>
       <div class="btn-row" style="margin-bottom:12px">
@@ -1178,7 +1178,7 @@ export function createB2bPages(ctx = {}) {
     const KIND = { supply: 'Закупівля', client: 'Замовлення клієнта', item: 'Товар із закупівлі' };
     main.innerHTML = `
       <div class="head-row"><h2>Кошик</h2><select id="trP" aria-label="Партнер" style="max-width:260px"><option value="">Усі партнери</option>${partners.map((p) => `<option value="${p.id}" ${String(trashPartner) === String(p.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
-      <div class="alert info" style="margin-bottom:12px">Видалені закупівлі й замовлення клієнтів (можна відновити) і прибрані з закупівель товари. Партнер бачить свій кошик, але видаляти не може (лише свої чернетки).</div>
+      <div class="alert info help" style="margin-bottom:12px">Видалені закупівлі й замовлення клієнтів (можна відновити) і прибрані з закупівель товари. Партнер бачить свій кошик, але видаляти не може (лише свої чернетки).</div>
       ${rows.length ? `<table class="list"><thead><tr><th>Коли</th><th>Що</th><th class="hide-m">Партнер</th><th class="r">Сума</th><th>Хто видалив</th><th></th></tr></thead><tbody>
         ${rows.map((r) => `<tr><td class="small nowrap">${esc(fmtDateTime(r.deleted_at))}</td>
           <td><span class="small muted">${KIND[r.kind] || r.kind}</span><div>${esc(r.title)}</div></td>

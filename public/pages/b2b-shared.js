@@ -121,7 +121,8 @@ export function wireBulk(actions, { onDone, confirmDanger }) {
   $$('[data-nosel]').forEach((td) => (td.onclick = (e) => e.stopPropagation()));
   $$('[data-sel]').forEach((cb) => (cb.onchange = draw));
   const all = $('#selAll');
-  if (all) all.onchange = () => { $$('[data-sel]').forEach((x) => { x.checked = all.checked; }); draw(); };
+  // «Обрати всі» — лише видимі рядки (довгі таблиці показують частину, див. «Показати ще»)
+  if (all) all.onchange = () => { $$('[data-sel]').filter((x) => x.offsetParent).forEach((x) => { x.checked = all.checked; }); draw(); };
   async function run(key) {
     if (key === '_clear') { $$('[data-sel]').forEach((x) => { x.checked = false; }); if (all) all.checked = false; draw(); return; }
     const a = actions.find((x) => x.key === key);
