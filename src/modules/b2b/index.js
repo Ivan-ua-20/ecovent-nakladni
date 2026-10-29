@@ -16,6 +16,7 @@ import { mountB2bPrices } from './prices.js';
 import { mountB2bTgDocs } from './tgdocs.js';
 import { mountB2bPay } from './odbpay.js';
 import { mountB2bEdits } from './edits.js';
+import { mountB2bHome } from './home.js';
 
 export const partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 
@@ -563,6 +564,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   const pay = mountB2bPay(app, { db, services, orders, hooks });
   onCleanup(() => hooks.cleanup?.());
   mountB2bStats(app, { db, myPartner });
+  const home = mountB2bHome(app, { db, myPartner, orders });
   mountB2bPrices(app, { db, services, partnerPrice });
 
   // ---------- Telegram-група партнера ----------
@@ -593,5 +595,5 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   const tgGroupMoved = (from, to) => db.run(`UPDATE b2b_partners SET tg_group = ? WHERE tg_group = ?`, [to, from]);
   const tgGroupLeft = (chat) => db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '' WHERE tg_group = ?`, [chat]);
 
-  return { crmOrderInfo: orders.crmOrderInfo, partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupMessage: tgdocs.tgGroupMessage, onPayments: pay.onPayments, payInfo: pay.payInfo };
+  return { attention: home.attention, crmOrderInfo: orders.crmOrderInfo, partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupMessage: tgdocs.tgGroupMessage, onPayments: pay.onPayments, payInfo: pay.payInfo };
 }

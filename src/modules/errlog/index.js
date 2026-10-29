@@ -96,5 +96,10 @@ export function mountErrLog(app, { db, fetchFn, onCleanup, shared = {} }) {
     return c.json({ ok: true });
   });
 
-  return { log };
+  // Для головної сторінки: збої за останню добу.
+  async function attention() {
+    const r = await db.get(`SELECT COUNT(*) AS n FROM error_log WHERE at > ?`, [new Date(Date.now() - 86400000).toISOString()]);
+    return r?.n ? [{ key: 'errors', level: 'bad', count: r.n, label: 'Збої інтеграцій за добу (LP-CRM, Opendatabot, НП…)', link: '#/errors' }] : [];
+  }
+  return { log, attention };
 }

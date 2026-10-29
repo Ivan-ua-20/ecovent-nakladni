@@ -309,6 +309,7 @@ export function createB2bPages(ctx = {}) {
               : '<div class="small muted">Партнер ще не додав юросіб (додає сам у своєму кабінеті).</div>'}
             <a class="small" href="#/b2borders" data-pord="${p.id}">Замовлення партнера →</a>
             <a class="small" href="#/b2bstats/${p.id}">Аналітика партнера →</a>
+            <a class="small" href="#/b2bstatement/${p.id}">Взаєморозрахунки →</a>
           </div>
         </div>
       </div>`;

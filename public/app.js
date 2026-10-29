@@ -13,6 +13,7 @@ import { createUsersPages } from './pages/users.js';
 import { createErrorsPages } from './pages/errors.js';
 import { createB2bPages } from './pages/b2b.js';
 import { createPartnerPages } from './pages/partner.js';
+import { createHomePages } from './pages/home.js';
 import { createB2bStats } from './pages/b2b-stats.js';
 import { createRetailPages } from './pages/retail.js';
 
@@ -22,6 +23,8 @@ const can = (perm) => Boolean(boot.user?.perms?.includes(perm));
 
 // Розділи (вкладки зверху) і підвкладки кожного розділу.
 const SECTIONS = [
+  // Черга «Потребує дій» — перша сторінка для команди (партнер її не бачить).
+  { id: 'home', label: 'Головна', perm: 'docs.view', home: 'home', tabs: [{ id: 'home', label: 'Потребує дій' }] },
   { id: 'nakladni', label: 'Накладні ФОП', perm: 'docs.view', home: 'invoice', tabs: [
     { id: 'invoice', label: 'Формування' },
     { id: 'history', label: 'Історія' },
@@ -43,12 +46,15 @@ const SECTIONS = [
     { id: 'b2bpartners', label: 'Партнери' },
     { id: 'b2bcatalog', label: 'Каталог і ціни' },
     { id: 'b2bstats', label: 'Аналітика' },
+    { id: 'b2bstatement', label: 'Взаєморозрахунки' },
     { id: 'b2btrash', label: 'Кошик' },
   ] },
   // Кабінет партнера — єдиний розділ, який бачить партнер.
-  { id: 'partner', label: 'Кабінет партнера', perm: 'b2b.partner', home: 'pcatalog', tabs: [
+  { id: 'partner', label: 'Кабінет партнера', perm: 'b2b.partner', home: 'phome', tabs: [
+    { id: 'phome', label: 'Головна' },
     { id: 'pcatalog', label: 'Каталог' },
     { id: 'porders', label: 'Закупівлі' },
+    { id: 'pstatement', label: 'Взаєморозрахунки' },
     { id: 'pclients', label: 'Замовлення клієнтів' },
     { id: 'pentities', label: 'Мої юрособи' },
     { id: 'pstats', label: 'Аналітика' },
@@ -221,6 +227,7 @@ const { viewErrors } = createErrorsPages(ctx);
 const B2BSTATS = createB2bStats();
 const RETAIL = createRetailPages(ctx);
 const { viewPartners, viewCatalog, viewOrders: viewB2bOrders, viewClients: viewB2bClients, viewTrash: viewB2bTrash } = createB2bPages(ctx);
+const HOME = createHomePages(ctx);
 const { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients, viewTeam: viewPartnerTeam, viewSettings: viewPartnerSettings, viewTrash: viewPartnerTrash } = createPartnerPages(ctx);
 setUnauthorized(() => showAuth());
 
@@ -258,6 +265,10 @@ const routes = {
   pentities: viewEntities,
   b2bcatalog: viewCatalog,
   pcatalog: viewPartnerCatalog,
+  home: () => HOME.viewHome(),
+  phome: () => HOME.viewPartnerHome(),
+  pstatement: () => HOME.viewStatement(),
+  b2bstatement: (pid) => HOME.viewStatement(pid),
   phelp: viewPartnerHelp,
   rzorders: () => RETAIL.viewOrders(),
   rzproducts: () => RETAIL.viewProducts(),
@@ -266,7 +277,8 @@ const routes = {
 
 async function route() {
   if (!boot.user) return;
-  let [, name = homeRoute(), ...args] = location.hash.replace(/^#/, '').split('/');
+  // Після «?» — параметри сторінки (напр. період виписки); у маршрут не входять.
+  let [, name = homeRoute(), ...args] = location.hash.replace(/^#/, '').split('?')[0].split('/');
   if (!routes[name]) name = homeRoute();
   const sec = sectionOf(name);
   const tab = sec.tabs.find((t) => t.id === name);

@@ -1,0 +1,101 @@
+// Головна B2B: що потребує дій адміністратора (для черги на головній сайту), головна кабінету партнера
+// і виписка взаєморозрахунків (рахунки закупівель і оплати з залишком на кожну дату).
+import { fail, need, round2, kyivDay } from '../../core/common.js';
+import { orderNo, DEBT } from './orders.js';
+
+const today = () => kyivDay();
+const dayOf = (v) => String(v || '').slice(0, 10);
+// Закупівля з виставленим рахунком (лише такі — у виписці).
+const INVOICED = `kind = 'supply' AND invoice_no != '' AND status NOT IN ('cancelled', 'draft', 'confirm', 'open')`;
+
+export function mountB2bHome(app, { db, myPartner, orders }) {
+  // ---------- адмін: що чекає дій (коротко, для головної сторінки) ----------
+  async function attention() {
+    const [st, checks, overdue, clientsNew] = await Promise.all([
+      db.all(`SELECT status, COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND status IN ('invoice_wait') GROUP BY status`),
+      db.get(`SELECT COUNT(*) AS n FROM b2b_payments WHERE order_id IS NULL AND dismissed = 0 AND candidates != '[]'`),
+      db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(total - paid_amount), 0) AS sum FROM b2b_orders WHERE kind = 'supply' AND status IN ${DEBT} AND due_date != '' AND due_date < ?`, [today()]),
+      db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE kind = 'client' AND status = 'new'`),
+    ]);
+    const n = (s) => st.find((r) => r.status === s)?.n || 0;
+    return [
+      { key: 'b2b_invoice', level: 'warn', count: n('invoice_wait'), label: 'Закупівлі партнерів чекають рахунку', link: '#/b2borders' },
+      { key: 'b2b_clients', level: 'warn', count: clientsNew?.n || 0, label: 'Замовлення клієнтів партнерів не передані в CRM', link: '#/b2bclients' },
+      { key: 'b2b_paycheck', level: 'warn', count: checks?.n || 0, label: 'Платежі B2B: перевірити, в яку закупівлю зарахувати', link: '#/payments' },
+      { key: 'b2b_overdue', level: 'bad', count: overdue?.n || 0, label: `Прострочена оплата закупівель${overdue?.n ? ` на ${round2(overdue.sum).toLocaleString('uk-UA')} грн` : ''}`, link: '#/b2bpartners' },
+    ].filter((x) => x.count > 0);
+  }
+
+  // ---------- партнер: головна кабінету ----------
+  app.get('/api/b2b/p/home', async (c) => {
+    const p = await myPartner(c);
+    const [confirm, drafts, pending, recent, debt, postpay] = await Promise.all([
+      db.all(`SELECT id, total, created_at FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status = 'confirm' ORDER BY id DESC LIMIT 20`, [p.id]),
+      db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status = 'draft'`, [p.id]),
+      db.all(`SELECT id, client_name FROM b2b_orders WHERE partner_id = ? AND kind = 'client' AND COALESCE(pending, '') != '' ORDER BY id DESC LIMIT 20`, [p.id]),
+      db.all(`SELECT id, kind, status, total, client_name, created_at FROM b2b_orders WHERE partner_id = ? AND status NOT IN ('open') ORDER BY id DESC LIMIT 8`, [p.id]),
+      orders.debtOf(p.id),
+      orders.postpayInfo(p),
+    ]);
+    const todo = [
+      ...confirm.map((o) => ({ text: `Підтвердіть закупівлю ${orderNo(o.id)}, яку підготував менеджер`, link: `#/porders/${o.id}` })),
+      ...pending.map((o) => ({ text: `Менеджер змінив замовлення ${orderNo(o.id)} (${o.client_name || 'клієнт'}) — підтвердіть або відхиліть зміни`, link: `#/pclients/${o.id}` })),
+      ...(drafts?.n ? [{ text: `Чернетки закупівель: ${drafts.n} — відправте або видаліть`, link: '#/porders' }] : []),
+      ...debt.rows.filter((o) => o.overdue).map((o) => ({ text: `Прострочено оплату ${o.number}: ${o.due.toLocaleString('uk-UA')} грн (${o.overdue} дн.)`, link: `#/porders/${o.id}`, bad: true })),
+    ];
+    const next = debt.rows.filter((o) => o.due_date && !o.overdue).sort((a, b) => a.due_date.localeCompare(b.due_date))[0];
+    return c.json({
+      partner: { name: p.name, paused: Boolean(p.paused) },
+      todo,
+      debt: { total: debt.total, overdue: debt.overdue, next: next ? { number: next.number, id: next.id, due: next.due, due_date: next.due_date } : null },
+      postpay: { days: postpay.days, limit: postpay.limit, used: postpay.used },
+      recent: recent.map((o) => ({ id: o.id, number: orderNo(o.id), kind: o.kind, status: o.status, total: o.total, client_name: o.client_name || '', created_at: o.created_at })),
+    });
+  });
+
+  // ---------- виписка взаєморозрахунків ----------
+  // Нараховано — рахунки закупівель (за датою рахунку); оплачено — платежі Opendatabot, зараховані в ці закупівлі,
+  // і оплати, позначені вручну (різниця між «оплачено» і платежами). Сальдо = нараховано − оплачено.
+  async function statement(partnerId, from, to) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) throw fail(400, 'Вкажіть період: дати «з» і «по».');
+    const [sup, pays] = await Promise.all([
+      db.all(`SELECT id, invoice_no, invoice_date, created_at, total, paid_amount, paid_at, paid_by, entity FROM b2b_orders WHERE partner_id = ? AND ${INVOICED}`, [partnerId]),
+      db.all(`SELECT p.order_id, p.amount, p.date, p.payer_name FROM b2b_payments p JOIN b2b_orders o ON o.id = p.order_id WHERE o.partner_id = ?`, [partnerId]),
+    ]);
+    const events = [];
+    const linked = new Map();
+    for (const t of pays) {
+      linked.set(t.order_id, round2((linked.get(t.order_id) || 0) + t.amount));
+      events.push({ date: dayOf(t.date), kind: 'pay', doc: `Оплата за ${orderNo(t.order_id)}`, payer: t.payer_name || '', credit: round2(t.amount), order_id: t.order_id });
+    }
+    for (const o of sup) {
+      events.push({ date: dayOf(o.invoice_date || o.created_at), kind: 'invoice', doc: `Рахунок № ${o.invoice_no} · ${orderNo(o.id)}`, payer: String(o.entity || '').split('\n')[0], debit: round2(o.total), order_id: o.id });
+      const manual = round2((o.paid_amount || 0) - (linked.get(o.id) || 0));
+      if (o.paid_by && o.paid_by !== 'Opendatabot' && manual > 0.004) {
+        events.push({ date: dayOf(o.paid_at || o.invoice_date), kind: 'manual', doc: `Оплату позначено вручну · ${orderNo(o.id)}`, payer: o.paid_by, credit: manual, order_id: o.id });
+      }
+    }
+    events.sort((a, b) => a.date.localeCompare(b.date) || (a.kind === 'invoice' ? -1 : 1));
+    let opening = 0;
+    for (const e of events) if (e.date < from) opening = round2(opening + (e.debit || 0) - (e.credit || 0));
+    let bal = opening;
+    const rows = events.filter((e) => e.date >= from && e.date <= to).map((e) => {
+      bal = round2(bal + (e.debit || 0) - (e.credit || 0));
+      return { ...e, number: orderNo(e.order_id), balance: bal };
+    });
+    const sum = (k) => round2(rows.reduce((t, r) => t + (r[k] || 0), 0));
+    return { from, to, opening, debit: sum('debit'), credit: sum('credit'), closing: bal, rows };
+  }
+  app.get('/api/b2b/p/statement', async (c) => {
+    const p = await myPartner(c);
+    return c.json({ partner: p.name, ...(await statement(p.id, c.req.query('from') || '', c.req.query('to') || '')) });
+  });
+  app.get('/api/b2b/partners/:id/statement', async (c) => {
+    need(c, 'b2b.admin');
+    const p = await db.get(`SELECT id, name FROM b2b_partners WHERE id = ?`, [c.req.param('id')]);
+    if (!p) throw fail(404, 'Партнера не знайдено.');
+    return c.json({ partner: p.name, ...(await statement(p.id, c.req.query('from') || '', c.req.query('to') || '')) });
+  });
+
+  return { attention };
+}

@@ -3055,8 +3055,8 @@ function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {}, serv
     else if (!demo && /^\d{1,8}$/.test(orderId)) crmOrder.orderId = String(orderId);
     const prefs = await db.get(`SELECT * FROM order_prefs WHERE order_id = ?`, [orderId]);
     const edits = prefs?.edits ? JSON.parse(prefs.edits) : null;
-    const today2 = kyivDay();
-    const autoInvoiceDate = s.invoice_date_mode === "order" ? String(crmOrder.date || "").slice(0, 10) || today2 : today2;
+    const today3 = kyivDay();
+    const autoInvoiceDate = s.invoice_date_mode === "order" ? String(crmOrder.date || "").slice(0, 10) || today3 : today3;
     crmOrder.invoiceDate = autoInvoiceDate;
     const order2 = applyEdits(crmOrder, edits);
     const allFops = await db.all(`SELECT * FROM fops WHERE active = 1`);
@@ -3423,11 +3423,11 @@ function mountRahunky(app, { db, services, onCleanup }) {
       i.unit = "\u0448\u0442";
       i.sum = round2(i.qty * i.price);
     }
-    const today2 = kyivDay();
+    const today3 = kyivDay();
     const { signature, stamp, ...fopRest } = fop;
     return {
       number: String(number),
-      date: /^\d{4}-\d{2}-\d{2}$/.test(String(b.date || "")) ? b.date : today2,
+      date: /^\d{4}-\d{2}-\d{2}$/.test(String(b.date || "")) ? b.date : today3,
       source: b.source === "crm" ? "crm" : "manual",
       orderRef: String(b.order_ref || ""),
       fop: { ...fopRest, signature, stamp, warning_text: fop.warning_text || DEFAULT_WARNING },
@@ -3851,11 +3851,11 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     if (!s.lpcrm_subdomain || !s.lpcrm_key) return { skipped: true, reason: "LP-CRM \u043D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E" };
     const cr = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
     const st = await getSt();
-    const today2 = kyivDay();
-    const from = addDays(today2, -1);
+    const today3 = kyivDay();
+    const from = addDays(today3, -1);
     const listed = /* @__PURE__ */ new Map();
     for (const x of [...st.okStatuses, ...st.refuseStatuses]) {
-      const j = await lp(cr, "getOrdersIdByStatus", { status: String(x), date_start: from, date_end: today2 }).catch(() => null);
+      const j = await lp(cr, "getOrdersIdByStatus", { status: String(x), date_start: from, date_end: today3 }).catch(() => null);
       if (j?.status === "ok") for (const code of asList(j.data).map(String).filter(Boolean)) listed.set(code, x);
     }
     const codes = [...listed.keys()];
@@ -3875,7 +3875,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
           ON CONFLICT(code) DO UPDATE SET ttn = excluded.ttn, day = excluded.day, user = excluded.user, status = excluded.status`, [o.code, o.ttn || "", o.day, o.user, o.status]]));
         const ttns = [...new Set(got.map((o) => o.ttn).filter(Boolean))];
         if (ttns.length) {
-          const week = addDays(today2, -7);
+          const week = addDays(today3, -7);
           const [a, b] = await Promise.all([
             db.all(`SELECT code, user, ttn, status, day FROM an_ttn_recent WHERE ttn IN (SELECT value FROM json_each(?)) AND day >= ?`, [JSON.stringify(ttns), week]),
             db.all(`SELECT code, user, ttn, status, day FROM an_orders WHERE ttn IN (SELECT value FROM json_each(?)) AND status != 0 AND day >= ?`, [JSON.stringify(ttns), week])
@@ -3886,9 +3886,9 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       }
     }
     const pruneDay = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_prune'`))?.value || "";
-    if (pruneDay !== today2) {
-      await db.run(`DELETE FROM an_ttn_recent WHERE day < ?`, [addDays(today2, -10)]);
-      await putSetting2("an_ttn_prune", today2);
+    if (pruneDay !== today3) {
+      await db.run(`DELETE FROM an_ttn_recent WHERE day < ?`, [addDays(today3, -10)]);
+      await putSetting2("an_ttn_prune", today3);
     }
     const res = { at: new Date(now).toISOString(), listed: codes.length, fetched, dups: found };
     await putSetting2("an_ttn_last", JSON.stringify(res));
@@ -4246,13 +4246,13 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       await db.batch([[`DELETE FROM an_items`, []], [`DELETE FROM an_orders`, []], [`DELETE FROM an_day_bounds`, []], [`UPDATE an_products SET fetched = 0`, []]]);
     }
     const firstRun = !(await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`))?.value;
-    const today2 = kyivDay();
-    const keepFrom = addMonths(monthStart(today2), -st.months);
-    const start = mode === "today" || mode === "daily" ? addDays(today2, -29) : keepFrom;
+    const today3 = kyivDay();
+    const keepFrom = addMonths(monthStart(today3), -st.months);
+    const start = mode === "today" || mode === "daily" ? addDays(today3, -29) : keepFrom;
     const statuses = [...st.okStatuses, ...st.refuseStatuses];
     const units = [];
-    for (let m = monthStart(today2); m >= monthStart(start); m = addMonths(m, -1)) {
-      const to = monthEnd(m) > today2 ? today2 : monthEnd(m);
+    for (let m = monthStart(today3); m >= monthStart(start); m = addMonths(m, -1)) {
+      const to = monthEnd(m) > today3 ? today3 : monthEnd(m);
       const from = m < start ? start : m;
       for (const s of statuses) units.push({ s, from, to });
     }
@@ -4262,10 +4262,10 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       start,
       keepFrom,
       firstRun,
-      today: today2,
+      today: today3,
       // Повні дані (сума, товари, менеджер) наново — лише для сьогоднішніх замовлень; решта — лише нові
       // і ті, у яких змінився статус (щоденне оновлення більше не перечитує весь тиждень).
-      refetchFrom: mode === "today" || mode === "daily" ? today2 : "9999-12-31",
+      refetchFrom: mode === "today" || mode === "daily" ? today3 : "9999-12-31",
       phase: "units",
       units,
       unitsTotal: units.length,
@@ -4362,9 +4362,9 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
         }
         if (state.phase === "deliv") {
           const fill = await getJson("an_deliv_fill") || {};
-          const today2 = kyivDay();
-          if (fill.day !== today2) {
-            fill.day = today2;
+          const today3 = kyivDay();
+          if (fill.day !== today3) {
+            fill.day = today3;
             fill.n = 0;
           }
           if (fill.done || fill.n >= DELIV_PER_DAY || (state.stats.deliv || 0) >= DELIV_PER_RUN) {
@@ -4472,9 +4472,9 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
   app.post("/api/an/query", async (c) => {
     const b = await c.req.json();
     const st = await getSt();
-    const today2 = kyivDay();
-    const from = isDay(b.from) ? b.from : addDays(today2, -6);
-    const to = isDay(b.to) && b.to >= from ? b.to : today2;
+    const today3 = kyivDay();
+    const from = isDay(b.from) ? b.from : addDays(today3, -6);
+    const to = isDay(b.to) && b.to >= from ? b.to : today3;
     if (daysBetween(from, to) > 400) throw fail(400, "\u041F\u0435\u0440\u0456\u043E\u0434 \u0437\u0430\u0432\u0435\u043B\u0438\u043A\u0438\u0439 (\u043C\u0430\u043A\u0441\u0438\u043C\u0443\u043C 400 \u0434\u043D\u0456\u0432).");
     const cmp = st.compare && isDay(b.cmpFrom) && isDay(b.cmpTo) && b.cmpTo >= b.cmpFrom ? { from: b.cmpFrom, to: b.cmpTo } : null;
     const ints = (a) => Array.isArray(a) ? a.map((x) => parseInt(x, 10)).filter((x) => Number.isFinite(x)).slice(0, 40) : [];
@@ -4494,7 +4494,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const ph = (a) => a.map(() => "?").join(",");
     const rfExpr = `(CASE WHEN o.status IN (${rf.join(",") || "-1"}) THEN 1 ELSE 0 END)`;
     const ver = (await db.get(`SELECT value FROM settings WHERE key = 'an_ver'`))?.value || "0";
-    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today: today2, kpi: 4 }));
+    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today: today3, kpi: 4 }));
     const hit = await db.get(`SELECT value FROM an_cache WHERE key = ?`, [cacheKey]);
     if (hit) return c.body(hit.value, 200, { "content-type": "application/json; charset=UTF-8" });
     function base(range, { items = itemLevel, skipCats = false } = {}) {
@@ -5218,7 +5218,11 @@ ${h2(message.slice(0, 500))}${path ? `
     await db.run(`DELETE FROM error_log`);
     return c.json({ ok: true });
   });
-  return { log };
+  async function attention() {
+    const r = await db.get(`SELECT COUNT(*) AS n FROM error_log WHERE at > ?`, [new Date(Date.now() - 864e5).toISOString()]);
+    return r?.n ? [{ key: "errors", level: "bad", count: r.n, label: "\u0417\u0431\u043E\u0457 \u0456\u043D\u0442\u0435\u0433\u0440\u0430\u0446\u0456\u0439 \u0437\u0430 \u0434\u043E\u0431\u0443 (LP-CRM, Opendatabot, \u041D\u041F\u2026)", link: "#/errors" }] : [];
+  }
+  return { log, attention };
 }
 
 // src/modules/b2b/filters.js
@@ -7456,8 +7460,8 @@ function mountB2bStats(app, { db, myPartner }) {
     return { cat: new Map(cats.map((r) => [r.id, r.name])), brand: new Map([...brands.map((r) => [r.id, r.name]), [0, "\u0406\u043D\u0448\u0456"]]) };
   }
   async function report(partnerId, q) {
-    const today2 = kyivDayOf((/* @__PURE__ */ new Date()).toISOString());
-    const to = isDay2(q.to) ? q.to : today2;
+    const today3 = kyivDayOf((/* @__PURE__ */ new Date()).toISOString());
+    const to = isDay2(q.to) ? q.to : today3;
     const from = isDay2(q.from) && q.from <= to ? q.from : addDays2(to, -29);
     const days = Math.min(daysBetween2(from, to), 400);
     const prevTo = addDays2(from, -1);
@@ -8896,6 +8900,94 @@ ${link(c, `porders/${o.id}`)}`);
   });
 }
 
+// src/modules/b2b/home.js
+var today2 = () => kyivDay();
+var dayOf = (v) => String(v || "").slice(0, 10);
+var INVOICED2 = `kind = 'supply' AND invoice_no != '' AND status NOT IN ('cancelled', 'draft', 'confirm', 'open')`;
+function mountB2bHome(app, { db, myPartner, orders }) {
+  async function attention() {
+    const [st, checks, overdue, clientsNew] = await Promise.all([
+      db.all(`SELECT status, COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND status IN ('invoice_wait') GROUP BY status`),
+      db.get(`SELECT COUNT(*) AS n FROM b2b_payments WHERE order_id IS NULL AND dismissed = 0 AND candidates != '[]'`),
+      db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(total - paid_amount), 0) AS sum FROM b2b_orders WHERE kind = 'supply' AND status IN ${DEBT} AND due_date != '' AND due_date < ?`, [today2()]),
+      db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE kind = 'client' AND status = 'new'`)
+    ]);
+    const n = (s) => st.find((r) => r.status === s)?.n || 0;
+    return [
+      { key: "b2b_invoice", level: "warn", count: n("invoice_wait"), label: "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432 \u0447\u0435\u043A\u0430\u044E\u0442\u044C \u0440\u0430\u0445\u0443\u043D\u043A\u0443", link: "#/b2borders" },
+      { key: "b2b_clients", level: "warn", count: clientsNew?.n || 0, label: "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432 \u043D\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u0456 \u0432 CRM", link: "#/b2bclients" },
+      { key: "b2b_paycheck", level: "warn", count: checks?.n || 0, label: "\u041F\u043B\u0430\u0442\u0435\u0436\u0456 B2B: \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438, \u0432 \u044F\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u0442\u0438", link: "#/payments" },
+      { key: "b2b_overdue", level: "bad", count: overdue?.n || 0, label: `\u041F\u0440\u043E\u0441\u0442\u0440\u043E\u0447\u0435\u043D\u0430 \u043E\u043F\u043B\u0430\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C${overdue?.n ? ` \u043D\u0430 ${round2(overdue.sum).toLocaleString("uk-UA")} \u0433\u0440\u043D` : ""}`, link: "#/b2bpartners" }
+    ].filter((x) => x.count > 0);
+  }
+  app.get("/api/b2b/p/home", async (c) => {
+    const p = await myPartner(c);
+    const [confirm, drafts, pending2, recent, debt, postpay] = await Promise.all([
+      db.all(`SELECT id, total, created_at FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status = 'confirm' ORDER BY id DESC LIMIT 20`, [p.id]),
+      db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status = 'draft'`, [p.id]),
+      db.all(`SELECT id, client_name FROM b2b_orders WHERE partner_id = ? AND kind = 'client' AND COALESCE(pending, '') != '' ORDER BY id DESC LIMIT 20`, [p.id]),
+      db.all(`SELECT id, kind, status, total, client_name, created_at FROM b2b_orders WHERE partner_id = ? AND status NOT IN ('open') ORDER BY id DESC LIMIT 8`, [p.id]),
+      orders.debtOf(p.id),
+      orders.postpayInfo(p)
+    ]);
+    const todo = [
+      ...confirm.map((o) => ({ text: `\u041F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)}, \u044F\u043A\u0443 \u043F\u0456\u0434\u0433\u043E\u0442\u0443\u0432\u0430\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440`, link: `#/porders/${o.id}` })),
+      ...pending2.map((o) => ({ text: `\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0437\u043C\u0456\u043D\u0438\u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${o.client_name || "\u043A\u043B\u0456\u0454\u043D\u0442"}) \u2014 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0456\u0442\u044C \u0430\u0431\u043E \u0432\u0456\u0434\u0445\u0438\u043B\u0456\u0442\u044C \u0437\u043C\u0456\u043D\u0438`, link: `#/pclients/${o.id}` })),
+      ...drafts?.n ? [{ text: `\u0427\u0435\u0440\u043D\u0435\u0442\u043A\u0438 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C: ${drafts.n} \u2014 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u0442\u0435 \u0430\u0431\u043E \u0432\u0438\u0434\u0430\u043B\u0456\u0442\u044C`, link: "#/porders" }] : [],
+      ...debt.rows.filter((o) => o.overdue).map((o) => ({ text: `\u041F\u0440\u043E\u0441\u0442\u0440\u043E\u0447\u0435\u043D\u043E \u043E\u043F\u043B\u0430\u0442\u0443 ${o.number}: ${o.due.toLocaleString("uk-UA")} \u0433\u0440\u043D (${o.overdue} \u0434\u043D.)`, link: `#/porders/${o.id}`, bad: true }))
+    ];
+    const next = debt.rows.filter((o) => o.due_date && !o.overdue).sort((a, b) => a.due_date.localeCompare(b.due_date))[0];
+    return c.json({
+      partner: { name: p.name, paused: Boolean(p.paused) },
+      todo,
+      debt: { total: debt.total, overdue: debt.overdue, next: next ? { number: next.number, id: next.id, due: next.due, due_date: next.due_date } : null },
+      postpay: { days: postpay.days, limit: postpay.limit, used: postpay.used },
+      recent: recent.map((o) => ({ id: o.id, number: orderNo(o.id), kind: o.kind, status: o.status, total: o.total, client_name: o.client_name || "", created_at: o.created_at }))
+    });
+  });
+  async function statement(partnerId, from, to) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043F\u0435\u0440\u0456\u043E\u0434: \u0434\u0430\u0442\u0438 \xAB\u0437\xBB \u0456 \xAB\u043F\u043E\xBB.");
+    const [sup, pays] = await Promise.all([
+      db.all(`SELECT id, invoice_no, invoice_date, created_at, total, paid_amount, paid_at, paid_by, entity FROM b2b_orders WHERE partner_id = ? AND ${INVOICED2}`, [partnerId]),
+      db.all(`SELECT p.order_id, p.amount, p.date, p.payer_name FROM b2b_payments p JOIN b2b_orders o ON o.id = p.order_id WHERE o.partner_id = ?`, [partnerId])
+    ]);
+    const events = [];
+    const linked = /* @__PURE__ */ new Map();
+    for (const t of pays) {
+      linked.set(t.order_id, round2((linked.get(t.order_id) || 0) + t.amount));
+      events.push({ date: dayOf(t.date), kind: "pay", doc: `\u041E\u043F\u043B\u0430\u0442\u0430 \u0437\u0430 ${orderNo(t.order_id)}`, payer: t.payer_name || "", credit: round2(t.amount), order_id: t.order_id });
+    }
+    for (const o of sup) {
+      events.push({ date: dayOf(o.invoice_date || o.created_at), kind: "invoice", doc: `\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${o.invoice_no} \xB7 ${orderNo(o.id)}`, payer: String(o.entity || "").split("\n")[0], debit: round2(o.total), order_id: o.id });
+      const manual = round2((o.paid_amount || 0) - (linked.get(o.id) || 0));
+      if (o.paid_by && o.paid_by !== "Opendatabot" && manual > 4e-3) {
+        events.push({ date: dayOf(o.paid_at || o.invoice_date), kind: "manual", doc: `\u041E\u043F\u043B\u0430\u0442\u0443 \u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \u0432\u0440\u0443\u0447\u043D\u0443 \xB7 ${orderNo(o.id)}`, payer: o.paid_by, credit: manual, order_id: o.id });
+      }
+    }
+    events.sort((a, b) => a.date.localeCompare(b.date) || (a.kind === "invoice" ? -1 : 1));
+    let opening = 0;
+    for (const e of events) if (e.date < from) opening = round2(opening + (e.debit || 0) - (e.credit || 0));
+    let bal = opening;
+    const rows = events.filter((e) => e.date >= from && e.date <= to).map((e) => {
+      bal = round2(bal + (e.debit || 0) - (e.credit || 0));
+      return { ...e, number: orderNo(e.order_id), balance: bal };
+    });
+    const sum = (k) => round2(rows.reduce((t, r) => t + (r[k] || 0), 0));
+    return { from, to, opening, debit: sum("debit"), credit: sum("credit"), closing: bal, rows };
+  }
+  app.get("/api/b2b/p/statement", async (c) => {
+    const p = await myPartner(c);
+    return c.json({ partner: p.name, ...await statement(p.id, c.req.query("from") || "", c.req.query("to") || "") });
+  });
+  app.get("/api/b2b/partners/:id/statement", async (c) => {
+    need(c, "b2b.admin");
+    const p = await db.get(`SELECT id, name FROM b2b_partners WHERE id = ?`, [c.req.param("id")]);
+    if (!p) throw fail(404, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return c.json({ partner: p.name, ...await statement(p.id, c.req.query("from") || "", c.req.query("to") || "") });
+  });
+  return { attention };
+}
+
 // src/modules/b2b/index.js
 var partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 var BATCH = 50;
@@ -8942,9 +9034,9 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
         (SELECT COUNT(*) FROM users u WHERE u.partner_id = p.id AND u.role = 'partner' AND u.added_by LIKE 'partner:%') AS users_by_partner,
         (SELECT COUNT(*) FROM b2b_margins m WHERE m.partner_id = p.id) AS brands
       FROM b2b_partners p WHERE COALESCE(p.deleted_at, '') = '' ORDER BY p.active DESC, p.name`);
-    const today2 = (/* @__PURE__ */ new Date()).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+    const today3 = (/* @__PURE__ */ new Date()).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
     const debt = new Map((await db.all(`SELECT partner_id, SUM(total - paid_amount) AS due, SUM(CASE WHEN due_date != '' AND due_date < ? THEN total - paid_amount ELSE 0 END) AS overdue,
-      COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND status IN ('pay_wait', 'partial') GROUP BY partner_id`, [today2])).map((r) => [r.partner_id, r]));
+      COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND status IN ('pay_wait', 'partial') GROUP BY partner_id`, [today3])).map((r) => [r.partner_id, r]));
     const ship = new Map((await db.all(`SELECT s.partner_id, SUM(co.total) AS sum, COUNT(co.id) AS n FROM b2b_orders s
       JOIN b2b_orders co ON co.supply_id = s.id AND co.kind = 'client' AND co.status = 'crm'
       WHERE s.kind = 'supply' AND s.status IN ('open', 'invoice_wait') GROUP BY s.partner_id`)).map((r) => [r.partner_id, r]));
@@ -9283,10 +9375,10 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     ]);
     return c.json({ rows: rows.map((r) => ({ ...r, brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456" })), state });
   });
-  async function catalogState(today2 = kyivDay()) {
+  async function catalogState(today3 = kyivDay()) {
     const [last, left] = await Promise.all([
       db.get(`SELECT value FROM settings WHERE key = 'b2b_catalog_sync'`),
-      db.get(`SELECT COUNT(*) AS n FROM b2b_catalog WHERE hidden = 0 AND checked_at < ? AND (manual = 1 OR brand_id IN (SELECT brand_id FROM b2b_margins))`, [today2])
+      db.get(`SELECT COUNT(*) AS n FROM b2b_catalog WHERE hidden = 0 AND checked_at < ? AND (manual = 1 OR brand_id IN (SELECT brand_id FROM b2b_margins))`, [today3])
     ]);
     return { lastSync: last?.value || "", stale: left?.n || 0 };
   }
@@ -9314,7 +9406,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const b = await c.req.json().catch(() => ({}));
     const run = String(b.run || "");
     const fresh = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(run) && Math.abs(Date.now() - Date.parse(run)) < 3 * 3600 * 1e3;
-    const today2 = fresh ? run : kyivDay();
+    const today3 = fresh ? run : kyivDay();
     const stamp = nowIso();
     await db.batch([
       [`INSERT OR IGNORE INTO b2b_catalog (product_id, name, brand_id) SELECT product_id, COALESCE(name, ''), brand_id FROM an_products WHERE product_id > 0`, []],
@@ -9324,7 +9416,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const todo = await db.all(
       `SELECT product_id, rrp, brand_id FROM b2b_catalog WHERE hidden = 0 AND checked_at < ? AND (manual = 1 OR brand_id IN (SELECT brand_id FROM b2b_margins))
        ORDER BY checked_at LIMIT ?`,
-      [today2, BATCH * BATCHES_PER_CALL]
+      [today3, BATCH * BATCHES_PER_CALL]
     );
     const at = nowIso();
     let changed = 0;
@@ -9357,7 +9449,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       await db.batch(st);
     }
     await db.run(`INSERT INTO settings (key, value) VALUES ('b2b_catalog_sync', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [at]);
-    const state = await catalogState(today2);
+    const state = await catalogState(today3);
     return c.json({ ok: true, checked: todo.length, changed, items, left: state.stale, lastSync: at });
   });
   app.get("/api/b2b/brands", async (c) => {
@@ -9443,6 +9535,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   const pay = mountB2bPay(app, { db, services, orders, hooks });
   onCleanup(() => hooks.cleanup?.());
   mountB2bStats(app, { db, myPartner });
+  const home = mountB2bHome(app, { db, myPartner, orders });
   mountB2bPrices(app, { db, services, partnerPrice });
   app.post("/api/b2b/partners/:id/tg-group", async (c) => {
     need(c, "b2b.admin");
@@ -9469,7 +9562,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   };
   const tgGroupMoved = (from, to) => db.run(`UPDATE b2b_partners SET tg_group = ? WHERE tg_group = ?`, [to, from]);
   const tgGroupLeft = (chat) => db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '' WHERE tg_group = ?`, [chat]);
-  return { crmOrderInfo: orders.crmOrderInfo, partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupMessage: tgdocs.tgGroupMessage, onPayments: pay.onPayments, payInfo: pay.payInfo };
+  return { attention: home.attention, crmOrderInfo: orders.crmOrderInfo, partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupMessage: tgdocs.tgGroupMessage, onPayments: pay.onPayments, payInfo: pay.payInfo };
 }
 
 // src/integrations/novaposhta.js
@@ -9707,10 +9800,10 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
     const phone = phone9(b.phone);
     const refs = (Array.isArray(b.refs) ? b.refs : []).map((x) => String(x || "").trim()).filter((x) => x.length >= 3).slice(0, 3);
     if (phone.length < 9 && !refs.length) throw fail(400, "\u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043D\u0435\u043C\u0430\u0454 \u043D\u0456 \u0422\u0422\u041D, \u043D\u0456 \u0442\u0435\u043B\u0435\u0444\u043E\u043D\u0443 \u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0447\u0430 \u2014 \u0448\u0443\u043A\u0430\u0442\u0438 \u043D\u0435\u043C\u0430 \u0437\u0430 \u0447\u0438\u043C.");
-    const today2 = kyivDay();
-    const from = /^\d{4}-\d{2}-\d{2}/.test(String(b.date || "")) ? String(b.date).slice(0, 10) : today2;
-    const to = addDays3(from, SEARCH_DAYS) < today2 ? addDays3(from, SEARCH_DAYS) : today2;
-    if (from > today2) throw fail(400, "\u0414\u0430\u0442\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 \u043C\u0430\u0439\u0431\u0443\u0442\u043D\u044C\u043E\u043C\u0443 \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
+    const today3 = kyivDay();
+    const from = /^\d{4}-\d{2}-\d{2}/.test(String(b.date || "")) ? String(b.date).slice(0, 10) : today3;
+    const to = addDays3(from, SEARCH_DAYS) < today3 ? addDays3(from, SEARCH_DAYS) : today3;
+    if (from > today3) throw fail(400, "\u0414\u0430\u0442\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 \u043C\u0430\u0439\u0431\u0443\u0442\u043D\u044C\u043E\u043C\u0443 \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
     const match2 = (docs) => docs.find((d) => phone.length === 9 && d.phone === phone || d.orderRef && refs.includes(d.orderRef));
     const lookup = () => db.get(
       `SELECT ttn, account_id FROM (
@@ -9733,7 +9826,7 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
       for (const day of days) {
         const st = state.get(`${a.id}|${day}`);
         const fresh = st?.at && Date.now() - Date.parse(st.at) < TODAY_REFRESH_MS;
-        if (st?.done && (day < today2 || fresh)) continue;
+        if (st?.done && (day < today3 || fresh)) continue;
         let page = st?.done || !st ? 1 : st.next_page;
         for (; ; ) {
           if (pages >= PAGES_PER_CALL) throw pending();
@@ -10880,7 +10973,16 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
       crm_id: r.crm_id
     };
   }
-  return { orderInfo };
+  async function attention() {
+    const since = new Date(Date.now() - 45 * 864e5).toISOString().slice(0, 10);
+    const r = await db.get(`SELECT SUM(status IN ('new', 'updated')) AS todo, SUM(status IN ('confirmed', 'problem') AND ttn = '' AND uzd_status IN ('verified', 'skipped')) AS ready
+      FROM rzs_orders WHERE created_at >= ?`, [since]);
+    return [
+      { key: "rz_todo", level: "warn", count: r?.todo || 0, label: "\u041D\u043E\u0432\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u2014 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0438", link: "#/rzorders" },
+      { key: "rz_ready", level: "info", count: r?.ready || 0, label: "\u0420\u043E\u0437\u0435\u0442\u043A\u0430: \u043C\u043E\u0436\u043D\u0430 \u0441\u0442\u0432\u043E\u0440\u0438\u0442\u0438 \u0422\u0422\u041D", link: "#/rzorders" }
+    ].filter((x) => x.count > 0);
+  }
+  return { orderInfo, attention };
 }
 
 // src/modules/payments/index.js
@@ -11560,6 +11662,20 @@ function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, notify = a
   return { linkForRahunok, txs, txByPayer, refresh };
 }
 
+// src/modules/home/index.js
+function mountHome(app, { services }) {
+  const SOURCES = [
+    ["b2b", "b2b.admin"],
+    ["retail", "docs.view"],
+    ["errlog", "users"]
+  ];
+  app.get("/api/home", async (c) => {
+    const u = c.get("user");
+    const parts = await Promise.all(SOURCES.filter(([, perm]) => can(u, perm)).map(([name]) => Promise.resolve(services[name]?.attention?.()).catch(() => [])));
+    return c.json({ items: parts.flat().filter(Boolean) });
+  });
+}
+
 // src/app.js
 function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, odbBase = ODB_BASE, shared: shared2 = {} }) {
   const app = new Hono3();
@@ -11616,6 +11732,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   services.retail = mountRetail(app, ctx);
   mountAnalytics(app, ctx);
   services.notify = mountTg(app, ctx);
+  mountHome(app, ctx);
   services.payments = mountOdb(app, { ...ctx, base: odbBase, notify: (...a) => services.notify.notify(...a), onTx: (ids, origin) => services.b2b?.onPayments?.(ids, origin) });
   return app;
 }

@@ -706,5 +706,15 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
       ttn: r.ttn, tracking_status: r.tracking_status, document_link: r.document_link, invoice_no: r.invoice_no, docs_at: r.docs_at, crm_id: r.crm_id,
     };
   }
-  return { orderInfo };
+  // Для головної сторінки: що в Розетці чекає дій.
+  async function attention() {
+    const since = new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
+    const r = await db.get(`SELECT SUM(status IN ('new', 'updated')) AS todo, SUM(status IN ('confirmed', 'problem') AND ttn = '' AND uzd_status IN ('verified', 'skipped')) AS ready
+      FROM rzs_orders WHERE created_at >= ?`, [since]);
+    return [
+      { key: 'rz_todo', level: 'warn', count: r?.todo || 0, label: 'Нові замовлення Розетки — підтвердити', link: '#/rzorders' },
+      { key: 'rz_ready', level: 'info', count: r?.ready || 0, label: 'Розетка: можна створити ТТН', link: '#/rzorders' },
+    ].filter((x) => x.count > 0);
+  }
+  return { orderInfo, attention };
 }

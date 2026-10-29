@@ -181,4 +181,23 @@ assert.deepEqual(amb.b2b.candidates, [s3, s4]);
 await hook({ amount: 4500, purpose: 'рах 104' });
 assert.equal((await order(s4)).status, 'paid');
 
+// ---------- 6. Виписка взаєморозрахунків, головна партнера, черга «Потребує дій» ----------
+// Рахунки: s1 18 000, s2/s3/s4/s5 по 4 500 (s6 скасовано — не входить) = 36 000.
+// Оплачено: s2, s4, s5 — платежами; s1 — платіж 9 000 + 9 000 «вручну»; s3 — ні. Сальдо = 4 500.
+const st = await req('GET', '/api/b2b/p/statement?from=2000-01-01&to=2099-12-31', null, A);
+assert.deepEqual([st.opening, st.debit, st.credit, st.closing], [0, 36000, 31500, 4500]);
+assert.ok(st.rows.some((r) => r.kind === 'manual' && r.credit === 9000 && r.order_id === s1), 'оплата вручну — різниця');
+assert.equal(st.rows.at(-1).balance, 4500, 'сальдо наростаючим');
+const stAdmin = await req('GET', `/api/b2b/partners/${pa.id}/statement?from=2000-01-01&to=2099-12-31`);
+assert.equal(stAdmin.closing, 4500, 'адмін бачить те саме');
+const future = await req('GET', '/api/b2b/p/statement?from=2099-01-01&to=2099-12-31', null, A);
+assert.deepEqual([future.opening, future.rows.length, future.closing], [4500, 0, 4500], 'сальдо на початок періоду');
+assert.match(await errOf(() => req('GET', '/api/b2b/p/statement?from=2026-02-01&to=2026-01-01', null, A)), /період/);
+const ph = await req('GET', '/api/b2b/p/home', null, A);
+assert.equal(ph.debt.total, 4500);
+assert.equal(ph.partner.name, 'Партнер А');
+const home = await req('GET', '/api/home');
+assert.ok(home.items.some((x) => x.key === 'b2b_paycheck' && x.count >= 1), 'неоднозначний платіж — у черзі');
+assert.equal((await errOf(() => req('GET', '/api/home', null, A))) !== '', true, 'партнерові — ні');
+
 console.log('OK — B2B: оплата закупівель з Opendatabot (авто, частково, перевірити, вручну)');
