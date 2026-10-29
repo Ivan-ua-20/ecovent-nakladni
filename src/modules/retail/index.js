@@ -28,12 +28,14 @@ const normSeat = (s) => Object.fromEntries(['lengthCm', 'widthCm', 'heightCm', '
 const goodSeat = (s) => ['lengthCm', 'widthCm', 'heightCm', 'weightKg'].every((k) => Number(s?.[k]) > 0);
 const seatOf = (s) => ({ lengthCm: round2(Number(s.lengthCm)), widthCm: round2(Number(s.widthCm)), heightCm: round2(Number(s.heightCm)), weightKg: round2(Number(s.weightKg)) });
 const userName = (u) => u?.name || u?.login || '';
+let lastTickTry = 0;
+const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-export function mountRetail(app, { db, fetchFn, services = {} }) {
+export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {} }) {
   // ================================================================ кабінети
   const publicAcc = (a, origin = '') => ({
     id: a.id, name: a.name, token: keyHint(a.token), price_list_id: a.price_list_id, crm_office: a.crm_office, crm_delivery: a.crm_delivery,
-    crm_site: a.crm_site, crm_field1: a.crm_field1 ?? '', active: a.active, synced_at: a.synced_at, hook_at: a.hook_at,
+    crm_site: a.crm_site, crm_field1: a.crm_field1 ?? '', notify_inv: !!a.notify_inv, notify_ttn: !!a.notify_ttn, notify_users: (() => { try { return JSON.parse(a.notify_users || '[]'); } catch { return []; } })(), active: a.active, synced_at: a.synced_at, hook_at: a.hook_at,
     hook: { url: origin ? `${origin}/api/rzs/hook/${a.id}` : '', user: a.hook_user, pass: a.hook_pass },
   });
   const accOf = async (id) => {
@@ -46,6 +48,12 @@ export function mountRetail(app, { db, fetchFn, services = {} }) {
     const origin = new URL(c.req.url).origin;
     return c.json((await db.all(`SELECT * FROM rzs_accounts ORDER BY active DESC, name`)).map((a) => publicAcc(a, origin)));
   });
+  // Кого можна вибрати для сповіщень (і чи підключено в нього Telegram-бота).
+  app.get('/api/rzs/notify-users', async (c) => {
+    need(c, 'api');
+    const users = await db.all(`SELECT id, login, name, role, tg_chat_id FROM users WHERE active = 1 AND role != 'partner' ORDER BY name, login`);
+    return c.json(users.map((u) => ({ id: u.id, name: u.name || u.login, tg: !!u.tg_chat_id, admin: ['owner', 'admin', 'admin_lite'].includes(u.role) })));
+  });
   const accFields = (b, cur = {}) => ({
     name: String(b.name ?? cur.name ?? '').trim().slice(0, 100),
     price_list_id: String(b.price_list_id ?? cur.price_list_id ?? '').replace(/\D/g, '').slice(0, 20),
@@ -53,6 +61,9 @@ export function mountRetail(app, { db, fetchFn, services = {} }) {
     crm_delivery: String(b.crm_delivery ?? cur.crm_delivery ?? '1').replace(/\D/g, '').slice(0, 10),
     crm_site: String(b.crm_site ?? cur.crm_site ?? '').trim().slice(0, 100),
     crm_field1: String(b.crm_field1 ?? cur.crm_field1 ?? 'Riteil(Rozetka)').trim().slice(0, 100),
+    notify_inv: b.notify_inv === undefined ? (cur.notify_inv ? 1 : 0) : (b.notify_inv ? 1 : 0),
+    notify_ttn: b.notify_ttn === undefined ? (cur.notify_ttn ? 1 : 0) : (b.notify_ttn ? 1 : 0),
+    notify_users: b.notify_users === undefined ? (cur.notify_users || '') : JSON.stringify((Array.isArray(b.notify_users) ? b.notify_users : []).map(Number).filter((x) => x > 0).slice(0, 50)),
     active: b.active === undefined ? (cur.active ?? 1) : (b.active ? 1 : 0),
   });
   app.post('/api/rzs/accounts', async (c) => {
@@ -79,8 +90,8 @@ export function mountRetail(app, { db, fetchFn, services = {} }) {
       token = t;
     }
     const pass = b.new_hook_pass ? randomToken(12) : cur.hook_pass;
-    await db.run(`UPDATE rzs_accounts SET name = ?, token = ?, price_list_id = ?, crm_office = ?, crm_delivery = ?, crm_site = ?, crm_field1 = ?, active = ?, hook_pass = ? WHERE id = ?`,
-      [f.name || cur.name, token, f.price_list_id, f.crm_office, f.crm_delivery, f.crm_site, f.crm_field1, f.active, pass, cur.id]);
+    await db.run(`UPDATE rzs_accounts SET name = ?, token = ?, price_list_id = ?, crm_office = ?, crm_delivery = ?, crm_site = ?, crm_field1 = ?, notify_inv = ?, notify_ttn = ?, notify_users = ?, active = ?, hook_pass = ? WHERE id = ?`,
+      [f.name || cur.name, token, f.price_list_id, f.crm_office, f.crm_delivery, f.crm_site, f.crm_field1, f.notify_inv, f.notify_ttn, f.notify_users, f.active, pass, cur.id]);
     if (token !== cur.token) await logAudit(db, { user: c.get('user'), kind: 'rzs', refId: cur.id, action: 'змінено токен Розетки', changes: [{ field: 'token', from: keyHint(cur.token), to: keyHint(token) }] });
     return c.json({ ok: true });
   });
@@ -106,7 +117,7 @@ export function mountRetail(app, { db, fetchFn, services = {} }) {
   async function saveOrders(list, accountId) {
     const rows = list.map((o) => rowOf(o, accountId)).filter((r) => r.id);
     if (!rows.length) return 0;
-    const old = new Map((await db.all(`SELECT id, docs_at, confirmed_at, ttn_at, document_link, products FROM rzs_orders WHERE id IN (SELECT value FROM json_each(?))`,
+    const old = new Map((await db.all(`SELECT id, docs_at, confirmed_at, ttn_at, document_link, products, status, uzd_status, ttn, invoice_no, inv_notified, ttn_notified FROM rzs_orders WHERE id IN (SELECT value FROM json_each(?))`,
       [JSON.stringify(rows.map((r) => r.id))])).map((r) => [r.id, r]));
     const now = nowIso();
     const st = rows.map((r) => {
@@ -133,9 +144,51 @@ export function mountRetail(app, { db, fetchFn, services = {} }) {
       st.push([`INSERT INTO rzs_products (code, rz_code, updated_at) VALUES (?, ?, ?) ON CONFLICT(code) DO UPDATE SET rz_code = CASE WHEN rzs_products.rz_code = '' THEN excluded.rz_code ELSE rzs_products.rz_code END`,
         [code, String(p?.rzCode ?? ''), now]]);
     }
+    // Події для сповіщень: з'явився вхідний рахунок; замовлення стало готовим до ТТН (підтверджене, ЮЗД звірено, ТТН ще немає).
+    const ready = (x) => ['confirmed', 'problem'].includes(x.status) && !x.ttn && ['verified', 'skipped'].includes(x.uzd_status);
+    const events = { inv: [], ttn: [] };
+    for (const r of rows) {
+      const o = old.get(r.id);
+      if (!o) continue; // нове для нас замовлення (перше завантаження) — без сповіщень
+      if (r.invoice_no && !o.invoice_no && !o.inv_notified) {
+        events.inv.push(r);
+        st.push([`UPDATE rzs_orders SET inv_notified = ? WHERE id = ?`, [now, r.id]]);
+      }
+      const uzd = r.uzd_status || o.uzd_status;
+      if (ready({ ...r, uzd_status: uzd }) && !ready(o) && !o.ttn_notified) {
+        events.ttn.push(r);
+        st.push([`UPDATE rzs_orders SET ttn_notified = ? WHERE id = ?`, [now, r.id]]);
+      }
+    }
     await db.batch(st);
     if (codes.length) await autoMap(codes);
+    if (events.inv.length || events.ttn.length) await notifyEvents(accountId, events).catch(() => 0);
     return rows.length;
+  }
+  // Сповіщення в Telegram (вмикає адмін у налаштуваннях кабінету): кому — вибрані користувачі або власник і адміни.
+  async function notifyEvents(accountId, ev) {
+    const a = await db.get(`SELECT * FROM rzs_accounts WHERE id = ?`, [accountId]);
+    if (!a || !services.notify?.sendText) return;
+    let ids = [];
+    try { ids = JSON.parse(a.notify_users || '[]').map(Number).filter(Boolean); } catch { /* */ }
+    const to = ids.length ? { userIds: ids } : { admins: true };
+    const names = await prodNames(ev.inv.concat(ev.ttn));
+    const line = (r) => `• <b>${esc(r.order_num)}</b> — ${esc(r.customer)}${names(r) ? ` · ${esc(names(r))}` : ''}`;
+    const more = (l) => (l.length > 30 ? `\n…і ще ${l.length - 30}` : '');
+    if (a.notify_inv && ev.inv.length) {
+      await services.notify.sendText(to, `🧾 <b>Розетка${a.name && a.name !== 'Розетка' ? ` · ${esc(a.name)}` : ''}: з'явився вхідний рахунок (Вчасно)</b> — ${ev.inv.length}\n`
+        + ev.inv.slice(0, 30).map((r) => `${line(r)} · рах. <b>${esc(r.invoice_no)}</b>`).join('\n') + more(ev.inv)
+        + '\n\nЗавантажте документи для Розетки у «Вчасно», щоб можна було створити ТТН.');
+    }
+    if (a.notify_ttn && ev.ttn.length) {
+      await services.notify.sendText(to, `🚚 <b>Розетка${a.name && a.name !== 'Розетка' ? ` · ${esc(a.name)}` : ''}: можна створювати ТТН</b> — ${ev.ttn.length}\n`
+        + ev.ttn.slice(0, 30).map(line).join('\n') + more(ev.ttn)
+        + '\n\nДокументи звірено (ЮЗД). ТТН — «Рітейл → Розетка» → фільтр «Без ТТН» → «🚚 Створити ТТН».');
+    }
+  }
+  async function prodNames(rows) {
+    const pm = await prodMap(rows.map((r) => ({ products: JSON.stringify(r.products || []) })));
+    return (r) => (r.products || []).map((p) => `${pm.get(String(p.supplierCode).trim())?.name || p.supplierCode} × ${p.quantity}`).join(', ').slice(0, 200);
   }
   // Артикул постачальника → товар LP-CRM: за артикулом у каталозі B2B або за ID товару.
   async function autoMap(codes) {
@@ -165,6 +218,23 @@ export function mountRetail(app, { db, fetchFn, services = {} }) {
     await db.run(`UPDATE rzs_accounts SET synced_at = ? WHERE id = ?`, [nowIso(), a.id]);
     return { saved, more };
   }
+  // Сповіщення потребують свіжих даних: у фоні (на запитах до сайту) раз на 10 хв оновлюємо замовлення за 7 днів —
+  // лише якщо в якомусь кабінеті ввімкнено сповіщення. Вебхук Розетки й так приносить зміни одразу.
+  const TICK_MS = 10 * 60e3;
+  onTick((c) => {
+    if (Date.now() - (lastTickTry || 0) < 60e3) return;
+    lastTickTry = Date.now();
+    const p = (async () => {
+      const accs = await db.all(`SELECT * FROM rzs_accounts WHERE active = 1 AND (notify_inv = 1 OR notify_ttn = 1)`);
+      if (!accs.length) return;
+      const now = Date.now();
+      const claim = await db.run(`INSERT INTO settings (key, value) VALUES ('rzs_tick_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
+        [new Date(now).toISOString(), new Date(now - TICK_MS).toISOString()]);
+      if (!claim.changes) return;
+      for (const a of accs) await syncAccount(a, { days: 7 }).catch(() => 0);
+    })().catch(() => 0);
+    try { c?.executionCtx?.waitUntil(p); } catch { /* не Cloudflare */ }
+  });
   app.post('/api/rzs/sync', async (c) => {
     need(c, 'docs.view');
     const b = await c.req.json().catch(() => ({}));
@@ -237,14 +307,16 @@ export function mountRetail(app, { db, fetchFn, services = {} }) {
     else if (st === 'nottn') where.push(`o.status IN ('confirmed', 'problem') AND o.ttn = ''`);
     else if (st === 'nocrm') where.push(`o.crm_id = '' AND o.crm_code = '' AND o.status NOT IN ('deleted', 'closed', 'delivery_refused')`);
     else if (st === 'docs') where.push(`o.document_link != ''`);
+    else if (st === 'noinv') where.push(`o.status IN ('confirmed', 'problem') AND o.invoice_no = '' AND o.ttn = ''`);
+    else if (st === 'ready') where.push(`o.status IN ('confirmed', 'problem') AND o.ttn = '' AND o.uzd_status IN ('verified', 'skipped')`);
     else if (st && RZS_STATUS[st]) { where.push('o.status = ?'); params.push(st); }
     // LIKE у SQLite не зважає на регістр лише для латиниці — для кирилиці пробуємо «як є», малими і з великої.
     if (q) {
       const raw = String(c.req.query('q') || '').trim();
       const cap = q.replace(/(^|[\s'-])(\S)/g, (m, a, b) => a + b.toUpperCase());
       const vars = [...new Set([raw, q, cap])].map((v) => `%${v}%`);
-      where.push(`(o.order_num LIKE ? OR o.phone LIKE ? OR o.ttn LIKE ? OR ${vars.map(() => 'o.customer LIKE ?').join(' OR ')})`);
-      params.push(`%${q}%`, `%${q.replace(/\D/g, '') || q}%`, `%${q}%`, ...vars);
+      where.push(`(o.order_num LIKE ? OR o.phone LIKE ? OR o.ttn LIKE ? OR o.invoice_no LIKE ? OR ${vars.map(() => 'o.customer LIKE ?').join(' OR ')})`);
+      params.push(`%${q}%`, `%${q.replace(/\D/g, '') || q}%`, `%${q}%`, `%${raw}%`, ...vars);
     }
     const [rows, counts, accs] = await Promise.all([
       db.all(`SELECT o.*, a.name AS account FROM rzs_orders o LEFT JOIN rzs_accounts a ON a.id = o.account_id WHERE ${where.join(' AND ')} ORDER BY o.created_at DESC LIMIT 300`, params),
