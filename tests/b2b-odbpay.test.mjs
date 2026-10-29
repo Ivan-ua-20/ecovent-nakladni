@@ -181,4 +181,20 @@ assert.deepEqual(amb.b2b.candidates, [s3, s4]);
 await hook({ amount: 4500, purpose: 'рах 104' });
 assert.equal((await order(s4)).status, 'paid');
 
+// ---------- 6. Код юрософи іншого партнера: не можна взяти; якщо вже спільний — лише «перевірити» ----------
+const pb = await req('POST', '/api/b2b/partners', { name: 'Партнер Б' });
+await req('POST', `/api/b2b/partners/${pb.id}/users`, { login: 'pb', password: 'pass1234' });
+const B = await login('pb', 'pass1234');
+assert.match(await errOf(() => req('POST', '/api/b2b/p/entities', { name: 'Не моя', code: '1234567890' }, B)), /іншого партнера/);
+const entB = await req('POST', '/api/b2b/p/entities', { name: 'ФОП Бета', code: '2234567890' }, B);
+assert.match(await errOf(() => req('PUT', `/api/b2b/p/entities/${entB.id}`, { name: 'ФОП Бета', code: '1234567890' }, B)), /іншого партнера/);
+const entA2 = await req('POST', '/api/b2b/p/entities', { name: 'ФОП Альфа 2', code: '3234567890' }, A);
+await req('PUT', `/api/b2b/p/entities/${entA2.id}`, { name: 'ФОП Альфа 2', code: '1234567890' }, A); // свій код — можна
+// давні дані: той самий код уже є в обох партнерів
+await db.run(`INSERT INTO b2b_entities (partner_id, kind, name, code, active, created_at) VALUES (?, 'fop', 'Стара', '1234567890', 1, '')`, [pb.id]);
+tg.length = 0;
+await hook({ amount: 4500, purpose: 'рах 103' });
+assert.equal((await order(s3)).status, 'pay_wait', 'не зараховано автоматично');
+assert.ok(tg.some((m) => /кількох партнерів/.test(m.text)), 'адмінам — перевірити');
+
 console.log('OK — B2B: оплата закупівель з Opendatabot (авто, частково, перевірити, вручну)');

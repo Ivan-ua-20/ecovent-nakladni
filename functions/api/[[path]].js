@@ -3293,6 +3293,8 @@ function mountAdmin(app, { db }) {
     "seller_note"
   ];
   const SECRET_COLS = /* @__PURE__ */ new Set(["checkbox_password", "checkbox_pin", "checkbox_license", "checkbox_login"]);
+  const REQ_FIELDS = { fops: FOP_REQUISITES, inv_fops: INV_FOP_REQUISITES };
+  const REQ_KIND = { fops: "fop", inv_fops: "inv_fop" };
   app.get("/api/admin/export", async (c) => {
     need(c, "users");
     const out = { version: 1, exported_at: nowIso(), tables: {}, settings: {} };
@@ -3319,17 +3321,29 @@ function mountAdmin(app, { db }) {
     const b = await c.req.json();
     if (!b?.tables) throw fail(400, "\u0426\u0435 \u043D\u0435 \u0444\u0430\u0439\u043B \u0435\u043A\u0441\u043F\u043E\u0440\u0442\u0443 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u044C.");
     const counts = {};
+    const reqLog = [];
     const st = [];
     for (const t of EXPORT_TABLES) {
       const rows = b.tables[t];
       if (!Array.isArray(rows)) continue;
       const cols = new Set((await db.all(`PRAGMA table_info(${t})`)).map((x) => x.name));
+      const current = new Map((await db.all(`SELECT * FROM ${t}`)).map((r) => [String(r.id), r]));
+      const reqFields = REQ_FIELDS[t];
       st.push([`DELETE FROM ${t}`, []]);
       for (const r0 of rows) {
         const r = dropUnsafeImages(r0 || {});
+        const cur = current.get(String(r.id));
+        const keep = cur ? [...SECRET_COLS].filter((k) => cols.has(k) && cur[k]) : [];
         const keys = Object.keys(r).filter((k) => cols.has(k) && !SECRET_COLS.has(k));
         if (!keys.length) continue;
-        st.push([`INSERT INTO ${t} (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`, keys.map((k) => r[k])]);
+        st.push([
+          `INSERT INTO ${t} (${[...keys, ...keep].join(", ")}) VALUES (${[...keys, ...keep].map(() => "?").join(", ")})`,
+          [...keys.map((k) => r[k]), ...keep.map((k) => cur[k])]
+        ]);
+        if (reqFields) {
+          const req2 = changedFields(cur || {}, r, reqFields);
+          if (req2.length) reqLog.push({ kind: REQ_KIND[t], refId: r.id, action: cur ? "\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0440\u0435\u043A\u0432\u0456\u0437\u0438\u0442\u0438 (\u0456\u043C\u043F\u043E\u0440\u0442)" : "\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E (\u0456\u043C\u043F\u043E\u0440\u0442)", changes: describeChanges(cur || {}, r, req2) });
+        }
       }
       counts[t] = rows.length;
     }
@@ -3339,6 +3353,13 @@ function mountAdmin(app, { db }) {
       st.push([`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, String(v)]]);
     }
     await db.batch(st);
+    const u = c.get("user");
+    if (reqLog.length) {
+      await db.batch(reqLog.map((x) => [
+        `INSERT INTO audit_log (at, user_id, user_name, kind, ref_id, action, changes) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [nowIso(), u?.id || null, u?.name || u?.login || "", x.kind, String(x.refId ?? ""), x.action, JSON.stringify(x.changes)]
+      ]));
+    }
     await logAudit(db, { user: c.get("user"), kind: "settings", action: "\u0456\u043C\u043F\u043E\u0440\u0442 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u044C", changes: Object.entries(counts).map(([field, n]) => ({ field, from: "", to: `${n} \u0440\u044F\u0434\u043A\u0456\u0432` })) });
     return c.json({ ok: true, counts });
   });
@@ -5717,10 +5738,16 @@ ${lines.join("\n")}
     await db.run(`UPDATE b2b_partners SET default_entity = ? WHERE id = ?`, [on ? e.id : null, p.id]);
     return c.json({ ok: true });
   });
+  async function codeFree(p, code) {
+    const other = await db.get(`SELECT e.id FROM b2b_entities e JOIN b2b_partners p ON p.id = e.partner_id
+      WHERE e.code = ? AND e.active = 1 AND e.partner_id != ? AND COALESCE(p.deleted_at, '') = '' LIMIT 1`, [code, p.id]);
+    if (other) throw fail(400, "\u042E\u0440\u043E\u0441\u043E\u0431\u0430 \u0437 \u0446\u0438\u043C \u043A\u043E\u0434\u043E\u043C \u0443\u0436\u0435 \u0454 \u0432 \u0456\u043D\u0448\u043E\u0433\u043E \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u2014 \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u0432\u0430\u0448\u043E\u0433\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.");
+  }
   app.post("/api/b2b/p/entities", async (c) => {
     const p = await myPartner(c);
     const f = entityFields(await c.req.json());
     if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_entities WHERE partner_id = ? AND active = 1`, [p.id])).n >= 50) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 50 \u044E\u0440\u043E\u0441\u0456\u0431.");
+    await codeFree(p, f.code);
     const r = await db.run(
       `INSERT INTO b2b_entities (partner_id, kind, name, code, address, iban, phone, email, vat, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       [p.id, f.kind, f.name, f.code, f.address, f.iban, f.phone, f.email, f.vat, nowIso()]
@@ -5736,6 +5763,7 @@ ${lines.join("\n")}
     const p = await myPartner(c);
     const e = await myEntity(p, c.req.param("id"));
     const f = entityFields(await c.req.json());
+    if (f.code !== e.code) await codeFree(p, f.code);
     await db.run(
       `UPDATE b2b_entities SET kind = ?, name = ?, code = ?, address = ?, iban = ?, phone = ?, email = ?, vat = ? WHERE id = ?`,
       [f.kind, f.name, f.code, f.address, f.iban, f.phone, f.email, f.vat, e.id]
@@ -8533,6 +8561,8 @@ ${link(base, hash2)}` : "";
     const all = await candidatesFor([...new Set(txs.map((t) => t.payer_code))]);
     if (!all.length) return;
     txs = txs.filter((t) => all.some((o) => o.code === t.payer_code)).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 10);
+    const shared2 = new Set((await db.all(`SELECT code FROM b2b_entities WHERE active = 1 AND code IN (SELECT value FROM json_each(?))
+      GROUP BY code HAVING COUNT(DISTINCT partner_id) > 1`, [JSON.stringify([...new Set(txs.map((t) => t.payer_code))])])).map((r) => r.code));
     const known = new Set((await db.all(`SELECT tx_id FROM b2b_payments WHERE tx_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(txs.map((t) => t.id))])).map((r) => r.tx_id));
     for (const t of txs) {
       if (known.has(t.id)) continue;
@@ -8545,7 +8575,7 @@ ${link(base, hash2)}` : "";
         const exact = pool.filter((o) => Math.abs(due(o) - t.amount) <= DUE_EPS);
         if (exact.length === 1) pool = exact;
       }
-      const hit = pool.length === 1 && t.amount <= due(pool[0]) + DUE_EPS ? pool[0] : null;
+      const hit = !shared2.has(t.payer_code) && pool.length === 1 && t.amount <= due(pool[0]) + DUE_EPS ? pool[0] : null;
       await db.run(
         `INSERT OR IGNORE INTO b2b_payments (tx_id, order_id, candidates, amount, date, payer_name, payer_code, purpose, auto, created_at, account) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
         [t.id, hit?.id ?? null, JSON.stringify(hit ? [] : pool.map((o) => o.id)), t.amount, t.date, t.payer_name, t.payer_code, t.purpose, nowIso(), t.account || ""]
@@ -8554,7 +8584,7 @@ ${link(base, hash2)}` : "";
         hit.paid_amount = round2(hit.paid_amount + t.amount);
         await recalc(hit.id, base);
       } else {
-        const why = pool.length > 1 ? `\u043F\u0456\u0434\u0445\u043E\u0434\u0438\u0442\u044C \u043A\u0456\u043B\u044C\u043A\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C: ${pool.map((o) => `${orderNo(o.id)} (\u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah3(due(o))})`).join(", ")}` : `\u0441\u0443\u043C\u0430 \u0431\u0456\u043B\u044C\u0448\u0430 \u0437\u0430 \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah3(due(pool[0]))} \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(pool[0].id)}`;
+        const why = shared2.has(t.payer_code) ? `\u043A\u043E\u0434 \u043F\u043B\u0430\u0442\u043D\u0438\u043A\u0430 ${h6(t.payer_code)} \u0454 \u0432 \u044E\u0440\u043E\u0441\u043E\u0431\u0430\u0445 \u043A\u0456\u043B\u044C\u043A\u043E\u0445 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432` : pool.length > 1 ? `\u043F\u0456\u0434\u0445\u043E\u0434\u0438\u0442\u044C \u043A\u0456\u043B\u044C\u043A\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C: ${pool.map((o) => `${orderNo(o.id)} (\u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah3(due(o))})`).join(", ")}` : `\u0441\u0443\u043C\u0430 \u0431\u0456\u043B\u044C\u0448\u0430 \u0437\u0430 \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah3(due(pool[0]))} \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(pool[0].id)}`;
         await tgAdmins(`\u{1F4B3} <b>\u041F\u043B\u0430\u0442\u0456\u0436 \u0437\u0430 B2B \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435</b>: ${uah3(t.amount)} \u0432\u0456\u0434 ${h6(t.payer_name || t.payer_code)}
 ${why}.
 \u0412\u043A\u0430\u0436\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0432\u0440\u0443\u0447\u043D\u0443 \u043D\u0430 \u0457\u0457 \u0441\u0442\u043E\u0440\u0456\u043D\u0446\u0456 \u0430\u0431\u043E \u0432 \xAB\u041F\u043B\u0430\u0442\u0435\u0436\u0430\u0445\xBB.${base ? `

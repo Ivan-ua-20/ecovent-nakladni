@@ -172,10 +172,18 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return c.json({ ok: true });
   });
 
+  // Код юрособи — за ним Opendatabot зараховує оплати, тож один код не може належати двом партнерам.
+  async function codeFree(p, code) {
+    const other = await db.get(`SELECT e.id FROM b2b_entities e JOIN b2b_partners p ON p.id = e.partner_id
+      WHERE e.code = ? AND e.active = 1 AND e.partner_id != ? AND COALESCE(p.deleted_at, '') = '' LIMIT 1`, [code, p.id]);
+    if (other) throw fail(400, 'Юрособа з цим кодом уже є в іншого партнера — зверніться до вашого менеджера.');
+  }
+
   app.post('/api/b2b/p/entities', async (c) => {
     const p = await myPartner(c);
     const f = entityFields(await c.req.json());
     if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_entities WHERE partner_id = ? AND active = 1`, [p.id])).n >= 50) throw fail(400, 'Не більше 50 юросіб.');
+    await codeFree(p, f.code);
     const r = await db.run(`INSERT INTO b2b_entities (partner_id, kind, name, code, address, iban, phone, email, vat, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       [p.id, f.kind, f.name, f.code, f.address, f.iban, f.phone, f.email, f.vat, nowIso()]);
     return c.json({ id: r.lastId });
@@ -191,6 +199,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const p = await myPartner(c);
     const e = await myEntity(p, c.req.param('id'));
     const f = entityFields(await c.req.json());
+    if (f.code !== e.code) await codeFree(p, f.code);
     await db.run(`UPDATE b2b_entities SET kind = ?, name = ?, code = ?, address = ?, iban = ?, phone = ?, email = ?, vat = ? WHERE id = ?`,
       [f.kind, f.name, f.code, f.address, f.iban, f.phone, f.email, f.vat, e.id]);
     return c.json({ ok: true });

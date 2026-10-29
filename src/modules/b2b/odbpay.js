@@ -79,6 +79,9 @@ export function mountB2bPay(app, { db, services, orders, hooks }) {
     const all = await candidatesFor([...new Set(txs.map((t) => t.payer_code))]);
     if (!all.length) return; // жоден платіж не від юрособи з неоплаченою закупівлею
     txs = txs.filter((t) => all.some((o) => o.code === t.payer_code)).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 10);
+    // Код платника є в юрособах кількох партнерів — не зараховуємо самі, лише «перевірити».
+    const shared = new Set((await db.all(`SELECT code FROM b2b_entities WHERE active = 1 AND code IN (SELECT value FROM json_each(?))
+      GROUP BY code HAVING COUNT(DISTINCT partner_id) > 1`, [JSON.stringify([...new Set(txs.map((t) => t.payer_code))])])).map((r) => r.code));
     const known = new Set((await db.all(`SELECT tx_id FROM b2b_payments WHERE tx_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(txs.map((t) => t.id))])).map((r) => r.tx_id));
     for (const t of txs) {
       if (known.has(t.id)) continue;
@@ -91,14 +94,15 @@ export function mountB2bPay(app, { db, services, orders, hooks }) {
         const exact = pool.filter((o) => Math.abs(due(o) - t.amount) <= DUE_EPS);
         if (exact.length === 1) pool = exact;
       }
-      const hit = pool.length === 1 && t.amount <= due(pool[0]) + DUE_EPS ? pool[0] : null;
+      const hit = !shared.has(t.payer_code) && pool.length === 1 && t.amount <= due(pool[0]) + DUE_EPS ? pool[0] : null;
       await db.run(
         `INSERT OR IGNORE INTO b2b_payments (tx_id, order_id, candidates, amount, date, payer_name, payer_code, purpose, auto, created_at, account) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
         [t.id, hit?.id ?? null, JSON.stringify(hit ? [] : pool.map((o) => o.id)), t.amount, t.date, t.payer_name, t.payer_code, t.purpose, nowIso(), t.account || ''],
       );
       if (hit) { hit.paid_amount = round2(hit.paid_amount + t.amount); await recalc(hit.id, base); }
       else {
-        const why = pool.length > 1 ? `підходить кілька закупівель: ${pool.map((o) => `${orderNo(o.id)} (залишок ${uah(due(o))})`).join(', ')}`
+        const why = shared.has(t.payer_code) ? `код платника ${h(t.payer_code)} є в юрособах кількох партнерів`
+          : pool.length > 1 ? `підходить кілька закупівель: ${pool.map((o) => `${orderNo(o.id)} (залишок ${uah(due(o))})`).join(', ')}`
           : `сума більша за залишок ${uah(due(pool[0]))} закупівлі ${orderNo(pool[0].id)}`;
         await tgAdmins(`💳 <b>Платіж за B2B — перевірте</b>: ${uah(t.amount)} від ${h(t.payer_name || t.payer_code)}\n${why}.\nВкажіть закупівлю вручну на її сторінці або в «Платежах».`
           + `${base ? `\n${link(base, `b2borders/${pool[0].id}`)}` : ''}`);
