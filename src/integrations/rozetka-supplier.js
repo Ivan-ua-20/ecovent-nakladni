@@ -10,7 +10,19 @@ const rzsError = (status, j, fallback) => Object.assign(
   { status: status === 401 ? 400 : status === 429 ? 429 : status >= 500 ? 502 : 400, rzsStatus: status, rzs: j },
 );
 
-async function rq(fetchFn, token, method, path, { json, xml, raw = false } = {}) {
+// Розетка обмежує частоту запитів (429): чекаємо (Retry-After, до 5 с) і повторюємо — до 2 разів.
+const RETRY_MS = [1500, 3500];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function rq(fetchFn, token, method, path, opts = {}) {
+  for (let i = 0; ; i++) {
+    try { return await rq1(fetchFn, token, method, path, opts); } catch (e) {
+      if (e.rzsStatus !== 429 || i >= RETRY_MS.length) throw e;
+      const ra = Number(e.retryAfter) * 1000;
+      await sleep(ra > 0 ? Math.min(ra, 5000) : RETRY_MS[i]);
+    }
+  }
+}
+async function rq1(fetchFn, token, method, path, { json, xml, raw = false } = {}) {
   let res;
   try {
     res = await fetchFn(`${RZS_API}${path}`, {
@@ -29,7 +41,7 @@ async function rq(fetchFn, token, method, path, { json, xml, raw = false } = {})
   }
   if (raw && res.ok) return res;
   const j = await res.json().catch(() => null);
-  if (!res.ok) throw rzsError(res.status, j);
+  if (!res.ok) throw Object.assign(rzsError(res.status, j), { retryAfter: res.headers?.get?.('Retry-After') || '' });
   return j || {};
 }
 
