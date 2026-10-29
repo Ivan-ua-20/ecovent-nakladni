@@ -1,7 +1,7 @@
 // Рітейл → Розетка (кабінет постачальника): замовлення дропшипінгу з груповими діями (підтвердити, ТТН, маркування,
 // у LP-CRM), товари й ціни закупівлі (завантаження з Кабінету, прайс на Розетку не відправляємо), налаштування кабінетів і вебхука.
 import { esc, money } from '../invoice.js';
-import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
+import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime, takeHashQuery } from '../core/ui.js';
 
 const ST_CLS = { new: 'warn', updated: 'warn', confirmed: 'info', shipping: 'info', problem: 'bad', closed: 'ok', delivery_refused: 'bad', deleted: 'bad', shipped_from_rozetka: 'ok' };
 const UZD_CLS = { verified: 'ok', skipped: 'ok', problem: 'bad', not_uploaded: '' };
@@ -63,6 +63,8 @@ export function createRetailPages(ctx) {
     }).catch(() => 0);
   }
   async function viewOrders() {
+    const hq = takeHashQuery();
+    if (hq != null) filter = { view: '', q: hq };
     bgSync();
     const qs = new URLSearchParams(Object.entries({ status: filter.view, q: filter.q }).filter(([, v]) => v)).toString();
     const d = await api('GET', `/api/rzs/orders${qs ? `?${qs}` : ''}`);
@@ -88,12 +90,12 @@ export function createRetailPages(ctx) {
           <td>${esc(o.customer)}<div class="small muted">${esc([o.city, o.phone].filter(Boolean).join(' · '))}</div></td>
           <td class="small hide-m">${o.products.map((p) => `${esc(p.name || p.supplierCode)} × ${p.quantity}`).join('<br>')}</td>
           <td class="r nowrap">${o.cod ? money(o.cod) : '—'}</td>
-          <td><span class="badge ${ST_CLS[o.status] || ''}">${esc(o.status_name)}</span>${o.uzd_name ? `<div><span class="badge ${UZD_CLS[o.uzd_status] || ''}" style="font-size:11px">${esc(o.uzd_name)}</span></div>` : ''}</td>
+          <td><span class="badge ${ST_CLS[o.status] || ''}">${esc(o.status_name)}</span>${o.uzd_name ? `<div><span class="badge ${UZD_CLS[o.uzd_status] || ''}">${esc(o.uzd_name)}</span></div>` : ''}</td>
           <td class="small nowrap">${o.ttn ? `<b>${esc(o.ttn)}</b>${o.tracking_status ? `<div class="muted">${esc(o.tracking_status)}</div>` : ''}` : '—'}${o.return_ttn ? `<div class="badge bad">повернення ${esc(o.return_ttn)}</div>` : ''}</td>
           <td class="small nowrap">${o.invoice_no ? `<b>${esc(o.invoice_no)}</b>` : '<span class="muted">—</span>'}</td>
           <td class="small" data-nosel>${o.document_link ? `<a class="badge ok" href="${esc(o.document_link)}" target="_blank" rel="noopener">📄 є</a>` : '<span class="muted">ще немає</span>'}
             ${o.docs_at ? `<div class="muted">${esc(fmtDateTime(o.docs_at))}</div>` : ''}</td>
-          <td class="small hide-m">${o.crm_id ? `№ <b>${esc(o.crm_id)}</b>` : o.crm_code ? 'передано' : '—'}${o.crm_status ? `<div><span class="badge ${o.crm_new ? 'warn' : 'info'}" style="font-size:11px">${esc(o.crm_status)}</span></div>` : ''}</td>
+          <td class="small hide-m">${o.crm_id ? `№ <b>${esc(o.crm_id)}</b>` : o.crm_code ? 'передано' : '—'}${o.crm_status ? `<div><span class="badge ${o.crm_new ? 'warn' : 'info'}">${esc(o.crm_status)}</span></div>` : ''}</td>
         </tr>`).join('')}</tbody></table></div>`
         : '<div class="card empty"><div class="big">Замовлень немає</div>Нові замовлення Розетки з’являються тут автоматично (вебхук) або кнопкою «Оновити з Розетки».</div>'}`;
     $('#rzSync').onclick = async (e) => {
@@ -130,10 +132,10 @@ export function createRetailPages(ctx) {
         <button class="btn sm" data-b="_clear">Зняти вибір</button>` : '';
       $$('[data-b]', bar).forEach((b) => (b.onclick = () => run(b.dataset.b)));
       const all = $('#rzAll');
-      if (all) all.checked = ids.length > 0 && ids.length === $$('[data-sel]').length;
+      if (all) all.checked = ids.length > 0 && ids.length === $$('[data-sel]').filter((x) => x.offsetParent).length;
     };
     $$('[data-sel]').forEach((x) => (x.onchange = draw));
-    $('#rzAll') && ($('#rzAll').onchange = (e) => { $$('[data-sel]').forEach((x) => { x.checked = e.target.checked; }); draw(); });
+    $('#rzAll') && ($('#rzAll').onchange = (e) => { $$('[data-sel]').filter((x) => x.offsetParent).forEach((x) => { x.checked = e.target.checked; }); draw(); });
     const ACT = {
       confirm: { label: 'Підтвердити', run: (id) => api('POST', `/api/rzs/orders/${id}/confirm`, {}) },
       ttn: { label: 'Створити ТТН', run: (id) => api('POST', `/api/rzs/orders/${id}/ttn`, {}) },
@@ -316,7 +318,7 @@ export function createRetailPages(ctx) {
       <div class="head-row"><h2>Розетка — товари й ціни закупівлі</h2><div class="btn-row">
         ${edit ? '<label class="btn primary">📥 Завантажити товари з Розетки (CSV)<input type="file" id="rpImp" accept=".csv,text/csv" hidden></label><button class="btn" id="rpAdd">+ Товар</button>' : ''}
 </div></div>
-      <div class="alert info" style="margin-bottom:12px"><b>Як оновити:</b> Кабінет постачальника Розетки → вивантажте товари в CSV → «📥 Завантажити товари з Розетки». Нові артикули додадуться,
+      <div class="alert info help" style="margin-bottom:12px"><b>Як оновити:</b> Кабінет постачальника Розетки → вивантажте товари в CSV → «📥 Завантажити товари з Розетки». Нові артикули додадуться,
         у наявних оновляться назва, код Розетки, РРЦ, ціна закупівлі, залишок і статус; прив’язка до LP-CRM і габарити лишаються.
         <b>Ціна закупівлі</b> йде в LP-CRM у замовлення Розетки (не роздрібна). <b>Товар LP-CRM (ID)</b> підставляється сам, якщо артикул збігається з артикулом у каталозі, інакше — впишіть ID товару з LP-CRM.
         ${lastImport ? `<div class="small" style="margin-top:4px">Останнє завантаження: ${esc(fmtDateTime(lastImport))}</div>` : ''}</div>
@@ -324,7 +326,7 @@ export function createRetailPages(ctx) {
         <input id="rpQ" placeholder="Артикул, код Розетки, назва, бренд" value="${esc(pf.q)}" style="max-width:300px" aria-label="Пошук товару"></div>
       ${rows.length ? `<div class="table-wrap"><table class="list"><thead><tr><th>Артикул</th><th>Товар LP-CRM (ID)</th><th>Назва</th><th class="r">Ціна закупівлі</th><th class="r">РРЦ</th><th class="r">Залишок</th><th>Габарити (на 1 шт.)</th></tr></thead><tbody>
         ${rows.map((p) => `<tr data-code="${esc(p.code)}">
-          <td><b>${esc(p.code)}</b>${p.rz_code ? `<div class="small muted">Розетка ${esc(p.rz_code)}</div>` : ''}${RZ_ST[p.rz_status] ? `<div><span class="badge ${RZ_ST[p.rz_status][1]}" style="font-size:11px">${RZ_ST[p.rz_status][0]}</span></div>` : ''}</td>
+          <td><b>${esc(p.code)}</b>${p.rz_code ? `<div class="small muted">Розетка ${esc(p.rz_code)}</div>` : ''}${RZ_ST[p.rz_status] ? `<div><span class="badge ${RZ_ST[p.rz_status][1]}">${RZ_ST[p.rz_status][0]}</span></div>` : ''}</td>
           <td><input data-f="product_id" value="${esc(p.product_id ?? '')}" inputmode="numeric" style="width:90px" ${edit ? '' : 'disabled'} class="${p.product_id ? '' : 'bad-input'}" aria-label="ID товару LP-CRM"></td>
           <td><input data-f="name" value="${esc(p.name || '')}" style="min-width:220px" ${edit ? '' : 'disabled'} aria-label="Назва">${p.brand ? `<div class="small muted">${esc(p.brand)}</div>` : ''}</td>
           <td class="r"><input data-f="purchase_price" value="${esc(p.purchase_price ?? '')}" inputmode="decimal" style="width:100px" ${edit ? '' : 'disabled'} aria-label="Ціна закупівлі"></td>
@@ -393,7 +395,7 @@ export function createRetailPages(ctx) {
     const rows = await api('GET', '/api/rzs/accounts');
     main.innerHTML = `
       <div class="head-row"><h2>Розетка — кабінети постачальника</h2><button class="btn primary" id="raNew">+ Підключити кабінет</button></div>
-      <div class="alert info" style="margin-bottom:14px">Токен: Кабінет постачальника Розетки → <b>Налаштування → Токени</b> → «Згенерувати токен».
+      <div class="alert info help" style="margin-bottom:14px">Токен: Кабінет постачальника Розетки → <b>Налаштування → Токени</b> → «Згенерувати токен».
         Після підключення вставте адресу, логін і пароль вебхука в Кабінеті Розетки (<b>Налаштування → Вебхуки</b>), позначте «Дропшипінг» (додавання, зміна, видалення) — замовлення з’являтимуться тут одразу.</div>
       ${rows.length ? rows.map((a) => `<div class="card form-stack" style="max-width:900px;margin-bottom:12px">
           <div class="head-row" style="margin:0"><h3 style="margin:0">${esc(a.name)} ${a.active ? '' : '<span class="badge bad">вимкнено</span>'}</h3><button class="btn sm" data-ae="${a.id}">Змінити</button></div>
@@ -419,7 +421,7 @@ export function createRetailPages(ctx) {
             <label class="check"><input type="checkbox" name="notify_inv" ${a?.notify_inv ? 'checked' : ''}> З’явився вхідний рахунок (Вчасно) — після підтвердження замовлення</label>
             <label class="check"><input type="checkbox" name="notify_ttn" ${a?.notify_ttn ? 'checked' : ''}> Можна створювати ТТН — документи звірено (ЮЗД)</label>
             <div class="small muted">Кому (нікого не вибрано — власник і адміністратори з підключеним ботом):</div>
-            <div class="form-stack" style="gap:2px;max-height:180px;overflow:auto">${users.map((u) => `<label class="check"><input type="checkbox" name="nu" value="${u.id}" ${sel.has(u.id) ? 'checked' : ''}> ${esc(u.name)}${u.admin ? ' <span class="small muted">· адмін</span>' : ''}${u.tg ? '' : ' <span class="badge warn" style="font-size:11px">бот не підключено</span>'}</label>`).join('')}</div>
+            <div class="form-stack" style="gap:2px;max-height:180px;overflow:auto">${users.map((u) => `<label class="check"><input type="checkbox" name="nu" value="${u.id}" ${sel.has(u.id) ? 'checked' : ''}> ${esc(u.name)}${u.admin ? ' <span class="small muted">· адмін</span>' : ''}${u.tg ? '' : ' <span class="badge warn">бот не підключено</span>'}</label>`).join('')}</div>
           </fieldset>
           ${a ? `<label class="check"><input type="checkbox" name="active" ${a.active ? 'checked' : ''}> Увімкнено</label><label class="check"><input type="checkbox" name="new_hook_pass"> Новий пароль вебхука</label>` : ''}
         </form>`, { footer: `${a ? '<button class="btn danger" id="raDel" style="margin-right:auto">Видалити</button>' : ''}<button class="btn" data-close>Скасувати</button><button class="btn primary" id="raSave">Зберегти</button>` });

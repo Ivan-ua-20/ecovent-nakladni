@@ -3,7 +3,7 @@ import { esc, money } from '../invoice.js';
 import { renderRahunok, rahunokDocx, rahunokMessage } from '../rahunok.js';
 import { sendDialog } from '../core/share.js';
 import { STATUS as PAY_STATUS } from '../pay.js';
-import { $, $$, main, MASK, api, setPending, toast, modal, confirmDanger, fmtDateTime, readImage, printHtml, todayKyiv } from '../core/ui.js';
+import { $, $$, main, MASK, api, setPending, toast, modal, confirmDanger, fmtDateTime, readImage, printHtml, todayKyiv, takeHashQuery } from '../core/ui.js';
 
 export function createRahunkyPages(ctx) {
   // Вікно «Надіслати» для рахунку: файл Word і текст із посиланням на оплату.
@@ -38,6 +38,8 @@ async function viewRahunkyList() {
     <div class="head-row"><h2>Сформовані рахунки</h2>
       <label class="sr-only" for="rQ">Пошук</label><input id="rQ" placeholder="Номер або клієнт" style="width:240px"></div>
     <div id="rList"><div class="card empty"><span class="spinner"></span></div></div>`;
+  const hq = takeHashQuery();
+  if (hq) $('#rQ').value = hq;
   const load = async () => {
     const r = await api('GET', `/api/rahunky?q=${encodeURIComponent($('#rQ').value)}`);
     $('#rList').innerHTML = (r.rows.length

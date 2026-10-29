@@ -5,7 +5,7 @@
 //  - передача в LP-CRM у «Нові»: ціна товару — ціна закупівлі для Розетки (не роздрібна);
 //  - товари: артикул постачальника → товар LP-CRM, ціна закупівлі, РРЦ, залишок — з вивантаження Кабінету (CSV); прайс на Розетку не відправляємо.
 // Групові дії браузер виконує по одному замовленню за запит (ліміти Cloudflare), з прогресом.
-import { MASK, fail, need, nowIso, round2, loadSettings } from '../../core/common.js';
+import { MASK, fail, need, nowIso, round2, loadSettings, likeVariants } from '../../core/common.js';
 import { randomToken } from '../../core/auth.js';
 import { logAudit } from '../../core/requisites.js';
 import { addNewOrder, getOrdersBatch, getStatuses, phpSerialize, phpUrlencode } from '../../integrations/lpcrm.js';
@@ -331,8 +331,9 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
       const raw = String(c.req.query('q') || '').trim();
       const cap = q.replace(/(^|[\s'-])(\S)/g, (m, a, b) => a + b.toUpperCase());
       const vars = [...new Set([raw, q, cap])].map((v) => `%${v}%`);
-      where.push(`(o.order_num LIKE ? OR o.phone LIKE ? OR o.ttn LIKE ? OR o.invoice_no LIKE ? OR ${vars.map(() => 'o.customer LIKE ?').join(' OR ')})`);
-      params.push(`%${q}%`, `%${q.replace(/\D/g, '') || q}%`, `%${q}%`, `%${raw}%`, ...vars);
+      // № Розетки — і як введено (кирилиця «РО…» у SQLite чутлива до регістру), і великими.
+      where.push(`(o.order_num LIKE ? OR o.order_num LIKE ? OR o.phone LIKE ? OR o.ttn LIKE ? OR o.invoice_no LIKE ? OR ${vars.map(() => 'o.customer LIKE ?').join(' OR ')})`);
+      params.push(`%${raw}%`, `%${raw.toUpperCase()}%`, `%${q.replace(/\D/g, '') || q}%`, `%${q}%`, `%${raw}%`, ...vars);
     }
     const [rows, counts, accs] = await Promise.all([
       db.all(`SELECT o.*, a.name AS account FROM rzs_orders o LEFT JOIN rzs_accounts a ON a.id = o.account_id WHERE ${where.join(' AND ')} ORDER BY o.created_at DESC LIMIT 300`, params),
@@ -706,5 +707,27 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
       ttn: r.ttn, tracking_status: r.tracking_status, document_link: r.document_link, invoice_no: r.invoice_no, docs_at: r.docs_at, crm_id: r.crm_id,
     };
   }
-  return { orderInfo };
+  // Для головної сторінки: що в Розетці чекає дій.
+  async function attention() {
+    const since = new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
+    const r = await db.get(`SELECT SUM(status IN ('new', 'updated')) AS todo, SUM(status IN ('confirmed', 'problem') AND ttn = '' AND uzd_status IN ('verified', 'skipped')) AS ready
+      FROM rzs_orders WHERE created_at >= ?`, [since]);
+    return [
+      { key: 'rz_todo', level: 'warn', count: r?.todo || 0, label: 'Нові замовлення Розетки — підтвердити', link: '#/rzorders' },
+      { key: 'rz_ready', level: 'info', count: r?.ready || 0, label: 'Розетка: можна створити ТТН', link: '#/rzorders' },
+    ].filter((x) => x.count > 0);
+  }
+  // Пошук по сайту: № Розетки, телефон, ТТН, клієнт.
+  async function search(q) {
+    const s = String(q || '').trim();
+    const digits = s.replace(/\D/g, '');
+    const v = likeVariants(s);
+    const rows = await db.all(`SELECT id, order_num, status, customer, ttn, created_at FROM rzs_orders
+      WHERE order_num LIKE ? ${digits.length >= 5 ? 'OR phone LIKE ? OR ttn LIKE ?' : ''} OR ${v.map(() => 'customer LIKE ?').join(' OR ')}
+      ORDER BY created_at DESC LIMIT 8`, [`%${s}%`, ...(digits.length >= 5 ? [`%${digits.slice(-9)}%`, `%${digits}%`] : []), ...v]);
+    return rows.map((r) => ({ group: 'Розетка', title: `${r.order_num} · ${r.customer || ''}`,
+      sub: [RZS_STATUS[r.status] || r.status, r.ttn && `ТТН ${r.ttn}`, String(r.created_at).slice(0, 10).split('-').reverse().join('.')].filter(Boolean).join(' · '),
+      link: `#/rzorders?q=${encodeURIComponent(r.order_num)}` }));
+  }
+  return { orderInfo, attention, search };
 }

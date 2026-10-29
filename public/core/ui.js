@@ -3,6 +3,14 @@ import { esc } from '../invoice.js';
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+// Запит з адреси сторінки (#/rzorders?q=…, з пошуку по сайту): повертає його один раз і прибирає з адреси.
+export function takeHashQuery() {
+  const [path, qs] = location.hash.split('?');
+  const q = new URLSearchParams(qs || '').get('q');
+  if (q == null) return null;
+  history.replaceState(null, '', path);
+  return q;
+}
 export const main = $('#main');
 export const MASK = '••••••';
 export const todayKyiv = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv' }).format(new Date());

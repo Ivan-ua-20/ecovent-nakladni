@@ -8,7 +8,7 @@ export function createNpPages() {
     const [rows, rzRows] = await Promise.all([api('GET', '/api/np/accounts'), api('GET', '/api/rz/accounts')]);
     main.innerHTML = `
       <div class="head-row"><h2>Кабінети Нової пошти</h2><button class="btn primary" id="npNew">+ Додати кабінет</button></div>
-      <div class="alert info" style="margin-bottom:14px">Додайте ключі API всіх кабінетів НП (ФОП і ТОВ). На сторінці накладної кнопка
+      <div class="alert info help" style="margin-bottom:14px">Додайте ключі API всіх кабінетів НП (ФОП і ТОВ). На сторінці накладної кнопка
         <b>«Маркування»</b> сама знайде ТТН замовлення — з CRM або в цих кабінетах за телефоном отримувача — і відкриє маркування 100×100.
         Ключ: кабінет <a href="https://new.novaposhta.ua/dashboard/settings/developers" target="_blank" rel="noopener">new.novaposhta.ua → Налаштування → Безпека</a> → «Створити ключ».</div>
       ${rows.length ? `<table class="list"><thead><tr><th>Назва</th><th>Відправник у НП</th><th>Ключ</th><th>Стан</th><th></th></tr></thead><tbody>
@@ -21,7 +21,7 @@ export function createNpPages() {
         </tr>`).join('')}</tbody></table>`
         : '<div class="card empty"><div class="big">Кабінетів ще немає</div>Додайте ключ API першого кабінету Нової пошти.</div>'}
       <div class="head-row" style="margin-top:28px"><h2>Магазини Розетки</h2><button class="btn primary" id="rzNew">+ Додати магазин</button></div>
-      <div class="alert info" style="margin-bottom:14px">Для замовлень на точки видачі Розетки (ТТН <b>RMP-…</b>) «Маркування» друкує ТТН з кабінету продавця.
+      <div class="alert info help" style="margin-bottom:14px">Для замовлень на точки видачі Розетки (ТТН <b>RMP-…</b>) «Маркування» друкує ТТН з кабінету продавця.
         API Розетки працює лише з логіном і паролем кабінету — радимо створити в кабінеті Розетки окремого менеджера для цього сайту.</div>
       ${Array.isArray(rzRows) && rzRows.length ? `<table class="list"><thead><tr><th>Назва</th><th>Магазин на Розетці</th><th>Логін</th><th>Стан</th><th></th></tr></thead><tbody>
         ${rzRows.map((a) => `<tr>

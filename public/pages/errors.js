@@ -8,7 +8,7 @@ export function createErrorsPages() {
     const { rows, sources, keepDays } = await api('GET', `/api/errors${filter ? `?source=${encodeURIComponent(filter)}` : ''}`);
     main.innerHTML = `
       <div class="head-row"><h2>Журнал помилок</h2>${rows.length ? '<button class="btn danger" id="errClear">Очистити журнал</button>' : ''}</div>
-      <div class="alert info" style="margin-bottom:14px">Сюди записуються збої сервера і зовнішніх сервісів (LP-CRM, Opendatabot, Нова пошта, база даних…).
+      <div class="alert info help" style="margin-bottom:14px">Сюди записуються збої сервера і зовнішніх сервісів (LP-CRM, Opendatabot, Нова пошта, база даних…).
         Адміністратори з підключеним Telegram отримують повідомлення — не частіше одного на той самий тип помилки за годину.
         Записи зберігаються ${keepDays} днів.</div>
       ${sources.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">

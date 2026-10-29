@@ -1,7 +1,7 @@
 // Модуль «Рахунки на оплату (Word)»: ФОПи рахунків, замовлення з CRM для рахунку, рахунки з номером
 // зі спільного лічильника, QR-посилання на оплату (через модуль payments).
 import { can } from '../../core/auth.js';
-import { fail, need, nowIso, userName, round2, num as toNum, kyivDay, loadSettings } from '../../core/common.js';
+import { fail, need, nowIso, userName, round2, num as toNum, kyivDay, loadSettings, likeVariants } from '../../core/common.js';
 import { DEFAULT_WARNING } from '../../core/schema.js';
 import { checkImages } from '../../core/validate.js';
 import { takeRahunokNumber, peekRahunokNumber } from '../../core/counters.js';
@@ -161,4 +161,16 @@ export function mountRahunky(app, { db, services, onCleanup }) {
     await db.run(`DELETE FROM invoices WHERE id = ?`, [c.req.param('id')]);
     return c.json({ ok: true });
   });
+
+  // Пошук по сайту: рахунки за номером, замовленням або клієнтом.
+  async function search(q) {
+    const s = String(q || '').trim();
+    const v = likeVariants(s);
+    const rows = await db.all(`SELECT id, number, client_name, fop_name, total, created_at FROM invoices
+      WHERE number LIKE ? OR order_ref LIKE ? OR ${v.map(() => 'client_name LIKE ?').join(' OR ')} ORDER BY id DESC LIMIT 6`, [`%${s}%`, `%${s}%`, ...v]);
+    return rows.map((r) => ({ group: 'Рахунки', title: `Рахунок № ${r.number}${r.client_name ? ` · ${r.client_name}` : ''}`,
+      sub: [r.fop_name, String(r.created_at).slice(0, 10).split('-').reverse().join('.')].filter(Boolean).join(' · '),
+      link: `#/rlist?q=${encodeURIComponent(r.number)}` }));
+  }
+  return { search };
 }

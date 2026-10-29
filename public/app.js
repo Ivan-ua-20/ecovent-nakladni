@@ -1,5 +1,6 @@
 // Оболонка інтерфейсу: вхід, меню розділів, роутер. Сторінки — у pages/, спільні функції — у core/ui.js.
 import { esc } from './invoice.js';
+import { iconize } from './core/icons.js';
 import { createAnalyticsUI } from './an.js';
 import { createPayUI } from './pay.js';
 import { createPayStatsUI } from './anpay.js';
@@ -13,6 +14,7 @@ import { createUsersPages } from './pages/users.js';
 import { createErrorsPages } from './pages/errors.js';
 import { createB2bPages } from './pages/b2b.js';
 import { createPartnerPages } from './pages/partner.js';
+import { createHomePages } from './pages/home.js';
 import { createB2bStats } from './pages/b2b-stats.js';
 import { createRetailPages } from './pages/retail.js';
 
@@ -22,21 +24,17 @@ const can = (perm) => Boolean(boot.user?.perms?.includes(perm));
 
 // Розділи (вкладки зверху) і підвкладки кожного розділу.
 const SECTIONS = [
+  // Черга «Потребує дій» — перша сторінка для команди (партнер її не бачить).
+  { id: 'home', label: 'Головна', perm: 'docs.view', home: 'home', tabs: [{ id: 'home', label: 'Потребує дій' }] },
   { id: 'nakladni', label: 'Накладні ФОП', perm: 'docs.view', home: 'invoice', tabs: [
     { id: 'invoice', label: 'Формування' },
     { id: 'history', label: 'Історія' },
-    { id: 'fops', label: 'ФОПи накладних', perm: 'refs.edit' },
-    { id: 'offices', label: 'Відділи, поле 1 → ФОП', perm: 'refs.edit' },
-    { id: 'templates', label: 'Шаблони', perm: 'refs.edit' },
-    { id: 'nsettings', label: 'Налаштування накладних', perm: 'refs.edit' },
   ] },
   { id: 'rahunky', label: 'Рахунки Word', perm: 'docs.view', home: 'rahunky', tabs: [
     { id: 'rahunky', label: 'Формування', perm: 'docs.edit' },
     { id: 'rlist', label: 'Сформовані рахунки' },
     { id: 'paylinks', label: 'Посилання на оплату', perm: 'docs.edit' },
     { id: 'payments', label: 'Платежі', perm: 'docs.edit' },
-    { id: 'invfops', label: 'ФОПи рахунків', perm: 'refs.edit' },
-    { id: 'rsettings', label: 'Налаштування рахунків', perm: 'refs.edit' },
   ] },
   { id: 'an', label: 'Аналітика', perm: 'an.view', home: 'an', tabs: [
     { id: 'an', label: 'Дашборд' },
@@ -49,12 +47,15 @@ const SECTIONS = [
     { id: 'b2bpartners', label: 'Партнери' },
     { id: 'b2bcatalog', label: 'Каталог і ціни' },
     { id: 'b2bstats', label: 'Аналітика' },
+    { id: 'b2bstatement', label: 'Взаєморозрахунки' },
     { id: 'b2btrash', label: 'Кошик' },
   ] },
   // Кабінет партнера — єдиний розділ, який бачить партнер.
-  { id: 'partner', label: 'Кабінет партнера', perm: 'b2b.partner', home: 'pcatalog', tabs: [
+  { id: 'partner', label: 'Кабінет партнера', perm: 'b2b.partner', home: 'phome', tabs: [
+    { id: 'phome', label: 'Головна' },
     { id: 'pcatalog', label: 'Каталог' },
     { id: 'porders', label: 'Закупівлі' },
+    { id: 'pstatement', label: 'Взаєморозрахунки' },
     { id: 'pclients', label: 'Замовлення клієнтів' },
     { id: 'pentities', label: 'Мої юрособи' },
     { id: 'pstats', label: 'Аналітика' },
@@ -65,10 +66,21 @@ const SECTIONS = [
   { id: 'retail', label: 'Рітейл', perm: 'docs.view', home: 'rzorders', tabs: [
     { id: 'rzorders', label: 'Розетка' },
     { id: 'rzproducts', label: 'Розетка: товари й ціни', perm: 'refs.edit' },
-    { id: 'rzsettings', label: 'Налаштування Розетки', perm: 'api' },
   ] },
-  { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [{ id: 'settings', label: 'Загальні налаштування' }, { id: 'np', label: 'Нова пошта і Розетка', perm: 'api' }, { id: 'errors', label: 'Журнал помилок', perm: 'users' }] },
-  { id: 'users', label: 'Користувачі', perm: 'people', home: 'users', tabs: [{ id: 'users', label: 'Користувачі' }] },
+  // Усі налаштування — в одному розділі: щоденна робота — в інших, рідкісні налаштування — тут.
+  { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [
+    { id: 'settings', label: 'Загальні налаштування' },
+    { id: 'fops', label: 'ФОПи накладних' },
+    { id: 'offices', label: 'Відділи, поле 1 → ФОП' },
+    { id: 'templates', label: 'Шаблони' },
+    { id: 'nsettings', label: 'Налаштування накладних' },
+    { id: 'invfops', label: 'ФОПи рахунків' },
+    { id: 'rsettings', label: 'Налаштування рахунків' },
+    { id: 'np', label: 'Нова пошта і Розетка', perm: 'api' },
+    { id: 'rzsettings', label: 'Налаштування Розетки', perm: 'api' },
+    { id: 'users', label: 'Користувачі', perm: 'people' },
+    { id: 'errors', label: 'Журнал помилок', perm: 'users' },
+  ] },
 ];
 const visibleTabs = (sec) => sec.tabs.filter((t) => !t.perm || can(t.perm));
 const sectionOf = (routeId) => SECTIONS.find((sec) => sec.tabs.some((t) => t.id === routeId)) || SECTIONS[0];
@@ -90,6 +102,11 @@ function renderNav(active = 'invoice') {
     <nav class="main-tabs" aria-label="Розділи">
       ${secs.map((sec) => `<a href="#/${homeOf(sec)}" class="${sec.id === cur.id ? 'active' : ''}">${esc(sec.label)}</a>`).join('')}
     </nav>
+    ${u?.role !== 'partner' ? `<div class="gsearch" role="search">
+      <label class="sr-only" for="gQ">Пошук по сайту</label>
+      <input id="gQ" type="search" autocomplete="off" placeholder="Пошук: №, ТТН, телефон, клієнт  ( / )">
+      <div id="gRes" class="gsearch-res" hidden></div>
+    </div>` : ''}
     <div class="top-user">
       ${can('api') && !s.lpcrm_key ? '<a href="#/settings" class="top-warn">LP-CRM не підключено</a>' : ''}
       <span><b>${esc(u?.name || '')}</b> · ${esc(u?.partner_role_name ? `Партнер · ${u.partner_role_name}` : (u?.role_name || ''))}</span>
@@ -107,7 +124,46 @@ function renderNav(active = 'invoice') {
   };
   $('#navPwd').onclick = (e) => { e.preventDefault(); changeOwnPassword(); };
   $('#navTg').onclick = (e) => { e.preventDefault(); tgDialog(); };
+  wireSearch();
 }
+
+// Пошук по всьому сайту: накладні, рахунки, B2B, Розетка (що видно за правами). «/» — перейти в поле пошуку.
+function wireSearch() {
+  const inp = $('#gQ');
+  const box = $('#gRes');
+  if (!inp) return;
+  let timer = 0;
+  let seq = 0;
+  const close = () => { box.hidden = true; };
+  const run = async () => {
+    const q = inp.value.trim();
+    if (q.length < 2) { close(); return; }
+    const my = ++seq;
+    let items = [];
+    try { ({ items } = await api('GET', `/api/search?q=${encodeURIComponent(q)}`)); } catch (e) { items = []; }
+    if (my !== seq) return;
+    const groups = [...new Set(items.map((x) => x.group))];
+    box.innerHTML = items.length
+      ? groups.map((g) => `<div class="gs-group">${esc(g)}</div>${items.filter((x) => x.group === g).map((x) => `<a class="gs-item" href="${esc(x.link)}"><b>${esc(x.title)}</b><span>${esc(x.sub || '')}</span></a>`).join('')}`).join('')
+      : `<div class="gs-empty">Нічого не знайдено за «${esc(q)}»${/^\d{4,}$/.test(q) ? ` · <a href="#/invoice/${encodeURIComponent(q)}">сформувати накладну за замовленням ${esc(q)}</a>` : ''}</div>`;
+    box.hidden = false;
+  };
+  inp.oninput = () => { clearTimeout(timer); timer = setTimeout(run, 250); };
+  inp.onfocus = () => { if (inp.value.trim().length >= 2 && box.innerHTML) box.hidden = false; };
+  inp.onkeydown = (e) => {
+    if (e.key === 'Escape') { close(); inp.blur(); }
+    if (e.key === 'Enter') { const first = box.querySelector('a'); if (first) { location.hash = first.getAttribute('href'); close(); } }
+  };
+  box.onclick = (e) => { if (e.target.closest('a')) { close(); inp.value = ''; } };
+}
+// Клік поза пошуком закриває результати (один обробник на всю сторінку — шапка перемальовується на кожному переході).
+document.addEventListener('click', (e) => { const box = $('#gRes'); if (box && !e.target.closest?.('.gsearch')) box.hidden = true; });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+  const inp = $('#gQ');
+  if (inp) { e.preventDefault(); inp.focus(); }
+});
 
 // Мій Telegram: підключення одним натисканням (бот сам отримує ID), для адмінів — що надсилати.
 async function tgDialog() {
@@ -115,7 +171,7 @@ async function tgDialog() {
   try { me = await api('GET', '/api/tg/me'); } catch (e) { toast(e.message, true); return; }
   const admin = can('users');
   const body = () => `
-    ${!me.bot ? `<div class="alert">Telegram-бота ще не підключено. ${can('api') ? 'Вставте токен бота в <a href="#/rsettings" data-close>«Рахунки Word → Налаштування рахунків»</a>.' : 'Зверніться до власника або адміністратора.'}</div>`
+    ${!me.bot ? `<div class="alert">Telegram-бота ще не підключено. ${can('api') ? 'Вставте токен бота в <a href="#/rsettings" data-close>«Налаштування → Налаштування рахунків»</a>.' : 'Зверніться до власника або адміністратора.'}</div>`
       : me.connected ? `<div class="alert info">✅ Telegram підключено до бота <b>@${esc(me.bot)}</b>. Сюди надходитимуть сповіщення про оплату рахунків, які ви створили.</div>`
         : `<p>Натисніть кнопку — відкриється бот <b>@${esc(me.bot)}</b>. Натисніть у ньому <b>«Start»</b> (або «Почати»), і ваш Telegram прив’яжеться до цього акаунта автоматично.</p>
           <div class="btn-row"><button class="btn primary" id="tgGo">Підключити Telegram</button></div><div class="small muted" id="tgWait"></div>`}
@@ -216,6 +272,7 @@ const { viewErrors } = createErrorsPages(ctx);
 const B2BSTATS = createB2bStats();
 const RETAIL = createRetailPages(ctx);
 const { viewPartners, viewCatalog, viewOrders: viewB2bOrders, viewClients: viewB2bClients, viewTrash: viewB2bTrash } = createB2bPages(ctx);
+const HOME = createHomePages(ctx);
 const { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients, viewTeam: viewPartnerTeam, viewSettings: viewPartnerSettings, viewTrash: viewPartnerTrash } = createPartnerPages(ctx);
 setUnauthorized(() => showAuth());
 
@@ -253,6 +310,10 @@ const routes = {
   pentities: viewEntities,
   b2bcatalog: viewCatalog,
   pcatalog: viewPartnerCatalog,
+  home: () => HOME.viewHome(),
+  phome: () => HOME.viewPartnerHome(),
+  pstatement: () => HOME.viewStatement(),
+  b2bstatement: (pid) => HOME.viewStatement(pid),
   phelp: viewPartnerHelp,
   rzorders: () => RETAIL.viewOrders(),
   rzproducts: () => RETAIL.viewProducts(),
@@ -261,7 +322,8 @@ const routes = {
 
 async function route() {
   if (!boot.user) return;
-  let [, name = homeRoute(), ...args] = location.hash.replace(/^#/, '').split('/');
+  // Після «?» — параметри сторінки (напр. період виписки); у маршрут не входять.
+  let [, name = homeRoute(), ...args] = location.hash.replace(/^#/, '').split('?')[0].split('/');
   if (!routes[name]) name = homeRoute();
   const sec = sectionOf(name);
   const tab = sec.tabs.find((t) => t.id === name);
@@ -270,6 +332,8 @@ async function route() {
   activeRoute = name;
   document.body.classList.toggle('an-mode', sec.id === 'an');
   renderNav(name);
+  // На телефоні меню гортається вбік — активний пункт має бути видно
+  for (const a of $$('.main-tabs a.active, .subnav a.active')) a.scrollIntoView({ block: 'nearest', inline: 'center' });
   try {
     if ((sec.perm && !can(sec.perm)) || (tab?.perm && !can(tab.perm))) throw new Error('Немає доступу до цього розділу.');
     await routes[name](...args.map((x) => decodeURIComponent(x)));
@@ -279,6 +343,74 @@ async function route() {
   window.scrollTo(0, 0);
 }
 window.addEventListener('hashchange', route);
+
+// Таблиці на телефоні показуються картками (app.css): кожна клітинка отримує підпис зі свого заголовка.
+function labelTables() {
+  for (const t of main.querySelectorAll('table.list:not(.an-table):not(.no-cards)')) {
+    const heads = [...t.querySelectorAll(':scope > thead th')].map((th) => th.textContent.trim().replace(/\s*↕\s*$/, ''));
+    if (!heads.length) continue;
+    for (const tr of t.querySelectorAll(':scope > tbody > tr')) {
+      let i = 0;
+      for (const td of tr.children) {
+        if (!td.dataset.label && heads[i]) td.dataset.label = heads[i];
+        i += td.colSpan || 1;
+      }
+    }
+  }
+  // Довгі таблиці (платежі, каталог, Розетка…) — спершу PAGE рядків і кнопка «Показати ще».
+  for (const t of main.querySelectorAll('table.list:not(.no-paging)')) {
+    if (t.dataset.paged) continue;
+    const rows = [...t.querySelectorAll(':scope > tbody > tr')];
+    if (rows.length <= PAGE + 20) continue;
+    t.dataset.paged = '1';
+    let shown = PAGE;
+    rows.slice(shown).forEach((r) => r.classList.add('pg-hidden'));
+    const more = document.createElement('div');
+    more.className = 'pg-more';
+    const wrap = t.closest('.table-wrap') || t;
+    wrap.after(more);
+    const draw = () => {
+      const left = rows.length - shown;
+      more.innerHTML = left > 0
+        ? `<span class="muted small">Показано ${shown} з ${rows.length}</span><button class="btn" type="button" data-more>Показати ще ${Math.min(PAGE, left)}</button><button class="btn" type="button" data-all>Показати всі</button>`
+        : '';
+    };
+    more.onclick = (e) => {
+      const all = e.target.closest('[data-all]');
+      if (!all && !e.target.closest('[data-more]')) return;
+      shown = all ? rows.length : shown + PAGE;
+      rows.slice(0, shown).forEach((r) => r.classList.remove('pg-hidden'));
+      draw();
+    };
+    draw();
+  }
+}
+const PAGE = 50;
+
+// Інструкції (.alert.help) згортаються в рядок «Як це працює»; закрита інструкція лишається закритою на цій сторінці.
+function foldHelp() {
+  for (const box of main.querySelectorAll('.alert.help:not([data-folded])')) {
+    box.dataset.folded = '1';
+    const key = `help:${activeRoute}`;
+    let closed = false;
+    try { closed = localStorage.getItem(key) === '0'; } catch { /* приватний режим */ }
+    const d = document.createElement('details');
+    d.className = 'help-box';
+    d.open = !closed;
+    d.innerHTML = '<summary>Як це працює</summary>';
+    box.replaceWith(d);
+    box.style.margin = '';
+    d.append(box);
+    d.ontoggle = () => { try { localStorage.setItem(key, d.open ? '1' : '0'); } catch { /* */ } };
+  }
+}
+let labelQueued = false;
+new MutationObserver(() => {
+  if (labelQueued) return;
+  labelQueued = true;
+  setTimeout(() => { labelQueued = false; labelTables(); foldHelp(); iconize(document.body); }, 0);
+// Уся сторінка (шапка, вікна, підказки) — щоб емодзі ставали іконками й поза основним вмістом.
+}).observe(document.body, { childList: true, subtree: true, characterData: true });
 
 // =====================================================================
 // НАКЛАДНА

@@ -14,7 +14,7 @@
 // магазин ТТН запам'ятовується (rz_docs) — друк з першої спроби.
 import { MASK, fail, need, kyivDay } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
-import { npSender, npDocumentsPage, npMarkingPdf, npServiceType, isDoorPickup, phone9 } from '../../integrations/novaposhta.js';
+import { npSender, npDocumentsPage, npMarkingPdf, npServiceType, npTracking, isDoorPickup, phone9 } from '../../integrations/novaposhta.js';
 import { rzLogin, rzTtnPdf } from '../../integrations/rozetka.js';
 
 const PAGES_PER_CALL = 12;
@@ -318,4 +318,14 @@ export function mountMarking(app, { db, fetchFn, onCleanup }) {
     }
     throw fail(404, `ТТН ${ttn} немає в жодному з підключених магазинів Розетки (або її скасовано).`);
   });
+
+  // Статус ТТН для інших модулів (B2B: замовлення клієнтів партнера). Відстежити можна будь-яку ТТН НП ключем будь-якого кабінету.
+  async function trackTtn(ttn, phone = '') {
+    const t = String(ttn || '').replace(/\s/g, '');
+    if (!/^\d{10,20}$/.test(t)) throw fail(400, 'ТТН Нової пошти — 10–20 цифр.');
+    const acc = await db.get(`SELECT api_key FROM np_accounts WHERE active = 1 ORDER BY hits DESC, id LIMIT 1`);
+    if (!acc) throw fail(400, 'Немає підключеного кабінету Нової пошти (Налаштування → Нова пошта і Розетка).');
+    return npTracking(fetchFn, acc.api_key, t, String(phone || '').replace(/\D/g, '').slice(-12));
+  }
+  return { trackTtn };
 }

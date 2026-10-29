@@ -454,7 +454,9 @@ export function createAnalyticsUI(ctx) {
         <div><span class="muted">План на ${monthName(m.name + '-01')}</span><b>${uah(m.plan)}</b></div>
         <div><span class="muted">Прогноз на кінець місяця</span><b class="${enough ? 'good' : 'bad'}">${uah(m.forecast)} · ${pct1(m.forecastPct)}</b></div>
         <div><span class="muted">Зараз у середньому</span><b>${uah(m.avgPerDay)} / день</b></div>
-        <div><span class="muted">${m.left ? `Треба до кінця місяця (${m.left} дн.)` : 'Місяць завершено'}</span><b>${m.left ? `${uah(m.needPerDay)} / день` : '—'}</b></div>
+        ${m.left && m.needPerDay <= 0
+    ? `<div><span class="muted">До кінця місяця (${m.left} дн.)</span><b class="good">План місяця вже виконано</b></div>`
+    : `<div><span class="muted">${m.left ? `Треба до кінця місяця (${m.left} дн.)` : 'Місяць завершено'}</span><b>${m.left ? `${uah(m.needPerDay)} / день` : '—'}</b></div>`}
       </div>`;
     }
     return `<div class="card an-target">

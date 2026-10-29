@@ -57,6 +57,19 @@ export async function npServiceType(fetchFn, apiKey, ttn) {
   const list = await npCall(fetchFn, apiKey, 'TrackingDocument', 'getStatusDocuments', { Documents: [{ DocumentNumber: ttn, Phone: '' }] });
   return String(list[0]?.ServiceType || '').trim().slice(0, 40);
 }
+// Статус відправлення для відстеження (з телефоном отримувача НП віддає повні дані, без нього — основне).
+export async function npTracking(fetchFn, apiKey, ttn, phone = '') {
+  const list = await npCall(fetchFn, apiKey, 'TrackingDocument', 'getStatusDocuments', { Documents: [{ DocumentNumber: ttn, Phone: phone }] });
+  const d = list[0] || {};
+  return {
+    status: String(d.Status || '').trim().slice(0, 200),
+    code: String(d.StatusCode || ''),
+    city: String(d.CityRecipient || '').trim().slice(0, 80),
+    warehouse: String(d.WarehouseRecipient || '').trim().slice(0, 160),
+    scheduled: String(d.ScheduledDeliveryDate || '').trim().slice(0, 30),
+    received: String(d.RecipientDateTime || '').trim().slice(0, 30),
+  };
+}
 // Адресний (кур'єрський) забір: відправлення забирає кур'єр НП з адреси відправника — тип доставки «Doors…».
 export const isDoorPickup = (service) => /^Doors/i.test(String(service || ''));
 

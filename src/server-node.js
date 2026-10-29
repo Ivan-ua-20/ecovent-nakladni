@@ -54,7 +54,9 @@ root.get('*', (c) => {
 });
 
 const port = Number(process.env.PORT || 8787);
-serve({ fetch: root.fetch, port }, () => {
+// Лише з цього комп'ютера. Відкрити для інших у мережі — змінна HOST=0.0.0.0 (див. local/README.txt).
+const hostname = process.env.HOST || '127.0.0.1';
+serve({ fetch: root.fetch, port, hostname }, () => {
   const url = `http://localhost:${port}`;
   console.log(`\n  Накладні працюють: ${url}\n  Щоб зупинити — закрийте це вікно.\n`);
   if (process.env.OPEN_BROWSER === '1') {
