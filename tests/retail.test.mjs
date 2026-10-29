@@ -239,13 +239,6 @@ assert.equal(o3.crm_code, '1761400000000111');
 assert.equal((await req('GET', `/api/rzs/orders/${R4}`)).crm_id, '', 'підказку не прив’язано без людини');
 await req('PUT', `/api/rzs/orders/${R4}/crm-link`, { crm: '70002' });
 assert.equal((await req('GET', `/api/rzs/orders/${R4}`)).crm_id, '70002');
-await raw.run(`UPDATE rzs_orders SET crm_checked_at = '' WHERE id IN (?, ?)`, [R3, R4]);
-await req('POST', '/api/rzs/crm-status', {});
-const cn = await req('GET', '/api/rzs/orders?status=crmnew');
-assert.deepEqual(cn.rows.map((r) => r.order_num), ['PO4'], 'фільтр «В LP-CRM — Нове»');
-assert.equal(cn.counts.crmnew, 1);
-assert.equal(cn.rows[0].crm_status, 'Новий');
-assert.equal((await req('GET', `/api/rzs/orders/${R3}`)).crm_status, 'Прийнято', 'інші статуси теж видно');
 assert.match(await errOf(() => req('PUT', `/api/rzs/orders/${R5}/crm-link`, { crm: '70001' })), /уже прив/, 'один номер LP-CRM — до одного замовлення');
 assert.match(await errOf(() => req('PUT', `/api/rzs/orders/${R5}/crm-link`, { crm: 'abc' })), /цифри/);
 await req('PUT', `/api/rzs/orders/${R4}/crm-link`, { crm: '' });
@@ -311,6 +304,13 @@ await raw.run(`UPDATE rzs_orders SET crm_code = '1761400000000222', crm_id = '' 
 const s1 = await req('POST', '/api/rzs/sync', { force: true });
 assert.ok(s1.results.some((x) => x.crmNums === 1), 'номер LP-CRM для «передано» підтягнуто');
 assert.equal((await req('GET', `/api/rzs/orders/${R4}`)).crm_id, '70002');
+await raw.run(`UPDATE rzs_orders SET crm_checked_at = '' WHERE id IN (?, ?)`, [R3, R4]);
+await req('POST', '/api/rzs/crm-status', {});
+const cn = await req('GET', '/api/rzs/orders?status=crmnew');
+assert.deepEqual(cn.rows.map((r) => r.order_num), ['PO4'], 'фільтр «В LP-CRM — Нове»');
+assert.equal(cn.counts.crmnew, 1);
+assert.equal(cn.rows[0].crm_status, 'Новий');
+assert.equal((await req('GET', `/api/rzs/orders/${R3}`)).crm_status, 'Прийнято', 'інші статуси теж видно');
 
 // ---------- 9. Права ----------
 await req('POST', '/api/users', { login: 'viewer', password: 'pass1234', role: 'viewer' });
