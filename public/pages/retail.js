@@ -5,7 +5,7 @@ import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../c
 
 const ST_CLS = { new: 'warn', updated: 'warn', confirmed: 'info', shipping: 'info', problem: 'bad', closed: 'ok', delivery_refused: 'bad', deleted: 'bad', shipped_from_rozetka: 'ok' };
 const UZD_CLS = { verified: 'ok', skipped: 'ok', problem: 'bad', not_uploaded: '' };
-const VIEWS = { '': 'Усі', todo: 'До підтвердження', noinv: 'Чекає рахунок', ready: 'Можна створити ТТН', nottn: 'Без ТТН', nocrm: 'Не в LP-CRM', docs: 'З документами' };
+const VIEWS = { '': 'Усі', todo: 'До підтвердження', noinv: 'Чекає рахунок', ready: 'Можна створити ТТН', nottn: 'Без ТТН', nocrm: 'Не в LP-CRM', crmnew: 'В LP-CRM — Нове', docs: 'З документами' };
 const GAP_MS = 2000; // пауза між замовленнями в групових діях
 const RETRY_MS = [5000, 10000, 20000]; // якщо Розетка все ж відповіла «забагато запитів»
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -47,7 +47,7 @@ export function createRetailPages(ctx) {
         ${accounts.filter((a) => a.sync_error).map((a) => `<div class="alert warn small" style="margin-bottom:10px">⚠️ Останнє оновлення з Розетки${accounts.length > 1 ? ` («${esc(a.name)}»)` : ''} не вдалося${a.sync_error_at ? ` (${esc(fmtDateTime(a.sync_error_at))})` : ''}: ${esc(a.sync_error)}. Натисніть «Оновити з Розетки» ще раз.</div>`).join('')}`
         : `<div class="alert warn" style="margin-bottom:12px">Кабінет постачальника Розетки ще не підключено${can('api') ? ' — «Налаштування Розетки»' : ' — зверніться до адміністратора'}.</div>`}
       <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap">
-        ${Object.entries(VIEWS).map(([k, v]) => `<button class="chip ${filter.view === k ? 'on' : ''}" data-v="${k}">${esc(v)}</button>`).join('')}
+        ${Object.entries(VIEWS).map(([k, v]) => `<button class="chip ${filter.view === k ? 'on' : ''}" data-v="${k}">${esc(v)}${k === 'crmnew' && counts.crmnew ? ` · ${counts.crmnew}` : ''}</button>`).join('')}
         ${Object.entries(statuses).filter(([k]) => counts[k]).map(([k, v]) => `<button class="chip ${filter.view === k ? 'on' : ''}" data-v="${k}">${esc(v)} · ${counts[k]}</button>`).join('')}
       </div>
       <div class="btn-row" style="margin-bottom:10px"><input id="rzQ" placeholder="№ Розетки, клієнт, телефон, ТТН, рахунок" value="${esc(filter.q)}" style="max-width:320px"></div>
@@ -65,7 +65,7 @@ export function createRetailPages(ctx) {
           <td class="small nowrap">${o.invoice_no ? `<b>${esc(o.invoice_no)}</b>` : '<span class="muted">—</span>'}</td>
           <td class="small" data-nosel>${o.document_link ? `<a class="badge ok" href="${esc(o.document_link)}" target="_blank" rel="noopener">📄 є</a>` : '<span class="muted">ще немає</span>'}
             ${o.docs_at ? `<div class="muted">${esc(fmtDateTime(o.docs_at))}</div>` : ''}</td>
-          <td class="small hide-m">${o.crm_id ? `№ <b>${esc(o.crm_id)}</b>` : o.crm_code ? 'передано' : '—'}</td>
+          <td class="small hide-m">${o.crm_id ? `№ <b>${esc(o.crm_id)}</b>` : o.crm_code ? 'передано' : '—'}${o.crm_status ? `<div><span class="badge ${o.crm_new ? 'warn' : 'info'}" style="font-size:11px">${esc(o.crm_status)}</span></div>` : ''}</td>
         </tr>`).join('')}</tbody></table></div>`
         : '<div class="card empty"><div class="big">Замовлень немає</div>Нові замовлення Розетки з’являються тут автоматично (вебхук) або кнопкою «Оновити з Розетки».</div>'}`;
     $('#rzSync').onclick = async (e) => {
@@ -74,7 +74,11 @@ export function createRetailPages(ctx) {
       try { const r = await api('POST', '/api/rzs/sync', { force: true }); const err = r.results?.find((x) => x.error); const lk = r.results?.reduce((t, x) => t + (x.crm || 0), 0) || 0; toast(err ? err.error : `Оновлено: ${r.results?.reduce((t, x) => t + (x.saved || 0), 0) || 0} замовлень${lk ? ` · знайдено в LP-CRM за ТТН: ${lk}` : ''}`, !!err); } catch (er) { toast(er.message, true); }
       viewOrders();
     };
-    $$('[data-v]').forEach((b) => (b.onclick = () => { filter.view = b.dataset.v; viewOrders(); }));
+    $$('[data-v]').forEach((b) => (b.onclick = async () => {
+      filter.view = b.dataset.v;
+      if (filter.view === 'crmnew') { b.innerHTML = '<span class="spinner"></span> Перевіряю статуси в LP-CRM…'; await api('POST', '/api/rzs/crm-status', {}).catch((e) => toast(e.message, true)); }
+      viewOrders();
+    }));
     $('#rzFind') && ($('#rzFind').onclick = () => findCrm(null));
     let qt;
     $('#rzQ').oninput = (e) => { clearTimeout(qt); qt = setTimeout(async () => { filter.q = e.target.value; await viewOrders(); const el = $('#rzQ'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 350); };
@@ -174,7 +178,7 @@ export function createRetailPages(ctx) {
           <div><span class="badge ${ST_CLS[o.status] || ''}">${esc(o.status_name)}</span> ${o.uzd_name ? `<span class="badge ${UZD_CLS[o.uzd_status] || ''}">${esc(o.uzd_name)}</span>` : ''}
             <div class="small">ТТН: ${o.ttn ? `<b>${esc(o.ttn)}</b>${o.tracking_status ? ` · ${esc(o.tracking_status)}` : ''}` : '—'}</div>
             <div class="small">Документи: ${o.document_link ? `<a href="${esc(o.document_link)}" target="_blank" rel="noopener">📄 відкрити</a>` : 'ще немає'}${o.docs_at ? ` · з ${esc(fmtDateTime(o.docs_at))}` : ''}${o.invoice_no ? ` · рахунок Вчасно № ${esc(o.invoice_no)}` : ''}</div>
-            <div class="small">LP-CRM: ${o.crm_id ? `№ <b>${esc(o.crm_id)}</b>` : o.crm_code ? 'передано' : '—'}</div>
+            <div class="small">LP-CRM: ${o.crm_id ? `№ <b>${esc(o.crm_id)}</b>` : o.crm_code ? 'передано' : '—'}${o.crm_status ? ` · ${esc(o.crm_status)}` : ''}</div>
             ${edit ? `<div class="btn-row" style="margin-top:4px"><input id="omCrmNo" value="${esc(o.crm_id || '')}" placeholder="№ замовлення в LP-CRM" inputmode="numeric" style="max-width:170px" aria-label="Номер замовлення в LP-CRM">
               <button type="button" class="btn sm" id="omLink">${o.crm_id || o.crm_code ? 'Змінити' : '🔗 Прив’язати'}</button>${o.crm_id || o.crm_code ? '<button type="button" class="btn sm danger" id="omUnlink">Відв’язати</button>' : ''}</div>` : ''}
             ${o.note ? `<div class="small muted">${esc(o.note)}</div>` : ''}</div></div>

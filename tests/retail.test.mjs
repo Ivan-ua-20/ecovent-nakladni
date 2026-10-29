@@ -30,7 +30,7 @@ let tooMany = 0; // скільки разів поспіль Розетка ві
 let listFail = false;
 const tg = [];
 // Замовлення LP-CRM (код → номер, ТТН, телефон) — для пошуку прив'язки за ТТН.
-const CRM = new Map([['1761400000000111', { id: '70001', status: '1', ttn: '20400558101410', phone: '0971089181', bayer_name: 'Попелянська' }], ['1761400000000222', { id: '70002', ttn: '', phone: '0508846132', bayer_name: 'Підопличко' }]]);
+const CRM = new Map([['1761400000000111', { id: '70001', status: '1', ttn: '20400558101410', phone: '0971089181', bayer_name: 'Попелянська' }], ['1761400000000222', { id: '70002', status: '2', ttn: '', phone: '0508846132', bayer_name: 'Підопличко' }]]);
 const calls = { list: 0, confirm: [], ttn: [], print: [], price: [], crm: [] };
 const json = (o, status = 200) => new Response(JSON.stringify(o), { status });
 const fetchFn = async (url, opts = {}) => {
@@ -41,7 +41,7 @@ const fetchFn = async (url, opts = {}) => {
     const p = Object.fromEntries(new URLSearchParams(opts.body));
     calls.crm.push({ method, p });
     if (method === 'addNewOrder') return json({ status: 'ok', data: { order_id: p.order_id }, message: 'ok' });
-    if (method === 'getStatuses') return json({ status: 'ok', data: { 1: { name: 'Прийнято' }, 4: { name: 'Відправлено' } } });
+    if (method === 'getStatuses') return json({ status: 'ok', data: { 1: { name: 'Прийнято' }, 2: { name: 'Новий' }, 4: { name: 'Відправлено' } } });
     if (method === 'getOrdersByID' && p.order_id.split(',').some((c) => CRM.has(c))) return json({ status: 'ok', data: p.order_id.split(',').filter((c) => CRM.has(c)).map((c) => ({ order_id: c, ...CRM.get(c), products: [] })) });
     if (method === 'getOrdersByID') return json({ status: 'ok', data: [{ order_id: p.order_id, id: '88001', products: [], bayer_name: 'x' }] });
     return json({ status: 'ok', data: [] });
@@ -304,6 +304,13 @@ await raw.run(`UPDATE rzs_orders SET crm_code = '1761400000000222', crm_id = '' 
 const s1 = await req('POST', '/api/rzs/sync', { force: true });
 assert.ok(s1.results.some((x) => x.crmNums === 1), 'номер LP-CRM для «передано» підтягнуто');
 assert.equal((await req('GET', `/api/rzs/orders/${R4}`)).crm_id, '70002');
+await raw.run(`UPDATE rzs_orders SET crm_checked_at = '' WHERE id IN (?, ?)`, [R3, R4]);
+await req('POST', '/api/rzs/crm-status', {});
+const cn = await req('GET', '/api/rzs/orders?status=crmnew');
+assert.deepEqual(cn.rows.map((r) => r.order_num), ['PO4'], 'фільтр «В LP-CRM — Нове»');
+assert.equal(cn.counts.crmnew, 1);
+assert.equal(cn.rows[0].crm_status, 'Новий');
+assert.equal((await req('GET', `/api/rzs/orders/${R3}`)).crm_status, 'Прийнято', 'інші статуси теж видно');
 
 // ---------- 9. Права ----------
 await req('POST', '/api/users', { login: 'viewer', password: 'pass1234', role: 'viewer' });
