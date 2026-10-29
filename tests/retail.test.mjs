@@ -298,6 +298,12 @@ listFail = false;
 await req('POST', '/api/rzs/sync', { force: true });
 sa = (await req('GET', '/api/rzs/orders')).accounts[0];
 assert.equal(sa.sync_error, '', 'вдале оновлення знімає помилку');
+const s0 = await req('POST', '/api/rzs/sync', { force: true });
+assert.equal(s0.results.find((x) => x.saved)?.changed, 0, 'нічого не змінилось — список не перемальовується');
+await raw.run(`UPDATE rzs_orders SET crm_code = '1761400000000222', crm_id = '' WHERE id = ?`, [R4]);
+const s1 = await req('POST', '/api/rzs/sync', { force: true });
+assert.ok(s1.results.some((x) => x.crmNums === 1), 'номер LP-CRM для «передано» підтягнуто');
+assert.equal((await req('GET', `/api/rzs/orders/${R4}`)).crm_id, '70002');
 
 // ---------- 9. Права ----------
 await req('POST', '/api/users', { login: 'viewer', password: 'pass1234', role: 'viewer' });
