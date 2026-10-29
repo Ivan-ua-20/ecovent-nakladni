@@ -15,6 +15,7 @@ export function createRetailPages(ctx) {
   const can = (p) => (ctx.can ? ctx.can(p) : true);
   let filter = { view: '', q: '' };
   let lastSyncTry = 0;
+  let busy = false; // йде групова дія — список не перемальовуємо
 
   // ---------------------------------------------------------------- замовлення
   // Відкриття сторінки: оновлення з Розетки у фоні (не частіше разу на 2 хв); прийшли нові дані — перемальовуємо.
@@ -24,7 +25,13 @@ export function createRetailPages(ctx) {
     api('POST', '/api/rzs/sync', {}).then((r) => {
       const err = r?.results?.find((x) => x.error);
       if (err) toast(`Оновлення з Розетки: ${err.error}`, true);
-      if ((r?.results || []).some((x) => x.saved || x.crm) && location.hash.startsWith('#/rzorders') && !document.querySelector('.modal-bg')) viewOrders();
+      // Перемальовуємо лише якщо щось справді змінилось і людина зараз нічого не вибирає (інакше зник би вибір).
+      if (!(r?.results || []).some((x) => x.changed || x.crm || x.crmNums) || !location.hash.startsWith('#/rzorders')) return;
+      if (!document.querySelector('.modal-bg') && !$$('[data-sel]').some((x) => x.checked) && !busy) viewOrders();
+      else if (!$('#rzFresh') && $('#rzBulk')) {
+        $('#rzBulk').insertAdjacentHTML('beforebegin', '<div class="alert info small" id="rzFresh" style="margin-bottom:8px">З Розетки прийшли зміни — <a href="#" id="rzFreshGo">оновити список</a>.</div>');
+        $('#rzFreshGo').onclick = (ev) => { ev.preventDefault(); viewOrders(); };
+      }
     }).catch(() => 0);
   }
   async function viewOrders() {
@@ -112,6 +119,7 @@ export function createRetailPages(ctx) {
       if (!(await confirmDanger(`${a.label}: ${todo.length} замовлень?`, skipped.length ? `Пропущено ${skipped.length} — ${a.why}.` : '', a.label))) return;
       const fails = [];
       let ok = 0;
+      busy = true;
       bar.querySelectorAll('button').forEach((b) => { b.disabled = true; });
       const label = (t) => { bar.querySelector('b').textContent = t; };
       for (const [i, id] of todo.entries()) {
@@ -129,6 +137,7 @@ export function createRetailPages(ctx) {
           }
         }
       }
+      busy = false;
       toast(`${a.label}: виконано ${ok} з ${todo.length}`, ok < todo.length);
       if (fails.length || skipped.length) modal('Результат', `<div class="form-stack small">${[...fails, ...skipped].map((x) => `<div>${esc(x)}</div>`).join('')}</div>`, { footer: '<button class="btn primary" data-close>Зрозуміло</button>' });
       viewOrders();

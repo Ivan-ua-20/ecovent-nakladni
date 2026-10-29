@@ -10270,6 +10270,11 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     }
     const ready2 = (x) => ["confirmed", "problem"].includes(x.status) && !x.ttn && ["verified", "skipped"].includes(x.uzd_status);
     const events = { inv: [], ttn: [] };
+    const KEYS = ["status", "uzd_status", "ttn", "invoice_no", "document_link"];
+    saveOrders2.changed = rows.filter((r) => {
+      const o = old.get(r.id);
+      return !o || KEYS.some((k) => String(r[k] ?? "") !== String(o[k] ?? "") && !(k === "uzd_status" && !r[k]));
+    }).length;
     for (const r of rows) {
       const o = old.get(r.id);
       if (!o) continue;
@@ -10329,12 +10334,14 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
   async function syncAccount(a, { days = SYNC_DAYS } = {}) {
     const dateFrom = rzsDateTime(new Date(Date.now() - days * 864e5));
     let saved = 0;
+    let changed = 0;
     let more = false;
     try {
       for (let page = 1; page <= SYNC_PAGES; page++) {
         if (page > 1) await new Promise((r2) => setTimeout(r2, PAGE_PAUSE_MS));
         const r = await rzsOrdersPage(fetchFn, a.token, { dateFrom, page });
         saved += await saveOrders2(r.orders, a.id);
+        changed += saveOrders2.changed || 0;
         if (!r.orders.length || page * 50 >= r.total) break;
         if (page === SYNC_PAGES) more = true;
       }
@@ -10343,7 +10350,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
       throw e;
     }
     await db.run(`UPDATE rzs_accounts SET synced_at = ?, sync_error = '', sync_error_at = '' WHERE id = ?`, [nowIso(), a.id]);
-    return { saved, more };
+    return { saved, changed, more };
   }
   const TICK_MS = 10 * 6e4;
   onTick((c) => {
@@ -10383,6 +10390,8 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
         out.push({ id: a.id, error: e.message });
       }
     }
+    const noNum = await db.all(`SELECT id, crm_code FROM rzs_orders WHERE crm_code != '' AND crm_id = '' AND created_at >= ? LIMIT 100`, [new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)]);
+    if (noNum.length) out.push({ crmNums: await fillCrmIds(noNum).catch(() => 0) });
     if (out.some((x) => x.saved)) {
       const since = new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10);
       const todo = await db.all(`SELECT * FROM rzs_orders WHERE created_at >= ? AND ttn != '' AND crm_id = '' AND crm_code = '' AND status != 'deleted' LIMIT 200`, [since]);
@@ -10685,6 +10694,18 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     }
     if (st.length) await db.batch(st);
     return out;
+  }
+  async function fillCrmIds(rows) {
+    const s = await loadSettings(db);
+    if (!s.lpcrm_subdomain || !s.lpcrm_key) return 0;
+    const got = await getOrdersBatch(fetchFn, { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key }, rows.map((r) => r.crm_code));
+    const st = [];
+    for (const r of rows) {
+      const o = got.find((x) => String(x.order_id) === r.crm_code);
+      if (o && /^\d+$/.test(String(o.id ?? ""))) st.push([`UPDATE rzs_orders SET crm_id = ? WHERE id = ? AND crm_id = ''`, [String(o.id), r.id]]);
+    }
+    if (st.length) await db.batch(st);
+    return st.length;
   }
   app.post("/api/rzs/crm-find", async (c) => {
     need(c, "docs.edit");

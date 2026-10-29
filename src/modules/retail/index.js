@@ -148,6 +148,8 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     // Події для сповіщень: з'явився вхідний рахунок; замовлення стало готовим до ТТН (підтверджене, ЮЗД звірено, ТТН ще немає).
     const ready = (x) => ['confirmed', 'problem'].includes(x.status) && !x.ttn && ['verified', 'skipped'].includes(x.uzd_status);
     const events = { inv: [], ttn: [] };
+    const KEYS = ['status', 'uzd_status', 'ttn', 'invoice_no', 'document_link'];
+    saveOrders.changed = rows.filter((r) => { const o = old.get(r.id); return !o || KEYS.some((k) => String(r[k] ?? '') !== String(o[k] ?? '') && !(k === 'uzd_status' && !r[k])); }).length;
     for (const r of rows) {
       const o = old.get(r.id);
       if (!o) continue; // нове для нас замовлення (перше завантаження) — без сповіщень
@@ -209,12 +211,14 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
   async function syncAccount(a, { days = SYNC_DAYS } = {}) {
     const dateFrom = rzsDateTime(new Date(Date.now() - days * 86400000));
     let saved = 0;
+    let changed = 0;
     let more = false;
     try {
       for (let page = 1; page <= SYNC_PAGES; page++) {
         if (page > 1) await new Promise((r) => setTimeout(r, PAGE_PAUSE_MS)); // Розетка обмежує частоту запитів
         const r = await rzsOrdersPage(fetchFn, a.token, { dateFrom, page });
         saved += await saveOrders(r.orders, a.id);
+        changed += saveOrders.changed || 0;
         if (!r.orders.length || page * 50 >= r.total) break;
         if (page === SYNC_PAGES) more = true;
       }
@@ -223,7 +227,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
       throw e;
     }
     await db.run(`UPDATE rzs_accounts SET synced_at = ?, sync_error = '', sync_error_at = '' WHERE id = ?`, [nowIso(), a.id]);
-    return { saved, more };
+    return { saved, changed, more };
   }
   // Сповіщення потребують свіжих даних: у фоні (на запитах до сайту) раз на 10 хв оновлюємо замовлення за 7 днів —
   // лише якщо в якомусь кабінеті ввімкнено сповіщення. Вебхук Розетки й так приносить зміни одразу.
@@ -252,6 +256,9 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
       if (!b.force && a.synced_at && Date.now() - Date.parse(a.synced_at) < SYNC_GAP_MS) { out.push({ id: a.id, skipped: true }); continue; }
       try { out.push({ id: a.id, ...(await syncAccount(a)) }); } catch (e) { if (e.pending) throw e; out.push({ id: a.id, error: e.message }); }
     }
+    // Передані в LP-CRM, але номер ще не відомий (LP-CRM не встигла віддати) — дізнаємося за кодом.
+    const noNum = await db.all(`SELECT id, crm_code FROM rzs_orders WHERE crm_code != '' AND crm_id = '' AND created_at >= ? LIMIT 100`, [new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)]);
+    if (noNum.length) out.push({ crmNums: await fillCrmIds(noNum).catch(() => 0) });
     // Нові ТТН — одразу шукаємо їх у LP-CRM (лише точний збіг ТТН).
     if (out.some((x) => x.saved)) {
       const since = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
@@ -516,6 +523,18 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     }
     if (st.length) await db.batch(st);
     return out;
+  }
+  async function fillCrmIds(rows) {
+    const s = await loadSettings(db);
+    if (!s.lpcrm_subdomain || !s.lpcrm_key) return 0;
+    const got = await getOrdersBatch(fetchFn, { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key }, rows.map((r) => r.crm_code));
+    const st = [];
+    for (const r of rows) {
+      const o = got.find((x) => String(x.order_id) === r.crm_code);
+      if (o && /^\d+$/.test(String(o.id ?? ''))) st.push([`UPDATE rzs_orders SET crm_id = ? WHERE id = ? AND crm_id = ''`, [String(o.id), r.id]]);
+    }
+    if (st.length) await db.batch(st);
+    return st.length;
   }
   app.post('/api/rzs/crm-find', async (c) => {
     need(c, 'docs.edit');
