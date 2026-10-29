@@ -2,7 +2,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
@@ -126,7 +126,7 @@ export function createPartnerPages(ctx = {}) {
           <td class="small hide-m">${esc(p.brand)}</td>
           <td class="r small muted">${money(p.rrp)} грн</td>
           <td class="r small hide-m">${pct(p.margin)}<div class="muted">−${money(p.rrp - p.price)}</div></td>
-          <td class="r"><b>${money(p.price)} грн</b></td>
+          <td class="r"><b>${money(p.price)} грн</b>${p.special ? `<div><span class="badge ok">${p.special_until ? `акція до ${p.special_until.slice(5).split('-').reverse().join('.')}` : 'особлива ціна'}</span></div>` : ''}</td>
         </tr>`;
       }).join('');
       $('#pcCount').textContent = `Знайдено: ${list.length} з ${products.length}`;
@@ -497,6 +497,7 @@ export function createPartnerPages(ctx = {}) {
             <h3>Клієнт і доставка</h3>
             <div><b>${esc(o.client_name)}</b><div>${esc(phoneFmt(o.client_phone))}</div></div>
             <div>ТТН: ${o.ttn ? `<b>${esc(o.ttn)}</b>` : '<span class="muted">не вказано</span>'}</div>
+            ${o.ttn ? trackBtn() : ''}
             <div>${o.no_supply ? supplyMark(o) : `Із закупівлі <a href="#/porders/${o.supply_id}">${esc(o.supply_number)}</a>`}</div>
           </div>
           <div class="card form-stack">
@@ -517,6 +518,7 @@ export function createPartnerPages(ctx = {}) {
           ${historyCard(history)}
         </div>
       </div>`;
+    wireTracking(`/api/b2b/p/clients/${o.id}/tracking`);
     $('#cpOk') && ($('#cpOk').onclick = async () => {
       try { await api('POST', `/api/b2b/p/clients/${o.id}/confirm`); toast('Зміни підтверджено'); viewClient(o.id); } catch (e) { toast(e.message, true); }
     });

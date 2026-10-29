@@ -64,6 +64,39 @@ export function mountB2bCrm(app, { db, services, onCleanup }) {
     return c.json({ ok: true });
   });
 
+  // ---------- особливі ціни на товари (маржа на товар замість маржі бренду, за бажання — до дати) ----------
+  app.get('/api/b2b/partners/:id/product-margins', async (c) => {
+    need(c, 'b2b.admin');
+    const p = await partnerOf(c.req.param('id'));
+    const rows = await db.all(`SELECT pm.product_id, pm.margin, pm.until, pm.created_by, c.name, c.article, c.rrp, m.margin AS brand_margin
+      FROM b2b_product_margins pm LEFT JOIN b2b_catalog c ON c.product_id = pm.product_id LEFT JOIN b2b_margins m ON m.partner_id = pm.partner_id AND m.brand_id = c.brand_id
+      WHERE pm.partner_id = ? ORDER BY c.name`, [p.id]);
+    const t = kyivDay();
+    return c.json(rows.map((r) => ({ ...r, expired: Boolean(r.until && r.until < t), brand_enabled: r.brand_margin != null })));
+  });
+  app.post('/api/b2b/partners/:id/product-margins', async (c) => {
+    need(c, 'b2b.admin');
+    const p = await partnerOf(c.req.param('id'));
+    const b = await c.req.json();
+    const key = String(b.product ?? '').trim();
+    const prod = key && await db.get(`SELECT product_id, name FROM b2b_catalog WHERE product_id = ? OR (article != '' AND article = ?) LIMIT 1`, [parseInt(key, 10) || 0, key]);
+    if (!prod) throw fail(400, 'Товар не знайдено в каталозі — вкажіть ID LP-CRM або артикул.');
+    const margin = Number(String(b.margin ?? '').replace(',', '.'));
+    if (!Number.isFinite(margin) || margin < 0 || margin > 90) throw fail(400, 'Знижка від РРЦ — від 0 до 90 %.');
+    const until = String(b.until || '').trim();
+    if (until && (!/^\d{4}-\d{2}-\d{2}$/.test(until) || until < kyivDay())) throw fail(400, 'Дата «до» — сьогодні або пізніше (або порожньо — постійно).');
+    const u = c.get('user');
+    await db.run(`INSERT INTO b2b_product_margins (partner_id, product_id, margin, until, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(partner_id, product_id) DO UPDATE SET margin = excluded.margin, until = excluded.until, created_by = excluded.created_by, created_at = excluded.created_at`,
+    [p.id, prod.product_id, Math.round(margin * 100) / 100, until, u.name || u.login, nowIso()]);
+    return c.json({ ok: true, product_id: prod.product_id, name: prod.name });
+  });
+  app.delete('/api/b2b/partners/:id/product-margins/:pid', async (c) => {
+    need(c, 'b2b.admin');
+    await db.run(`DELETE FROM b2b_product_margins WHERE partner_id = ? AND product_id = ?`, [c.req.param('id'), c.req.param('pid')]);
+    return c.json({ ok: true });
+  });
+
   // ---------- налаштування автопаузи ----------
   app.get('/api/b2b/autopause', async (c) => {
     need(c, 'b2b.admin');

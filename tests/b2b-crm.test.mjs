@@ -7,8 +7,14 @@ import { createApp } from '../src/app.js';
 const db = openDb(':memory:');
 await migrate(db);
 const tg = [];
+const npCalls = [];
 const fetchFn = async (url, opts = {}) => {
   if (String(url).startsWith('https://api.telegram.org/')) { tg.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } })); }
+  if (String(url).includes('novaposhta')) {
+    const b = JSON.parse(opts.body);
+    npCalls.push(b);
+    return new Response(JSON.stringify({ success: true, data: [{ Status: 'Відправлення отримано', StatusCode: '9', CityRecipient: 'Київ', WarehouseRecipient: 'Відділення №1', RecipientDateTime: '29.10.2026 10:00' }] }));
+  }
   return new Response(JSON.stringify({ status: 'ok', data: [] }));
 };
 const shared = {};
@@ -97,4 +103,46 @@ assert.ok(found.some((x) => x.group === 'Розетка' && /РО123456789/.test
 found = (await req('GET', '/api/search?q=петренко')).items;
 assert.ok(found.some((x) => x.group === 'Розетка'), 'Розетка за клієнтом');
 
-console.log('OK — B2B: менеджер, нотатки, автопауза; пошук по сайту');
+// ---------- 5. Статус доставки за ТТН ----------
+const cl = await db.run(`INSERT INTO b2b_orders (partner_id, kind, status, client_name, client_phone, ttn, total, created_at) VALUES (?, 'client', 'crm', 'Олена', '0501234567', '20450001112233', 100, ?)`, [p.id, new Date().toISOString()]);
+assert.match(await errOf(() => req('GET', `/api/b2b/clients/${cl.lastId}/tracking`)), /Нової пошти/, 'без кабінету НП — пояснення');
+await db.run(`INSERT INTO np_accounts (name, api_key, active) VALUES ('ТОВ', 'npkey', 1)`);
+const trk = await req('GET', `/api/b2b/clients/${cl.lastId}/tracking`);
+assert.deepEqual([trk.status, trk.warehouse, trk.received], ['Відправлення отримано', 'Відділення №1', '29.10.2026 10:00']);
+assert.equal(npCalls.at(-1).methodProperties.Documents[0].Phone, '0501234567', 'з телефоном отримувача');
+// ---------- 6. Борг за віком прострочки і «останнє замовлення» ----------
+await db.run(`INSERT INTO b2b_orders (partner_id, kind, status, total, paid_amount, invoice_no, due_date, created_at) VALUES (?, 'supply', 'pay_wait', 500, 100, '8', ?, ?), (?, 'supply', 'partial', 300, 0, '9', ?, ?)`,
+  [p.id, addDay(-12), new Date().toISOString(), p.id, addDay(3), new Date().toISOString()]);
+const ag = await req('GET', '/api/b2b/debt-aging');
+const bk = Object.fromEntries(ag.buckets.map((b) => [b.key, b.sum]));
+assert.deepEqual([bk.current, bk.d1_7, bk.d8_30, bk.d30, ag.total], [300, 0, 400, 0, 700]);
+assert.ok((await req('GET', '/api/b2b/partners')).find((x) => x.id === p.id).last_order_at, 'дата останнього замовлення');
+// ---------- 7. Особливі ціни на товари ----------
+await db.run(`INSERT INTO b2b_catalog (product_id, name, article, rrp, brand_id) VALUES (501, 'Осушувач', 'DRY1', 10000, 7), (502, 'Фільтр', 'F1', 1000, 7)`);
+await db.run(`INSERT INTO b2b_margins (partner_id, brand_id, margin) VALUES (?, 7, 10)`, [p.id]);
+await req('POST', `/api/b2b/partners/${p.id}/users`, { login: 'pa', password: 'pass1234' });
+const pl = await app.request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: 'pa', password: 'pass1234' }) });
+const PA = { 'Content-Type': 'application/json', Cookie: pl.headers.get('set-cookie').split(';')[0] };
+const preq = async (method, path, body) => { const r = await app.request(path, { method, headers: PA, body: body ? JSON.stringify(body) : undefined }); const j = await r.json(); if (r.status >= 400) throw new Error(j.error); return j; };
+const priceOf = async (id) => (await preq('GET', '/api/b2b/p/catalog')).products.find((x) => x.id === id);
+assert.equal((await priceOf(501)).price, 9000, 'маржа бренду 10 %');
+assert.match(await errOf(() => req('POST', `/api/b2b/partners/${p.id}/product-margins`, { product: 'NOPE', margin: 20 })), /не знайдено/);
+assert.match(await errOf(() => req('POST', `/api/b2b/partners/${p.id}/product-margins`, { product: 'DRY1', margin: 95 })), /90/);
+await req('POST', `/api/b2b/partners/${p.id}/product-margins`, { product: 'DRY1', margin: 25, until: addDay(5) });
+let it = await priceOf(501);
+assert.deepEqual([it.price, it.special, it.special_until], [7500, true, addDay(5)], 'акція: 25 % до дати');
+assert.equal((await priceOf(502)).price, 900, 'інший товар — як було');
+await req('PUT', `/api/b2b/partners/${p.id}`, { paused: false }); // пауза з розділу 3
+const ent = await preq('POST', '/api/b2b/p/entities', { name: 'ФОП Тест', code: '1234567890' });
+const sup = await preq('POST', '/api/b2b/p/orders', { entity_id: ent.id, items: [{ product_id: 501, qty: 2 }] });
+assert.equal(sup.total ?? (await req('GET', `/api/b2b/orders/${sup.id}`)).order.total, 15000, 'закупівля — за особливою ціною');
+// минула акція — знову ціна бренду
+await db.run(`UPDATE b2b_product_margins SET until = ? WHERE product_id = 501`, [addDay(-1)]);
+it = await priceOf(501);
+assert.deepEqual([it.price, it.special], [9000, false]);
+const list = await req('GET', `/api/b2b/partners/${p.id}/product-margins`);
+assert.ok(list[0].expired && list[0].name === 'Осушувач');
+await req('DELETE', `/api/b2b/partners/${p.id}/product-margins/501`);
+assert.equal((await req('GET', `/api/b2b/partners/${p.id}/product-margins`)).length, 0);
+
+console.log('OK — B2B: менеджер, нотатки, автопауза; пошук по сайту; статус ТТН; борг за віком; особливі ціни');

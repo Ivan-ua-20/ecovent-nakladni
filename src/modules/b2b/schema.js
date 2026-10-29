@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 26,
+  version: 27,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -216,6 +216,16 @@ export const schema = {
     created_at TEXT NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS b2b_notes_partner ON b2b_notes (partner_id, id)`,
+  // Особлива маржа на товар для партнера (замість маржі бренду); until — до якої дати діє (акція), порожньо — постійно.
+  `CREATE TABLE IF NOT EXISTS b2b_product_margins (
+    partner_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    margin REAL NOT NULL,
+    until TEXT DEFAULT '',
+    created_by TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (partner_id, product_id)
+  )`,
   ],
   // ---------- етап 3: замовлення для клієнтів партнера ----------
   // supply_id — закупівля, з якої взято товари (порожньо — «без закупівлі»); дані клієнта й ТТН партнера;

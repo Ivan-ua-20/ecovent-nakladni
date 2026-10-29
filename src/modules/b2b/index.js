@@ -9,7 +9,7 @@ import { hashPassword, can, PARTNER_ROLES, partnerRole, randomToken } from '../.
 import { fail, need, nowIso, kyivDay, loadSettings, round2 } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
 import { call } from '../../integrations/lpcrm.js';
-import { mountB2bOrders } from './orders.js';
+import { mountB2bOrders, PM_JOIN, PM_COLS } from './orders.js';
 import { mountB2bClients } from './clients.js';
 import { mountB2bStats } from './stats.js';
 import { mountB2bPrices } from './prices.js';
@@ -71,7 +71,8 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     const rows = await db.all(`SELECT p.*,
         (SELECT COUNT(*) FROM users u WHERE u.partner_id = p.id AND u.role = 'partner') AS users,
         (SELECT COUNT(*) FROM users u WHERE u.partner_id = p.id AND u.role = 'partner' AND u.added_by LIKE 'partner:%') AS users_by_partner,
-        (SELECT COUNT(*) FROM b2b_margins m WHERE m.partner_id = p.id) AS brands
+        (SELECT COUNT(*) FROM b2b_margins m WHERE m.partner_id = p.id) AS brands,
+        (SELECT MAX(o.created_at) FROM b2b_orders o WHERE o.partner_id = p.id AND o.status NOT IN ('cancelled', 'draft')) AS last_order_at
       FROM b2b_partners p WHERE COALESCE(p.deleted_at, '') = '' ORDER BY p.active DESC, p.name`);
     // Борг: закупівлі з рахунком без повної оплати (одним запитом на всіх партнерів).
     const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Kyiv' });
@@ -527,9 +528,9 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   app.get('/api/b2b/p/catalog', async (c) => {
     const p = await myPartner(c);
     const [rows, names, cats] = await Promise.all([
-      db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.image, c.brand_id, m.margin, COALESCE(a.cat_manual, a.category_id, 0) AS cat
-        FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id LEFT JOIN an_products a ON a.product_id = c.product_id
-        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [p.id]),
+      db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.image, c.brand_id, ${PM_COLS}, COALESCE(a.cat_manual, a.category_id, 0) AS cat
+        FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN} LEFT JOIN an_products a ON a.product_id = c.product_id
+        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [kyivDay(), p.id]),
       brandNames(),
       db.all(`SELECT id, name FROM an_categories`).catch(() => []),
     ]);
@@ -551,7 +552,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
       // Спершу те, що партнер замовляє найчастіше (далі — за назвою).
       products: rows.map((r) => ({
         id: r.product_id, name: r.name, article: r.article, image: r.image, brand_id: r.brand_id, cat: r.cat,
-        brand: names.get(r.brand_id) || 'Інші', rrp: r.rrp, price: partnerPrice(r.rrp, r.margin), margin: r.margin,
+        brand: names.get(r.brand_id) || 'Інші', rrp: r.rrp, price: partnerPrice(r.rrp, r.margin), margin: r.margin, special: Boolean(r.special), special_until: r.special_until || '',
         ordered: freq.get(r.product_id)?.n || 0, ordered_qty: freq.get(r.product_id)?.q || 0,
       })).sort((a, b) => b.ordered - a.ordered || b.ordered_qty - a.ordered_qty),
     });
@@ -560,7 +561,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   // hooks — зв'язки між частинами модуля, що підключаються пізніше (маркування → Telegram, № у CRM → група маркувань).
   const hooks = {};
   const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup, hooks });
-  mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks });
+  mountB2bClients(app, { db, fetchFn, services, myPartner, orders, hooks });
   mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice });
   const tgdocs = mountB2bTgDocs(app, { db, services, orders, hooks });
   const pay = mountB2bPay(app, { db, services, orders, hooks });

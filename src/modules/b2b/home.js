@@ -97,6 +97,21 @@ export function mountB2bHome(app, { db, myPartner, orders }) {
     return c.json({ partner: p.name, ...(await statement(p.id, c.req.query('from') || '', c.req.query('to') || '')) });
   });
 
+  // ---------- борг партнерів за віком прострочки (для списку партнерів) ----------
+  app.get('/api/b2b/debt-aging', async (c) => {
+    need(c, 'b2b.admin');
+    const t = today();
+    const rows = await db.all(`SELECT o.partner_id, p.name, o.total - o.paid_amount AS due, o.due_date FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id
+      WHERE o.kind = 'supply' AND o.status IN ${DEBT} AND COALESCE(p.deleted_at, '') = ''`);
+    const days = (d) => (d && d < t ? Math.round((Date.parse(`${t}T12:00:00Z`) - Date.parse(`${d}T12:00:00Z`)) / 86400000) : 0);
+    const B = [['current', 'Без прострочки', 0, 0], ['d1_7', '1–7 дн.', 1, 7], ['d8_30', '8–30 дн.', 8, 30], ['d30', 'понад 30 дн.', 31, Infinity]];
+    const buckets = B.map(([key, label, lo, hi]) => {
+      const list = rows.filter((r) => { const n = days(r.due_date); return n >= lo && n <= hi; });
+      return { key, label, sum: round2(list.reduce((s, r) => s + r.due, 0)), count: list.length };
+    });
+    return c.json({ buckets, total: round2(rows.reduce((s, r) => s + r.due, 0)) });
+  });
+
   // ---------- пошук по сайту: закупівлі, замовлення клієнтів (№, клієнт, телефон, ТТН, рахунок), партнери ----------
   async function search(q) {
     const s = String(q || '').trim();

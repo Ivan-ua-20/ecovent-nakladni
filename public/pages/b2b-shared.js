@@ -1,6 +1,6 @@
 // Спільне для сторінок B2B (адмін і партнер): статуси, суми, завантаження файлів.
 import { esc, money } from '../invoice.js';
-import { fmtDateTime as fmtDT, $, $$, toast, modal } from '../core/ui.js';
+import { fmtDateTime as fmtDT, $, $$, api, toast, modal } from '../core/ui.js';
 
 export const uah = (n) => `${money(n)} грн`;
 const ST_CLS = { confirm: 'warn', invoice_wait: 'warn', pay_wait: 'warn', partial: 'info', paid: 'ok', done: 'ok', cancelled: 'bad', new: 'warn', crm: 'info' };
@@ -142,3 +142,22 @@ export function wireBulk(actions, { onDone, confirmDanger }) {
   draw();
 }
 export const bulkBar = () => '<div id="bulkBar" class="btn-row card" hidden style="position:sticky;top:8px;z-index:5;margin-bottom:10px;padding:8px 12px;flex-wrap:wrap;align-items:center"></div>';
+
+// Статус доставки за ТТН (Нова пошта): кнопка в картці замовлення клієнта; url — /api/b2b/p/clients/:id/tracking або адмінський.
+export const trackBtn = () => '<div class="trk"><button class="btn sm" type="button" data-track>Статус доставки</button><span class="small muted" data-track-out></span></div>';
+export function wireTracking(url) {
+  const b = $('[data-track]');
+  if (!b) return;
+  b.onclick = async () => {
+    const out = $('[data-track-out]');
+    b.disabled = true;
+    out.textContent = 'Перевіряю в Новій пошті…';
+    try {
+      const t = await api('GET', url);
+      out.innerHTML = t.status
+        ? `<b>${esc(t.status)}</b>${t.warehouse ? ` · ${esc(t.city ? `${t.city}, ` : '')}${esc(t.warehouse)}` : ''}${t.received ? ` · отримано ${esc(t.received)}` : t.scheduled ? ` · очікувана доставка ${esc(t.scheduled)}` : ''}`
+        : 'Нова пошта не знайшла цю ТТН.';
+    } catch (e) { out.textContent = e.message; }
+    b.disabled = false;
+  };
+}

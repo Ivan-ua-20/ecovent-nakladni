@@ -5626,6 +5626,8 @@ var limitsOf = (p) => ({
 });
 var UNPAID = `('open', 'invoice_wait', 'pay_wait', 'partial')`;
 var DEBT = `('pay_wait', 'partial')`;
+var PM_JOIN = `LEFT JOIN b2b_product_margins pm ON pm.partner_id = m.partner_id AND pm.product_id = c.product_id AND (pm.until = '' OR pm.until >= ?)`;
+var PM_COLS = `COALESCE(pm.margin, m.margin) AS margin, pm.margin IS NOT NULL AS special, COALESCE(pm.until, '') AS special_until`;
 var SHIP_NOINV = `('open', 'invoice_wait')`;
 var today = () => kyivDayOf((/* @__PURE__ */ new Date()).toISOString());
 var addDaysTo = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
@@ -5802,9 +5804,9 @@ ${e.email}` : ""}`;
     if (!want.size) throw fail(400, "\u0414\u043E\u0434\u0430\u0439\u0442\u0435 \u0445\u043E\u0447\u0430 \u0431 \u043E\u0434\u0438\u043D \u0442\u043E\u0432\u0430\u0440 \u0456\u0437 \u043A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044E.");
     if (want.size > 300) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 300 \u043F\u043E\u0437\u0438\u0446\u0456\u0439 \u0432 \u043E\u0434\u043D\u043E\u043C\u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.");
     const rows = await db.all(
-      `SELECT c.product_id, c.name, c.article, c.rrp, m.margin FROM b2b_catalog c JOIN b2b_margins m ON m.brand_id = c.brand_id AND m.partner_id = ?
+      `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_catalog c JOIN b2b_margins m ON m.brand_id = c.brand_id AND m.partner_id = ? ${PM_JOIN}
        WHERE c.product_id IN (SELECT value FROM json_each(?)) AND c.hidden = 0 AND c.rrp > 0`,
-      [p.id, JSON.stringify([...want.keys()])]
+      [p.id, kyivDay(), JSON.stringify([...want.keys()])]
     );
     if (rows.length !== want.size) throw fail(400, "\u0414\u0435\u044F\u043A\u0456 \u0442\u043E\u0432\u0430\u0440\u0438 \u0431\u0456\u043B\u044C\u0448\u0435 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0456 \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443 \u043A\u0430\u0442\u0430\u043B\u043E\u0433\u0443.");
     return rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || "", qty: want.get(r.product_id), price: partnerPrice2(r.rrp, r.margin), rrp: r.rrp }));
@@ -6210,8 +6212,8 @@ ${link(c, `b2borders/${o.id}`)}`);
     const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ? AND COALESCE(deleted_at, '') = ''`, [c.req.param("id")]);
     if (!p) throw fail(404, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     const [rows, brands, ents] = await Promise.all([
-      db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.brand_id, m.margin FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id
-        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [p.id]),
+      db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.brand_id, ${PM_COLS} FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN}
+        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [kyivDay(), p.id]),
       db.all(`SELECT id, name FROM an_brands`).catch(() => []),
       db.get(`SELECT COUNT(*) AS n FROM b2b_entities WHERE partner_id = ? AND active = 1`, [p.id])
     ]);
@@ -6569,7 +6571,7 @@ var DEFAULT_OFFICE = "27";
 var OPT_ID_RE = /^\d{0,10}$/;
 var TTN_FIELDS = ["", "additional_2", "additional_3", "additional_4", "delivery_adress"];
 var newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Math.random() * 9e4))}`;
-function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {} }) {
+function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, hooks = {} }) {
   const { labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h6 } = orders;
   const userName6 = (u) => u?.name || u?.login || "";
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files,
@@ -6925,6 +6927,18 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     if (o.kind !== "client") throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     return o;
   }
+  const tracking = async (o) => {
+    if (!o.ttn) throw fail(400, "\u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u0449\u0435 \u043D\u0435\u043C\u0430\u0454 \u0422\u0422\u041D.");
+    if (!services.marking?.trackTtn) throw fail(400, "\u0412\u0456\u0434\u0441\u0442\u0435\u0436\u0435\u043D\u043D\u044F \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0435.");
+    return { ttn: o.ttn, ...await services.marking.trackTtn(o.ttn, o.client_phone) };
+  };
+  app.get("/api/b2b/p/clients/:id/tracking", async (c) => c.json(await tracking(await myClientOrder(c, await myPartner(c)))));
+  app.get("/api/b2b/clients/:id/tracking", async (c) => {
+    need(c, "b2b.admin");
+    const o = await db.get(`SELECT * FROM b2b_orders WHERE id = ? AND kind = 'client'`, [c.req.param("id")]);
+    if (!o) throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return c.json(await tracking(o));
+  });
   app.get("/api/b2b/p/clients/:id", async (c) => {
     const p = await myPartner(c);
     const o = await myClientOrder(c, p);
@@ -8706,9 +8720,9 @@ var firstLine = (s) => String(s || "").split("\n")[0];
 function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partnerPrice2 }) {
   const { orderOf, supplyLeft, itemRows, totalOf, log, tgPartner, tgGroup, link, uah: uah3, h: h6, rebuildOpen, getOpen, entityText } = orders;
   const partnerCatalog = (partnerId) => db.all(
-    `SELECT c.product_id, c.name, c.article, c.rrp, m.margin FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id
+    `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN}
      WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`,
-    [partnerId]
+    [kyivDay(), partnerId]
   ).then((rows) => rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || "", rrp: r.rrp, price: partnerPrice2(r.rrp, r.margin) })));
   hooks.partnerCatalog = partnerCatalog;
   app.get("/api/b2b/orders/:id/edit-options", async (c) => {
@@ -8754,9 +8768,9 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
     if (want.size > 300) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 300 \u043F\u043E\u0437\u0438\u0446\u0456\u0439.");
     const newIds = [...want.keys()].filter((id) => !curMap.has(id));
     const cat = newIds.length ? new Map((await db.all(
-      `SELECT c.product_id, c.name, c.article, c.rrp, m.margin FROM b2b_catalog c LEFT JOIN b2b_margins m ON m.brand_id = c.brand_id AND m.partner_id = ?
+      `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_catalog c LEFT JOIN b2b_margins m ON m.brand_id = c.brand_id AND m.partner_id = ? ${PM_JOIN}
        WHERE c.product_id IN (SELECT value FROM json_each(?))`,
-      [o.partner_id, JSON.stringify(newIds)]
+      [o.partner_id, kyivDay(), JSON.stringify(newIds)]
     )).map((r) => [r.product_id, r])) : /* @__PURE__ */ new Map();
     const items = [...want].map(([id, w]) => {
       const old = curMap.get(id);
@@ -9016,6 +9030,22 @@ function mountB2bHome(app, { db, myPartner, orders }) {
     if (!p) throw fail(404, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     return c.json({ partner: p.name, ...await statement(p.id, c.req.query("from") || "", c.req.query("to") || "") });
   });
+  app.get("/api/b2b/debt-aging", async (c) => {
+    need(c, "b2b.admin");
+    const t = today2();
+    const rows = await db.all(`SELECT o.partner_id, p.name, o.total - o.paid_amount AS due, o.due_date FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id
+      WHERE o.kind = 'supply' AND o.status IN ${DEBT} AND COALESCE(p.deleted_at, '') = ''`);
+    const days = (d) => d && d < t ? Math.round((Date.parse(`${t}T12:00:00Z`) - Date.parse(`${d}T12:00:00Z`)) / 864e5) : 0;
+    const B = [["current", "\u0411\u0435\u0437 \u043F\u0440\u043E\u0441\u0442\u0440\u043E\u0447\u043A\u0438", 0, 0], ["d1_7", "1\u20137 \u0434\u043D.", 1, 7], ["d8_30", "8\u201330 \u0434\u043D.", 8, 30], ["d30", "\u043F\u043E\u043D\u0430\u0434 30 \u0434\u043D.", 31, Infinity]];
+    const buckets = B.map(([key, label, lo, hi]) => {
+      const list = rows.filter((r) => {
+        const n = days(r.due_date);
+        return n >= lo && n <= hi;
+      });
+      return { key, label, sum: round2(list.reduce((s, r) => s + r.due, 0)), count: list.length };
+    });
+    return c.json({ buckets, total: round2(rows.reduce((s, r) => s + r.due, 0)) });
+  });
   async function search(q) {
     const s = String(q || "").trim();
     const digits = s.replace(/\D/g, "");
@@ -9096,6 +9126,39 @@ function mountB2bCrm(app, { db, services, onCleanup }) {
   app.delete("/api/b2b/notes/:id", async (c) => {
     need(c, "b2b.admin");
     await db.run(`DELETE FROM b2b_notes WHERE id = ?`, [c.req.param("id")]);
+    return c.json({ ok: true });
+  });
+  app.get("/api/b2b/partners/:id/product-margins", async (c) => {
+    need(c, "b2b.admin");
+    const p = await partnerOf(c.req.param("id"));
+    const rows = await db.all(`SELECT pm.product_id, pm.margin, pm.until, pm.created_by, c.name, c.article, c.rrp, m.margin AS brand_margin
+      FROM b2b_product_margins pm LEFT JOIN b2b_catalog c ON c.product_id = pm.product_id LEFT JOIN b2b_margins m ON m.partner_id = pm.partner_id AND m.brand_id = c.brand_id
+      WHERE pm.partner_id = ? ORDER BY c.name`, [p.id]);
+    const t = kyivDay();
+    return c.json(rows.map((r) => ({ ...r, expired: Boolean(r.until && r.until < t), brand_enabled: r.brand_margin != null })));
+  });
+  app.post("/api/b2b/partners/:id/product-margins", async (c) => {
+    need(c, "b2b.admin");
+    const p = await partnerOf(c.req.param("id"));
+    const b = await c.req.json();
+    const key = String(b.product ?? "").trim();
+    const prod = key && await db.get(`SELECT product_id, name FROM b2b_catalog WHERE product_id = ? OR (article != '' AND article = ?) LIMIT 1`, [parseInt(key, 10) || 0, key]);
+    if (!prod) throw fail(400, "\u0422\u043E\u0432\u0430\u0440 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 \u043A\u0430\u0442\u0430\u043B\u043E\u0437\u0456 \u2014 \u0432\u043A\u0430\u0436\u0456\u0442\u044C ID LP-CRM \u0430\u0431\u043E \u0430\u0440\u0442\u0438\u043A\u0443\u043B.");
+    const margin = Number(String(b.margin ?? "").replace(",", "."));
+    if (!Number.isFinite(margin) || margin < 0 || margin > 90) throw fail(400, "\u0417\u043D\u0438\u0436\u043A\u0430 \u0432\u0456\u0434 \u0420\u0420\u0426 \u2014 \u0432\u0456\u0434 0 \u0434\u043E 90 %.");
+    const until = String(b.until || "").trim();
+    if (until && (!/^\d{4}-\d{2}-\d{2}$/.test(until) || until < kyivDay())) throw fail(400, "\u0414\u0430\u0442\u0430 \xAB\u0434\u043E\xBB \u2014 \u0441\u044C\u043E\u0433\u043E\u0434\u043D\u0456 \u0430\u0431\u043E \u043F\u0456\u0437\u043D\u0456\u0448\u0435 (\u0430\u0431\u043E \u043F\u043E\u0440\u043E\u0436\u043D\u044C\u043E \u2014 \u043F\u043E\u0441\u0442\u0456\u0439\u043D\u043E).");
+    const u = c.get("user");
+    await db.run(
+      `INSERT INTO b2b_product_margins (partner_id, product_id, margin, until, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(partner_id, product_id) DO UPDATE SET margin = excluded.margin, until = excluded.until, created_by = excluded.created_by, created_at = excluded.created_at`,
+      [p.id, prod.product_id, Math.round(margin * 100) / 100, until, u.name || u.login, nowIso()]
+    );
+    return c.json({ ok: true, product_id: prod.product_id, name: prod.name });
+  });
+  app.delete("/api/b2b/partners/:id/product-margins/:pid", async (c) => {
+    need(c, "b2b.admin");
+    await db.run(`DELETE FROM b2b_product_margins WHERE partner_id = ? AND product_id = ?`, [c.req.param("id"), c.req.param("pid")]);
     return c.json({ ok: true });
   });
   app.get("/api/b2b/autopause", async (c) => {
@@ -9185,7 +9248,8 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const rows = await db.all(`SELECT p.*,
         (SELECT COUNT(*) FROM users u WHERE u.partner_id = p.id AND u.role = 'partner') AS users,
         (SELECT COUNT(*) FROM users u WHERE u.partner_id = p.id AND u.role = 'partner' AND u.added_by LIKE 'partner:%') AS users_by_partner,
-        (SELECT COUNT(*) FROM b2b_margins m WHERE m.partner_id = p.id) AS brands
+        (SELECT COUNT(*) FROM b2b_margins m WHERE m.partner_id = p.id) AS brands,
+        (SELECT MAX(o.created_at) FROM b2b_orders o WHERE o.partner_id = p.id AND o.status NOT IN ('cancelled', 'draft')) AS last_order_at
       FROM b2b_partners p WHERE COALESCE(p.deleted_at, '') = '' ORDER BY p.active DESC, p.name`);
     const today3 = (/* @__PURE__ */ new Date()).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
     const debt = new Map((await db.all(`SELECT partner_id, SUM(total - paid_amount) AS due, SUM(CASE WHEN due_date != '' AND due_date < ? THEN total - paid_amount ELSE 0 END) AS overdue,
@@ -9645,9 +9709,9 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   app.get("/api/b2b/p/catalog", async (c) => {
     const p = await myPartner(c);
     const [rows, names, cats] = await Promise.all([
-      db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.image, c.brand_id, m.margin, COALESCE(a.cat_manual, a.category_id, 0) AS cat
-        FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id LEFT JOIN an_products a ON a.product_id = c.product_id
-        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [p.id]),
+      db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.image, c.brand_id, ${PM_COLS}, COALESCE(a.cat_manual, a.category_id, 0) AS cat
+        FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN} LEFT JOIN an_products a ON a.product_id = c.product_id
+        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [kyivDay(), p.id]),
       brandNames(),
       db.all(`SELECT id, name FROM an_categories`).catch(() => [])
     ]);
@@ -9675,6 +9739,8 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
         rrp: r.rrp,
         price: partnerPrice(r.rrp, r.margin),
         margin: r.margin,
+        special: Boolean(r.special),
+        special_until: r.special_until || "",
         ordered: freq.get(r.product_id)?.n || 0,
         ordered_qty: freq.get(r.product_id)?.q || 0
       })).sort((a, b) => b.ordered - a.ordered || b.ordered_qty - a.ordered_qty)
@@ -9682,7 +9748,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   });
   const hooks = {};
   const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup, hooks });
-  mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks });
+  mountB2bClients(app, { db, fetchFn, services, myPartner, orders, hooks });
   mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice });
   const tgdocs = mountB2bTgDocs(app, { db, services, orders, hooks });
   const pay = mountB2bPay(app, { db, services, orders, hooks });
@@ -9768,6 +9834,18 @@ async function npDocumentsPage(fetchFn, apiKey, day, page) {
 async function npServiceType(fetchFn, apiKey, ttn) {
   const list = await npCall(fetchFn, apiKey, "TrackingDocument", "getStatusDocuments", { Documents: [{ DocumentNumber: ttn, Phone: "" }] });
   return String(list[0]?.ServiceType || "").trim().slice(0, 40);
+}
+async function npTracking(fetchFn, apiKey, ttn, phone = "") {
+  const list = await npCall(fetchFn, apiKey, "TrackingDocument", "getStatusDocuments", { Documents: [{ DocumentNumber: ttn, Phone: phone }] });
+  const d = list[0] || {};
+  return {
+    status: String(d.Status || "").trim().slice(0, 200),
+    code: String(d.StatusCode || ""),
+    city: String(d.CityRecipient || "").trim().slice(0, 80),
+    warehouse: String(d.WarehouseRecipient || "").trim().slice(0, 160),
+    scheduled: String(d.ScheduledDeliveryDate || "").trim().slice(0, 30),
+    received: String(d.RecipientDateTime || "").trim().slice(0, 30)
+  };
 }
 var isDoorPickup = (service) => /^Doors/i.test(String(service || ""));
 async function npMarkingPdf(fetchFn, apiKey, ttn) {
@@ -10148,6 +10226,14 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
     }
     throw fail(404, `\u0422\u0422\u041D ${ttn} \u043D\u0435\u043C\u0430\u0454 \u0432 \u0436\u043E\u0434\u043D\u043E\u043C\u0443 \u0437 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0445 \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0456\u0432 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (\u0430\u0431\u043E \u0457\u0457 \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E).`);
   });
+  async function trackTtn(ttn, phone = "") {
+    const t = String(ttn || "").replace(/\s/g, "");
+    if (!/^\d{10,20}$/.test(t)) throw fail(400, "\u0422\u0422\u041D \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 \u2014 10\u201320 \u0446\u0438\u0444\u0440.");
+    const acc = await db.get(`SELECT api_key FROM np_accounts WHERE active = 1 ORDER BY hits DESC, id LIMIT 1`);
+    if (!acc) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E\u0433\u043E \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430 \u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0430).");
+    return npTracking(fetchFn, acc.api_key, t, String(phone || "").replace(/\D/g, "").slice(-12));
+  }
+  return { trackTtn };
 }
 
 // src/integrations/rozetka-supplier.js
@@ -11910,7 +11996,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   services.errlog = mountErrLog(app, ctx);
   services.b2b = mountB2b(app, ctx);
   services.rahunky = mountRahunky(app, ctx);
-  mountMarking(app, ctx);
+  services.marking = mountMarking(app, ctx);
   services.retail = mountRetail(app, ctx);
   mountAnalytics(app, ctx);
   services.notify = mountTg(app, ctx);
@@ -12674,7 +12760,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 26,
+  version: 27,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -12886,7 +12972,17 @@ var schema11 = {
     user_name TEXT DEFAULT '',
     created_at TEXT NOT NULL
   )`,
-    `CREATE INDEX IF NOT EXISTS b2b_notes_partner ON b2b_notes (partner_id, id)`
+    `CREATE INDEX IF NOT EXISTS b2b_notes_partner ON b2b_notes (partner_id, id)`,
+    // Особлива маржа на товар для партнера (замість маржі бренду); until — до якої дати діє (акція), порожньо — постійно.
+    `CREATE TABLE IF NOT EXISTS b2b_product_margins (
+    partner_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    margin REAL NOT NULL,
+    until TEXT DEFAULT '',
+    created_by TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (partner_id, product_id)
+  )`
   ],
   // ---------- етап 3: замовлення для клієнтів партнера ----------
   // supply_id — закупівля, з якої взято товари (порожньо — «без закупівлі»); дані клієнта й ТТН партнера;

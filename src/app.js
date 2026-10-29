@@ -80,7 +80,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   services.errlog = mountErrLog(app, ctx);
   services.b2b = mountB2b(app, ctx);
   services.rahunky = mountRahunky(app, ctx);
-  mountMarking(app, ctx);
+  services.marking = mountMarking(app, ctx);
   services.retail = mountRetail(app, ctx);
   mountAnalytics(app, ctx);
   services.notify = mountTg(app, ctx);
