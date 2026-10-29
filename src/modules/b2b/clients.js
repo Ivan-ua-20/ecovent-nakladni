@@ -21,7 +21,7 @@ const TTN_FIELDS = ['', 'additional_2', 'additional_3', 'additional_4', 'deliver
 // Код нового замовлення — як у прикладі LP-CRM: microtime×10 (11 цифр) + 5 випадкових.
 const newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(10000 + Math.random() * 90000))}`;
 
-export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {} }) {
+export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, hooks = {} }) {
   const { labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h } = orders;
   const userName = (u) => u?.name || u?.login || '';
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files,
@@ -355,6 +355,20 @@ export function mountB2bClients(app, { db, fetchFn, myPartner, orders, hooks = {
     if (o.kind !== 'client') throw fail(404, 'Замовлення не знайдено.');
     return o;
   }
+
+  // Статус доставки клієнту за ТТН (Нова пошта) — на запит, нічого не зберігає.
+  const tracking = async (o) => {
+    if (!o.ttn) throw fail(400, 'У замовленні ще немає ТТН.');
+    if (!services.marking?.trackTtn) throw fail(400, 'Відстеження Нової пошти недоступне.');
+    return { ttn: o.ttn, ...(await services.marking.trackTtn(o.ttn, o.client_phone)) };
+  };
+  app.get('/api/b2b/p/clients/:id/tracking', async (c) => c.json(await tracking(await myClientOrder(c, await myPartner(c)))));
+  app.get('/api/b2b/clients/:id/tracking', async (c) => {
+    need(c, 'b2b.admin');
+    const o = await db.get(`SELECT * FROM b2b_orders WHERE id = ? AND kind = 'client'`, [c.req.param('id')]);
+    if (!o) throw fail(404, 'Замовлення не знайдено.');
+    return c.json(await tracking(o));
+  });
 
   app.get('/api/b2b/p/clients/:id', async (c) => {
     const p = await myPartner(c);

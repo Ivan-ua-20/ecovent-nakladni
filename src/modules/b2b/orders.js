@@ -5,7 +5,7 @@
 // Відкрита закупівля (status 'open'): замовлення клієнтів «без закупівлі» автоматично складаються в одну таку закупівлю
 // партнера (ліміт open_limit, типово 20 000); партнер будь-коли обирає юрособу і «Формує рахунок» — вона стає звичайною.
 // Ліміт неоплачених закупівель (unpaid_limit, типово 100 000): понад нього нові закупівлі й поповнення відкритої — ні.
-import { fail, need, nowIso, round2 } from '../../core/common.js';
+import { fail, need, nowIso, round2, kyivDay } from '../../core/common.js';
 import { listFilter, kyivDayOf } from './filters.js';
 import { pdfText, parseNpLabel } from '../../integrations/pdftext.js';
 import { can } from '../../core/auth.js';
@@ -45,6 +45,10 @@ export const limitsOf = (p) => ({
 const UNPAID = `('open', 'invoice_wait', 'pay_wait', 'partial')`;
 // Борг партнера: рахунок виставлено, а оплати (повної) ще немає.
 export const DEBT = `('pay_wait', 'partial')`;
+// Особлива маржа на товар для партнера (b2b_product_margins) — замість маржі бренду, доки не минула дата until.
+// Підставляється після JOIN b2b_margins m і b2b_catalog c; перший параметр — сьогоднішня дата (kyivDay()).
+export const PM_JOIN = `LEFT JOIN b2b_product_margins pm ON pm.partner_id = m.partner_id AND pm.product_id = c.product_id AND (pm.until = '' OR pm.until >= ?)`;
+export const PM_COLS = `COALESCE(pm.margin, m.margin) AS margin, pm.margin IS NOT NULL AS special, COALESCE(pm.until, '') AS special_until`;
 // Закупівлі без рахунку, з яких уже могли відвантажити замовлення клієнтів.
 export const SHIP_NOINV = `('open', 'invoice_wait')`;
 const today = () => kyivDayOf(new Date().toISOString());
@@ -233,9 +237,9 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (!want.size) throw fail(400, 'Додайте хоча б один товар із кількістю.');
     if (want.size > 300) throw fail(400, 'Не більше 300 позицій в одному замовленні.');
     const rows = await db.all(
-      `SELECT c.product_id, c.name, c.article, c.rrp, m.margin FROM b2b_catalog c JOIN b2b_margins m ON m.brand_id = c.brand_id AND m.partner_id = ?
+      `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_catalog c JOIN b2b_margins m ON m.brand_id = c.brand_id AND m.partner_id = ? ${PM_JOIN}
        WHERE c.product_id IN (SELECT value FROM json_each(?)) AND c.hidden = 0 AND c.rrp > 0`,
-      [p.id, JSON.stringify([...want.keys()])],
+      [p.id, kyivDay(), JSON.stringify([...want.keys()])],
     );
     if (rows.length !== want.size) throw fail(400, 'Деякі товари більше недоступні — оновіть сторінку каталогу.');
     return rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || '', qty: want.get(r.product_id), price: partnerPrice(r.rrp, r.margin), rrp: r.rrp }));
@@ -621,8 +625,8 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ? AND COALESCE(deleted_at, '') = ''`, [c.req.param('id')]);
     if (!p) throw fail(404, 'Партнера не знайдено.');
     const [rows, brands, ents] = await Promise.all([
-      db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.brand_id, m.margin FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id
-        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [p.id]),
+      db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.brand_id, ${PM_COLS} FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN}
+        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [kyivDay(), p.id]),
       db.all(`SELECT id, name FROM an_brands`).catch(() => []),
       db.get(`SELECT COUNT(*) AS n FROM b2b_entities WHERE partner_id = ? AND active = 1`, [p.id]),
     ]);

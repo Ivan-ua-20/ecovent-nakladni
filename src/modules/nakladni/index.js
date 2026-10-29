@@ -394,5 +394,13 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, shared = {}, servic
     return c.json(rows);
   });
 
-  return { loadOrder };
+  // Пошук по сайту: сформовані накладні за номером замовлення.
+  async function search(q) {
+    const s = String(q || '').trim();
+    if (!/^[\w-]{3,30}$/.test(s)) return [];
+    const rows = await db.all(`SELECT order_id, fop_name, total, MAX(created_at) AS at FROM versions WHERE order_id LIKE ? GROUP BY order_id ORDER BY at DESC LIMIT 6`, [`%${s}%`]);
+    return rows.map((r) => ({ group: 'Накладні', title: `Накладна №${r.order_id}`, sub: [r.fop_name, String(r.at).slice(0, 10).split('-').reverse().join('.')].filter(Boolean).join(' · '),
+      link: `#/invoice/${encodeURIComponent(r.order_id)}` }));
+  }
+  return { loadOrder, search };
 }

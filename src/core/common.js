@@ -40,3 +40,12 @@ export const hash = (s) => {
   }
   return h.toString(16);
 };
+
+// Варіанти рядка для LIKE: SQLite не зважає на регістр лише для латиниці — для кирилиці шукаємо «як є», малими й з великої.
+export function likeVariants(q) {
+  const raw = String(q || '').trim();
+  const low = raw.toLowerCase();
+  const cap = low.replace(/(^|[\s'-])(\S)/g, (m, a, b) => a + b.toUpperCase()); // «Петренко Олена»
+  const first = low.charAt(0).toUpperCase() + low.slice(1); // «Тестовий партнер»
+  return [...new Set([raw, low, cap, first, raw.toUpperCase()])].map((v) => `%${v}%`);
+}

@@ -21,7 +21,7 @@ async function viewUsers() {
   const roleOpts = (sel) => assignable.map((r) => `<option value="${r}" ${r === sel ? 'selected' : ''}>${esc(roles[r])}</option>`).join('');
   main.innerHTML = `
     <div class="head-row"><h2>Користувачі</h2><div class="btn-row">${me.role === 'owner' && users.length > 1 ? '<button class="btn" id="uOwner">Передати права власника</button>' : ''}<button class="btn primary" id="uNew">+ Новий користувач</button></div></div>
-    <div class="alert info" style="margin-bottom:14px">
+    <div class="alert info help" style="margin-bottom:14px">
       <b>Адміністратор</b> — усе, включно з API, користувачами й аналітикою. <b>Менеджер</b> — накладні, рахунки, довідники і власна аналітика (лише замовлення його логінів LP-CRM, без таргетів).
       <b>Перегляд</b> — лише дивитися, друкувати й завантажувати.</div>
     ${tgInfo ? `<div class="small muted" style="margin-bottom:8px">Telegram-бот${tgInfo.bot ? ` <b>@${esc(tgInfo.bot)}</b>` : ''}: підключили ${tgInfo.users.filter((t) => t.connected).length} з ${tgInfo.users.length}. Кожен підключає себе сам — «Telegram» угорі сторінки.</div>` : ''}

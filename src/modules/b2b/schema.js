@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 25,
+  version: 27,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -204,6 +204,28 @@ export const schema = {
     restored_by TEXT DEFAULT ''
   )`,
   `CREATE INDEX IF NOT EXISTS b2b_trash_partner ON b2b_trash (partner_id, id)`,
+  // Нотатки по партнеру (домовленості, дзвінки) і нагадування: remind_at — дата, done — виконано.
+  `CREATE TABLE IF NOT EXISTS b2b_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    remind_at TEXT DEFAULT '',
+    done INTEGER NOT NULL DEFAULT 0,
+    user_id INTEGER,
+    user_name TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_notes_partner ON b2b_notes (partner_id, id)`,
+  // Особлива маржа на товар для партнера (замість маржі бренду); until — до якої дати діє (акція), порожньо — постійно.
+  `CREATE TABLE IF NOT EXISTS b2b_product_margins (
+    partner_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    margin REAL NOT NULL,
+    until TEXT DEFAULT '',
+    created_by TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (partner_id, product_id)
+  )`,
   ],
   // ---------- етап 3: замовлення для клієнтів партнера ----------
   // supply_id — закупівля, з якої взято товари (порожньо — «без закупівлі»); дані клієнта й ТТН партнера;
@@ -278,6 +300,10 @@ export const schema = {
     ['b2b_partners', 'wh_name', "TEXT DEFAULT ''"],
     ['b2b_partners', 'wh_phone', "TEXT DEFAULT ''"],
     ['b2b_partners', 'wh_address', "TEXT DEFAULT ''"],
+    // Відповідальний менеджер (users.id); автопауза при простроченні: поставлено автоматично / знято вручну (дата).
+    ['b2b_partners', 'manager_id', 'INTEGER'],
+    ['b2b_partners', 'paused_auto', 'INTEGER DEFAULT 0'],
+    ['b2b_partners', 'pause_override', "TEXT DEFAULT ''"],
   ],
   // Індекси на нові колонки — після ALTER TABLE (у старих базах колонок ще немає, коли створюються таблиці).
   async seed(db) {
