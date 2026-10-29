@@ -10603,6 +10603,8 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     need(c, "docs.edit");
     const r = await orderRow(c.req.param("id"));
     if (r.crm_id || r.crm_code) throw fail(400, `\u0423\u0436\u0435 \u0432 LP-CRM${r.crm_id ? `: \u2116 ${r.crm_id}` : ""}.`);
+    const body = await c.req.json().catch(() => ({}));
+    if (!r.ttn && !body.no_ttn) throw fail(400, "\u0429\u0435 \u043D\u0435\u043C\u0430\u0454 \u0422\u0422\u041D \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0441\u0442\u0432\u043E\u0440\u0456\u0442\u044C \u0422\u0422\u041D (\u0457\u0457 \u043F\u0435\u0440\u0435\u0434\u0430\u043C\u043E \u0432 \u043F\u043E\u043B\u0435 \u0430\u0434\u0440\u0435\u0441\u0438 \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0438).");
     if (["deleted"].includes(r.status)) throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u0435 \u043D\u0430 \u0420\u043E\u0437\u0435\u0442\u0446\u0456.");
     const a = await accOf(r.account_id);
     if (!a.crm_office) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C ID \u0432\u0456\u0434\u0434\u0456\u043B\u0443 LP-CRM \u0443 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u0420\u043E\u0437\u0435\u0442\u043A\u0438.");
