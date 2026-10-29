@@ -3816,7 +3816,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const sent = new Map((await db.all(`SELECT ttn, codes FROM an_ttn_dups WHERE ttn IN (SELECT value FROM json_each(?))`, [JSON.stringify(dups.map(([t]) => t))])).map((r) => [r.ttn, r.codes]));
     const names = await getJson("an_status_names") || {};
     const users = await db.all(`SELECT tg_chat_id, crm_logins FROM users WHERE active = 1 AND tg_chat_id != '' AND crm_logins != ''`);
-    const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const esc2 = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     let n = 0;
     const recent = addDays(kyivDay(), -recentDays);
     for (const [ttn, list] of dups) {
@@ -3826,8 +3826,8 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
         await db.run(`INSERT INTO an_ttn_dups (ttn, codes, at) VALUES (?, ?, ?) ON CONFLICT(ttn) DO UPDATE SET codes = excluded.codes, at = excluded.at`, [ttn, codes, nowIso()]);
         continue;
       }
-      const text = `\u26A0\uFE0F <b>\u0414\u0443\u0431\u043B\u044C \u0422\u0422\u041D ${esc(ttn)}</b> \u0443 LP-CRM \u2014 \u0446\u044F \u0422\u0422\u041D \u0454 \u0432 ${list.length} \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F\u0445:
-` + list.map((r) => `\u2022 \u2116 <b>${esc(r.code)}</b> \xB7 ${esc(names[r.status] || `\u0441\u0442\u0430\u0442\u0443\u0441 ${r.status}`)} \xB7 ${esc(r.day.split("-").reverse().join("."))}${r.user ? ` \xB7 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 ${esc(r.user)}` : ""}`).join("\n") + "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u043F\u043E\u043C\u0438\u043B\u043A\u0430 (\u043E\u0434\u043D\u0430 \u043F\u043E\u0441\u0438\u043B\u043A\u0430 \u043D\u0430 \u0434\u0432\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F).";
+      const text = `\u26A0\uFE0F <b>\u0414\u0443\u0431\u043B\u044C \u0422\u0422\u041D ${esc2(ttn)}</b> \u0443 LP-CRM \u2014 \u0446\u044F \u0422\u0422\u041D \u0454 \u0432 ${list.length} \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F\u0445:
+` + list.map((r) => `\u2022 \u2116 <b>${esc2(r.code)}</b> \xB7 ${esc2(names[r.status] || `\u0441\u0442\u0430\u0442\u0443\u0441 ${r.status}`)} \xB7 ${esc2(r.day.split("-").reverse().join("."))}${r.user ? ` \xB7 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 ${esc2(r.user)}` : ""}`).join("\n") + "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u043F\u043E\u043C\u0438\u043B\u043A\u0430 (\u043E\u0434\u043D\u0430 \u043F\u043E\u0441\u0438\u043B\u043A\u0430 \u043D\u0430 \u0434\u0432\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F).";
       const logins = new Set(list.map((r) => r.user).filter(Boolean));
       const chats = users.filter((u) => crmLogins(u.crm_logins).some((l) => logins.has(l))).map((u) => u.tg_chat_id);
       if (chats.length) await services.notify?.sendText({ chatIds: chats }, text).catch(() => 0);
@@ -10072,7 +10072,10 @@ var normSeat = (s) => Object.fromEntries(["lengthCm", "widthCm", "heightCm", "we
 var goodSeat = (s) => ["lengthCm", "widthCm", "heightCm", "weightKg"].every((k) => Number(s?.[k]) > 0);
 var seatOf = (s) => ({ lengthCm: round2(Number(s.lengthCm)), widthCm: round2(Number(s.widthCm)), heightCm: round2(Number(s.heightCm)), weightKg: round2(Number(s.weightKg)) });
 var userName5 = (u) => u?.name || u?.login || "";
-function mountRetail(app, { db, fetchFn, services = {} }) {
+var lastTickTry = 0;
+var esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
+} }) {
   const publicAcc = (a, origin = "") => ({
     id: a.id,
     name: a.name,
@@ -10082,6 +10085,15 @@ function mountRetail(app, { db, fetchFn, services = {} }) {
     crm_delivery: a.crm_delivery,
     crm_site: a.crm_site,
     crm_field1: a.crm_field1 ?? "",
+    notify_inv: !!a.notify_inv,
+    notify_ttn: !!a.notify_ttn,
+    notify_users: (() => {
+      try {
+        return JSON.parse(a.notify_users || "[]");
+      } catch {
+        return [];
+      }
+    })(),
     active: a.active,
     synced_at: a.synced_at,
     hook_at: a.hook_at,
@@ -10097,6 +10109,11 @@ function mountRetail(app, { db, fetchFn, services = {} }) {
     const origin = new URL(c.req.url).origin;
     return c.json((await db.all(`SELECT * FROM rzs_accounts ORDER BY active DESC, name`)).map((a) => publicAcc(a, origin)));
   });
+  app.get("/api/rzs/notify-users", async (c) => {
+    need(c, "api");
+    const users = await db.all(`SELECT id, login, name, role, tg_chat_id FROM users WHERE active = 1 AND role != 'partner' ORDER BY name, login`);
+    return c.json(users.map((u) => ({ id: u.id, name: u.name || u.login, tg: !!u.tg_chat_id, admin: ["owner", "admin", "admin_lite"].includes(u.role) })));
+  });
   const accFields = (b, cur = {}) => ({
     name: String(b.name ?? cur.name ?? "").trim().slice(0, 100),
     price_list_id: String(b.price_list_id ?? cur.price_list_id ?? "").replace(/\D/g, "").slice(0, 20),
@@ -10104,6 +10121,9 @@ function mountRetail(app, { db, fetchFn, services = {} }) {
     crm_delivery: String(b.crm_delivery ?? cur.crm_delivery ?? "1").replace(/\D/g, "").slice(0, 10),
     crm_site: String(b.crm_site ?? cur.crm_site ?? "").trim().slice(0, 100),
     crm_field1: String(b.crm_field1 ?? cur.crm_field1 ?? "Riteil(Rozetka)").trim().slice(0, 100),
+    notify_inv: b.notify_inv === void 0 ? cur.notify_inv ? 1 : 0 : b.notify_inv ? 1 : 0,
+    notify_ttn: b.notify_ttn === void 0 ? cur.notify_ttn ? 1 : 0 : b.notify_ttn ? 1 : 0,
+    notify_users: b.notify_users === void 0 ? cur.notify_users || "" : JSON.stringify((Array.isArray(b.notify_users) ? b.notify_users : []).map(Number).filter((x) => x > 0).slice(0, 50)),
     active: b.active === void 0 ? cur.active ?? 1 : b.active ? 1 : 0
   });
   app.post("/api/rzs/accounts", async (c) => {
@@ -10131,8 +10151,8 @@ function mountRetail(app, { db, fetchFn, services = {} }) {
     }
     const pass = b.new_hook_pass ? randomToken(12) : cur.hook_pass;
     await db.run(
-      `UPDATE rzs_accounts SET name = ?, token = ?, price_list_id = ?, crm_office = ?, crm_delivery = ?, crm_site = ?, crm_field1 = ?, active = ?, hook_pass = ? WHERE id = ?`,
-      [f.name || cur.name, token, f.price_list_id, f.crm_office, f.crm_delivery, f.crm_site, f.crm_field1, f.active, pass, cur.id]
+      `UPDATE rzs_accounts SET name = ?, token = ?, price_list_id = ?, crm_office = ?, crm_delivery = ?, crm_site = ?, crm_field1 = ?, notify_inv = ?, notify_ttn = ?, notify_users = ?, active = ?, hook_pass = ? WHERE id = ?`,
+      [f.name || cur.name, token, f.price_list_id, f.crm_office, f.crm_delivery, f.crm_site, f.crm_field1, f.notify_inv, f.notify_ttn, f.notify_users, f.active, pass, cur.id]
     );
     if (token !== cur.token) await logAudit(db, { user: c.get("user"), kind: "rzs", refId: cur.id, action: "\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0442\u043E\u043A\u0435\u043D \u0420\u043E\u0437\u0435\u0442\u043A\u0438", changes: [{ field: "token", from: keyHint2(cur.token), to: keyHint2(token) }] });
     return c.json({ ok: true });
@@ -10173,7 +10193,7 @@ function mountRetail(app, { db, fetchFn, services = {} }) {
     const rows = list.map((o) => rowOf(o, accountId)).filter((r) => r.id);
     if (!rows.length) return 0;
     const old = new Map((await db.all(
-      `SELECT id, docs_at, confirmed_at, ttn_at, document_link, products FROM rzs_orders WHERE id IN (SELECT value FROM json_each(?))`,
+      `SELECT id, docs_at, confirmed_at, ttn_at, document_link, products, status, uzd_status, ttn, invoice_no, inv_notified, ttn_notified FROM rzs_orders WHERE id IN (SELECT value FROM json_each(?))`,
       [JSON.stringify(rows.map((r) => r.id))]
     )).map((r) => [r.id, r]));
     const now = nowIso();
@@ -10232,9 +10252,51 @@ function mountRetail(app, { db, fetchFn, services = {} }) {
         [code, String(p?.rzCode ?? ""), now]
       ]);
     }
+    const ready2 = (x) => ["confirmed", "problem"].includes(x.status) && !x.ttn && ["verified", "skipped"].includes(x.uzd_status);
+    const events = { inv: [], ttn: [] };
+    for (const r of rows) {
+      const o = old.get(r.id);
+      if (!o) continue;
+      if (r.invoice_no && !o.invoice_no && !o.inv_notified) {
+        events.inv.push(r);
+        st.push([`UPDATE rzs_orders SET inv_notified = ? WHERE id = ?`, [now, r.id]]);
+      }
+      const uzd = r.uzd_status || o.uzd_status;
+      if (ready2({ ...r, uzd_status: uzd }) && !ready2(o) && !o.ttn_notified) {
+        events.ttn.push(r);
+        st.push([`UPDATE rzs_orders SET ttn_notified = ? WHERE id = ?`, [now, r.id]]);
+      }
+    }
     await db.batch(st);
     if (codes.length) await autoMap(codes);
+    if (events.inv.length || events.ttn.length) await notifyEvents(accountId, events).catch(() => 0);
     return rows.length;
+  }
+  async function notifyEvents(accountId, ev) {
+    const a = await db.get(`SELECT * FROM rzs_accounts WHERE id = ?`, [accountId]);
+    if (!a || !services.notify?.sendText) return;
+    let ids = [];
+    try {
+      ids = JSON.parse(a.notify_users || "[]").map(Number).filter(Boolean);
+    } catch {
+    }
+    const to = ids.length ? { userIds: ids } : { admins: true };
+    const names = await prodNames(ev.inv.concat(ev.ttn));
+    const line = (r) => `\u2022 <b>${esc(r.order_num)}</b> \u2014 ${esc(r.customer)}${names(r) ? ` \xB7 ${esc(names(r))}` : ""}`;
+    const more = (l) => l.length > 30 ? `
+\u2026\u0456 \u0449\u0435 ${l.length - 30}` : "";
+    if (a.notify_inv && ev.inv.length) {
+      await services.notify.sendText(to, `\u{1F9FE} <b>\u0420\u043E\u0437\u0435\u0442\u043A\u0430${a.name && a.name !== "\u0420\u043E\u0437\u0435\u0442\u043A\u0430" ? ` \xB7 ${esc(a.name)}` : ""}: \u0437'\u044F\u0432\u0438\u0432\u0441\u044F \u0432\u0445\u0456\u0434\u043D\u0438\u0439 \u0440\u0430\u0445\u0443\u043D\u043E\u043A (\u0412\u0447\u0430\u0441\u043D\u043E)</b> \u2014 ${ev.inv.length}
+` + ev.inv.slice(0, 30).map((r) => `${line(r)} \xB7 \u0440\u0430\u0445. <b>${esc(r.invoice_no)}</b>`).join("\n") + more(ev.inv) + "\n\n\u0417\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0442\u0435 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0438 \u0434\u043B\u044F \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u0443 \xAB\u0412\u0447\u0430\u0441\u043D\u043E\xBB, \u0449\u043E\u0431 \u043C\u043E\u0436\u043D\u0430 \u0431\u0443\u043B\u043E \u0441\u0442\u0432\u043E\u0440\u0438\u0442\u0438 \u0422\u0422\u041D.");
+    }
+    if (a.notify_ttn && ev.ttn.length) {
+      await services.notify.sendText(to, `\u{1F69A} <b>\u0420\u043E\u0437\u0435\u0442\u043A\u0430${a.name && a.name !== "\u0420\u043E\u0437\u0435\u0442\u043A\u0430" ? ` \xB7 ${esc(a.name)}` : ""}: \u043C\u043E\u0436\u043D\u0430 \u0441\u0442\u0432\u043E\u0440\u044E\u0432\u0430\u0442\u0438 \u0422\u0422\u041D</b> \u2014 ${ev.ttn.length}
+` + ev.ttn.slice(0, 30).map(line).join("\n") + more(ev.ttn) + "\n\n\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0438 \u0437\u0432\u0456\u0440\u0435\u043D\u043E (\u042E\u0417\u0414). \u0422\u0422\u041D \u2014 \xAB\u0420\u0456\u0442\u0435\u0439\u043B \u2192 \u0420\u043E\u0437\u0435\u0442\u043A\u0430\xBB \u2192 \u0444\u0456\u043B\u044C\u0442\u0440 \xAB\u0411\u0435\u0437 \u0422\u0422\u041D\xBB \u2192 \xAB\u{1F69A} \u0421\u0442\u0432\u043E\u0440\u0438\u0442\u0438 \u0422\u0422\u041D\xBB.");
+    }
+  }
+  async function prodNames(rows) {
+    const pm = await prodMap(rows.map((r) => ({ products: JSON.stringify(r.products || []) })));
+    return (r) => (r.products || []).map((p) => `${pm.get(String(p.supplierCode).trim())?.name || p.supplierCode} \xD7 ${p.quantity}`).join(", ").slice(0, 200);
   }
   async function autoMap(codes) {
     const todo = await db.all(`SELECT code FROM rzs_products WHERE product_id IS NULL AND code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)]);
@@ -10261,6 +10323,26 @@ function mountRetail(app, { db, fetchFn, services = {} }) {
     await db.run(`UPDATE rzs_accounts SET synced_at = ? WHERE id = ?`, [nowIso(), a.id]);
     return { saved, more };
   }
+  const TICK_MS = 10 * 6e4;
+  onTick((c) => {
+    if (Date.now() - (lastTickTry || 0) < 6e4) return;
+    lastTickTry = Date.now();
+    const p = (async () => {
+      const accs = await db.all(`SELECT * FROM rzs_accounts WHERE active = 1 AND (notify_inv = 1 OR notify_ttn = 1)`);
+      if (!accs.length) return;
+      const now = Date.now();
+      const claim = await db.run(
+        `INSERT INTO settings (key, value) VALUES ('rzs_tick_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
+        [new Date(now).toISOString(), new Date(now - TICK_MS).toISOString()]
+      );
+      if (!claim.changes) return;
+      for (const a of accs) await syncAccount(a, { days: 7 }).catch(() => 0);
+    })().catch(() => 0);
+    try {
+      c?.executionCtx?.waitUntil(p);
+    } catch {
+    }
+  });
   app.post("/api/rzs/sync", async (c) => {
     need(c, "docs.view");
     const b = await c.req.json().catch(() => ({}));
@@ -10357,6 +10439,8 @@ function mountRetail(app, { db, fetchFn, services = {} }) {
     else if (st === "nottn") where.push(`o.status IN ('confirmed', 'problem') AND o.ttn = ''`);
     else if (st === "nocrm") where.push(`o.crm_id = '' AND o.crm_code = '' AND o.status NOT IN ('deleted', 'closed', 'delivery_refused')`);
     else if (st === "docs") where.push(`o.document_link != ''`);
+    else if (st === "noinv") where.push(`o.status IN ('confirmed', 'problem') AND o.invoice_no = '' AND o.ttn = ''`);
+    else if (st === "ready") where.push(`o.status IN ('confirmed', 'problem') AND o.ttn = '' AND o.uzd_status IN ('verified', 'skipped')`);
     else if (st && RZS_STATUS[st]) {
       where.push("o.status = ?");
       params.push(st);
@@ -10365,8 +10449,8 @@ function mountRetail(app, { db, fetchFn, services = {} }) {
       const raw2 = String(c.req.query("q") || "").trim();
       const cap = q.replace(/(^|[\s'-])(\S)/g, (m, a, b) => a + b.toUpperCase());
       const vars = [.../* @__PURE__ */ new Set([raw2, q, cap])].map((v) => `%${v}%`);
-      where.push(`(o.order_num LIKE ? OR o.phone LIKE ? OR o.ttn LIKE ? OR ${vars.map(() => "o.customer LIKE ?").join(" OR ")})`);
-      params.push(`%${q}%`, `%${q.replace(/\D/g, "") || q}%`, `%${q}%`, ...vars);
+      where.push(`(o.order_num LIKE ? OR o.phone LIKE ? OR o.ttn LIKE ? OR o.invoice_no LIKE ? OR ${vars.map(() => "o.customer LIKE ?").join(" OR ")})`);
+      params.push(`%${q}%`, `%${q.replace(/\D/g, "") || q}%`, `%${q}%`, `%${raw2}%`, ...vars);
     }
     const [rows, counts, accs] = await Promise.all([
       db.all(`SELECT o.*, a.name AS account FROM rzs_orders o LEFT JOIN rzs_accounts a ON a.id = o.account_id WHERE ${where.join(" AND ")} ORDER BY o.created_at DESC LIMIT 300`, params),
@@ -12560,7 +12644,7 @@ var schema12 = {
 // src/modules/retail/schema.js
 var schema13 = {
   name: "retail",
-  version: 3,
+  version: 4,
   tables: [
     // Кабінети постачальника Розетки: токен (JWT) бачить лише сервер; прайс і параметри передачі замовлень у LP-CRM.
     `CREATE TABLE IF NOT EXISTS rzs_accounts (
@@ -12634,7 +12718,14 @@ var schema13 = {
     ["rzs_products", "brand", "TEXT DEFAULT ''"],
     ["rzs_products", "imported_at", "TEXT DEFAULT ''"],
     // «Додаткове поле 1» замовлення в LP-CRM (канал продажу; за ним аналітика визначає джерело).
-    ["rzs_accounts", "crm_field1", "TEXT DEFAULT 'Riteil(Rozetka)'"]
+    ["rzs_accounts", "crm_field1", "TEXT DEFAULT 'Riteil(Rozetka)'"],
+    // Сповіщення в Telegram: з'явився вхідний рахунок (Вчасно); можна створювати ТТН (ЮЗД звірено). Кому — id користувачів (JSON),
+    // порожньо — власник і адміністратори. У замовленні — коли сповіщення вже надіслано (щоб не повторювати).
+    ["rzs_accounts", "notify_inv", "INTEGER DEFAULT 0"],
+    ["rzs_accounts", "notify_ttn", "INTEGER DEFAULT 0"],
+    ["rzs_accounts", "notify_users", "TEXT DEFAULT ''"],
+    ["rzs_orders", "inv_notified", "TEXT DEFAULT ''"],
+    ["rzs_orders", "ttn_notified", "TEXT DEFAULT ''"]
   ]
 };
 
