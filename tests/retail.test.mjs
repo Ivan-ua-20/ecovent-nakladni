@@ -187,6 +187,7 @@ const cr = await req('POST', `/api/rzs/orders/${ID1}/crm`, {});
 assert.equal(cr.crm_id, '88001');
 const add = calls.crm.find((x) => x.method === 'addNewOrder').p;
 assert.equal(add.office, '7');
+assert.equal(add.delivery_adress, '20450000000001', 'ТТН — у поле адреси доставки');
 assert.equal(add.additional_1, 'Riteil(Rozetka)', '«Додаткове поле 1» — за замовчуванням Riteil(Rozetka)');
 assert.equal(add.phone, '380501112233');
 assert.ok(add.comment.includes('900001') && add.comment.includes('20450000000001'), 'у коментарі — № Розетки і ТТН');
@@ -229,6 +230,7 @@ await raw.batch([
   [`INSERT INTO an_orders (id, code, day, status, ttn) VALUES (70001, '1761400000000111', ?, 1, '20400558101410')`, [now]],
   [`INSERT INTO order_keys (k, code, day) VALUES ('p:508846132', '1761400000000222', ?)`, [now]],
 ]);
+assert.match(await errOf(() => req('POST', `/api/rzs/orders/${R4}/crm`, {})), /немає ТТН/, 'без ТТН у LP-CRM не передаємо (лише на явне прохання)');
 const fr = await req('POST', '/api/rzs/crm-find', {});
 assert.deepEqual(fr.linked.map((x) => [x.order_num, x.crm_id]), [['PO3', '70001']], 'точний збіг ТТН — прив’язано одразу (пробіли в ТТН не заважають)');
 assert.deepEqual(fr.suggest.map((x) => [x.order_num, x.crm[0].id, x.crm[0].by]), [['PO4', '70002', 'телефон']], 'за телефоном — лише підказка');

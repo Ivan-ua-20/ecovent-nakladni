@@ -440,6 +440,9 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     need(c, 'docs.edit');
     const r = await orderRow(c.req.param('id'));
     if (r.crm_id || r.crm_code) throw fail(400, `Уже в LP-CRM${r.crm_id ? `: № ${r.crm_id}` : ''}.`);
+    const body = await c.req.json().catch(() => ({}));
+    // ТТН іде в поле адреси доставки (менеджер переносить у поле ТТН) — без ТТН передаємо лише на явне прохання.
+    if (!r.ttn && !body.no_ttn) throw fail(400, 'Ще немає ТТН — спершу створіть ТТН (її передамо в поле адреси доставки).');
     if (['deleted'].includes(r.status)) throw fail(400, 'Замовлення видалене на Розетці.');
     const a = await accOf(r.account_id);
     if (!a.crm_office) throw fail(400, 'Вкажіть ID відділу LP-CRM у налаштуваннях кабінету Розетки.');
