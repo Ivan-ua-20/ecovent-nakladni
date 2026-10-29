@@ -363,7 +363,7 @@ let labelQueued = false;
 new MutationObserver(() => {
   if (labelQueued) return;
   labelQueued = true;
-  requestAnimationFrame(() => { labelQueued = false; labelTables(); foldHelp(); });
+  setTimeout(() => { labelQueued = false; labelTables(); foldHelp(); }, 0);
 }).observe(main, { childList: true, subtree: true });
 
 // =====================================================================
