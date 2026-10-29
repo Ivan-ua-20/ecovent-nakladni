@@ -9,6 +9,34 @@ const VIEWS = { '': 'Усі', todo: 'До підтвердження', noinv: '�
 const GAP_MS = 2000; // пауза між замовленнями в групових діях
 const RETRY_MS = [5000, 10000, 20000]; // якщо Розетка все ж відповіла «забагато запитів»
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Етапи замовлення — строго по черзі: 1 підтвердити → 2 Розетка звіряє документи (ЮЗД) → 3 ТТН → 4 маркування і LP-CRM.
+// blockedWhy(o, дія) — чому дію зараз не можна (порожньо — можна).
+const UZD_OK = ['verified', 'skipped'];
+const isConfirmed = (o) => !['new', 'updated', 'deleted'].includes(o.status);
+function blockedWhy(o, k) {
+  if (o.status === 'deleted') return 'замовлення видалене';
+  if (k === 'confirm') return ['new', 'updated'].includes(o.status) ? '' : 'вже підтверджене';
+  if (k === 'ttn') {
+    if (!isConfirmed(o)) return 'спершу підтвердіть замовлення';
+    if (o.ttn) return 'ТТН уже є';
+    if (!['confirmed', 'problem'].includes(o.status)) return `статус «${o.status_name}»`;
+    if (!UZD_OK.includes(o.uzd_status)) return 'Розетка ще не звірила документи (ЮЗД)';
+    return '';
+  }
+  if (k === 'mark') return o.ttn ? '' : 'ще немає ТТН';
+  if (k === 'crm') return o.crm_id || o.crm_code ? 'уже в LP-CRM' : !o.ttn ? 'спершу створіть ТТН' : '';
+  return '';
+}
+const stepsHtml = (o) => {
+  const st = [
+    ['Підтверджено', isConfirmed(o)],
+    ['Документи звірено (ЮЗД)', isConfirmed(o) && (UZD_OK.includes(o.uzd_status) || !!o.ttn)],
+    ['ТТН', !!o.ttn],
+    ['У LP-CRM', !!(o.crm_id || o.crm_code)],
+  ];
+  const cur = st.findIndex(([, done]) => !done);
+  return `<div class="btn-row small" style="flex-wrap:wrap;gap:6px">${st.map(([n, done], i) => `<span class="badge ${done ? 'ok' : i === cur ? 'warn' : ''}">${done ? '✅' : i === cur ? '👉' : '🔒'} ${i + 1}. ${n}</span>`).join('<span class="muted">→</span>')}</div>`;
+};
 const n2 = (v) => { const x = parseFloat(String(v ?? '').replace(/\s/g, '').replace(',', '.')); return Number.isFinite(x) ? x : 0; };
 
 export function createRetailPages(ctx) {
@@ -107,20 +135,28 @@ export function createRetailPages(ctx) {
     $$('[data-sel]').forEach((x) => (x.onchange = draw));
     $('#rzAll') && ($('#rzAll').onchange = (e) => { $$('[data-sel]').forEach((x) => { x.checked = e.target.checked; }); draw(); });
     const ACT = {
-      confirm: { label: 'Підтвердити', ok: (o) => ['new', 'updated'].includes(o.status), why: 'вже підтверджене (або статус не дозволяє)', run: (id) => api('POST', `/api/rzs/orders/${id}/confirm`, {}) },
-      ttn: { label: 'Створити ТТН', ok: (o) => ['confirmed', 'problem'].includes(o.status) && !o.ttn, why: 'не підтверджене або ТТН уже є', run: (id) => api('POST', `/api/rzs/orders/${id}/ttn`, {}) },
-      crm: { label: 'У LP-CRM', ok: (o) => !o.crm_id && !o.crm_code && o.status !== 'deleted' && !!o.ttn, why: 'уже в LP-CRM або ще немає ТТН', run: (id) => api('POST', `/api/rzs/orders/${id}/crm`, {}) },
+      confirm: { label: 'Підтвердити', run: (id) => api('POST', `/api/rzs/orders/${id}/confirm`, {}) },
+      ttn: { label: 'Створити ТТН', run: (id) => api('POST', `/api/rzs/orders/${id}/ttn`, {}) },
+      crm: { label: 'У LP-CRM', run: (id) => api('POST', `/api/rzs/orders/${id}/crm`, {}) },
     };
     async function run(k) {
       const ids = sel();
       if (k === '_clear') { $$('[data-sel]').forEach((x) => { x.checked = false; }); draw(); return; }
-      if (k === 'mark') return markings(ids);
       if (k === 'find') return findCrm(ids);
+      if (k === 'mark') {
+        const withTtn = ids.filter((id) => !blockedWhy(byId.get(id), 'mark'));
+        if (!withTtn.length) { toast('У вибраних замовленнях ще немає ТТН — спершу створіть ТТН', true); return; }
+        if (withTtn.length < ids.length) toast(`Без ТТН пропущено: ${ids.length - withTtn.length}`, true);
+        return markings(withTtn);
+      }
       const a = ACT[k];
-      const todo = ids.filter((id) => a.ok(byId.get(id)));
-      const skipped = ids.filter((id) => !a.ok(byId.get(id))).map((id) => `${byId.get(id).order_num}: ${a.why}`);
-      if (!todo.length) { toast(`Немає замовлень для дії «${a.label}» (${a.why})`, true); return; }
-      if (!(await confirmDanger(`${a.label}: ${todo.length} замовлень?`, skipped.length ? `Пропущено ${skipped.length} — ${a.why}.` : '', a.label))) return;
+      const todo = ids.filter((id) => !blockedWhy(byId.get(id), k));
+      const skipped = ids.filter((id) => blockedWhy(byId.get(id), k)).map((id) => `${byId.get(id).order_num}: ${blockedWhy(byId.get(id), k)}`);
+      if (!todo.length) {
+        modal(`«${a.label}» — зараз не можна`, `<div class="form-stack small"><div>Етапи йдуть по черзі: підтвердження → Розетка звіряє документи (ЮЗД) → ТТН → маркування і LP-CRM.</div>${skipped.map((x) => `<div>${esc(x)}</div>`).join('')}</div>`, { footer: '<button class="btn primary" data-close>Зрозуміло</button>' });
+        return;
+      }
+      if (!(await confirmDanger(`${a.label}: ${todo.length} замовлень?`, skipped.length ? `Пропущено ${skipped.length} — попередній етап ще не завершено (деталі — після виконання).` : '', a.label))) return;
       const fails = [];
       let ok = 0;
       busy = true;
@@ -173,6 +209,7 @@ export function createRetailPages(ctx) {
     const unitSeats = (p) => (p.own_seats?.length ? p.own_seats : p.cargoSeats);
     let seats = o.products.flatMap((p) => Array.from({ length: p.quantity }, () => unitSeats(p).map((s) => ({ ...s })))).flat();
     const m = modal(`Розетка ${o.order_num || ''}`, `<div class="form-stack">
+        ${stepsHtml(o)}
         <div class="grid2"><div><b>${esc(o.customer)}</b><div class="small">${esc(o.phone)}</div><div class="small">${esc([o.city, o.street].filter(Boolean).join(', '))}${o.address_id ? ` · відд. ${esc(o.address_id)}` : ''}</div>
             <div class="small muted">${esc([o.delivery_type, o.delivery_company].filter(Boolean).join(' · '))}${o.cod ? ` · післяплата <b>${money(o.cod)} грн</b>` : ''}</div></div>
           <div><span class="badge ${ST_CLS[o.status] || ''}">${esc(o.status_name)}</span> ${o.uzd_name ? `<span class="badge ${UZD_CLS[o.uzd_status] || ''}">${esc(o.uzd_name)}</span>` : ''}
@@ -191,11 +228,16 @@ export function createRetailPages(ctx) {
         <div><b>Місця для ТТН</b> <span class="small muted">— з каталогу Розетки або свої габарити товару («Товари»); можна змінити тут</span></div>
         <div id="omSeats"></div>
         ${edit ? '<div class="btn-row"><button type="button" class="btn sm" id="omSeatAdd">+ Місце</button></div>' : ''}
-      </div>`, { wide: true, footer: `<button class="btn" data-close>Закрити</button>
-        ${o.ttn ? '<button class="btn" id="omMark">🏷 Маркування</button>' : ''}
-        ${edit && ['new', 'updated'].includes(o.status) ? '<button class="btn primary" id="omConfirm">✅ Підтвердити</button>' : ''}
-        ${edit && ['confirmed', 'problem', 'shipping'].includes(o.status) ? `<button class="btn ${o.ttn ? '' : 'primary'}" id="omTtn">${o.ttn ? '🚚 Перевипустити ТТН' : '🚚 Створити ТТН'}</button>` : ''}
-        ${edit && !o.crm_id && !o.crm_code && o.status !== 'deleted' ? '<button class="btn" id="omCrm">➕ У LP-CRM</button>' : ''}` });
+      </div>`, { wide: true, footer: (() => {
+        // Кнопка наступного етапу активна лише після попереднього; недоступна — сіра, з причиною в підказці.
+        const btn = (id, k, label, primary) => { const why = blockedWhy(o, k); return `<button class="btn ${primary && !why ? 'primary' : ''}" id="${id}" ${why ? `disabled title="${esc(why)}"` : ''}>${label}</button>`; };
+        const reTtn = o.ttn && ['confirmed', 'problem', 'shipping'].includes(o.status);
+        return `<button class="btn" data-close>Закрити</button>
+          ${edit && ['new', 'updated'].includes(o.status) ? btn('omConfirm', 'confirm', '✅ 1. Підтвердити', true) : ''}
+          ${edit ? (reTtn ? '<button class="btn" id="omTtn">🚚 Перевипустити ТТН</button>' : btn('omTtn', 'ttn', '🚚 3. Створити ТТН', true)) : ''}
+          ${btn('omMark', 'mark', '🏷 4. Маркування', false)}
+          ${edit && !o.crm_id && !o.crm_code ? btn('omCrm', 'crm', '➕ 4. У LP-CRM', !!o.ttn) : ''}`;
+      })() });
     const drawSeats = () => {
       $('#omSeats', m.el).innerHTML = seats.length ? seatsTable(seats, edit) : '<div class="small muted">Габаритів немає — додайте місце або вкажіть габарити товару в «Товари».</div>';
       $$('[data-seat]', m.el).forEach((i) => (i.onchange = () => { seats[Number(i.dataset.seat)][i.dataset.k] = n2(i.value); }));
@@ -219,8 +261,7 @@ export function createRetailPages(ctx) {
       toast(`ТТН ${r.ttn || 'створено'}${r.point ? ` · ${r.point}` : ''}`);
     });
     act('#omCrm', async () => {
-      if (!o.ttn && !(await confirmDanger('ТТН ще немає', 'У LP-CRM у поле адреси піде адреса доставки, а не ТТН. Краще спершу створити ТТН. Все одно передати?', 'Передати без ТТН'))) return false;
-      const r = await api('POST', `/api/rzs/orders/${o.id}/crm`, o.ttn ? {} : { no_ttn: true });
+      const r = await api('POST', `/api/rzs/orders/${o.id}/crm`, {});
       toast(r.crm_id ? `Додано в LP-CRM: № ${r.crm_id}` : 'Додано в LP-CRM');
     });
     $('#omMark', m.el) && ($('#omMark', m.el).onclick = () => markings([o.id]));

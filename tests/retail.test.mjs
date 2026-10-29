@@ -230,7 +230,9 @@ await raw.batch([
   [`INSERT INTO an_orders (id, code, day, status, ttn) VALUES (70001, '1761400000000111', ?, 1, '20400558101410')`, [now]],
   [`INSERT INTO order_keys (k, code, day) VALUES ('p:508846132', '1761400000000222', ?)`, [now]],
 ]);
-assert.match(await errOf(() => req('POST', `/api/rzs/orders/${R4}/crm`, {})), /немає ТТН/, 'без ТТН у LP-CRM не передаємо (лише на явне прохання)');
+assert.match(await errOf(() => req('POST', `/api/rzs/orders/${R4}/crm`, {})), /немає ТТН/, 'без ТТН у LP-CRM не передаємо');
+assert.match(await errOf(() => req('POST', `/api/rzs/orders/${R4}/crm`, { no_ttn: true })), /немає ТТН/, 'і без винятків');
+assert.match(await errOf(() => req('POST', `/api/rzs/orders/${R5}/ttn`, {})), /ЮЗД/, 'ТТН — лише коли Розетка звірила документи (ЮЗД)');
 const fr = await req('POST', '/api/rzs/crm-find', {});
 assert.deepEqual(fr.linked.map((x) => [x.order_num, x.crm_id]), [['PO3', '70001']], 'точний збіг ТТН — прив’язано одразу (пробіли в ТТН не заважають)');
 assert.deepEqual(fr.suggest.map((x) => [x.order_num, x.crm[0].id, x.crm[0].by]), [['PO4', '70002', 'телефон']], 'за телефоном — лише підказка');
