@@ -20,6 +20,7 @@ export const UZD_STATUS = { not_uploaded: 'ЮЗД не завантажено', 
 const SYNC_DAYS = 14;
 const SYNC_PAGES = 8; // по 50 замовлень; решта — наступним зверненням
 const SYNC_GAP_MS = 2 * 60 * 1000;
+const PAGE_PAUSE_MS = 700;
 const keyHint = (k) => (k ? `${MASK}${String(k).slice(-4)}` : '');
 const newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(10000 + Math.random() * 90000))}`;
 const num = (v) => { const n = parseFloat(String(v ?? '').replace(/\s/g, '').replace(',', '.')); return Number.isFinite(n) ? n : null; };
@@ -35,7 +36,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
   // ================================================================ кабінети
   const publicAcc = (a, origin = '') => ({
     id: a.id, name: a.name, token: keyHint(a.token), price_list_id: a.price_list_id, crm_office: a.crm_office, crm_delivery: a.crm_delivery,
-    crm_site: a.crm_site, crm_field1: a.crm_field1 ?? '', notify_inv: !!a.notify_inv, notify_ttn: !!a.notify_ttn, notify_users: (() => { try { return JSON.parse(a.notify_users || '[]'); } catch { return []; } })(), active: a.active, synced_at: a.synced_at, hook_at: a.hook_at,
+    crm_site: a.crm_site, crm_field1: a.crm_field1 ?? '', sync_error: a.sync_error || '', sync_error_at: a.sync_error_at || '', notify_inv: !!a.notify_inv, notify_ttn: !!a.notify_ttn, notify_users: (() => { try { return JSON.parse(a.notify_users || '[]'); } catch { return []; } })(), active: a.active, synced_at: a.synced_at, hook_at: a.hook_at,
     hook: { url: origin ? `${origin}/api/rzs/hook/${a.id}` : '', user: a.hook_user, pass: a.hook_pass },
   });
   const accOf = async (id) => {
@@ -209,13 +210,19 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     const dateFrom = rzsDateTime(new Date(Date.now() - days * 86400000));
     let saved = 0;
     let more = false;
-    for (let page = 1; page <= SYNC_PAGES; page++) {
-      const r = await rzsOrdersPage(fetchFn, a.token, { dateFrom, page });
-      saved += await saveOrders(r.orders, a.id);
-      if (!r.orders.length || page * 50 >= r.total) break;
-      if (page === SYNC_PAGES) more = true;
+    try {
+      for (let page = 1; page <= SYNC_PAGES; page++) {
+        if (page > 1) await new Promise((r) => setTimeout(r, PAGE_PAUSE_MS)); // Розетка обмежує частоту запитів
+        const r = await rzsOrdersPage(fetchFn, a.token, { dateFrom, page });
+        saved += await saveOrders(r.orders, a.id);
+        if (!r.orders.length || page * 50 >= r.total) break;
+        if (page === SYNC_PAGES) more = true;
+      }
+    } catch (e) {
+      if (!e.pending) await db.run(`UPDATE rzs_accounts SET sync_error = ?, sync_error_at = ? WHERE id = ?`, [String(e.message || e).slice(0, 300), nowIso(), a.id]).catch(() => 0);
+      throw e;
     }
-    await db.run(`UPDATE rzs_accounts SET synced_at = ? WHERE id = ?`, [nowIso(), a.id]);
+    await db.run(`UPDATE rzs_accounts SET synced_at = ?, sync_error = '', sync_error_at = '' WHERE id = ?`, [nowIso(), a.id]);
     return { saved, more };
   }
   // Сповіщення потребують свіжих даних: у фоні (на запитах до сайту) раз на 10 хв оновлюємо замовлення за 7 днів —
@@ -243,7 +250,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     const out = [];
     for (const a of accs) {
       if (!b.force && a.synced_at && Date.now() - Date.parse(a.synced_at) < SYNC_GAP_MS) { out.push({ id: a.id, skipped: true }); continue; }
-      try { out.push({ id: a.id, ...(await syncAccount(a)) }); } catch (e) { out.push({ id: a.id, error: e.message }); }
+      try { out.push({ id: a.id, ...(await syncAccount(a)) }); } catch (e) { if (e.pending) throw e; out.push({ id: a.id, error: e.message }); }
     }
     // Нові ТТН — одразу шукаємо їх у LP-CRM (лише точний збіг ТТН).
     if (out.some((x) => x.saved)) {
@@ -273,7 +280,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
         if (o && (o.orderId || o.id)) saved += await saveOrders([o], a.id);
         else if (/delete/i.test(raw)) await db.run(`UPDATE rzs_orders SET status = 'deleted' WHERE id = ?`, [id]);
       }
-    } else saved = (await syncAccount(a, { days: 2 })).saved;
+    } else saved = (await syncAccount(a, { days: 2 }).catch((e) => { if (e.pending) throw e; return { saved: 0 }; })).saved; // помилку видно на сторінці
     return c.json({ ok: true, saved });
   });
 
@@ -321,7 +328,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     const [rows, counts, accs] = await Promise.all([
       db.all(`SELECT o.*, a.name AS account FROM rzs_orders o LEFT JOIN rzs_accounts a ON a.id = o.account_id WHERE ${where.join(' AND ')} ORDER BY o.created_at DESC LIMIT 300`, params),
       db.all(`SELECT status, COUNT(*) AS n FROM rzs_orders WHERE created_at >= ? GROUP BY status`, [since]),
-      db.all(`SELECT id, name, synced_at, hook_at FROM rzs_accounts WHERE active = 1`),
+      db.all(`SELECT id, name, synced_at, hook_at, sync_error, sync_error_at FROM rzs_accounts WHERE active = 1`),
     ]);
     const pm = await prodMap(rows);
     return c.json({ rows: rows.map((r) => publicOrder(r, pm)), counts: Object.fromEntries(counts.map((r) => [r.status, r.n])), statuses: RZS_STATUS, accounts: accs });

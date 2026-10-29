@@ -26,7 +26,8 @@ const ORDERS = new Map([
     deliveryCity: 'Львів', deliveryPhone: '380671234567', cashOnDelivery: 0, snRequired: true,
     products: [{ supplierCode: 'EV-200', rzCode: 778, quantity: 1, cargoSeats: [] }] }],
 ]);
-let tooMany = false;
+let tooMany = 0; // скільки разів поспіль Розетка відповість 429
+let listFail = false;
 const tg = [];
 // Замовлення LP-CRM (код → номер, ТТН, телефон) — для пошуку прив'язки за ТТН.
 const CRM = new Map([['1761400000000111', { id: '70001', status: '1', ttn: '20400558101410', phone: '0971089181', bayer_name: 'Попелянська' }], ['1761400000000222', { id: '70002', ttn: '', phone: '0508846132', bayer_name: 'Підопличко' }]]);
@@ -49,6 +50,7 @@ const fetchFn = async (url, opts = {}) => {
   if (opts.headers.Authorization !== `Bearer ${TOKEN}`) return json({ name: 'Unauthorized', message: 'bad', status: 401 }, 401);
   const path = u.pathname;
   if (path === '/dropshipping/orders') {
+    if (listFail) return json({ message: 'Internal error' }, 500);
     calls.list++;
     assert.ok(u.searchParams.get('expand').includes('products'));
     const list = [...ORDERS.values()];
@@ -56,7 +58,7 @@ const fetchFn = async (url, opts = {}) => {
   }
   let m = path.match(/^\/dropshipping\/orders\/confirm\/(.+)$/);
   if (m) {
-    if (tooMany) { tooMany = false; return json({ message: 'Too many requests. Please try again later.' }, 429); }
+    if (tooMany > 0) { tooMany--; return json({ message: 'Too many requests. Please try again later.' }, 429); }
     const b = JSON.parse(opts.body);
     calls.confirm.push({ id: m[1], b });
     const o = ORDERS.get(m[1]);
@@ -145,9 +147,11 @@ assert.ok((await req('GET', '/api/rzs/accounts'))[0].hook_at, 'час остан
 
 // ---------- 4. Підтвердження: серійні номери, повне підтвердження ----------
 assert.match(await errOf(() => req('POST', `/api/rzs/orders/${ID2}/confirm`, {})), /серійні номери/, 'без серійних номерів — ні');
-tooMany = true;
-assert.equal(await status(() => req('POST', `/api/rzs/orders/${ID1}/confirm`, {})), 429, '«забагато запитів» — 429, браузер зачекає й повторить');
-await req('POST', `/api/rzs/orders/${ID1}/confirm`, {});
+tooMany = 3;
+assert.equal(await status(() => req('POST', `/api/rzs/orders/${ID1}/confirm`, {})), 429, '429 тричі поспіль — 429 (браузер зачекає й повторить)');
+tooMany = 1;
+await req('POST', `/api/rzs/orders/${ID1}/confirm`, {}); // один 429 — сервер сам зачекав і повторив
+assert.equal(tooMany, 0);
 await req('POST', `/api/rzs/orders/${ID2}/confirm`, { serials: { 'EV-200': 'SN-1' } });
 assert.deepEqual(calls.confirm[0].b.products, [{ supplierCode: 'EV-100', confirmedQuantity: 2 }]);
 assert.deepEqual(calls.confirm[1].b.products[0].serialNumbers, ['SN-1']);
@@ -283,6 +287,17 @@ assert.equal((await req('GET', '/api/rzs/orders?q=РО3607')).rows.length, 1, '�
 const accN = (await req('GET', '/api/rzs/accounts'))[0];
 assert.deepEqual([accN.notify_inv, accN.notify_ttn, accN.notify_users], [true, true, []]);
 ORDERS.delete(ID6);
+
+// ---------- 8г. Помилка оновлення з Розетки видно на сторінці; вдале оновлення її знімає ----------
+listFail = true;
+const sf = await req('POST', '/api/rzs/sync', { force: true });
+assert.ok(sf.results.some((x) => x.error), 'помилка — у відповіді');
+let sa = (await req('GET', '/api/rzs/orders')).accounts[0];
+assert.ok(sa.sync_error && sa.sync_error_at, 'помилку збережено');
+listFail = false;
+await req('POST', '/api/rzs/sync', { force: true });
+sa = (await req('GET', '/api/rzs/orders')).accounts[0];
+assert.equal(sa.sync_error, '', 'вдале оновлення знімає помилку');
 
 // ---------- 9. Права ----------
 await req('POST', '/api/users', { login: 'viewer', password: 'pass1234', role: 'viewer' });

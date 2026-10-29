@@ -404,7 +404,7 @@ export function createPayUI(ctx) {
               toast('Рахунок додано в Opendatabot і увімкнено для формування');
               await ctx.reloadBoot?.();
               drawAccs(true);
-            } catch (er) { toast(er.message, true); e.currentTarget.disabled = false; }
+            } catch (er) { toast(er.message, true); e.target.closest('button').disabled = false; }
           };
         }));
         $$('[data-ren]', box).forEach((b) => (b.onclick = () => {
