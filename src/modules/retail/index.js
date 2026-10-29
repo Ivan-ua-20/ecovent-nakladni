@@ -397,7 +397,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     const replace = Boolean(b.replace);
     if (r.ttn && !replace) throw fail(400, `ТТН уже є: ${r.ttn}.`);
     if (!['confirmed', 'problem', 'shipping'].includes(r.status)) throw fail(400, r.status === 'new' || r.status === 'updated' ? 'Спершу підтвердіть замовлення.' : `Замовлення «${RZS_STATUS[r.status] || r.status}» — ТТН створити не можна.`);
-    if (r.uzd_status && !['verified', 'skipped'].includes(r.uzd_status)) throw fail(400, `${UZD_STATUS[r.uzd_status] || 'ЮЗД не звірено'} — ТТН можна створити після звірки документів у «Вчасно».`);
+    if (!['verified', 'skipped'].includes(r.uzd_status)) throw fail(400, `${UZD_STATUS[r.uzd_status] || 'ЮЗД ще не звірено'} — ТТН можна створити, коли Розетка звірить документи (ЮЗД).`);
     const o = publicOrder(r, await prodMap([r]));
     let seats;
     if (Array.isArray(b.seats) && b.seats.length) {
@@ -440,9 +440,8 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     need(c, 'docs.edit');
     const r = await orderRow(c.req.param('id'));
     if (r.crm_id || r.crm_code) throw fail(400, `Уже в LP-CRM${r.crm_id ? `: № ${r.crm_id}` : ''}.`);
-    const body = await c.req.json().catch(() => ({}));
-    // ТТН іде в поле адреси доставки (менеджер переносить у поле ТТН) — без ТТН передаємо лише на явне прохання.
-    if (!r.ttn && !body.no_ttn) throw fail(400, 'Ще немає ТТН — спершу створіть ТТН (її передамо в поле адреси доставки).');
+    // Етапи по черзі: у LP-CRM — лише з ТТН (вона йде в поле адреси доставки, менеджер переносить у поле ТТН).
+    if (!r.ttn) throw fail(400, 'Ще немає ТТН — спершу створіть ТТН (її передамо в поле адреси доставки).');
     if (['deleted'].includes(r.status)) throw fail(400, 'Замовлення видалене на Розетці.');
     const a = await accOf(r.account_id);
     if (!a.crm_office) throw fail(400, 'Вкажіть ID відділу LP-CRM у налаштуваннях кабінету Розетки.');
