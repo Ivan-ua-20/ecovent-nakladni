@@ -109,7 +109,7 @@ export function createRetailPages(ctx) {
     const ACT = {
       confirm: { label: 'Підтвердити', ok: (o) => ['new', 'updated'].includes(o.status), why: 'вже підтверджене (або статус не дозволяє)', run: (id) => api('POST', `/api/rzs/orders/${id}/confirm`, {}) },
       ttn: { label: 'Створити ТТН', ok: (o) => ['confirmed', 'problem'].includes(o.status) && !o.ttn, why: 'не підтверджене або ТТН уже є', run: (id) => api('POST', `/api/rzs/orders/${id}/ttn`, {}) },
-      crm: { label: 'У LP-CRM', ok: (o) => !o.crm_id && !o.crm_code && o.status !== 'deleted', why: 'уже в LP-CRM', run: (id) => api('POST', `/api/rzs/orders/${id}/crm`, {}) },
+      crm: { label: 'У LP-CRM', ok: (o) => !o.crm_id && !o.crm_code && o.status !== 'deleted' && !!o.ttn, why: 'уже в LP-CRM або ще немає ТТН', run: (id) => api('POST', `/api/rzs/orders/${id}/crm`, {}) },
     };
     async function run(k) {
       const ids = sel();
@@ -218,7 +218,11 @@ export function createRetailPages(ctx) {
       const r = await api('POST', `/api/rzs/orders/${o.id}/ttn`, { seats, replace: !!o.ttn });
       toast(`ТТН ${r.ttn || 'створено'}${r.point ? ` · ${r.point}` : ''}`);
     });
-    act('#omCrm', async () => { const r = await api('POST', `/api/rzs/orders/${o.id}/crm`, {}); toast(r.crm_id ? `Додано в LP-CRM: № ${r.crm_id}` : 'Додано в LP-CRM'); });
+    act('#omCrm', async () => {
+      if (!o.ttn && !(await confirmDanger('ТТН ще немає', 'У LP-CRM у поле адреси піде адреса доставки, а не ТТН. Краще спершу створити ТТН. Все одно передати?', 'Передати без ТТН'))) return false;
+      const r = await api('POST', `/api/rzs/orders/${o.id}/crm`, o.ttn ? {} : { no_ttn: true });
+      toast(r.crm_id ? `Додано в LP-CRM: № ${r.crm_id}` : 'Додано в LP-CRM');
+    });
     $('#omMark', m.el) && ($('#omMark', m.el).onclick = () => markings([o.id]));
     act('#omLink', async () => {
       const v = $('#omCrmNo', m.el).value.trim();
