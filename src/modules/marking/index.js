@@ -17,6 +17,7 @@ import { logAudit } from '../../core/requisites.js';
 import { npSender, npDocumentsPage, npMarkingPdf, npServiceType, npTracking, isDoorPickup, phone9 } from '../../integrations/novaposhta.js';
 import { rzLogin, rzTtnPdf } from '../../integrations/rozetka.js';
 import { promOrders, promDelivery } from '../../integrations/prom.js';
+import { epcOrders, epcDelivery, epcLabelPdf, EPC_LABEL_PROVIDERS } from '../../integrations/epicentr.js';
 
 const PAGES_PER_CALL = 12;
 const TODAY_REFRESH_MS = 5 * 60 * 1000;
@@ -109,7 +110,7 @@ export function mountMarking(app, { db, fetchFn, onCleanup }) {
     need(c, 'docs.view');
     const b = await c.req.json();
     const accounts = await activeAccounts();
-    if (!accounts.length) throw fail(400, 'Кабінети Нової пошти ще не додано: «Налаштування → Доставка: НП, Розетка, Prom».');
+    if (!accounts.length) throw fail(400, 'Кабінети Нової пошти ще не додано: «Налаштування → Доставка: НП, Розетка, Prom, Епіцентр».');
     const byId = new Map(accounts.map((a) => [a.id, a]));
     const answer = (row, source) => c.json({
       ttn: row.ttn, accountId: row.account_id || null, accountName: byId.get(row.account_id)?.name || '', source,
@@ -188,7 +189,7 @@ export function mountMarking(app, { db, fetchFn, onCleanup }) {
     const ttn = String(c.req.param('ttn')).replace(/\D/g, '');
     if (!/^\d{10,20}$/.test(ttn)) throw fail(400, 'Невірний номер ТТН.');
     const accounts = await activeAccounts();
-    if (!accounts.length) throw fail(400, 'Кабінети Нової пошти ще не додано: «Налаштування → Доставка: НП, Розетка, Prom».');
+    if (!accounts.length) throw fail(400, 'Кабінети Нової пошти ще не додано: «Налаштування → Доставка: НП, Розетка, Prom, Епіцентр».');
     const known = await db.get(`SELECT account_id, service FROM np_docs WHERE ttn = ?`, [ttn]);
     const wanted = Number(c.req.query('account')) || known?.account_id;
     const order = [...accounts.filter((a) => a.id === wanted), ...accounts.filter((a) => a.id !== wanted)];
@@ -295,7 +296,7 @@ export function mountMarking(app, { db, fetchFn, onCleanup }) {
     const tries = ttn.startsWith('PRM') ? [ttn, ttn.replace(/\D/g, '')] : [ttn];
     const reasons = new Set();
     const accounts = await db.all(`SELECT * FROM rz_accounts WHERE active = 1 ORDER BY hits DESC, id`);
-    if (!accounts.length) throw fail(400, 'Магазини Розетки ще не додано: «Налаштування → Доставка: НП, Розетка, Prom».');
+    if (!accounts.length) throw fail(400, 'Магазини Розетки ще не додано: «Налаштування → Доставка: НП, Розетка, Prom, Епіцентр».');
     const known = await db.get(`SELECT account_id FROM rz_docs WHERE ttn = ?`, [ttn]);
     const order = [...accounts.filter((a) => a.id === known?.account_id), ...accounts.filter((a) => a.id !== known?.account_id)];
     for (const a of order) {
@@ -380,12 +381,94 @@ export function mountMarking(app, { db, fetchFn, onCleanup }) {
     return c.json({ ok: true });
   });
 
+  // ---------------------------------------------------------------- магазини Епіцентр Маркету
+  // Токен перевіряємо запитом останніх замовлень; «Перевірити» показує їхню доставку (провайдер, номер накладної).
+  // Маркування: PDF накладної з API Епіцентру (Укрпошта, Meest, центри видачі й поштомати Епіцентру).
+  const TOKEN_RE = /^[\w.-]{20,4000}$/;
+  const publicEpc = (a) => ({ id: a.id, name: a.name, token: keyHint(a.token), active: a.active, checked_at: a.checked_at || '' });
+  const epcSample = (orders) => orders.map((o) => ({ id: String(o.number || o.id || ''), date: String(o.createdAt || ''), status: String(o.statusCode || ''), ...epcDelivery(o) }));
+  app.get('/api/epc/accounts', async (c) => {
+    need(c, 'api');
+    return c.json((await db.all(`SELECT * FROM epc_accounts ORDER BY active DESC, name`)).map(publicEpc));
+  });
+  app.post('/api/epc/accounts', async (c) => {
+    need(c, 'api');
+    const b = await c.req.json();
+    const token = String(b.token || '').trim();
+    if (!TOKEN_RE.test(token)) throw fail(400, 'Вставте токен API з кабінету продавця Епіцентру (Налаштування компанії → API).');
+    if (await db.get(`SELECT id FROM epc_accounts WHERE token = ?`, [token])) throw fail(400, 'Цей токен уже додано.');
+    const orders = await epcOrders(fetchFn, token, { limit: 10 });
+    const name = String(b.name || '').trim().slice(0, 100) || 'Магазин Епіцентру';
+    const now = new Date().toISOString();
+    const r = await db.run(`INSERT INTO epc_accounts (name, token, active, checked_at, created_at) VALUES (?, ?, 1, ?, ?)`, [name, token, now, now]);
+    await logAudit(db, { user: c.get('user'), kind: 'epc', refId: r.lastId, action: 'додано магазин Епіцентру', changes: [{ field: 'name', from: '', to: name }] });
+    return c.json({ id: r.lastId, orders: epcSample(orders) });
+  });
+  app.put('/api/epc/accounts/:id', async (c) => {
+    need(c, 'api');
+    const b = await c.req.json();
+    const cur = await db.get(`SELECT * FROM epc_accounts WHERE id = ?`, [c.req.param('id')]);
+    if (!cur) throw fail(404, 'Магазин не знайдено.');
+    const next = { ...cur };
+    if (b.name !== undefined) next.name = String(b.name).trim().slice(0, 100) || cur.name;
+    if (b.active !== undefined) next.active = b.active ? 1 : 0;
+    const t = String(b.token ?? '').trim();
+    const tokenChanged = t && !t.startsWith(MASK) && t !== cur.token;
+    if (tokenChanged && !TOKEN_RE.test(t)) throw fail(400, 'Вставте токен API з кабінету продавця Епіцентру (Налаштування компанії → API).');
+    let orders = null;
+    if (tokenChanged || b.check) {
+      orders = await epcOrders(fetchFn, tokenChanged ? t : cur.token, { limit: 10 });
+      next.checked_at = new Date().toISOString();
+      if (tokenChanged) next.token = t;
+    }
+    await db.run(`UPDATE epc_accounts SET name = ?, token = ?, active = ?, checked_at = ? WHERE id = ?`, [next.name, next.token, next.active, next.checked_at, cur.id]);
+    if (tokenChanged) await logAudit(db, { user: c.get('user'), kind: 'epc', refId: cur.id, action: 'змінено токен Епіцентру', changes: [{ field: 'token', from: keyHint(cur.token), to: keyHint(t) }] });
+    return c.json({ ...publicEpc(next), ...(orders ? { orders: epcSample(orders) } : {}) });
+  });
+  app.delete('/api/epc/accounts/:id', async (c) => {
+    need(c, 'api');
+    const cur = await db.get(`SELECT * FROM epc_accounts WHERE id = ?`, [c.req.param('id')]);
+    if (!cur) throw fail(404, 'Магазин не знайдено.');
+    await db.run(`DELETE FROM epc_accounts WHERE id = ?`, [cur.id]);
+    await logAudit(db, { user: c.get('user'), kind: 'epc', refId: cur.id, action: 'видалено магазин Епіцентру', changes: [{ field: 'name', from: cur.name, to: '' }] });
+    return c.json({ ok: true });
+  });
+  // PDF накладної Епіцентру: провайдер — з параметра (якщо відомий), інакше по черзі всі, що друкуються; магазини — від того,
+  // з якого друкували найчастіше.
+  app.get('/api/epc/marking/:ttn', async (c) => {
+    need(c, 'docs.view');
+    const ttn = String(c.req.param('ttn')).replace(/\s/g, '');
+    if (!/^[\w-]{5,40}$/.test(ttn)) throw fail(400, 'Невірний номер накладної.');
+    const p = String(c.req.query('provider') || '');
+    const providers = EPC_LABEL_PROVIDERS.includes(p) ? [p] : EPC_LABEL_PROVIDERS;
+    const accounts = await db.all(`SELECT * FROM epc_accounts WHERE active = 1 ORDER BY hits DESC, id`);
+    if (!accounts.length) throw fail(400, 'Магазини Епіцентру ще не додано: «Налаштування → Доставка: НП, Розетка, Prom, Епіцентр».');
+    const reasons = new Set();
+    for (const a of accounts) {
+      for (const prov of providers) {
+        const pdf = await epcLabelPdf(fetchFn, a.token, prov, ttn, (w) => reasons.add(w));
+        if (!pdf) continue;
+        await db.run(`UPDATE epc_accounts SET hits = hits + 1 WHERE id = ?`, [a.id]);
+        return new Response(pdf, {
+          headers: {
+            'Content-Type': 'application/pdf',
+            'Content-Disposition': `inline; filename="marking-${ttn}.pdf"`,
+            'X-NP-Account': encodeURIComponent(a.name),
+            'Cache-Control': 'private, max-age=600',
+          },
+        });
+      }
+    }
+    const why = reasons.size ? ` Відповідь Епіцентру: ${[...reasons].slice(0, 3).join('; ')}.` : '';
+    throw fail(404, `Накладної ${ttn} немає в підключених магазинах Епіцентру.${why}`);
+  });
+
   // Статус ТТН для інших модулів (B2B: замовлення клієнтів партнера). Відстежити можна будь-яку ТТН НП ключем будь-якого кабінету.
   async function trackTtn(ttn, phone = '') {
     const t = String(ttn || '').replace(/\s/g, '');
     if (!/^\d{10,20}$/.test(t)) throw fail(400, 'ТТН Нової пошти — 10–20 цифр.');
     const acc = await db.get(`SELECT api_key FROM np_accounts WHERE active = 1 ORDER BY hits DESC, id LIMIT 1`);
-    if (!acc) throw fail(400, 'Немає підключеного кабінету Нової пошти (Налаштування → Доставка: НП, Розетка, Prom).');
+    if (!acc) throw fail(400, 'Немає підключеного кабінету Нової пошти (Налаштування → Доставка: НП, Розетка, Prom, Епіцентр).');
     return npTracking(fetchFn, acc.api_key, t, String(phone || '').replace(/\D/g, '').slice(-12));
   }
   return { trackTtn };

@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'marking',
-  version: 4,
+  version: 5,
   tables: [
   // Кабінети НП (ФОП або ТОВ): ключ API бачить лише сервер.
   `CREATE TABLE IF NOT EXISTS np_accounts (
@@ -63,6 +63,16 @@ export const schema = {
     name TEXT NOT NULL DEFAULT '',
     token TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
+    checked_at TEXT DEFAULT '',
+    created_at TEXT
+  )`,
+  // Магазини Епіцентр Маркету (кабінет продавця): токен API — лише на сервері.
+  `CREATE TABLE IF NOT EXISTS epc_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL DEFAULT '',
+    token TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    hits INTEGER NOT NULL DEFAULT 0,
     checked_at TEXT DEFAULT '',
     created_at TEXT
   )`,
