@@ -10149,7 +10149,8 @@ async function rzLogin(fetchFn, username, password) {
   if (!j?.success || !j.content?.access_token) throw rzError(j);
   return { token: j.content.access_token, marketId: String(j.content.market?.id || ""), marketTitle: String(j.content.market?.title || "") };
 }
-async function rzTtnPdf(fetchFn, token, ttn) {
+async function rzTtnPdf(fetchFn, token, ttn, why = () => {
+}) {
   const res = await send(fetchFn, "/delivery-rozetka/ttn-print-batch", { method: "POST", token, body: { track_numbers: [ttn] } });
   const buf = new Uint8Array(await res.arrayBuffer());
   if (isPdf(buf)) return buf;
@@ -10157,11 +10158,13 @@ async function rzTtnPdf(fetchFn, token, ttn) {
   try {
     j = JSON.parse(new TextDecoder().decode(buf));
   } catch {
+    why(`HTTP ${res.status}`);
     return null;
   }
   if (!j?.success) {
     const err = rzError(j);
     if (err.rzAuth) throw err;
+    why(err.message);
     return null;
   }
   const c = j.content;
@@ -10477,18 +10480,23 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
   app.get("/api/rz/marking/:ttn", async (c) => {
     need(c, "docs.view");
     const ttn = String(c.req.param("ttn")).toUpperCase().replace(/\s/g, "");
-    if (!/^RMP-?[0-9A-Z-]{4,30}$/.test(ttn)) throw fail(400, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043D\u043E\u043C\u0435\u0440 \u0422\u0422\u041D \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (\u043C\u0430\u0454 \u043F\u043E\u0447\u0438\u043D\u0430\u0442\u0438\u0441\u044F \u0437 RMP).");
+    if (!/^(RMP|PRM)-?[0-9A-Z-]{4,30}$/.test(ttn)) throw fail(400, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043D\u043E\u043C\u0435\u0440 \u0422\u0422\u041D \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (\u043C\u0430\u0454 \u043F\u043E\u0447\u0438\u043D\u0430\u0442\u0438\u0441\u044F \u0437 RMP \u0430\u0431\u043E PRM).");
+    const tries = ttn.startsWith("PRM") ? [ttn, ttn.replace(/\D/g, "")] : [ttn];
+    const reasons = /* @__PURE__ */ new Set();
     const accounts = await db.all(`SELECT * FROM rz_accounts WHERE active = 1 ORDER BY hits DESC, id`);
     if (!accounts.length) throw fail(400, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D\u0438 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u0449\u0435 \u043D\u0435 \u0434\u043E\u0434\u0430\u043D\u043E: \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430: \u041D\u041F, \u0420\u043E\u0437\u0435\u0442\u043A\u0430, Prom\xBB.");
     const known = await db.get(`SELECT account_id FROM rz_docs WHERE ttn = ?`, [ttn]);
     const order2 = [...accounts.filter((a) => a.id === known?.account_id), ...accounts.filter((a) => a.id !== known?.account_id)];
     for (const a of order2) {
-      let pdf;
-      try {
-        pdf = await rzTtnPdf(fetchFn, await rzToken(a), ttn);
-      } catch (e) {
-        if (!e.rzAuth) throw e;
-        pdf = await rzTtnPdf(fetchFn, await rzToken(a, true), ttn);
+      let pdf = null;
+      for (const t of tries) {
+        try {
+          pdf = await rzTtnPdf(fetchFn, await rzToken(a), t, (w) => reasons.add(w));
+        } catch (e) {
+          if (!e.rzAuth) throw e;
+          pdf = await rzTtnPdf(fetchFn, await rzToken(a, true), t, (w) => reasons.add(w));
+        }
+        if (pdf) break;
       }
       if (!pdf) continue;
       await db.batch([
@@ -10504,7 +10512,9 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
         }
       });
     }
-    throw fail(404, `\u0422\u0422\u041D ${ttn} \u043D\u0435\u043C\u0430\u0454 \u0432 \u0436\u043E\u0434\u043D\u043E\u043C\u0443 \u0437 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0445 \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0456\u0432 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (\u0430\u0431\u043E \u0457\u0457 \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E).`);
+    const why = reasons.size ? ` \u0412\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u044C \u0420\u043E\u0437\u0435\u0442\u043A\u0438: ${[...reasons].join("; ")}.` : "";
+    if (ttn.startsWith("PRM")) throw fail(404, `\u0415\u041D ${ttn} \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u0430 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 Prom, \u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u043D\u0435 \u0434\u0430\u0454 \u0457\u0457 \u043D\u0430\u0434\u0440\u0443\u043A\u0443\u0432\u0430\u0442\u0438 \u0447\u0435\u0440\u0435\u0437 \u043A\u0430\u0431\u0456\u043D\u0435\u0442 \u043F\u0440\u043E\u0434\u0430\u0432\u0446\u044F.${why} \u041D\u0430\u0434\u0440\u0443\u043A\u0443\u0439\u0442\u0435 \u0435\u0442\u0438\u043A\u0435\u0442\u043A\u0443 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 Prom (\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2192 \u0415\u041D \u2192 \xAB\u0414\u0440\u0443\u043A\xBB).`);
+    throw fail(404, `\u0422\u0422\u041D ${ttn} \u043D\u0435\u043C\u0430\u0454 \u0432 \u0436\u043E\u0434\u043D\u043E\u043C\u0443 \u0437 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0445 \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0456\u0432 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (\u0430\u0431\u043E \u0457\u0457 \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E).${why}`);
   });
   const publicProm = (a) => ({ id: a.id, name: a.name, token: keyHint(a.token), active: a.active, checked_at: a.checked_at || "" });
   const promSample = (orders) => orders.map((o) => ({ id: o.id, date: String(o.date_created || ""), status: String(o.status_name || o.status || ""), ...promDelivery(o) }));

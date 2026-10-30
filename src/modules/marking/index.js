@@ -10,7 +10,7 @@
 //  і сторінка попереджає менеджера, щоб той передав складу. Тип береться з індексу або з відстеження (раз, далі — з індексу).
 //  Ліміти Cloudflare: не більше PAGES_PER_CALL сторінок за одне звернення; далі сервер відповідає «триває»,
 //  браузер повторює запит, і пошук продовжується з місця зупинки (прогрес — у np_days).
-// Розетка (ROZETKA Delivery, ТТН «RMP-…»): магазини з логіном/паролем кабінету продавця; токен — раз на добу,
+// Розетка (ROZETKA Delivery, ТТН «RMP-…»; «PRM-…» — створені в кабінеті Prom, пробуємо так само): магазини з логіном/паролем кабінету продавця; токен — раз на добу,
 // магазин ТТН запам'ятовується (rz_docs) — друк з першої спроби.
 import { MASK, fail, need, kyivDay } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
@@ -290,18 +290,24 @@ export function mountMarking(app, { db, fetchFn, onCleanup }) {
   app.get('/api/rz/marking/:ttn', async (c) => {
     need(c, 'docs.view');
     const ttn = String(c.req.param('ttn')).toUpperCase().replace(/\s/g, '');
-    if (!/^RMP-?[0-9A-Z-]{4,30}$/.test(ttn)) throw fail(400, 'Невірний номер ТТН Розетки (має починатися з RMP).');
+    if (!/^(RMP|PRM)-?[0-9A-Z-]{4,30}$/.test(ttn)) throw fail(400, 'Невірний номер ТТН Розетки (має починатися з RMP або PRM).');
+    // PRM (ЕН з кабінету Prom): на кіоску Rozetka її вводять 9 цифрами — пробуємо і повний номер, і лише цифри.
+    const tries = ttn.startsWith('PRM') ? [ttn, ttn.replace(/\D/g, '')] : [ttn];
+    const reasons = new Set();
     const accounts = await db.all(`SELECT * FROM rz_accounts WHERE active = 1 ORDER BY hits DESC, id`);
     if (!accounts.length) throw fail(400, 'Магазини Розетки ще не додано: «Налаштування → Доставка: НП, Розетка, Prom».');
     const known = await db.get(`SELECT account_id FROM rz_docs WHERE ttn = ?`, [ttn]);
     const order = [...accounts.filter((a) => a.id === known?.account_id), ...accounts.filter((a) => a.id !== known?.account_id)];
     for (const a of order) {
-      let pdf;
-      try {
-        pdf = await rzTtnPdf(fetchFn, await rzToken(a), ttn);
-      } catch (e) {
-        if (!e.rzAuth) throw e;
-        pdf = await rzTtnPdf(fetchFn, await rzToken(a, true), ttn); // токен прострочено — вхід заново і ще одна спроба
+      let pdf = null;
+      for (const t of tries) {
+        try {
+          pdf = await rzTtnPdf(fetchFn, await rzToken(a), t, (w) => reasons.add(w));
+        } catch (e) {
+          if (!e.rzAuth) throw e;
+          pdf = await rzTtnPdf(fetchFn, await rzToken(a, true), t, (w) => reasons.add(w)); // токен прострочено — вхід заново і ще одна спроба
+        }
+        if (pdf) break;
       }
       if (!pdf) continue;
       await db.batch([
@@ -317,7 +323,9 @@ export function mountMarking(app, { db, fetchFn, onCleanup }) {
         },
       });
     }
-    throw fail(404, `ТТН ${ttn} немає в жодному з підключених магазинів Розетки (або її скасовано).`);
+    const why = reasons.size ? ` Відповідь Розетки: ${[...reasons].join('; ')}.` : '';
+    if (ttn.startsWith('PRM')) throw fail(404, `ЕН ${ttn} створена в кабінеті Prom, і Розетка не дає її надрукувати через кабінет продавця.${why} Надрукуйте етикетку в кабінеті Prom (замовлення → ЕН → «Друк»).`);
+    throw fail(404, `ТТН ${ttn} немає в жодному з підключених магазинів Розетки (або її скасовано).${why}`);
   });
 
   // ---------------------------------------------------------------- магазини Prom.ua

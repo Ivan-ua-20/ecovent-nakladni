@@ -260,7 +260,7 @@ async function snapshot(reason) {
 }
 
 
-// Маркування: ТТН Розетки (RMP-…) — з магазину Розетки; інакше Нова пошта: ТТН з замовлення (з правками)
+// Маркування: ТТН Розетки (RMP-…, а також PRM-… з кабінету Prom) — з магазину Розетки; інакше Нова пошта: ТТН з замовлення (з правками)
 // або пошук у кабінетах НП. PDF відкривається в новій вкладці. ТТН з адресним забором (кур'єр НП забирає з адреси) —
 // попередження менеджеру, щоб передав складу.
 async function npMarking(btn) {
@@ -288,7 +288,7 @@ async function npMarking(btn) {
       return;
     }
     const rzTtn = String(o.delivery?.ttn || '').toUpperCase().replace(/\s/g, '');
-    if (/^RMP/.test(rzTtn)) {
+    if (/^(RMP|PRM)/.test(rzTtn)) { // RMP — Розетка; PRM — ЕН доставки Rozetka з кабінету Prom (теж пробуємо через Розетку)
       const res = await fetch(`/api/rz/marking/${encodeURIComponent(rzTtn)}`);
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Маркування Розетки не отримано.');
       const url = URL.createObjectURL(await res.blob());
