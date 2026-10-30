@@ -2931,7 +2931,8 @@ var docFop = (f) => {
   const { checkbox_login, checkbox_password, checkbox_license, checkbox_pin, ...rest } = f;
   return rest;
 };
-function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {}, services = {} }) {
+function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {
+}, shared: shared2 = {}, services = {} }) {
   const settings = () => loadSettings(db);
   shared2.receiptCache ||= /* @__PURE__ */ new Map();
   const receiptCache = shared2.receiptCache;
@@ -3014,6 +3015,44 @@ function mountNakladni(app, { db, fetchFn, onCleanup, shared: shared2 = {}, serv
     for (let k = 0; k < fresh.length; k += 100) await saveOrders2(await getOrdersBatch(fetchFn, creds, fresh.slice(k, k + 100)));
     return codes;
   }
+  const WARM_MS = 3 * 6e4;
+  async function warmIndex() {
+    const s = await settings();
+    const creds = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
+    if (!creds.subdomain || !creds.key) return { skipped: true };
+    const now = Date.now();
+    const claim = await db.run(
+      `INSERT INTO settings (key, value) VALUES ('orders_warm_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
+      [new Date(now).toISOString(), new Date(now - WARM_MS).toISOString()]
+    );
+    if (!claim.changes) return { fresh: true };
+    try {
+      const codes = await loadAccepted(creds, Math.max(1, Number(s.lpcrm_search_days) || 30));
+      return { indexed: codes.length };
+    } catch (e) {
+      await db.run(`UPDATE settings SET value = '' WHERE key = 'orders_warm_at'`);
+      if (e.pending) return { more: true };
+      throw e;
+    }
+  }
+  app.post("/api/invoice/warm", async (c) => {
+    need(c, "docs.view");
+    try {
+      return c.json(await warmIndex());
+    } catch {
+      return c.json({ failed: true });
+    }
+  });
+  onTick((c) => {
+    if (String(c?.req?.path || "").startsWith("/api/invoice")) return;
+    if (Date.now() - (shared2.warmTry || 0) < 6e4) return;
+    shared2.warmTry = Date.now();
+    const p = warmIndex().catch(() => 0);
+    try {
+      c?.executionCtx?.waitUntil(p);
+    } catch {
+    }
+  });
   const findById = (q, codes = null) => db.get(
     `SELECT o.code FROM order_keys k JOIN orders_index o ON o.code = k.code
      WHERE k.k = ? ${codes ? "AND o.code IN (SELECT value FROM json_each(?))" : ""} ORDER BY o.datetime DESC LIMIT 1`,

@@ -35,6 +35,7 @@ async function viewInvoice(orderId) {
     if (location.hash === `#/invoice/${encodeURIComponent(v)}`) loadInvoice(v);
     else location.hash = `#/invoice/${encodeURIComponent(v)}`;
   });
+  keepWarm();
   if (orderId) await loadInvoice(orderId);
   else {
     $('#invArea').innerHTML = `<div class="card empty"><div class="big">Введіть номер замовлення з LP-CRM</div>
@@ -42,9 +43,28 @@ async function viewInvoice(orderId) {
   }
 }
 
+// Поки сторінка відкрита, сервер у фоні довантажує нові прийняті замовлення з LP-CRM (раз на 3 хв),
+// тож номер, вставлений із CRM, відкривається за кілька секунд, без довгого першого пошуку.
+let warmTimer = 0;
+let searching = false;
+function keepWarm() {
+  clearTimeout(warmTimer);
+  const run = async () => {
+    const form = $('#orderForm');
+    if (!form || !document.contains(form)) return; // пішли зі сторінки
+    let r = {};
+    if (document.visibilityState === 'visible' && !searching) {
+      try { r = await api('POST', '/api/invoice/warm', {}); } catch { r = {}; }
+    }
+    warmTimer = setTimeout(run, r.more ? 5000 : 3 * 60e3);
+  };
+  run();
+}
+
 async function loadInvoice(orderId, fresh = false, wide = false) {
   const area = $('#invArea');
-  area.innerHTML = `<div class="card empty"><span class="spinner"></span> Шукаю замовлення №${esc(orderId)} серед «Прийнято»… <div class="small" style="margin-top:6px">Перший пошук може тривати до хвилини: програма завантажує прийняті замовлення з LP-CRM. Далі — кілька секунд.</div></div>`;
+  area.innerHTML = `<div class="card empty"><span class="spinner"></span> Шукаю замовлення №${esc(orderId)} серед «Прийнято»… <div class="small" style="margin-top:6px">Зазвичай кілька секунд. Якщо замовлення прийняли щойно — програма довантажить нові з LP-CRM, це трохи довше.</div></div>`;
+  searching = true;
   setPending((n) => { const el = $('#invArea .empty'); if (el) el.innerHTML = `<span class="spinner"></span> Шукаю замовлення №${esc(orderId)} у LP-CRM… (крок ${n + 1})`; });
   try {
     const qs = [fresh ? 'fresh=1' : '', wide ? 'wide=1' : ''].filter(Boolean).join('&');
@@ -58,6 +78,8 @@ async function loadInvoice(orderId, fresh = false, wide = false) {
     area.innerHTML = `<div class="alert bad"><b>Не вдалося отримати замовлення.</b><br>${esc(e.message)}
       ${ext ? `<div class="btn-row" style="margin-top:10px"><button class="btn primary" id="invWide">Перевірити за ${esc(e.data.extendDays)} днів</button></div>` : ''}</div>`;
     if (ext) $('#invWide').onclick = () => loadInvoice(orderId, false, true);
+  } finally {
+    searching = false;
   }
 }
 
