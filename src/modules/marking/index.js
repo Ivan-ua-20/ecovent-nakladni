@@ -471,5 +471,22 @@ export function mountMarking(app, { db, fetchFn, onCleanup }) {
     if (!acc) throw fail(400, 'Немає підключеного кабінету Нової пошти (Налаштування → Доставка: НП, Розетка, Prom, Епіцентр).');
     return npTracking(fetchFn, acc.api_key, t, String(phone || '').replace(/\D/g, '').slice(-12));
   }
-  return { trackTtn };
+  // Для розділу «Маркетплейси»: магазини, підключені тут (Розетка — логін кабінету продавця, Prom і Епіцентр — токени).
+  const SHOP_TABLES = { rozetka: 'rz_accounts', prom: 'prom_accounts', epc: 'epc_accounts' };
+  async function marketShops() {
+    const out = {};
+    for (const [mp, t] of Object.entries(SHOP_TABLES)) out[mp] = await db.all(`SELECT * FROM ${t} ORDER BY name, id`);
+    return out;
+  }
+  async function renameShop(mp, id, name, user) {
+    const t = SHOP_TABLES[mp];
+    const cur = t && await db.get(`SELECT id, name FROM ${t} WHERE id = ?`, [id]);
+    if (!cur) throw fail(404, 'Магазин не знайдено.');
+    const next = String(name || '').trim().slice(0, 100);
+    if (!next) throw fail(400, 'Вкажіть назву магазину.');
+    await db.run(`UPDATE ${t} SET name = ? WHERE id = ?`, [next, cur.id]);
+    await logAudit(db, { user, kind: mp === 'rozetka' ? 'rz' : mp, refId: cur.id, action: 'перейменовано магазин', changes: [{ field: 'name', from: cur.name, to: next }] });
+    return { id: cur.id, name: next };
+  }
+  return { trackTtn, marketShops, renameShop, rozetkaToken: rzToken };
 }

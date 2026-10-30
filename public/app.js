@@ -10,6 +10,7 @@ import { createRefsPages } from './pages/refs.js';
 import { createSettingsPages } from './pages/settings.js';
 import { createNpPages } from './pages/np.js';
 import { createCronPages } from './pages/cron.js';
+import { createMarketPages } from './pages/market.js';
 import { createRahunkyPages } from './pages/rahunky.js';
 import { createUsersPages } from './pages/users.js';
 import { createErrorsPages } from './pages/errors.js';
@@ -63,6 +64,11 @@ const SECTIONS = [
     { id: 'psettings', label: 'Налаштування' },
     { id: 'ptrash', label: 'Кошик' },
     { id: 'phelp', label: 'Інструкція' },
+  ] },
+  { id: 'market', label: 'Маркетплейси', perm: 'docs.view', home: 'mprz', tabs: [
+    { id: 'mprz', label: 'Розетка' },
+    { id: 'mpprom', label: 'Prom' },
+    { id: 'mpepc', label: 'Епіцентр' },
   ] },
   { id: 'retail', label: 'Рітейл', perm: 'docs.view', home: 'rzorders', tabs: [
     { id: 'rzorders', label: 'Розетка' },
@@ -269,6 +275,7 @@ const { viewFops, viewOffices, viewTemplates, viewInvFops } = createRefsPages(ct
 const { viewSettings, viewNakladniSettings, viewRahunkySettings } = createSettingsPages(ctx);
 const { viewNp } = createNpPages();
 const { viewCron } = createCronPages();
+const { viewMarket } = createMarketPages({ can });
 const { viewRahunky, viewRahunkyList } = createRahunkyPages(ctx);
 const { viewUsers } = createUsersPages(ctx);
 const { viewErrors } = createErrorsPages(ctx);
@@ -319,6 +326,9 @@ const routes = {
   pstatement: () => HOME.viewStatement(),
   b2bstatement: (pid) => HOME.viewStatement(pid),
   phelp: viewPartnerHelp,
+  mprz: (id) => viewMarket('rozetka', id),
+  mpprom: (id) => viewMarket('prom', id),
+  mpepc: (id) => viewMarket('epc', id),
   rzorders: () => RETAIL.viewOrders(),
   rzproducts: () => RETAIL.viewProducts(),
   rzsettings: () => RETAIL.viewSettings(),

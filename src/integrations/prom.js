@@ -19,10 +19,13 @@ async function send(fetchFn, token, path) {
 }
 
 // Останні замовлення компанії (найновіші першими).
-export async function promOrders(fetchFn, token, { limit = 20, dateFrom = '', status = '' } = {}) {
+// lastModifiedFrom — змінені після (UTC, 2015-04-28T12:50:34); lastId — сторінка: лише з id не вище за цей.
+export async function promOrders(fetchFn, token, { limit = 20, dateFrom = '', status = '', lastModifiedFrom = '', lastId = 0 } = {}) {
   const q = new URLSearchParams({ limit: String(limit) });
   if (dateFrom) q.set('date_from', dateFrom);
   if (status) q.set('status', status);
+  if (lastModifiedFrom) q.set('last_modified_from', lastModifiedFrom);
+  if (lastId) q.set('last_id', String(lastId));
   return (await send(fetchFn, token, `/orders/list?${q}`)).orders || [];
 }
 
