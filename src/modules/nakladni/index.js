@@ -129,7 +129,7 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {}, 
   // Не частіше разу на 3 хв на всі екземпляри (бронь у settings). За раз — список і щонайбільше одна пачка (2 запити),
   // і лише коли LP-CRM ніхто не чекає: пошук накладної не повинен стояти в черзі за фоновими запитами.
   // Не встигли все — бронь знімаємо, наступний виклик продовжить (збережені пачки не перечитуються).
-  const WARM_MS = 3 * 60e3;
+  const WARM_MS = 2.5 * 60e3; // трохи менше за розклад Worker'а (3 хв), щоб кожен його запуск міг виконати задачу
   async function warmIndex() {
     const s = await settings();
     const creds = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
