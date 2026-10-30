@@ -16,6 +16,17 @@ const docFop = (f) => {
   return rest;
 };
 
+// Час етапів пошуку накладної — у заголовку Server-Timing (видно в інструментах розробника браузера).
+const timer = () => {
+  let last = Date.now();
+  const parts = [];
+  return {
+    mark(name) { const now = Date.now(); parts.push(`${name};dur=${now - last}`); last = now; },
+    headers: () => ({ 'Server-Timing': parts.join(', ') }),
+  };
+};
+const NO_TIMER = { mark() {} };
+
 export function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {}, onCron = () => {}, cronActive = async () => false, shared = {}, services = {} }) {
   const settings = () => loadSettings(db);
   shared.receiptCache ||= new Map();
@@ -183,7 +194,7 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {}, 
     { status: 404, extra: { canExtend: Boolean(days) && days < maxDays, extendDays: maxDays } },
   );
 
-  async function resolveCode(q, s, creds) {
+  async function resolveCode(q, s, creds, tm = NO_TIMER) {
     if (!ID_RE.test(q)) {
       throw fail(400, 'Неправильний формат номера замовлення: введіть ID замовлення з LP-CRM — лише цифри, напр. 108008 (не код ID-o, не телефон і не ТТН).');
     }
@@ -191,21 +202,24 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {}, 
     const maxDays = days;
     // Уже в індексі (прийняте раніше) — без списку з CRM; актуальний статус перевіряє loadOrder.
     let row = await findById(q);
-    if (!row) row = await findById(q, await loadAccepted(creds, days));
+    tm.mark(row ? 'index' : 'index-miss');
+    if (!row) { row = await findById(q, await loadAccepted(creds, days)); tm.mark('accepted'); }
     if (!row) throw notAccepted(q, days, maxDays);
     return { code: row.code, days, maxDays };
   }
 
-  async function loadOrder(orderId, s, fresh = false) {
+  async function loadOrder(orderId, s, fresh = false, tm = NO_TIMER) {
     if (orderId === 'demo' || orderId === '0') {
       return { rawOrder: DEMO_ORDER, demo: true };
     }
     const creds = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
     if (!creds.subdomain || !creds.key) throw new Error('Не налаштовано LP-CRM: вкажіть піддомен і API-ключ у розділі «Налаштування».');
-    const { code, maxDays } = await resolveCode(orderId, s, creds);
+    const { code, maxDays } = await resolveCode(orderId, s, creds, tm);
     const { order, raw } = await getOrder(fetchFn, creds, code, { fresh });
+    tm.mark('crm-order');
     // Актуальний статус у CRM: замовлення могли вже перевести з «Прийнято» в інший статус.
     const { ids, map } = await acceptedIds(creds);
+    tm.mark('statuses');
     const st = String(order.status ?? order.status_id ?? '');
     if (!ids.includes(st)) throw notAccepted(orderId, 0, maxDays, statusName(map, st));
     const note = '';
@@ -213,12 +227,13 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {}, 
     const list = Array.isArray(prods) ? prods : Object.values(prods);
     const missing = list.filter((p) => !(p.name || p.title || p.product_name)).map((p) => String(p.product_id ?? p.id ?? ''));
     const productNames = missing.length ? await getProducts(fetchFn, creds, missing) : {};
+    tm.mark('products');
     return { rawOrder: order, crmRaw: raw, productNames, demo: false, code, note };
   }
 
-  async function buildInvoice(orderId, { skipCheckbox = false, fresh = false } = {}) {
+  async function buildInvoice(orderId, { skipCheckbox = false, fresh = false, tm = NO_TIMER } = {}) {
     const s = await settings();
-    const { rawOrder, crmRaw, productNames, demo, code, note } = await loadOrder(orderId, s, fresh);
+    const { rawOrder, crmRaw, productNames, demo, code, note } = await loadOrder(orderId, s, fresh, tm);
     const crmOrder = normalizeOrder(rawOrder, productNames);
     if (demo) crmOrder.orderId = 'demo';
     if (!crmOrder.orderId) crmOrder.orderId = String(orderId);
@@ -266,6 +281,7 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {}, 
       }
     }
 
+    tm.mark('checkbox');
     // 2) Відділ
     const office = crmOrder.office ? await db.get(`SELECT * FROM offices WHERE office_id = ?`, [crmOrder.office]) : null;
     const officeFop = office?.fop_id ? byId(office.fop_id) : null;
@@ -368,16 +384,20 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {}, 
 
   app.get('/api/invoice/:orderId', async (c) => {
     const orderId = c.req.param('orderId').trim().replace(/^№/, '');
-    const inv = await buildInvoice(orderId, { fresh: c.req.query('fresh') === '1' });
+    const tm = timer();
+    const inv = await buildInvoice(orderId, { fresh: c.req.query('fresh') === '1', tm });
     // Замовлення від B2B-партнера: накладна не формується (версії не зберігаємо) — лише маркування, яке додав партнер.
     const b2b = await services.b2b?.crmOrderInfo?.({ ids: [orderId, inv.crmOrder?.orderId, inv.crmOrder?.shortId, inv.crmCode], comment: inv.crmOrder?.comment }).catch(() => null);
-    if (b2b) return c.json({ ...inv, b2b, versionsCount: 0 });
+    tm.mark('b2b');
+    if (b2b) return c.json({ ...inv, b2b, versionsCount: 0 }, 200, tm.headers());
     // Замовлення Розетки (дропшипінг): накладну ФОП не формуємо — маркування й супровідні документи з Розетки.
     const rzs = await services.retail?.orderInfo?.({ ids: [orderId, inv.crmOrder?.orderId, inv.crmOrder?.shortId, inv.crmCode], comment: inv.crmOrder?.comment, ttn: inv.order?.delivery?.ttn || inv.crmOrder?.delivery?.ttn }).catch(() => null);
-    if (rzs) return c.json({ ...inv, rzs, versionsCount: 0 });
+    tm.mark('rozetka');
+    if (rzs) return c.json({ ...inv, rzs, versionsCount: 0 }, 200, tm.headers());
     await trackChanges(orderId, inv, userName(c));
     const n = await db.get(`SELECT COUNT(*) AS n FROM versions WHERE order_id = ?`, [orderId]);
-    return c.json({ ...inv, versionsCount: n?.n || 0 });
+    tm.mark('versions');
+    return c.json({ ...inv, versionsCount: n?.n || 0 }, 200, tm.headers());
   });
 
   app.put('/api/invoice/:orderId/prefs', async (c) => {

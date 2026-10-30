@@ -2605,6 +2605,7 @@ async function throttled(task) {
     return await task();
   } finally {
     lastAt = Date.now();
+    nextAt = Math.max(nextAt, lastAt + MIN_GAP_MS);
   }
 }
 var lpcrmBusy = (recentMs = 5e3) => nextAt - MIN_GAP_MS > Date.now() || Date.now() - lastAt < recentMs;
@@ -2932,6 +2933,20 @@ var docFop = (f) => {
   const { checkbox_login, checkbox_password, checkbox_license, checkbox_pin, ...rest } = f;
   return rest;
 };
+var timer = () => {
+  let last = Date.now();
+  const parts = [];
+  return {
+    mark(name) {
+      const now = Date.now();
+      parts.push(`${name};dur=${now - last}`);
+      last = now;
+    },
+    headers: () => ({ "Server-Timing": parts.join(", ") })
+  };
+};
+var NO_TIMER = { mark() {
+} };
 function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {
 }, onCron = () => {
 }, cronActive = async () => false, shared: shared2 = {}, services = {} }) {
@@ -3083,26 +3098,32 @@ function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {
     new Error(`\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2116 ${q} \u043D\u0435\u043C\u0430\u0454 \u0432 CRM \u0443 \u0441\u0442\u0430\u0442\u0443\u0441\u0456 \xAB\u041F\u0440\u0438\u0439\u043D\u044F\u0442\u043E\xBB${days ? ` \u0437\u0430 \u043E\u0441\u0442\u0430\u043D\u043D\u0456 ${days} \u0434\u043D\u0456\u0432` : ""}${now ? ` (\u0437\u0430\u0440\u0430\u0437: \xAB${now}\xBB)` : ""}.`),
     { status: 404, extra: { canExtend: Boolean(days) && days < maxDays, extendDays: maxDays } }
   );
-  async function resolveCode(q, s, creds) {
+  async function resolveCode(q, s, creds, tm = NO_TIMER) {
     if (!ID_RE2.test(q)) {
       throw fail(400, "\u041D\u0435\u043F\u0440\u0430\u0432\u0438\u043B\u044C\u043D\u0438\u0439 \u0444\u043E\u0440\u043C\u0430\u0442 \u043D\u043E\u043C\u0435\u0440\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F: \u0432\u0432\u0435\u0434\u0456\u0442\u044C ID \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0437 LP-CRM \u2014 \u043B\u0438\u0448\u0435 \u0446\u0438\u0444\u0440\u0438, \u043D\u0430\u043F\u0440. 108008 (\u043D\u0435 \u043A\u043E\u0434 ID-o, \u043D\u0435 \u0442\u0435\u043B\u0435\u0444\u043E\u043D \u0456 \u043D\u0435 \u0422\u0422\u041D).");
     }
     const days = Math.max(1, Number(s.lpcrm_search_days) || 30);
     const maxDays = days;
     let row = await findById(q);
-    if (!row) row = await findById(q, await loadAccepted(creds, days));
+    tm.mark(row ? "index" : "index-miss");
+    if (!row) {
+      row = await findById(q, await loadAccepted(creds, days));
+      tm.mark("accepted");
+    }
     if (!row) throw notAccepted(q, days, maxDays);
     return { code: row.code, days, maxDays };
   }
-  async function loadOrder(orderId, s, fresh = false) {
+  async function loadOrder(orderId, s, fresh = false, tm = NO_TIMER) {
     if (orderId === "demo" || orderId === "0") {
       return { rawOrder: DEMO_ORDER, demo: true };
     }
     const creds = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
     if (!creds.subdomain || !creds.key) throw new Error("\u041D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E LP-CRM: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u043F\u0456\u0434\u0434\u043E\u043C\u0435\u043D \u0456 API-\u043A\u043B\u044E\u0447 \u0443 \u0440\u043E\u0437\u0434\u0456\u043B\u0456 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\xBB.");
-    const { code, maxDays } = await resolveCode(orderId, s, creds);
+    const { code, maxDays } = await resolveCode(orderId, s, creds, tm);
     const { order: order2, raw: raw2 } = await getOrder(fetchFn, creds, code, { fresh });
+    tm.mark("crm-order");
     const { ids, map } = await acceptedIds(creds);
+    tm.mark("statuses");
     const st = String(order2.status ?? order2.status_id ?? "");
     if (!ids.includes(st)) throw notAccepted(orderId, 0, maxDays, statusName(map, st));
     const note = "";
@@ -3110,11 +3131,12 @@ function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {
     const list = Array.isArray(prods) ? prods : Object.values(prods);
     const missing = list.filter((p) => !(p.name || p.title || p.product_name)).map((p) => String(p.product_id ?? p.id ?? ""));
     const productNames = missing.length ? await getProducts(fetchFn, creds, missing) : {};
+    tm.mark("products");
     return { rawOrder: order2, crmRaw: raw2, productNames, demo: false, code, note };
   }
-  async function buildInvoice(orderId, { skipCheckbox = false, fresh = false } = {}) {
+  async function buildInvoice(orderId, { skipCheckbox = false, fresh = false, tm = NO_TIMER } = {}) {
     const s = await settings();
-    const { rawOrder, crmRaw, productNames, demo, code, note } = await loadOrder(orderId, s, fresh);
+    const { rawOrder, crmRaw, productNames, demo, code, note } = await loadOrder(orderId, s, fresh, tm);
     const crmOrder = normalizeOrder(rawOrder, productNames);
     if (demo) crmOrder.orderId = "demo";
     if (!crmOrder.orderId) crmOrder.orderId = String(orderId);
@@ -3153,6 +3175,7 @@ function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {
         warnings.push(`Checkbox: ${e.message}`);
       }
     }
+    tm.mark("checkbox");
     const office = crmOrder.office ? await db.get(`SELECT * FROM offices WHERE office_id = ?`, [crmOrder.office]) : null;
     const officeFop = office?.fop_id ? byId(office.fop_id) : null;
     if (crmOrder.office && !office) warnings.push(`\u0412\u0456\u0434\u0434\u0456\u043B ${crmOrder.office} \u043D\u0435 \u0434\u043E\u0434\u0430\u043D\u043E \u0432 \u0434\u043E\u0432\u0456\u0434\u043D\u0438\u043A \u0432\u0456\u0434\u0434\u0456\u043B\u0456\u0432.`);
@@ -3267,14 +3290,18 @@ function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {
   }
   app.get("/api/invoice/:orderId", async (c) => {
     const orderId = c.req.param("orderId").trim().replace(/^№/, "");
-    const inv = await buildInvoice(orderId, { fresh: c.req.query("fresh") === "1" });
+    const tm = timer();
+    const inv = await buildInvoice(orderId, { fresh: c.req.query("fresh") === "1", tm });
     const b2b = await services.b2b?.crmOrderInfo?.({ ids: [orderId, inv.crmOrder?.orderId, inv.crmOrder?.shortId, inv.crmCode], comment: inv.crmOrder?.comment }).catch(() => null);
-    if (b2b) return c.json({ ...inv, b2b, versionsCount: 0 });
+    tm.mark("b2b");
+    if (b2b) return c.json({ ...inv, b2b, versionsCount: 0 }, 200, tm.headers());
     const rzs = await services.retail?.orderInfo?.({ ids: [orderId, inv.crmOrder?.orderId, inv.crmOrder?.shortId, inv.crmCode], comment: inv.crmOrder?.comment, ttn: inv.order?.delivery?.ttn || inv.crmOrder?.delivery?.ttn }).catch(() => null);
-    if (rzs) return c.json({ ...inv, rzs, versionsCount: 0 });
+    tm.mark("rozetka");
+    if (rzs) return c.json({ ...inv, rzs, versionsCount: 0 }, 200, tm.headers());
     await trackChanges(orderId, inv, userName(c));
     const n = await db.get(`SELECT COUNT(*) AS n FROM versions WHERE order_id = ?`, [orderId]);
-    return c.json({ ...inv, versionsCount: n?.n || 0 });
+    tm.mark("versions");
+    return c.json({ ...inv, versionsCount: n?.n || 0 }, 200, tm.headers());
   });
   app.put("/api/invoice/:orderId/prefs", async (c) => {
     need(c, "docs.edit");
