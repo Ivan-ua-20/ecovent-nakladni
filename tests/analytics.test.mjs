@@ -203,6 +203,25 @@ assert.equal(q4.target.applicable, false, 'таргет не показуєть�
 const q5 = await req('POST', '/api/an/query', { from, to: today, cats: [31, 32] });
 assert.equal(q5.kpi.cur.cnt, expect.filter((o) => o.products.some((l) => ['701', '702'].includes(l.product_id))).length, 'кілька категорій');
 
+// ---------- 5а. Конкретні товари: скільки штук за період (і раніше), усі продані — не лише 20 ----------
+const qtyOf = (pid, list) => list.reduce((s, o) => s + o.products.filter((l) => l.product_id === pid).reduce((t, l) => t + Number(l.quantity), 0), 0);
+const qp = await req('POST', '/api/an/query', { from, to: today, cmpFrom: prevFrom, cmpTo, products: [965, 452] });
+const t965 = qp.top.find((r) => r.id === 965);
+assert.equal(t965.qty, qtyOf('965', expect), 'шт товару за період');
+assert.equal(qp.kpi.cur.cnt, expect.filter((o) => o.products.some((l) => ['965', '452'].includes(l.product_id))).length, 'лише замовлення з вибраними товарами');
+assert.ok(qp.top.every((r) => [965, 452].includes(r.id)), 'у таблиці — лише вибрані товари');
+assert.ok(t965.prevQty != null, 'шт у періоді порівняння');
+assert.deepEqual(qp.options.products.map((x) => x.id), [965, 452]);
+// товар без продажів — теж у таблиці з 0
+await db.run(`INSERT INTO an_products (product_id, name, brand_id, fetched) VALUES (8899, 'Тепловентилятор Warmix 1500', 0, 1)`);
+const q0 = await req('POST', '/api/an/query', { from, to: today, products: [8899] });
+assert.deepEqual(q0.top.map((r) => [r.id, r.qty]), [[8899, 0]]);
+assert.equal(q0.options.products[0].name, 'Тепловентилятор Warmix 1500');
+await db.run(`DELETE FROM an_products WHERE product_id = 8899`);
+const found = await req('GET', `/api/an/product-search?q=${encodeURIComponent(PRODUCTS[965].name.slice(0, 6).toLowerCase())}`);
+assert.ok(found.some((x) => x.id === 965), 'пошук товару за назвою без регістру');
+assert.ok((await req('GET', '/api/an/product-search?q=965')).some((x) => x.id === 965), 'пошук за ID');
+
 // ---------- 6. Таргети ----------
 const month = today.slice(0, 7);
 await req('PUT', '/api/an/targets', { month, rows: [{ kind: 'src', ref_id: rozetka.id, amount: 300000 }, { kind: 'src', ref_id: mp.sources[1].id, amount: 100000 }, { kind: 'dept', ref_id: cfg.depts[1].id, amount: 50000 }], copyMonths: 2 });

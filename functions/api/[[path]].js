@@ -4521,6 +4521,14 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     }
     return c.json({ ok: true });
   });
+  app.get("/api/an/product-search", async (c) => {
+    const q = String(c.req.query("q") || "").trim().slice(0, 60);
+    if (q.length < 2) return c.json([]);
+    const v = likeVariants(q);
+    const rows = await db.all(`SELECT p.product_id AS id, p.name, b.name AS brand FROM an_products p LEFT JOIN an_brands b ON b.id = p.brand_id
+      WHERE p.product_id = ? OR ${v.map(() => "p.name LIKE ?").join(" OR ")} ORDER BY p.name LIMIT 30`, [parseInt(q, 10) || 0, ...v]);
+    return c.json(rows.map((r) => ({ id: r.id, name: r.name || `\u0422\u043E\u0432\u0430\u0440 ${r.id}`, brand: r.brand || "\u0406\u043D\u0448\u0456" })));
+  });
   app.post("/api/an/query", async (c) => {
     const b = await c.req.json();
     const st = await getSt();
@@ -4535,18 +4543,20 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       sources: ints(b.sources),
       managers: (Array.isArray(b.managers) ? b.managers : []).map(low).filter(Boolean).slice(0, 40),
       brands: ints(b.brands),
-      cats: ints(b.cats)
+      cats: ints(b.cats),
+      // Конкретні товари (ID LP-CRM) — «скільки штук продалось за період».
+      products: (Array.isArray(b.products) ? b.products : []).map((x) => parseInt(x, 10)).filter((x) => x > 0).slice(0, 100)
     };
     const own = c.get("anOwn");
     if (own) f.managers = own.length ? own : [""];
-    const itemLevel = f.brands.length > 0 || f.cats.length > 0;
+    const itemLevel = f.brands.length > 0 || f.cats.length > 0 || f.products.length > 0;
     const ok = st.okStatuses.map(Number);
     const rf = st.refuseStatuses.map(Number);
     const tracked = [...ok, ...rf];
     const ph = (a) => a.map(() => "?").join(",");
     const rfExpr = `(CASE WHEN o.status IN (${rf.join(",") || "-1"}) THEN 1 ELSE 0 END)`;
     const ver = (await db.get(`SELECT value FROM settings WHERE key = 'an_ver'`))?.value || "0";
-    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today: today3, kpi: 4 }));
+    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today: today3, kpi: 5 }));
     const hit = await db.get(`SELECT value FROM an_cache WHERE key = ?`, [cacheKey]);
     if (hit) return c.body(hit.value, 200, { "content-type": "application/json; charset=UTF-8" });
     function base(range, { items = itemLevel, skipCats = false } = {}) {
@@ -4575,6 +4585,10 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
           where.push(`COALESCE(p.cat_manual, p.category_id, 0) IN (${ph(f.cats)})`);
           params.push(...f.cats);
         }
+        if (f.products.length) {
+          where.push(`i.product_id IN (${ph(f.products)})`);
+          params.push(...f.products);
+        }
       }
       return { from: `FROM an_orders o ${join} WHERE ${where.join(" AND ")}`, params };
     }
@@ -4589,7 +4603,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       const qi = base(range, { items: true });
       const topJob = full ? db.all(`SELECT i.product_id AS id, MAX(p.name) AS name, MAX(p.brand_id) AS brand, SUM(i.amount) AS rev,
                 SUM(i.qty) AS qty, SUM(CASE WHEN ${rfExpr} = 1 THEN i.qty ELSE 0 END) AS rqty
-                ${qi.from} GROUP BY i.product_id ORDER BY rev DESC LIMIT 20`, qi.params) : Promise.resolve([]);
+                ${qi.from} GROUP BY i.product_id ORDER BY rev DESC LIMIT 2000`, qi.params) : Promise.resolve([]);
       if (daysBetween(p.from, p.to) <= 92) {
         const [rows, oi, top3] = await Promise.all([
           db.all(`SELECT o.day AS day, o.dept AS dept, o.src AS src, o.user AS user, o.status AS status, o.deliv AS deliv, ${orderMeasures(itemLevel)} ${q.from}
@@ -4648,7 +4662,8 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     }
     const [cur, prev, depts, sources, managers, brands, categories, targets, catOptions] = await Promise.all([
       period({ from, to }, true),
-      cmp ? period(cmp, false) : null,
+      // вибрані товари — і для порівняння (скільки штук було в попередньому періоді)
+      cmp ? period(cmp, f.products.length > 0) : null,
       db.all(`SELECT id, name, sort FROM an_depts ORDER BY sort, id`),
       db.all(`SELECT id, dept_id, name, sort FROM an_sources ORDER BY sort, id`),
       db.all(`SELECT login, name, dept_id FROM an_managers`),
@@ -4863,7 +4878,20 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       prevRev: prev ? round2(prevCats.get(r.id)?.rev || 0) : null,
       prevNet: prev ? round2(prevCats.get(r.id)?.net || 0) : null
     })).sort((a, b2) => b2.rev - a.rev);
-    const top = cur.top.map((r) => ({ id: r.id, name: r.name || `\u0422\u043E\u0432\u0430\u0440 ${r.id}`, brand: r.brand ? bName.get(r.brand) || "\u0406\u043D\u0448\u0456" : "\u0406\u043D\u0448\u0456", rev: round2(r.rev), qty: r.qty, rqty: r.rqty }));
+    const prevTop = new Map((prev?.top || []).map((r) => [r.id, r]));
+    const top = cur.top.map((r) => ({
+      id: r.id,
+      name: r.name || `\u0422\u043E\u0432\u0430\u0440 ${r.id}`,
+      brand: r.brand ? bName.get(r.brand) || "\u0406\u043D\u0448\u0456" : "\u0406\u043D\u0448\u0456",
+      rev: round2(r.rev),
+      qty: r.qty,
+      rqty: r.rqty,
+      ...f.products.length && prev ? { prevQty: prevTop.get(r.id)?.qty || 0 } : {}
+    }));
+    const picked = f.products.length ? await db.all(`SELECT product_id AS id, name, brand_id FROM an_products WHERE product_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(f.products)]) : [];
+    for (const p of picked) {
+      if (!top.some((t) => t.id === p.id)) top.push({ id: p.id, name: p.name || `\u0422\u043E\u0432\u0430\u0440 ${p.id}`, brand: p.brand_id ? bName.get(p.brand_id) || "\u0406\u043D\u0448\u0456" : "\u0406\u043D\u0448\u0456", rev: 0, qty: 0, rqty: 0, ...prev ? { prevQty: prevTop.get(p.id)?.qty || 0 } : {} });
+    }
     const last = await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`);
     const out = JSON.stringify({
       own: own ? { logins: own } : null,
@@ -4891,6 +4919,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
           ...byManager.filter((m) => !mgrNames.has(m.login)).map((m) => [m.login, { login: m.login, name: m.login, dept_id: null }])
         ]).values()],
         brands: [...brands.map((x) => ({ id: x.id, name: x.name })), { id: 0, name: "\u0406\u043D\u0448\u0456" }],
+        products: f.products.map((id) => ({ id, name: picked.find((p) => p.id === id)?.name || `\u0422\u043E\u0432\u0430\u0440 ${id}` })),
         cats: catOptions.map((r) => ({ id: r.id, name: r.id ? cName.get(r.id) || `\u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044F ${r.id}` : "\u0411\u0435\u0437 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457" })).sort((a, b2) => (a.id === 0) - (b2.id === 0) || a.name.localeCompare(b2.name, "uk"))
       },
       lastSync: last?.value || ""

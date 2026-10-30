@@ -41,7 +41,7 @@ export function createAnalyticsUI(ctx) {
   const full = () => ctx.can('analytics'); // менеджер (без цього права) бачить лише свої замовлення
 
   // ---------- стан інтерфейсу (запам'ятовується в браузері) ----------
-  const DEF = { period: 'cm', from: '', to: '', cmpMode: 'auto', cmpFrom: '', cmpTo: '', depts: [], sources: [], managers: [], brands: [], cats: [], metric: 'rev', cumulative: true, showTarget: true, showCmp: true, table: false, collapsed: [], sort: {} };
+  const DEF = { period: 'cm', from: '', to: '', cmpMode: 'auto', cmpFrom: '', cmpTo: '', depts: [], sources: [], managers: [], brands: [], cats: [], products: [], metric: 'rev', cumulative: true, showTarget: true, showCmp: true, table: false, collapsed: [], sort: {} };
   let ui = { ...DEF };
   try { ui = { ...DEF, ...JSON.parse(localStorage.getItem(LS_KEY) || '{}') }; } catch { /* немає сховища */ }
   // Один раз: «Динаміка» за замовчуванням — сума з відмовами й поверненнями (раніше збережено «Оборот без відмов»).
@@ -262,7 +262,7 @@ export function createAnalyticsUI(ctx) {
     try {
       const d = await api('POST', '/api/an/query', {
         from: r.from, to: r.to, cmpFrom: r.cmpFrom, cmpTo: r.cmpTo,
-        depts: ui.depts, sources: ui.sources, managers: ui.managers, brands: ui.brands, cats: ui.cats,
+        depts: ui.depts, sources: ui.sources, managers: ui.managers, brands: ui.brands, cats: ui.cats, products: ui.products,
       });
       if (seq !== reqSeq || !$('#anBody')) return;
       const compareChanged = lastData && lastData.compareEnabled !== d.compareEnabled;
@@ -304,11 +304,11 @@ export function createAnalyticsUI(ctx) {
     const mgrOpts = o.managers.filter((m) => !deptSel.length || deptSel.includes(m.dept_id) || ui.managers.includes(m.login));
     const chip = (key, val, label, on) => `<button class="chip ${on ? 'on' : ''}" data-f="${key}" data-v="${esc(val)}" aria-pressed="${on}">${esc(label)}</button>`;
     const row = (title, html, hint = '') => (html ? `<div class="f-row"><span class="f-title">${title}</span><div class="f-chips">${html}</div>${hint}</div>` : '');
-    const active = ['depts', 'sources', 'managers', 'brands', 'cats'].reduce((a, k) => a + ui[k].length, 0);
+    const active = ['depts', 'sources', 'managers', 'brands', 'cats', 'products'].reduce((a, k) => a + ui[k].length, 0);
     const names = (key, list, id, label) => ui[key].map((v) => list.find((x) => x[id] === v)?.[label] ?? v);
     const picked = [
       ...names('depts', o.depts, 'id', 'name'), ...names('sources', o.sources, 'id', 'name'), ...names('managers', o.managers, 'login', 'name'),
-      ...names('brands', o.brands, 'id', 'name'), ...names('cats', o.cats, 'id', 'name'),
+      ...names('brands', o.brands, 'id', 'name'), ...names('cats', o.cats, 'id', 'name'), ...names('products', o.products || [], 'id', 'name'),
     ];
     const box = $('#anFilters');
     box.innerHTML = `
@@ -319,12 +319,43 @@ export function createAnalyticsUI(ctx) {
       ${d.own ? '' : row('Менеджер', mgrOpts.map((x) => chip('managers', x.login, x.name, ui.managers.includes(x.login))).join(''))}
       ${row('Бренд', o.brands.map((x) => chip('brands', x.id, x.name, ui.brands.includes(x.id))).join(''))}
       ${row('Категорія', o.cats.map((x) => chip('cats', x.id, x.name, ui.cats.includes(x.id))).join(''), ui.brands.length ? '<span class="f-hint">категорії вибраних брендів</span>' : '')}
+      <div class="f-row"><span class="f-title">Товари</span><div class="f-chips">
+        ${(o.products || []).map((x) => `<button class="chip on" data-f="products" data-v="${x.id}" aria-pressed="true" title="Прибрати">${esc(x.name)} ✕</button>`).join('')}
+        <span class="prod-pick"><label class="sr-only" for="anProdQ">Додати товар</label><input id="anProdQ" type="search" autocomplete="off" placeholder="+ Товар: назва або ID"><span id="anProdRes" class="prod-res" hidden></span></span>
+      </div></div>
       <div class="f-foot"><span class="small muted">Можна вибирати кілька значень у кожному рядку. Клік по рядку в таблицях нижче теж додає фільтр.</span></div>`;
     $$('[data-f]', box).forEach((b) => (b.onclick = () => toggle(b.dataset.f, b.dataset.v)));
+    wireProductPick();
     box.classList.remove('collapsed');
     collapsible(box.parentElement);
     const rs = $('#anReset');
-    if (rs) rs.onclick = () => { ui.depts = []; ui.sources = []; ui.managers = []; ui.brands = []; ui.cats = []; persist(); load(); };
+    if (rs) rs.onclick = () => { ui.depts = []; ui.sources = []; ui.managers = []; ui.brands = []; ui.cats = []; ui.products = []; persist(); load(); };
+  }
+
+  // Пошук товару для фільтра «Товари»: вибраний товар додається до фільтра (усі розділи нижче — лише по ньому).
+  function wireProductPick() {
+    const inp = $('#anProdQ');
+    const box = $('#anProdRes');
+    if (!inp) return;
+    let t = 0;
+    let seq = 0;
+    inp.oninput = () => {
+      clearTimeout(t);
+      t = setTimeout(async () => {
+        const q = inp.value.trim();
+        if (q.length < 2) { box.hidden = true; return; }
+        const my = ++seq;
+        let rows = [];
+        try { rows = await api('GET', `/api/an/product-search?q=${encodeURIComponent(q)}`); } catch { rows = []; }
+        if (my !== seq) return;
+        box.innerHTML = rows.length
+          ? rows.map((r) => `<button type="button" class="prod-opt" data-pid="${r.id}"${ui.products.includes(r.id) ? ' disabled' : ''}><b>${esc(r.name)}</b><span>${esc(r.brand)} · ID ${r.id}</span></button>`).join('')
+          : '<span class="prod-none">Нічого не знайдено</span>';
+        box.hidden = false;
+        $$('[data-pid]', box).forEach((b) => (b.onclick = () => { box.hidden = true; inp.value = ''; toggle('products', b.dataset.pid); }));
+      }, 250);
+    };
+    inp.onkeydown = (e) => { if (e.key === 'Escape') { box.hidden = true; inp.blur(); } };
   }
 
   function toggle(key, raw) {
@@ -428,6 +459,18 @@ export function createAnalyticsUI(ctx) {
     $('#anTableBtn').onclick = () => { ui.table = !ui.table; persist(); renderBody(lastData); };
     $$('[data-row]', $('#anBody')).forEach((tr) => (tr.onclick = () => toggle(tr.dataset.key, tr.dataset.row)));
     $$('[data-sort]', $('#anBody')).forEach((b) => (b.onclick = (e) => { e.stopPropagation(); onSort(b.dataset.sort, b.dataset.k); }));
+    // Пошук у таблиці товарів: показує всі збіги (навіть сховані «Показати ще»); порожній — як було.
+    const topQ = $('#anTopQ');
+    if (topQ) {
+      topQ.oninput = () => {
+        const q = topQ.value.trim().toLowerCase();
+        const card = topQ.closest('.card');
+        const more = card.querySelector('.pg-more');
+        if (!q) { renderBody(lastData); return; }
+        for (const tr of card.querySelectorAll('tbody tr[data-name]')) { tr.classList.remove('pg-hidden'); tr.hidden = !tr.dataset.name.includes(q); }
+        if (more) more.hidden = true;
+      };
+    }
     $$('[data-row]', $('#anBody')).forEach((tr) => (tr.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(tr.dataset.key, tr.dataset.row); } }));
     $$('.card', $('#anBody')).forEach((card) => { const h = $('h3', card); if (h && !card.dataset.col) card.dataset.col = h.textContent.trim(); });
     collapsible($('#anBody'));
@@ -479,7 +522,8 @@ export function createAnalyticsUI(ctx) {
     qty: (r) => r.qty || 0,
     avg: (r) => r.avg || 0,
     rqty: (r) => r.rqty || 0,
-    brand: (r) => String(r.brand || '').toLowerCase(),
+    prevQty: (r) => r.prevQty || 0,
+    brand:(r) => String(r.brand || '').toLowerCase(),
     refuse: (r) => (r.cnt ? (r.rcnt || 0) / r.cnt : 0),
     dyn: (r) => { const v = change(r.rev, r.prevRev); return v == null ? (r.rev ? Infinity : -Infinity) : v; },
     plan: (r) => (r.plan ? (r.net / r.plan) : -1),
@@ -604,10 +648,13 @@ export function createAnalyticsUI(ctx) {
 
   function topTable(rows) {
     if (!rows.length) return '';
-    return `<div class="card"><h3>Топ товарів</h3><div class="table-wrap"><table class="list an-table">
-      <thead><tr><th>${sortBtn('top', 'name', 'Товар')}</th><th class="hide-m">${sortBtn('top', 'brand', 'Бренд')}</th><th class="r">${sortBtn('top', 'qty', 'Шт')}</th><th class="r">${sortBtn('top', 'rev', 'Сума')}</th><th class="r hide-m">${sortBtn('top', 'rqty', 'Відмови, шт')}</th></tr></thead>
-      <tbody>${sortRows('top', rows).map((r) => `<tr><td>${esc(r.name)}<div class="small muted show-m">${esc(r.brand || '—')}${r.rqty ? ` · відмов ${int(r.rqty)}` : ''}</div></td><td class="muted hide-m">${esc(r.brand || '—')}</td><td class="r">${int(r.qty)}</td><td class="r">${uah(r.rev)}</td><td class="r hide-m">${int(r.rqty)}</td></tr>`).join('')}</tbody>
-    </table></div><div class="small muted">Сума товару — з урахуванням знижки замовлення (розподіленої пропорційно).</div></div>`;
+    const prevCol = rows.some((r) => r.prevQty != null);
+    return `<div class="card"><h3>Товари · ${rows.length}</h3>
+      <div class="btn-row" style="margin-bottom:8px"><label class="sr-only" for="anTopQ">Пошук у таблиці товарів</label><input id="anTopQ" type="search" placeholder="Пошук товару в таблиці" style="max-width:320px"></div>
+      <div class="table-wrap"><table class="list an-table">
+      <thead><tr><th>${sortBtn('top', 'name', 'Товар')}</th><th class="hide-m">${sortBtn('top', 'brand', 'Бренд')}</th><th class="r">${sortBtn('top', 'qty', 'Шт')}</th>${prevCol ? `<th class="r">${sortBtn('top', 'prevQty', 'Шт раніше')}</th>` : ''}<th class="r">${sortBtn('top', 'rev', 'Сума')}</th><th class="r hide-m">${sortBtn('top', 'rqty', 'Відмови, шт')}</th></tr></thead>
+      <tbody>${sortRows('top', rows).map((r) => `<tr class="click ${ui.products.includes(r.id) ? 'on' : ''}" data-row="${r.id}" data-key="products" data-name="${esc(String(r.name).toLowerCase())}" tabindex="0"><td>${esc(r.name)}<div class="small muted show-m">${esc(r.brand || '—')}${r.rqty ? ` · відмов ${int(r.rqty)}` : ''}</div></td><td class="muted hide-m">${esc(r.brand || '—')}</td><td class="r"><b>${int(r.qty)}</b></td>${prevCol ? `<td class="r">${int(r.prevQty || 0)} ${delta(r.qty, r.prevQty || 0)}</td>` : ''}<td class="r">${uah(r.rev)}</td><td class="r hide-m">${int(r.rqty)}</td></tr>`).join('')}</tbody>
+    </table></div><div class="small muted">Усі товари, продані за період. Клік по товару — фільтр лише по ньому (можна кілька). Сума — з урахуванням знижки замовлення (розподіленої пропорційно).</div></div>`;
   }
 
   // ---------- графік ----------
