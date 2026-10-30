@@ -320,23 +320,50 @@ export function createAnalyticsUI(ctx) {
       ${row('Бренд', o.brands.map((x) => chip('brands', x.id, x.name, ui.brands.includes(x.id))).join(''))}
       ${row('Категорія', o.cats.map((x) => chip('cats', x.id, x.name, ui.cats.includes(x.id))).join(''), ui.brands.length ? '<span class="f-hint">категорії вибраних брендів</span>' : '')}
       <div class="f-row"><span class="f-title">Товари</span><div class="f-chips">
-        ${(o.products || []).map((x) => `<button class="chip on" data-f="products" data-v="${x.id}" aria-pressed="true" title="Прибрати">${esc(x.name)} ✕</button>`).join('')}
-        <span class="prod-pick"><label class="sr-only" for="anProdQ">Додати товар</label><input id="anProdQ" type="search" autocomplete="off" placeholder="+ Товар: назва або ID"><span id="anProdRes" class="prod-res" hidden></span></span>
+        <span id="anProdChips" class="prod-chips"></span>
+        <span class="prod-pick"><label class="sr-only" for="anProdQ">Додати товари</label><input id="anProdQ" type="search" autocomplete="off" placeholder="+ Товари: назва або ID"><span id="anProdRes" class="prod-res" hidden></span></span>
+        <span id="anProdAct" class="prod-act" hidden><button type="button" class="btn sm primary" id="anProdApply">Застосувати</button><button type="button" class="btn sm" id="anProdCancel">Скасувати</button></span>
       </div></div>
       <div class="f-foot"><span class="small muted">Можна вибирати кілька значень у кожному рядку. Клік по рядку в таблицях нижче теж додає фільтр.</span></div>`;
     $$('[data-f]', box).forEach((b) => (b.onclick = () => toggle(b.dataset.f, b.dataset.v)));
-    wireProductPick();
+    wireProductPick(o.products || []);
     box.classList.remove('collapsed');
     collapsible(box.parentElement);
     const rs = $('#anReset');
     if (rs) rs.onclick = () => { ui.depts = []; ui.sources = []; ui.managers = []; ui.brands = []; ui.cats = []; ui.products = []; persist(); load(); };
   }
 
-  // Пошук товару для фільтра «Товари»: вибраний товар додається до фільтра (усі розділи нижче — лише по ньому).
-  function wireProductPick() {
+  // Пошук товарів для фільтра «Товари»: галочками збирається чернетка (кілька товарів, кілька пошуків),
+  // дані перераховуються лише після «Застосувати» — без завантаження на кожен клік.
+  function wireProductPick(applied) {
     const inp = $('#anProdQ');
     const box = $('#anProdRes');
     if (!inp) return;
+    const draft = new Map(applied.map((x) => [x.id, x.name]));
+    const same = () => draft.size === ui.products.length && ui.products.every((id) => draft.has(id));
+    let rows = [];
+    const drawChips = () => {
+      $('#anProdChips').innerHTML = [...draft].map(([id, name]) => `<button type="button" class="chip ${ui.products.includes(id) ? 'on' : 'draft'}" data-rm="${id}" title="Прибрати">${esc(name)} ✕</button>`).join('');
+      $$('[data-rm]', $('#anProdChips')).forEach((b) => (b.onclick = () => { draft.delete(Number(b.dataset.rm)); drawChips(); drawRes(); }));
+      $('#anProdAct').hidden = same();
+      $('#anProdApply').textContent = draft.size ? `Застосувати (${draft.size})` : 'Застосувати';
+    };
+    const drawRes = () => {
+      if (box.hidden) return;
+      const all = rows.length > 1 && rows.every((r) => draft.has(r.id));
+      box.innerHTML = rows.length
+        ? `${rows.length > 1 ? `<label class="prod-opt prod-all"><input type="checkbox" data-all${all ? ' checked' : ''}><b>${all ? 'Зняти всі знайдені' : `Вибрати всі знайдені (${rows.length})`}</b></label>` : ''}
+          ${rows.map((r) => `<label class="prod-opt"><input type="checkbox" data-pid="${r.id}"${draft.has(r.id) ? ' checked' : ''}><span class="prod-txt"><b>${esc(r.name)}</b><span>${esc(r.brand)} · ID ${r.id}</span></span></label>`).join('')}`
+        : '<span class="prod-none">Нічого не знайдено</span>';
+      $$('[data-pid]', box).forEach((c) => (c.onchange = () => {
+        const r = rows.find((x) => x.id === Number(c.dataset.pid));
+        if (c.checked) draft.set(r.id, r.name); else draft.delete(r.id);
+        drawChips(); drawRes();
+      }));
+      const ca = $('[data-all]', box);
+      if (ca) ca.onchange = () => { rows.forEach((r) => (ca.checked ? draft.set(r.id, r.name) : draft.delete(r.id))); drawChips(); drawRes(); };
+    };
+    const apply = () => { box.hidden = true; ui.products = [...draft.keys()]; persist(); load(); };
     let t = 0;
     let seq = 0;
     inp.oninput = () => {
@@ -345,17 +372,28 @@ export function createAnalyticsUI(ctx) {
         const q = inp.value.trim();
         if (q.length < 2) { box.hidden = true; return; }
         const my = ++seq;
-        let rows = [];
-        try { rows = await api('GET', `/api/an/product-search?q=${encodeURIComponent(q)}`); } catch { rows = []; }
+        let res = [];
+        try { res = await api('GET', `/api/an/product-search?q=${encodeURIComponent(q)}`); } catch { res = []; }
         if (my !== seq) return;
-        box.innerHTML = rows.length
-          ? rows.map((r) => `<button type="button" class="prod-opt" data-pid="${r.id}"${ui.products.includes(r.id) ? ' disabled' : ''}><b>${esc(r.name)}</b><span>${esc(r.brand)} · ID ${r.id}</span></button>`).join('')
-          : '<span class="prod-none">Нічого не знайдено</span>';
+        rows = res;
         box.hidden = false;
-        $$('[data-pid]', box).forEach((b) => (b.onclick = () => { box.hidden = true; inp.value = ''; toggle('products', b.dataset.pid); }));
+        drawRes();
       }, 250);
     };
-    inp.onkeydown = (e) => { if (e.key === 'Escape') { box.hidden = true; inp.blur(); } };
+    inp.onfocus = () => { if (rows.length && inp.value.trim().length >= 2) { box.hidden = false; drawRes(); } };
+    inp.onkeydown = (e) => {
+      if (e.key === 'Escape') { box.hidden = true; inp.blur(); }
+      if (e.key === 'Enter' && !same()) { e.preventDefault(); apply(); }
+    };
+    // клік поза полем і списком закриває список, вибрані галочки лишаються в чернетці
+    const pick = inp.parentElement;
+    document.addEventListener('pointerdown', function off(e) {
+      if (!pick.isConnected) { document.removeEventListener('pointerdown', off); return; }
+      if (!pick.contains(e.target)) box.hidden = true;
+    });
+    $('#anProdApply').onclick = apply;
+    $('#anProdCancel').onclick = () => { draft.clear(); applied.forEach((x) => draft.set(x.id, x.name)); box.hidden = true; inp.value = ''; drawChips(); };
+    drawChips();
   }
 
   function toggle(key, raw) {
