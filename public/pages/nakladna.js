@@ -35,9 +35,9 @@ async function viewInvoice(orderId) {
     if (location.hash === `#/invoice/${encodeURIComponent(v)}`) loadInvoice(v);
     else location.hash = `#/invoice/${encodeURIComponent(v)}`;
   });
-  keepWarm();
-  if (orderId) await loadInvoice(orderId);
+  if (orderId) { await loadInvoice(orderId); keepWarm(); } // спершу пошук, потім фонове оновлення — не навпаки
   else {
+    keepWarm();
     $('#invArea').innerHTML = `<div class="card empty"><div class="big">Введіть номер замовлення з LP-CRM</div>
       Накладна сформується автоматично: товари, покупець і ФОП (з чека Checkbox або за відділом).</div>`;
   }
@@ -56,7 +56,7 @@ function keepWarm() {
     if (document.visibilityState === 'visible' && !searching) {
       try { r = await api('POST', '/api/invoice/warm', {}); } catch { r = {}; }
     }
-    warmTimer = setTimeout(run, r.more ? 5000 : 3 * 60e3);
+    warmTimer = setTimeout(run, r.more || r.busy ? 20e3 : 3 * 60e3);
   };
   run();
 }
