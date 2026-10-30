@@ -214,7 +214,7 @@ async function upgradeV10(db) {
 
 export const schema = {
   name: 'analytics',
-  version: 5,
+  version: 6,
   tables: [
   // ---------- Аналітика ----------
   // Замовлення: id = короткий номер LP-CRM (зростає з часом), code = довгий код для API.
@@ -277,9 +277,16 @@ export const schema = {
     // Пошук дублів ТТН — лише серед замовлень, що мають ТТН.
     await db.run(`CREATE INDEX IF NOT EXISTS an_orders_ttn ON an_orders(ttn) WHERE ttn != ''`);
     if (fresh) {
-      await db.batch(['an_v9', 'an_v10', 'an_v11', 'an_v12'].map((k) => [`INSERT INTO settings (key, value) VALUES (?, '1') ON CONFLICT(key) DO NOTHING`, [k]]));
+      await db.batch(['an_v9', 'an_v10', 'an_v11', 'an_v12', 'an_v13'].map((k) => [`INSERT INTO settings (key, value) VALUES (?, '1') ON CONFLICT(key) DO NOTHING`, [k]]));
       return;
     }
     await upgradeV9(db); await upgradeV10(db); await upgradeV11(db); await upgradeV12(db);
+    // v13: відділ — спершу за джерелом («Поле 1»); перерахувати вже завантажені замовлення.
+    if (!(await db.get(`SELECT value FROM settings WHERE key = 'an_v13'`))) {
+      await db.batch([
+        [`INSERT INTO settings (key, value) VALUES ('an_need_remap', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`, []],
+        [`INSERT INTO settings (key, value) VALUES ('an_v13', '1') ON CONFLICT(key) DO NOTHING`, []],
+      ]);
+    }
   },
 };

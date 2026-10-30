@@ -3687,7 +3687,7 @@ var mgrDept = (o, m, src) => {
   }
   return m.mgr.get(o.user);
 };
-var deptOf = (o, m, src) => m.prio === "office" ? m.office.get(o.office) ?? mgrDept(o, m, src) ?? 0 : mgrDept(o, m, src) ?? m.office.get(o.office) ?? 0;
+var deptOf = (o, m, src) => src && m.srcDept.get(src) || (m.prio === "office" ? m.office.get(o.office) ?? mgrDept(o, m, src) ?? 0 : mgrDept(o, m, src) ?? m.office.get(o.office) ?? 0);
 var srcOf = (o, m) => o.ch && m.src.get(o.ch) || o.site && m.src.get(o.site) || o.utm && m.src.get(o.utm) || 0;
 function brandOf(name, brands) {
   const n = low(name);
@@ -3709,9 +3709,8 @@ async function remap(db, st, { dept = true, src = true } = {}) {
         WHEN m.depts LIKE '%,%' AND ${deptOff} IS NOT NULL AND ${inSet(deptOff)} THEN ${deptOff}
         ELSE m.dept_id END
       FROM an_managers m WHERE m.login = an_orders.user AND m.dept_id IS NOT NULL)`;
-    const d = st.deptPriority === "office" ? `COALESCE(${deptOff}, ${deptMgr}, 0)` : `COALESCE(${deptMgr}, ${deptOff}, 0)`;
-    const where = dept ? "" : ` AND user IN (SELECT login FROM an_managers WHERE depts LIKE '%,%')`;
-    await db.run(`UPDATE an_orders SET dept = ${d} WHERE dept IS NOT ${d}${where}`);
+    const d = st.deptPriority === "office" ? `COALESCE(${deptSrc}, ${deptOff}, ${deptMgr}, 0)` : `COALESCE(${deptSrc}, ${deptMgr}, ${deptOff}, 0)`;
+    await db.run(`UPDATE an_orders SET dept = ${d} WHERE dept IS NOT ${d}`);
   }
 }
 async function rebrand(db) {
@@ -4091,6 +4090,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       ttnSeen,
       ttnLast,
       cronOn,
+      check: await getJson("an_check"),
       sync: sync ? { phase: sync.phase, startedAt: sync.startedAt, mode: sync.mode, error: sync.error || "" } : null
     });
   });
@@ -4408,6 +4408,34 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     await putSetting2("an_sync", JSON.stringify(state));
     return { state: summary(state) };
   }
+  async function selfCheck(state) {
+    const problems = [];
+    try {
+      const name = (s) => String(state.statusNames?.[s]?.name ?? state.statusNames?.[s] ?? `\u0441\u0442\u0430\u0442\u0443\u0441 ${s}`);
+      const listedBy = state.listedBy || {};
+      if (Object.keys(listedBy).length) {
+        const have = new Map((await db.all(`SELECT status, COUNT(*) AS n FROM an_orders WHERE day BETWEEN ? AND ? GROUP BY status`, [state.start, state.today])).map((r) => [String(r.status), r.n]));
+        for (const [s, listed] of Object.entries(listedBy)) {
+          const n = have.get(String(s)) || 0;
+          if (Math.abs(listed - n) > Math.max(2, Math.ceil(listed * 0.01))) problems.push(`\xAB${name(s)}\xBB: \u0443 LP-CRM ${listed}, \u0432 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u0446\u0456 ${n}`);
+        }
+      }
+      const wrong = await db.get(`SELECT COUNT(*) AS n FROM an_orders o JOIN an_sources s ON s.id = o.src
+        WHERE o.day >= ? AND s.dept_id IS NOT NULL AND o.dept != s.dept_id`, [state.start]);
+      if (wrong?.n) {
+        problems.push(`${wrong.n} \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u0443 \u0432\u0456\u0434\u0434\u0456\u043B\u0456, \u0449\u043E \u043D\u0435 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0430\u0454 \u0457\u0445\u043D\u044C\u043E\u043C\u0443 \u0434\u0436\u0435\u0440\u0435\u043B\u0443 (\xAB\u041F\u043E\u043B\u0435 1\xBB) \u2014 \u043F\u0435\u0440\u0435\u0440\u0430\u0445\u043E\u0432\u0430\u043D\u043E`);
+        await remap(db, await getSt());
+      }
+    } catch (e) {
+      problems.push(`\u043F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0443 \u043D\u0435 \u0432\u0438\u043A\u043E\u043D\u0430\u043D\u043E: ${e.message}`);
+    }
+    const res = { at: nowIso(), mode: state.mode, from: state.start, to: state.today, ok: !problems.length, problems };
+    await putSetting2("an_check", JSON.stringify(res));
+    if (problems.length) {
+      await services.errlog?.log(new Error(`\u0410\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0430 \u043D\u0435 \u0437\u0431\u0456\u0433\u0430\u0454\u0442\u044C\u0441\u044F \u0437 LP-CRM: ${problems.join("; ")}`), { path: "/api/an/sync", source: "\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438" }).catch(() => 0);
+    }
+    return res;
+  }
   async function syncStep() {
     const state = await getJson("an_sync");
     if (!state) return { state: null };
@@ -4441,6 +4469,8 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
               continue;
             }
             state.stats.listed += codes.length;
+            state.listedBy = state.listedBy || {};
+            state.listedBy[u.s] = (state.listedBy[u.s] || 0) + codes.length;
             const listed = new Set(codes);
             const known = /* @__PURE__ */ new Map();
             const range = await idRange(db, u.from, u.to);
@@ -4572,6 +4602,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
           if (state.firstRun) await db.run(`UPDATE an_products SET seen = 1 WHERE seen = 0`);
           if (state.mode === "today") await mergeTodayValues(state.today);
           else await computeValues();
+          await selfCheck(state);
           state.phase = "done";
           state.finishedAt = nowIso();
           await putSetting2("an_last_sync", state.finishedAt);
@@ -13536,7 +13567,7 @@ async function upgradeV10(db) {
 }
 var schema8 = {
   name: "analytics",
-  version: 5,
+  version: 6,
   tables: [
     // ---------- Аналітика ----------
     // Замовлення: id = короткий номер LP-CRM (зростає з часом), code = довгий код для API.
@@ -13596,13 +13627,19 @@ var schema8 = {
     await db.run(`CREATE INDEX IF NOT EXISTS an_orders_status ON an_orders(status, id)`);
     await db.run(`CREATE INDEX IF NOT EXISTS an_orders_ttn ON an_orders(ttn) WHERE ttn != ''`);
     if (fresh) {
-      await db.batch(["an_v9", "an_v10", "an_v11", "an_v12"].map((k) => [`INSERT INTO settings (key, value) VALUES (?, '1') ON CONFLICT(key) DO NOTHING`, [k]]));
+      await db.batch(["an_v9", "an_v10", "an_v11", "an_v12", "an_v13"].map((k) => [`INSERT INTO settings (key, value) VALUES (?, '1') ON CONFLICT(key) DO NOTHING`, [k]]));
       return;
     }
     await upgradeV9(db);
     await upgradeV10(db);
     await upgradeV11(db);
     await upgradeV12(db);
+    if (!await db.get(`SELECT value FROM settings WHERE key = 'an_v13'`)) {
+      await db.batch([
+        [`INSERT INTO settings (key, value) VALUES ('an_need_remap', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`, []],
+        [`INSERT INTO settings (key, value) VALUES ('an_v13', '1') ON CONFLICT(key) DO NOTHING`, []]
+      ]);
+    }
   }
 };
 

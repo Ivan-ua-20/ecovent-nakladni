@@ -75,7 +75,9 @@ const mgrDept = (o, m, src) => {
   }
   return m.mgr.get(o.user);
 };
-const deptOf = (o, m, src) => (m.prio === 'office'
+// Відділ замовлення: спершу за джерелом («Поле 1», якщо джерело закріплене за відділом) — так рахує й LP-CRM;
+// інакше за менеджером або відділом CRM (порядок — з налаштувань).
+const deptOf = (o, m, src) => (src && m.srcDept.get(src)) || (m.prio === 'office'
   ? m.office.get(o.office) ?? mgrDept(o, m, src) ?? 0
   : mgrDept(o, m, src) ?? m.office.get(o.office) ?? 0);
 const srcOf = (o, m) => (o.ch && m.src.get(o.ch)) || (o.site && m.src.get(o.site)) || (o.utm && m.src.get(o.utm)) || 0;
@@ -103,10 +105,9 @@ export async function remap(db, st, { dept = true, src = true } = {}) {
         WHEN m.depts LIKE '%,%' AND ${deptOff} IS NOT NULL AND ${inSet(deptOff)} THEN ${deptOff}
         ELSE m.dept_id END
       FROM an_managers m WHERE m.login = an_orders.user AND m.dept_id IS NOT NULL)`;
-    const d = st.deptPriority === 'office' ? `COALESCE(${deptOff}, ${deptMgr}, 0)` : `COALESCE(${deptMgr}, ${deptOff}, 0)`;
-    // джерело змінює відділ лише менеджерам із кількома відділами
-    const where = dept ? '' : ` AND user IN (SELECT login FROM an_managers WHERE depts LIKE '%,%')`;
-    await db.run(`UPDATE an_orders SET dept = ${d} WHERE dept IS NOT ${d}${where}`);
+    // спершу відділ джерела (як у deptOf), далі — менеджер або відділ CRM за налаштуванням
+    const d = st.deptPriority === 'office' ? `COALESCE(${deptSrc}, ${deptOff}, ${deptMgr}, 0)` : `COALESCE(${deptSrc}, ${deptMgr}, ${deptOff}, 0)`;
+    await db.run(`UPDATE an_orders SET dept = ${d} WHERE dept IS NOT ${d}`);
   }
 }
 
@@ -510,6 +511,7 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
       ttnSeen,
       ttnLast,
       cronOn,
+      check: await getJson('an_check'),
       sync: sync ? { phase: sync.phase, startedAt: sync.startedAt, mode: sync.mode, error: sync.error || '' } : null,
     });
   });
@@ -863,6 +865,40 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
     return { state: summary(state) };
   }
 
+  // Самоперевірка після оновлення: (1) повнота — скільки замовлень кожного статусу LP-CRM віддала за період і скільки їх
+  // у базі; (2) відділи — замовлення з джерелом («Поле 1»), закріпленим за відділом, мають бути саме в ньому.
+  // Розбіжності — у налаштуваннях аналітики (an_check) і в журналі помилок (адмінам у Telegram).
+  async function selfCheck(state) {
+    const problems = [];
+    try {
+      const name = (s) => String(state.statusNames?.[s]?.name ?? state.statusNames?.[s] ?? `статус ${s}`);
+      const listedBy = state.listedBy || {};
+      if (Object.keys(listedBy).length) {
+        const have = new Map((await db.all(`SELECT status, COUNT(*) AS n FROM an_orders WHERE day BETWEEN ? AND ? GROUP BY status`, [state.start, state.today]))
+          .map((r) => [String(r.status), r.n]));
+        for (const [s, listed] of Object.entries(listedBy)) {
+          const n = have.get(String(s)) || 0;
+          // допуск: замовлення могли змінити статус посеред оновлення
+          if (Math.abs(listed - n) > Math.max(2, Math.ceil(listed * 0.01))) problems.push(`«${name(s)}»: у LP-CRM ${listed}, в аналітиці ${n}`);
+        }
+      }
+      const wrong = await db.get(`SELECT COUNT(*) AS n FROM an_orders o JOIN an_sources s ON s.id = o.src
+        WHERE o.day >= ? AND s.dept_id IS NOT NULL AND o.dept != s.dept_id`, [state.start]);
+      if (wrong?.n) {
+        problems.push(`${wrong.n} замовлень у відділі, що не відповідає їхньому джерелу («Поле 1») — перераховано`);
+        await remap(db, await getSt());
+      }
+    } catch (e) {
+      problems.push(`перевірку не виконано: ${e.message}`);
+    }
+    const res = { at: nowIso(), mode: state.mode, from: state.start, to: state.today, ok: !problems.length, problems };
+    await putSetting('an_check', JSON.stringify(res));
+    if (problems.length) {
+      await services.errlog?.log(new Error(`Аналітика не збігається з LP-CRM: ${problems.join('; ')}`), { path: '/api/an/sync', source: 'Перевірка аналітики' }).catch(() => 0);
+    }
+    return res;
+  }
+
   // Один крок оновлення (до 5 запитів до LP-CRM): з браузера (кнопки, щоденне) або за розкладом (Cloudflare Worker).
   async function syncStep() {
     const state = await getJson('an_sync');
@@ -898,6 +934,9 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
               continue;
             }
             state.stats.listed += codes.length;
+            // для перевірки повноти в кінці: скільки замовлень цього статусу LP-CRM віддала за період
+            state.listedBy = state.listedBy || {};
+            state.listedBy[u.s] = (state.listedBy[u.s] || 0) + codes.length;
             const listed = new Set(codes);
             const known = new Map();
             const range = await idRange(db, u.from, u.to);
@@ -1026,6 +1065,7 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
           if (state.firstRun) await db.run(`UPDATE an_products SET seen = 1 WHERE seen = 0`);
           if (state.mode === 'today') await mergeTodayValues(state.today);
           else await computeValues();
+          await selfCheck(state);
           state.phase = 'done';
           state.finishedAt = nowIso();
           await putSetting('an_last_sync', state.finishedAt);

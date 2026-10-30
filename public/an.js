@@ -845,6 +845,9 @@ export function createAnalyticsUI(ctx) {
               ${cfg.cronOn ? ' Запускається за розкладом (фонові задачі).' : ' Без фонових задач за розкладом перевірка запускається лише, коли хтось працює на сайті.'}</div>
             <div class="btn-row"><button type="button" class="btn sm" id="sTtnNow">Перевірити дублі ТТН зараз</button>${ctx.can('users') ? `<a class="btn sm" href="#/cron">${cfg.cronOn ? 'Фонові задачі — працюють' : 'Налаштувати фонові задачі'}</a>` : ''}</div>
           </div>
+          ${cfg.check ? `<div class="small ${cfg.check.ok ? '' : 'alert warn'}" style="margin-top:6px">${cfg.check.ok
+            ? `✅ <b>Перевірка даних</b> після оновлення ${ctx.fmtDateTime(cfg.check.at)}: кількість замовлень за статусами збігається з LP-CRM, відділи — за джерелами.`
+            : `⚠️ <b>Перевірка даних</b> ${ctx.fmtDateTime(cfg.check.at)} знайшла розбіжності з LP-CRM: ${cfg.check.problems.map((p) => esc(p)).join('; ')}. Подробиці — у журналі помилок.`}</div>` : ''}
           <div id="sSync"></div>
           <div class="btn-row">
             <button class="btn primary" id="sToday">Оновити сьогодні</button>
@@ -881,8 +884,8 @@ export function createAnalyticsUI(ctx) {
           <h3>Загальні</h3>
           <label class="check"><input type="checkbox" name="compare" ${st.compare ? 'checked' : ''}> Порівнювати з попереднім періодом</label>
           <label class="f"><span>Відділ замовлення визначати</span><select name="deptPriority">
-            <option value="manager" ${st.deptPriority === 'manager' ? 'selected' : ''}>спершу за менеджером, потім за відділом CRM</option>
-            <option value="office" ${st.deptPriority === 'office' ? 'selected' : ''}>спершу за відділом CRM, потім за менеджером</option></select></label>
+            <option value="manager" ${st.deptPriority === 'manager' ? 'selected' : ''}>за «Полем 1» (джерело), далі за менеджером, потім за відділом CRM</option>
+            <option value="office" ${st.deptPriority === 'office' ? 'selected' : ''}>за «Полем 1» (джерело), далі за відділом CRM, потім за менеджером</option></select></label>
           <label class="f"><span>Таргет рахувати від</span><select name="targetBase">
             <option value="net" ${st.targetBase === 'net' ? 'selected' : ''}>обороту без відмов і повернень</option>
             <option value="all" ${st.targetBase === 'all' ? 'selected' : ''}>суми всіх замовлень</option></select></label>
