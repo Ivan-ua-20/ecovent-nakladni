@@ -1388,6 +1388,23 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
     ]);
     return c.body(out, 200, { 'content-type': 'application/json; charset=UTF-8' });
   });
+
+  // Для B2B: товари LP-CRM, яких ще ніхто не купував (у довідник вони інакше потрапляють лише з продажу).
+  // Бренд — як для решти: за назвою товару, далі за назвою категорії. Наявні товари не змінює.
+  async function addProducts(items) {
+    const list = (items || []).filter((p) => p.product_id > 0);
+    if (!list.length) return;
+    const [brands, cats] = await Promise.all([
+      db.all(`SELECT id, keywords FROM an_brands ORDER BY sort, id`).then((r) => r.map((b) => ({ id: b.id, kws: String(b.keywords || '').split(',').map(low).filter(Boolean) }))),
+      db.all(`SELECT id, name FROM an_categories`).then((r) => new Map(r.map((x) => [x.id, x.name]))),
+    ]);
+    await db.batch(list.map((p) => [
+      `INSERT OR IGNORE INTO an_products (product_id, name, category_id, brand_id, fetched) VALUES (?, ?, ?, ?, 1)`,
+      [p.product_id, p.name, p.category_id || null, brandOf(p.name, brands) || brandOf(cats.get(p.category_id) || '', brands)],
+    ]));
+  }
+
+  return { addProducts };
 }
 
 async function hashKey(str) {

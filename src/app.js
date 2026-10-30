@@ -82,7 +82,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   services.rahunky = mountRahunky(app, ctx);
   services.marking = mountMarking(app, ctx);
   services.retail = mountRetail(app, ctx);
-  mountAnalytics(app, ctx);
+  services.analytics = mountAnalytics(app, ctx);
   services.notify = mountTg(app, ctx);
   mountHome(app, ctx);
   services.payments = mountOdb(app, { ...ctx, base: odbBase, notify: (...a) => services.notify.notify(...a), onTx: (ids, origin) => services.b2b?.onPayments?.(ids, origin) });

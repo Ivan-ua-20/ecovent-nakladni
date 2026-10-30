@@ -24,6 +24,7 @@ export const partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (N
 
 const BATCH = 50; // товарів за один запит getProduct
 const BATCHES_PER_CALL = 8; // запитів до LP-CRM за звернення (між ними пауза 1,5 с — обмеження LP-CRM)
+const DISCOVER = 3; // партій нових ID LP-CRM за одне «Оновити» (до 150 товарів наперед)
 const IMG_RE = /^https?:\/\/\S+\.(jpe?g|png|webp|gif)(\?\S*)?$/i;
 
 // Товари з відповіді getProduct (масив, мапа id → товар або один товар).
@@ -442,6 +443,22 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     const fresh = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(run) && Math.abs(Date.now() - Date.parse(run)) < 3 * 3600 * 1000;
     const today = fresh ? run : kyivDay();
     const stamp = nowIso();
+    // Нові товари LP-CRM, яких ще ніхто не купував: в аналітику товар потрапляє лише з продажу, тож перевіряємо
+    // ID після найбільшого відомого (LP-CRM видає їх по порядку) — до DISCOVER партій по BATCH, до першої порожньої.
+    let discovered = 0;
+    if (services.analytics?.addProducts) {
+      const hi = (await db.get(`SELECT MAX(id) AS hi FROM (SELECT MAX(product_id) AS id FROM an_products UNION ALL SELECT MAX(product_id) FROM b2b_catalog)`))?.hi || 0;
+      for (let k = 0; hi > 0 && k < DISCOVER; k++) {
+        const from = hi + 1 + k * BATCH;
+        const ids = Array.from({ length: BATCH }, (_, i) => from + i);
+        const j = await call(fetchFn, s.lpcrm_subdomain, s.lpcrm_key, 'getProduct', { product_id: ids.join(','), status_ignore: '1' }).catch((e) => { if (e.pending) throw e; return null; });
+        const found = collectProducts(j?.data).map((p) => ({ product_id: parseInt(p.id ?? p.product_id, 10), name: String(p.name || p.title || '').trim().slice(0, 300), category_id: parseInt(p.category_id, 10) || null }))
+          .filter((p) => p.product_id >= from && p.product_id < from + BATCH);
+        if (!found.length) break;
+        await services.analytics.addProducts(found);
+        discovered += found.length;
+      }
+    }
     // Нові товари з аналітики й актуальні бренди (бренд визначає аналітика за ключовими словами).
     await db.batch([
       [`INSERT OR IGNORE INTO b2b_catalog (product_id, name, brand_id) SELECT product_id, COALESCE(name, ''), brand_id FROM an_products WHERE product_id > 0`, []],
@@ -483,7 +500,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
       [`INSERT INTO settings (key, value) VALUES ('b2b_catalog_sync', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [at]],
     ]);
     const state = await catalogState(today);
-    return c.json({ ok: true, checked: todo.length, changed, items, left: state.stale, lastSync: at });
+    return c.json({ ok: true, checked: todo.length, changed, items, discovered, left: state.stale, lastSync: at });
   });
 
   app.get('/api/b2b/brands', async (c) => {
