@@ -16,7 +16,7 @@ const docFop = (f) => {
   return rest;
 };
 
-export function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {}, shared = {}, services = {} }) {
+export function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {}, onCron = () => {}, cronActive = async () => false, shared = {}, services = {} }) {
   const settings = () => loadSettings(db);
   shared.receiptCache ||= new Map();
   const receiptCache = shared.receiptCache;
@@ -161,12 +161,13 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {}, 
     need(c, 'docs.view');
     try { return c.json(await warmIndex()); } catch { return c.json({ failed: true }); }
   });
-  // І на будь-яких запитах до сайту — у фоні, після відповіді (крім самого пошуку накладної: він сам довантажує).
+  onCron('orders', 'Нові прийняті замовлення LP-CRM (швидкий пошук накладних)', () => warmIndex());
+  // Без розкладу — на будь-яких запитах до сайту, у фоні, після відповіді (крім самого пошуку накладної: він сам довантажує).
   onTick((c) => {
     if (String(c?.req?.path || '').startsWith('/api/invoice')) return;
     if (Date.now() - (shared.warmTry || 0) < 60e3) return;
     shared.warmTry = Date.now();
-    const p = warmIndex().catch(() => 0);
+    const p = (async () => { if (!(await cronActive())) await warmIndex(); })().catch(() => 0);
     try { c?.executionCtx?.waitUntil(p); } catch { /* не Cloudflare */ }
   });
 

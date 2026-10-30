@@ -431,13 +431,13 @@ await db.run(`INSERT INTO settings (key, value) VALUES ('an_ttn_check_at', ?) ON
   assert.deepEqual([r2.fetched, r2.dups], [0, 0]);
   // Worker: без ключа — ні; з ключем — так, але не частіше разу на 10 хв
   assert.equal((await app.request('/api/cron/ttn', { method: 'POST' })).status, 401);
-  const { key } = await req('POST', '/api/an/cron-key');
+  const { key } = await req('POST', '/api/jobs/key');
   assert.equal(key.length, 48);
   let cr = await (await app.request('/api/cron/ttn', { method: 'POST', headers: { 'X-Cron-Key': key } })).json();
-  assert.equal(cr.skipped, true, 'щойно перевіряли');
+  assert.ok(cr.ok && cr.result.fresh, 'щойно перевіряли');
   await db.run(`UPDATE settings SET value = ? WHERE key = 'an_ttn_check_at'`, [new Date(Date.now() - 11 * 60e3).toISOString()]);
-  cr = await (await app.request('/api/cron/ttn', { method: 'POST', headers: { 'X-Cron-Key': key } })).json();
-  assert.ok(!cr.skipped && cr.listed >= 2);
+  cr = await (await app.request('/api/cron/run/ttn', { method: 'POST', headers: { 'X-Cron-Key': key } })).json();
+  assert.ok(cr.ok && cr.result.listed >= 2, JSON.stringify(cr));
   const cfg = await req('GET', '/api/an/config');
   assert.ok(cfg.cronOn && cfg.ttnLast?.at);
   await db.run(`UPDATE users SET tg_chat_id = '', crm_logins = '' WHERE login = 'o'`);

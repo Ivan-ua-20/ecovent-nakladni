@@ -32,7 +32,7 @@ const userName = (u) => u?.name || u?.login || '';
 let lastTickTry = 0;
 const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {} }) {
+export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}, onCron = () => {}, cronActive = async () => false }) {
   // ================================================================ кабінети
   const publicAcc = (a, origin = '') => ({
     id: a.id, name: a.name, token: keyHint(a.token), price_list_id: a.price_list_id, crm_office: a.crm_office, crm_delivery: a.crm_delivery,
@@ -232,18 +232,22 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
   // Сповіщення потребують свіжих даних: у фоні (на запитах до сайту) раз на 10 хв оновлюємо замовлення за 7 днів —
   // лише якщо в якомусь кабінеті ввімкнено сповіщення. Вебхук Розетки й так приносить зміни одразу.
   const TICK_MS = 10 * 60e3;
+  async function notifySync() {
+    const accs = await db.all(`SELECT * FROM rzs_accounts WHERE active = 1 AND (notify_inv = 1 OR notify_ttn = 1)`);
+    if (!accs.length) return { skipped: 'сповіщення Розетки вимкнено' };
+    const now = Date.now();
+    const claim = await db.run(`INSERT INTO settings (key, value) VALUES ('rzs_tick_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
+      [new Date(now).toISOString(), new Date(now - TICK_MS).toISOString()]);
+    if (!claim.changes) return { fresh: true };
+    let saved = 0;
+    for (const a of accs) saved += (await syncAccount(a, { days: 7 }).catch(() => ({ saved: 0 }))).saved || 0;
+    return { accounts: accs.length, saved };
+  }
+  onCron('rzs', 'Замовлення Розетки для сповіщень (раз на 10 хв)', notifySync);
   onTick((c) => {
     if (Date.now() - (lastTickTry || 0) < 60e3) return;
     lastTickTry = Date.now();
-    const p = (async () => {
-      const accs = await db.all(`SELECT * FROM rzs_accounts WHERE active = 1 AND (notify_inv = 1 OR notify_ttn = 1)`);
-      if (!accs.length) return;
-      const now = Date.now();
-      const claim = await db.run(`INSERT INTO settings (key, value) VALUES ('rzs_tick_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
-        [new Date(now).toISOString(), new Date(now - TICK_MS).toISOString()]);
-      if (!claim.changes) return;
-      for (const a of accs) await syncAccount(a, { days: 7 }).catch(() => 0);
-    })().catch(() => 0);
+    const p = (async () => { if (!(await cronActive())) await notifySync(); })().catch(() => 0);
     try { c?.executionCtx?.waitUntil(p); } catch { /* не Cloudflare */ }
   });
   app.post('/api/rzs/sync', async (c) => {

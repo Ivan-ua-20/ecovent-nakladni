@@ -248,7 +248,7 @@ function flattenCategories(node, parent = null, out = [], depth = 0) {
 }
 
 // =====================================================================
-export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, onTick = () => {} }) {
+export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, onTick = () => {}, onCron = () => {}, cronActive = async () => false }) {
   const settings = () => loadSettings(db);
   const getSt = async () => {
     const r = await db.get(`SELECT value FROM settings WHERE key = 'an_settings'`);
@@ -455,39 +455,24 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
   }
   // Іншим модулям (Розетка: пошук замовлень LP-CRM за ТТН) — освіжити ТТН нових замовлень (не частіше разу на 10 хв).
   services.analytics = { ...(services.analytics || {}), ttnQuick };
-  // Сам на запитах до сайту — у фоні (після відповіді), коли перевірка вже потрібна.
+  // Перевірка дублів ТТН, коли вже час (раз на 10 хв) і ТТН з LP-CRM уже надходили.
+  async function ttnDue() {
+    const last = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_check_at'`))?.value || '';
+    if (last && Date.now() - Date.parse(last) < TTN_EVERY) return { fresh: true };
+    if (!(await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_seen'`))?.value) return { skipped: 'ТТН з LP-CRM ще не надходили' };
+    return ttnQuick();
+  }
+  onCron('ttn', 'Дублі ТТН у нових замовленнях (раз на 10 хв)', ttnDue);
+  // Без розкладу — сам на запитах до сайту, у фоні (після відповіді).
   onTick((c) => {
     if (Date.now() - (shared.ttnTry || 0) < 60e3) return; // не частіше разу на хвилину на екземпляр — щоб не читати базу щозапиту
     shared.ttnTry = Date.now();
-    const p = (async () => {
-      const last = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_check_at'`))?.value || '';
-      if (last && Date.now() - Date.parse(last) < TTN_EVERY) return;
-      if (!(await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_seen'`))?.value) return; // ТТН з LP-CRM ще не надходили
-      await ttnQuick();
-    })().catch(() => 0);
+    const p = (async () => { if (!(await cronActive())) await ttnDue(); })().catch(() => 0);
     try { c?.executionCtx?.waitUntil(p); } catch { /* не Cloudflare — промис і так виконається */ }
-  });
-  // Для Cloudflare Worker за розкладом: заголовок X-Cron-Key = ключ із налаштувань аналітики.
-  app.post('/api/cron/ttn', async (c) => {
-    const key = (await db.get(`SELECT value FROM settings WHERE key = 'an_cron_key'`))?.value || '';
-    const got = c.req.header('x-cron-key') || '';
-    if (!key || got.length !== key.length || got !== key) throw fail(401, 'Невірний ключ.');
-    return c.json(await ttnQuick());
   });
   app.post('/api/an/ttn-check', async (c) => {
     if (!can(c.get('user'), 'analytics')) throw fail(403, 'Недостатньо прав.');
     return c.json(await ttnQuick({ force: true }));
-  });
-  // Ключ для Worker'а — показує й змінює лише власник/адмін з правом «users».
-  app.get('/api/an/cron-key', async (c) => {
-    need(c, 'users');
-    return c.json({ key: (await db.get(`SELECT value FROM settings WHERE key = 'an_cron_key'`))?.value || '' });
-  });
-  app.post('/api/an/cron-key', async (c) => {
-    need(c, 'users');
-    const key = [...crypto.getRandomValues(new Uint8Array(24))].map((x) => x.toString(16).padStart(2, '0')).join('');
-    await putSetting('an_cron_key', key);
-    return c.json({ key });
   });
 
   // ---------------------------------------------------------------- налаштування
@@ -508,7 +493,7 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
     ]);
     const ttnSeen = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_seen'`))?.value || '';
     const ttnLast = await getJson('an_ttn_last');
-    const cronOn = Boolean((await db.get(`SELECT value FROM settings WHERE key = 'an_cron_key'`))?.value);
+    const cronOn = await cronActive();
     return c.json({
       categories,
       settings: st,
@@ -830,6 +815,11 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
       if (r.nextAt) throw fail(429, `Дані оновлювались о ${hhmm(last)} — наступне оновлення можна о ${hhmm(r.nextAt)}.`);
       await putSetting('an_today_cnt', JSON.stringify({ day: kyivDay(), n: r.used + 1 }));
     }
+    return c.json(await syncBegin(mode, st));
+  });
+
+  // Новий процес оновлення (одиниці «статус × місяць»); далі — кроки syncStep.
+  async function syncBegin(mode, st) {
     const cr = await creds();
     const statusNames = await lp(cr, 'getStatuses', {}).then((j) => (j.status === 'ok' ? j.data || {} : {})).catch(() => ({}));
     if (Object.keys(statusNames).length) await putSetting('an_status_names', JSON.stringify(statusNames));
@@ -870,14 +860,15 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
       warnings: [],
     };
     await putSetting('an_sync', JSON.stringify(state));
-    return c.json({ state: summary(state) });
-  });
+    return { state: summary(state) };
+  }
 
-  app.post('/api/an/sync/step', async (c) => {
+  // Один крок оновлення (до 5 запитів до LP-CRM): з браузера (кнопки, щоденне) або за розкладом (Cloudflare Worker).
+  async function syncStep() {
     const state = await getJson('an_sync');
-    if (!state) return c.json({ state: null });
-    if (state.phase === 'done' || state.error) return c.json({ state: summary(state) });
-    if (state.lockUntil && state.lockUntil > Date.now()) return c.json({ state: summary(state), busy: true });
+    if (!state) return { state: null };
+    if (state.phase === 'done' || state.error) return { state: summary(state), idle: true };
+    if (state.lockUntil && state.lockUntil > Date.now()) return { state: summary(state), busy: true };
     state.lockUntil = Date.now() + 120000;
     await putSetting('an_sync', JSON.stringify(state));
 
@@ -1054,7 +1045,27 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
     }
     state.lockUntil = 0;
     await save();
-    return c.json({ state: summary(state) });
+    return { state: summary(state) };
+  }
+  app.post('/api/an/sync/step', async (c) => c.json(await syncStep()));
+
+  // За розкладом: щоденне оновлення за 30 днів — уночі (2:00–6:00 за Києвом), а якщо пропущено понад 30 год — одразу.
+  // Уже запущене оновлення (зокрема «Оновити сьогодні» з браузера) розклад доводить до кінця по кроку за запуск.
+  onCron('analytics', 'Щоденне оновлення аналітики (вночі)', async () => {
+    const cur = await getJson('an_sync');
+    if (cur && cur.phase !== 'done' && !cur.error) {
+      const r = await syncStep();
+      return { step: r.state?.text || '', pct: r.state?.pct ?? null, ...(r.busy ? { busy: true } : {}) };
+    }
+    if (!(await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`))?.value) return { skipped: 'аналітику ще не завантажено' };
+    const lastDaily = (await db.get(`SELECT value FROM settings WHERE key = 'an_last_daily'`))?.value || '';
+    const age = lastDaily ? Date.now() - Date.parse(lastDaily) : Infinity;
+    const hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Kyiv', hour: '2-digit', hourCycle: 'h23' }).format(new Date()));
+    if (age > 30 * 3600e3 || (age > 20 * 3600e3 && hour >= 2 && hour < 6)) {
+      await syncBegin('daily', await getSt());
+      return { started: true };
+    }
+    return { fresh: true };
   });
 
   app.post('/api/an/sync/cancel', async (c) => {
