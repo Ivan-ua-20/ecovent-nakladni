@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'market',
-  version: 1,
+  version: 2,
   tables: [
   // mp — rozetka | prom | epc; account_id — магазин у налаштуваннях доставки; items — JSON [{ name, qty, price }].
   `CREATE TABLE IF NOT EXISTS mp_orders (
@@ -41,5 +41,14 @@ export const schema = {
     PRIMARY KEY (mp, account_id)
   )`,
   ],
-  columns: [],
+  columns: [
+    // Історія магазину (Розетка — за 4 роки): по місяцях назад від сьогодні за датою створення.
+    // hist_from — найдавніша дата; hist_to — кінець наступного місяця-вікна; hist_page — сторінка у вікні; hist_done — усе.
+    ['mp_sync', 'hist_from', "TEXT DEFAULT ''"],
+    ['mp_sync', 'hist_to', "TEXT DEFAULT ''"],
+    ['mp_sync', 'hist_page', 'INTEGER DEFAULT 1'],
+    ['mp_sync', 'hist_done', 'INTEGER DEFAULT 0'],
+    ['mp_sync', 'hist_saved', 'INTEGER DEFAULT 0'],
+    ['mp_sync', 'hist_error', "TEXT DEFAULT ''"],
+  ],
 };

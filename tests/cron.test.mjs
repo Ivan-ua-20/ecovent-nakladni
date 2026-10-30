@@ -23,7 +23,7 @@ assert.equal((await req('GET', '/api/cron/tasks', {})).status, 401);
 await db.run(`INSERT INTO settings (key, value) VALUES ('an_cron_key', 'old-key-0123456789')`);
 let r = await req('GET', '/api/cron/tasks', { 'X-Cron-Key': 'old-key-0123456789' });
 assert.equal(r.status, 200);
-assert.deepEqual(r.j.tasks.sort(), ['analytics', 'market', 'orders', 'rzs', 'ttn']);
+assert.deepEqual(r.j.tasks.sort(), ['analytics', 'market', 'market-history', 'orders', 'rzs', 'ttn']);
 
 // новий ключ з налаштувань; старий після цього не діє
 const { key } = (await req('POST', '/api/jobs/key')).j;
@@ -33,7 +33,7 @@ const K = { 'X-Cron-Key': key };
 
 // кожна задача — окремо; без LP-CRM і без даних — пропускають без запитів назовні
 calls = 0;
-for (const t of ['orders', 'ttn', 'rzs', 'analytics', 'market']) {
+for (const t of ['orders', 'ttn', 'rzs', 'analytics', 'market', 'market-history']) {
   r = await req('POST', `/api/cron/run/${t}`, K);
   assert.equal(r.status, 200, t);
   assert.ok(r.j.ok, `${t}: ${JSON.stringify(r.j)}`);
