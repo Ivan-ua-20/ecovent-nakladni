@@ -50,4 +50,22 @@ calls = 0;
 const again = await createApp({ db, fetchFn, maxSubrequests: 6 }).request('/api/invoice/106897', { headers: { Cookie: cookie } });
 assert.equal(again.status, 200);
 assert.ok(calls <= 3, `повторне відкриття — кілька запитів (${calls})`);
-console.log(`OK — знайдено за ${rounds} звернень`);
+// Фонове оновлення індексу (сторінка «Накладні ФОП» викликає /api/invoice/warm): нові прийняті замовлення
+// потрапляють в індекс заздалегідь, і пошук нового номера йде без списку й пачок з CRM.
+for (let i = 450; i < 520; i++) {
+  const code = String(5550000 + i);
+  orders.set(code, { id: String(106500 + i), order_id: code, status: '117', bayer_name: `Покупець ${i}`, phone: '380937971450', datetime: '2026-10-12 18:50:12', products: [{ product_id: '1', name: 'Очисник HOMI P300', price: '6599', quantity: '1' }] });
+}
+const warm = async () => (await createApp({ db, fetchFn, maxSubrequests: 3 }).request('/api/invoice/warm', { method: 'POST', headers: { Cookie: cookie } })).json();
+let w;
+let warmRounds = 0;
+do { w = await warm(); warmRounds++; } while (w.more && warmRounds < 10);
+assert.equal(w.indexed, 520, JSON.stringify(w));
+assert.equal((await db.get(`SELECT COUNT(*) AS n FROM orders_index`)).n, 520, 'нові прийняті — в індексі');
+assert.deepEqual(await warm(), { fresh: true }, 'повторно — не частіше разу на 3 хв');
+calls = 0;
+const quick = await createApp({ db, fetchFn, maxSubrequests: 6 }).request('/api/invoice/107010', { headers: { Cookie: cookie } });
+assert.equal(quick.status, 200);
+assert.equal((await quick.json()).order.orderId, '107010');
+assert.ok(calls <= 3, `новий номер після фонового оновлення — без списку з CRM (${calls})`);
+console.log(`OK — знайдено за ${rounds} звернень; фонове оновлення за ${warmRounds}`);

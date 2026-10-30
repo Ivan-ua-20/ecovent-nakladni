@@ -16,7 +16,7 @@ const docFop = (f) => {
   return rest;
 };
 
-export function mountNakladni(app, { db, fetchFn, onCleanup, shared = {}, services = {} }) {
+export function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {}, shared = {}, services = {} }) {
   const settings = () => loadSettings(db);
   shared.receiptCache ||= new Map();
   const receiptCache = shared.receiptCache;
@@ -121,6 +121,43 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, shared = {}, servic
     for (let k = 0; k < fresh.length; k += 100) await saveOrders(await getOrdersBatch(fetchFn, creds, fresh.slice(k, k + 100)));
     return codes;
   }
+
+  // Фонове оновлення індексу прийнятих замовлень, щоб номер з CRM відкривався одразу, без списку й пачок з LP-CRM.
+  // Не частіше разу на 3 хв на всі екземпляри (бронь у settings); якщо не встигли (ліміт запитів) — бронь знімаємо,
+  // і наступний виклик продовжить з того місця (збережені пачки не перечитуються).
+  const WARM_MS = 3 * 60e3;
+  async function warmIndex() {
+    const s = await settings();
+    const creds = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
+    if (!creds.subdomain || !creds.key) return { skipped: true };
+    const now = Date.now();
+    const claim = await db.run(
+      `INSERT INTO settings (key, value) VALUES ('orders_warm_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
+      [new Date(now).toISOString(), new Date(now - WARM_MS).toISOString()],
+    );
+    if (!claim.changes) return { fresh: true };
+    try {
+      const codes = await loadAccepted(creds, Math.max(1, Number(s.lpcrm_search_days) || 30));
+      return { indexed: codes.length };
+    } catch (e) {
+      await db.run(`UPDATE settings SET value = '' WHERE key = 'orders_warm_at'`);
+      if (e.pending) return { more: true };
+      throw e;
+    }
+  }
+  // Сторінка «Накладні ФОП» викликає це, поки відкрита; помилки CRM тут не показуємо — їх покаже сам пошук.
+  app.post('/api/invoice/warm', async (c) => {
+    need(c, 'docs.view');
+    try { return c.json(await warmIndex()); } catch { return c.json({ failed: true }); }
+  });
+  // І на будь-яких запитах до сайту — у фоні, після відповіді (крім самого пошуку накладної: він сам довантажує).
+  onTick((c) => {
+    if (String(c?.req?.path || '').startsWith('/api/invoice')) return;
+    if (Date.now() - (shared.warmTry || 0) < 60e3) return;
+    shared.warmTry = Date.now();
+    const p = warmIndex().catch(() => 0);
+    try { c?.executionCtx?.waitUntil(p); } catch { /* не Cloudflare */ }
+  });
 
   // Номер (ID) → код замовлення через ключі індексу; codes — обмежити списком прийнятих.
   const findById = (q, codes = null) => db.get(
