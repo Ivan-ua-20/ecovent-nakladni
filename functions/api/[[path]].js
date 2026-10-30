@@ -2229,10 +2229,10 @@ var isSafeImage = (v) => {
   const s = String(v ?? "");
   return s === "" || s.length <= MAX_IMAGE_CHARS && IMAGE_RE.test(s);
 };
-function checkImages(body, fail2) {
+function checkImages(body, fail3) {
   for (const k of IMAGE_FIELDS) {
     if (body[k] !== void 0 && !isSafeImage(body[k])) {
-      throw fail2(400, `\u041F\u043E\u043B\u0435 \xAB${k}\xBB: \u043F\u043E\u0442\u0440\u0456\u0431\u043D\u0430 \u043A\u0430\u0440\u0442\u0438\u043D\u043A\u0430 PNG, JPEG, WebP \u0430\u0431\u043E GIF (\u0434\u043E 2 \u041C\u0411).`);
+      throw fail3(400, `\u041F\u043E\u043B\u0435 \xAB${k}\xBB: \u043F\u043E\u0442\u0440\u0456\u0431\u043D\u0430 \u043A\u0430\u0440\u0442\u0438\u043D\u043A\u0430 PNG, JPEG, WebP \u0430\u0431\u043E GIF (\u0434\u043E 2 \u041C\u0411).`);
     }
   }
 }
@@ -7974,7 +7974,7 @@ function mountB2bTgDocs(app, { db, services, orders, hooks }) {
   const notify = () => services.notify;
   const tgApi = (method, body) => notify()?.api(method, body);
   const set = (key, value) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]);
-  const isPdf2 = (bytes) => bytes?.[0] === 37 && bytes[1] === 80 && bytes[2] === 68 && bytes[3] === 70;
+  const isPdf3 = (bytes) => bytes?.[0] === 37 && bytes[1] === 80 && bytes[2] === 68 && bytes[3] === 70;
   app.get("/api/b2b/labels-group", async (c) => {
     need(c, "b2b.admin");
     const s = await loadSettings(db);
@@ -8009,7 +8009,7 @@ function mountB2bTgDocs(app, { db, services, orders, hooks }) {
   async function afterLabel(o, f, _user, { fileId = "", replaced = false } = {}) {
     const warnings = [];
     let np = null;
-    if (f.bytes && isPdf2(f.bytes)) np = parseNpLabel(await pdfText(f.bytes));
+    if (f.bytes && isPdf3(f.bytes)) np = parseNpLabel(await pdfText(f.bytes));
     if (np?.ttn) {
       if (!o.ttn) {
         await db.run(`UPDATE b2b_orders SET ttn = ?, updated_at = ? WHERE id = ?`, [np.ttn, nowIso(), o.id]);
@@ -8282,7 +8282,7 @@ ${[...checks, ...itemLines.slice(0, 20), ...more].join("\n")}${!kind ? "\n\n<b>\
       return true;
     }
     const bytes = await notify().download(file.id);
-    const doc = isPdf2(bytes) ? parseBasDoc(await pdfText(bytes)) : null;
+    const doc = isPdf3(bytes) ? parseBasDoc(await pdfText(bytes)) : null;
     const hints = hintsOf(`${msg.caption || ""} ${file.name}`);
     const replyId = Number(/B2B-(\d+)/.exec(String(msg.reply_to_message?.text || msg.reply_to_message?.caption || ""))?.[1]) || null;
     const kind = doc?.kind || hints.kind || "";
@@ -10103,8 +10103,8 @@ async function npMarkingPdf(fetchFn, apiKey, ttn) {
   const res = await fetchFn(`${NP_PRINT}/orders[]/${encodeURIComponent(ttn)}/type/pdf/apiKey/${encodeURIComponent(apiKey)}`);
   if (!res.ok) return null;
   const buf = new Uint8Array(await res.arrayBuffer());
-  const isPdf2 = buf.length > 4 && buf[0] === 37 && buf[1] === 80 && buf[2] === 68 && buf[3] === 70;
-  return isPdf2 ? buf : null;
+  const isPdf3 = buf.length > 4 && buf[0] === 37 && buf[1] === 80 && buf[2] === 68 && buf[3] === 70;
+  return isPdf3 ? buf : null;
 }
 
 // src/integrations/rozetka.js
@@ -10214,6 +10214,60 @@ var promDelivery = (o) => ({
   ttn_status: String(o?.delivery_provider_data?.unified_status || "")
 });
 
+// src/integrations/epicentr.js
+var EPC_API = "https://merchant-api.epicentrm.com.ua";
+var EPC_LABEL_PROVIDERS = ["cvz_epicentr", "parcel_box_epicentr", "meest", "ukrposhta"];
+var unb642 = (s) => Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0));
+var isPdf2 = (buf) => buf.length > 4 && buf[0] === 37 && buf[1] === 80 && buf[2] === 68 && buf[3] === 70;
+async function send3(fetchFn, token, path) {
+  try {
+    return await fetchFn(`${EPC_API}${path}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "Accept-Language": "uk" } });
+  } catch (e) {
+    if (e.pending) throw e;
+    throw Object.assign(new Error("\u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440 \u043D\u0435 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0430\u0454. \u0421\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0449\u0435 \u0440\u0430\u0437 \u0437\u0430 \u0445\u0432\u0438\u043B\u0438\u043D\u0443."), { status: 502 });
+  }
+}
+var fail2 = async (res) => {
+  const j = await res.json().catch(() => null);
+  const msg = j?.message || j?.error?.message || j?.error || j?.detail || "";
+  if (res.status === 401 || res.status === 403) return Object.assign(new Error("\u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440: \u0442\u043E\u043A\u0435\u043D \u043D\u0435\u0434\u0456\u0439\u0441\u043D\u0438\u0439 \u0430\u0431\u043E \u043D\u0435 \u043C\u0430\u0454 \u0434\u043E\u0441\u0442\u0443\u043F\u0443."), { status: 400 });
+  return Object.assign(new Error(`\u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440: ${msg || `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${res.status}`}`), { status: res.status === 404 ? 404 : 502 });
+};
+async function epcOrders(fetchFn, token, { limit = 10 } = {}) {
+  const res = await send3(fetchFn, token, `/v3/oms/orders?limit=${limit}&sort[]=-createdAt`);
+  if (!res.ok) throw await fail2(res);
+  const j = await res.json().catch(() => ({}));
+  return Array.isArray(j.items) ? j.items : [];
+}
+var epcDelivery = (o) => ({
+  provider: String(o?.address?.shipment?.provider || o?.shipment?.provider || ""),
+  ttn: String(o?.address?.shipment?.number || o?.shipment?.number || "")
+});
+async function epcLabelPdf(fetchFn, token, provider, number, why = () => {
+}) {
+  const res = await send3(fetchFn, token, `/v3/deliveries/${encodeURIComponent(provider)}/invoices/${encodeURIComponent(number)}`);
+  if (res.status === 401 || res.status === 403) throw await fail2(res);
+  if (!res.ok) {
+    why((await fail2(res)).message);
+    return null;
+  }
+  const buf = new Uint8Array(await res.clone().arrayBuffer());
+  if (isPdf2(buf)) return buf;
+  const j = await res.json().catch(() => null);
+  const file = String(j?.file || "").replace(/^data:[^,]+,/, "");
+  if (!file) {
+    why("\u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440 \u043D\u0435 \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u0432 \u0444\u0430\u0439\u043B");
+    return null;
+  }
+  try {
+    const pdf = unb642(file);
+    if (isPdf2(pdf)) return pdf;
+  } catch {
+  }
+  why("\u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440 \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u0432 \u0444\u0430\u0439\u043B \u043D\u0435 \u0443 \u0444\u043E\u0440\u043C\u0430\u0442\u0456 PDF");
+  return null;
+}
+
 // src/modules/marking/index.js
 var PAGES_PER_CALL = 12;
 var TODAY_REFRESH_MS = 5 * 60 * 1e3;
@@ -10300,7 +10354,7 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
     need(c, "docs.view");
     const b = await c.req.json();
     const accounts = await activeAccounts();
-    if (!accounts.length) throw fail(400, "\u041A\u0430\u0431\u0456\u043D\u0435\u0442\u0438 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 \u0449\u0435 \u043D\u0435 \u0434\u043E\u0434\u0430\u043D\u043E: \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430: \u041D\u041F, \u0420\u043E\u0437\u0435\u0442\u043A\u0430, Prom\xBB.");
+    if (!accounts.length) throw fail(400, "\u041A\u0430\u0431\u0456\u043D\u0435\u0442\u0438 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 \u0449\u0435 \u043D\u0435 \u0434\u043E\u0434\u0430\u043D\u043E: \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430: \u041D\u041F, \u0420\u043E\u0437\u0435\u0442\u043A\u0430, Prom, \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440\xBB.");
     const byId = new Map(accounts.map((a) => [a.id, a]));
     const answer = (row, source) => c.json({
       ttn: row.ttn,
@@ -10378,7 +10432,7 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
     const ttn = String(c.req.param("ttn")).replace(/\D/g, "");
     if (!/^\d{10,20}$/.test(ttn)) throw fail(400, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043D\u043E\u043C\u0435\u0440 \u0422\u0422\u041D.");
     const accounts = await activeAccounts();
-    if (!accounts.length) throw fail(400, "\u041A\u0430\u0431\u0456\u043D\u0435\u0442\u0438 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 \u0449\u0435 \u043D\u0435 \u0434\u043E\u0434\u0430\u043D\u043E: \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430: \u041D\u041F, \u0420\u043E\u0437\u0435\u0442\u043A\u0430, Prom\xBB.");
+    if (!accounts.length) throw fail(400, "\u041A\u0430\u0431\u0456\u043D\u0435\u0442\u0438 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 \u0449\u0435 \u043D\u0435 \u0434\u043E\u0434\u0430\u043D\u043E: \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430: \u041D\u041F, \u0420\u043E\u0437\u0435\u0442\u043A\u0430, Prom, \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440\xBB.");
     const known = await db.get(`SELECT account_id, service FROM np_docs WHERE ttn = ?`, [ttn]);
     const wanted = Number(c.req.query("account")) || known?.account_id;
     const order2 = [...accounts.filter((a) => a.id === wanted), ...accounts.filter((a) => a.id !== wanted)];
@@ -10484,7 +10538,7 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
     const tries = ttn.startsWith("PRM") ? [ttn, ttn.replace(/\D/g, "")] : [ttn];
     const reasons = /* @__PURE__ */ new Set();
     const accounts = await db.all(`SELECT * FROM rz_accounts WHERE active = 1 ORDER BY hits DESC, id`);
-    if (!accounts.length) throw fail(400, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D\u0438 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u0449\u0435 \u043D\u0435 \u0434\u043E\u0434\u0430\u043D\u043E: \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430: \u041D\u041F, \u0420\u043E\u0437\u0435\u0442\u043A\u0430, Prom\xBB.");
+    if (!accounts.length) throw fail(400, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D\u0438 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u0449\u0435 \u043D\u0435 \u0434\u043E\u0434\u0430\u043D\u043E: \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430: \u041D\u041F, \u0420\u043E\u0437\u0435\u0442\u043A\u0430, Prom, \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440\xBB.");
     const known = await db.get(`SELECT account_id FROM rz_docs WHERE ttn = ?`, [ttn]);
     const order2 = [...accounts.filter((a) => a.id === known?.account_id), ...accounts.filter((a) => a.id !== known?.account_id)];
     for (const a of order2) {
@@ -10564,11 +10618,87 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
     await logAudit(db, { user: c.get("user"), kind: "prom", refId: cur.id, action: "\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D Prom", changes: [{ field: "name", from: cur.name, to: "" }] });
     return c.json({ ok: true });
   });
+  const TOKEN_RE = /^[\w.-]{20,4000}$/;
+  const publicEpc = (a) => ({ id: a.id, name: a.name, token: keyHint(a.token), active: a.active, checked_at: a.checked_at || "" });
+  const epcSample = (orders) => orders.map((o) => ({ id: String(o.number || o.id || ""), date: String(o.createdAt || ""), status: String(o.statusCode || ""), ...epcDelivery(o) }));
+  app.get("/api/epc/accounts", async (c) => {
+    need(c, "api");
+    return c.json((await db.all(`SELECT * FROM epc_accounts ORDER BY active DESC, name`)).map(publicEpc));
+  });
+  app.post("/api/epc/accounts", async (c) => {
+    need(c, "api");
+    const b = await c.req.json();
+    const token = String(b.token || "").trim();
+    if (!TOKEN_RE.test(token)) throw fail(400, "\u0412\u0441\u0442\u0430\u0432\u0442\u0435 \u0442\u043E\u043A\u0435\u043D API \u0437 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u043F\u0440\u043E\u0434\u0430\u0432\u0446\u044F \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440\u0443 (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u043A\u043E\u043C\u043F\u0430\u043D\u0456\u0457 \u2192 API).");
+    if (await db.get(`SELECT id FROM epc_accounts WHERE token = ?`, [token])) throw fail(400, "\u0426\u0435\u0439 \u0442\u043E\u043A\u0435\u043D \u0443\u0436\u0435 \u0434\u043E\u0434\u0430\u043D\u043E.");
+    const orders = await epcOrders(fetchFn, token, { limit: 10 });
+    const name = String(b.name || "").trim().slice(0, 100) || "\u041C\u0430\u0433\u0430\u0437\u0438\u043D \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440\u0443";
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const r = await db.run(`INSERT INTO epc_accounts (name, token, active, checked_at, created_at) VALUES (?, ?, 1, ?, ?)`, [name, token, now, now]);
+    await logAudit(db, { user: c.get("user"), kind: "epc", refId: r.lastId, action: "\u0434\u043E\u0434\u0430\u043D\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440\u0443", changes: [{ field: "name", from: "", to: name }] });
+    return c.json({ id: r.lastId, orders: epcSample(orders) });
+  });
+  app.put("/api/epc/accounts/:id", async (c) => {
+    need(c, "api");
+    const b = await c.req.json();
+    const cur = await db.get(`SELECT * FROM epc_accounts WHERE id = ?`, [c.req.param("id")]);
+    if (!cur) throw fail(404, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const next = { ...cur };
+    if (b.name !== void 0) next.name = String(b.name).trim().slice(0, 100) || cur.name;
+    if (b.active !== void 0) next.active = b.active ? 1 : 0;
+    const t = String(b.token ?? "").trim();
+    const tokenChanged = t && !t.startsWith(MASK) && t !== cur.token;
+    if (tokenChanged && !TOKEN_RE.test(t)) throw fail(400, "\u0412\u0441\u0442\u0430\u0432\u0442\u0435 \u0442\u043E\u043A\u0435\u043D API \u0437 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u043F\u0440\u043E\u0434\u0430\u0432\u0446\u044F \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440\u0443 (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u043A\u043E\u043C\u043F\u0430\u043D\u0456\u0457 \u2192 API).");
+    let orders = null;
+    if (tokenChanged || b.check) {
+      orders = await epcOrders(fetchFn, tokenChanged ? t : cur.token, { limit: 10 });
+      next.checked_at = (/* @__PURE__ */ new Date()).toISOString();
+      if (tokenChanged) next.token = t;
+    }
+    await db.run(`UPDATE epc_accounts SET name = ?, token = ?, active = ?, checked_at = ? WHERE id = ?`, [next.name, next.token, next.active, next.checked_at, cur.id]);
+    if (tokenChanged) await logAudit(db, { user: c.get("user"), kind: "epc", refId: cur.id, action: "\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0442\u043E\u043A\u0435\u043D \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440\u0443", changes: [{ field: "token", from: keyHint(cur.token), to: keyHint(t) }] });
+    return c.json({ ...publicEpc(next), ...orders ? { orders: epcSample(orders) } : {} });
+  });
+  app.delete("/api/epc/accounts/:id", async (c) => {
+    need(c, "api");
+    const cur = await db.get(`SELECT * FROM epc_accounts WHERE id = ?`, [c.req.param("id")]);
+    if (!cur) throw fail(404, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    await db.run(`DELETE FROM epc_accounts WHERE id = ?`, [cur.id]);
+    await logAudit(db, { user: c.get("user"), kind: "epc", refId: cur.id, action: "\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440\u0443", changes: [{ field: "name", from: cur.name, to: "" }] });
+    return c.json({ ok: true });
+  });
+  app.get("/api/epc/marking/:ttn", async (c) => {
+    need(c, "docs.view");
+    const ttn = String(c.req.param("ttn")).replace(/\s/g, "");
+    if (!/^[\w-]{5,40}$/.test(ttn)) throw fail(400, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043D\u043E\u043C\u0435\u0440 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u043E\u0457.");
+    const p = String(c.req.query("provider") || "");
+    const providers = EPC_LABEL_PROVIDERS.includes(p) ? [p] : EPC_LABEL_PROVIDERS;
+    const accounts = await db.all(`SELECT * FROM epc_accounts WHERE active = 1 ORDER BY hits DESC, id`);
+    if (!accounts.length) throw fail(400, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D\u0438 \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440\u0443 \u0449\u0435 \u043D\u0435 \u0434\u043E\u0434\u0430\u043D\u043E: \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430: \u041D\u041F, \u0420\u043E\u0437\u0435\u0442\u043A\u0430, Prom, \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440\xBB.");
+    const reasons = /* @__PURE__ */ new Set();
+    for (const a of accounts) {
+      for (const prov of providers) {
+        const pdf = await epcLabelPdf(fetchFn, a.token, prov, ttn, (w) => reasons.add(w));
+        if (!pdf) continue;
+        await db.run(`UPDATE epc_accounts SET hits = hits + 1 WHERE id = ?`, [a.id]);
+        return new Response(pdf, {
+          headers: {
+            "Content-Type": "application/pdf",
+            "Content-Disposition": `inline; filename="marking-${ttn}.pdf"`,
+            "X-NP-Account": encodeURIComponent(a.name),
+            "Cache-Control": "private, max-age=600"
+          }
+        });
+      }
+    }
+    const why = reasons.size ? ` \u0412\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u044C \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440\u0443: ${[...reasons].slice(0, 3).join("; ")}.` : "";
+    throw fail(404, `\u041D\u0430\u043A\u043B\u0430\u0434\u043D\u043E\u0457 ${ttn} \u043D\u0435\u043C\u0430\u0454 \u0432 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0445 \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0430\u0445 \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440\u0443.${why}`);
+  });
   async function trackTtn(ttn, phone = "") {
     const t = String(ttn || "").replace(/\s/g, "");
     if (!/^\d{10,20}$/.test(t)) throw fail(400, "\u0422\u0422\u041D \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 \u2014 10\u201320 \u0446\u0438\u0444\u0440.");
     const acc = await db.get(`SELECT api_key FROM np_accounts WHERE active = 1 ORDER BY hits DESC, id LIMIT 1`);
-    if (!acc) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E\u0433\u043E \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430: \u041D\u041F, \u0420\u043E\u0437\u0435\u0442\u043A\u0430, Prom).");
+    if (!acc) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E\u0433\u043E \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430: \u041D\u041F, \u0420\u043E\u0437\u0435\u0442\u043A\u0430, Prom, \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440).");
     return npTracking(fetchFn, acc.api_key, t, String(phone || "").replace(/\D/g, "").slice(-12));
   }
   return { trackTtn };
@@ -13526,7 +13656,7 @@ var schema11 = {
 // src/modules/marking/schema.js
 var schema12 = {
   name: "marking",
-  version: 4,
+  version: 5,
   tables: [
     // Кабінети НП (ФОП або ТОВ): ключ API бачить лише сервер.
     `CREATE TABLE IF NOT EXISTS np_accounts (
@@ -13586,6 +13716,16 @@ var schema12 = {
     name TEXT NOT NULL DEFAULT '',
     token TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
+    checked_at TEXT DEFAULT '',
+    created_at TEXT
+  )`,
+    // Магазини Епіцентр Маркету (кабінет продавця): токен API — лише на сервері.
+    `CREATE TABLE IF NOT EXISTS epc_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL DEFAULT '',
+    token TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    hits INTEGER NOT NULL DEFAULT 0,
     checked_at TEXT DEFAULT '',
     created_at TEXT
   )`,

@@ -296,6 +296,16 @@ async function npMarking(btn) {
       toast(`ТТН ${rzTtn} · ${decodeURIComponent(res.headers.get('X-NP-Account') || '') || 'Розетка'}`);
       return;
     }
+    // Замовлення Епіцентру (поле 1 «Epicentr(…)») з ТТН не Нової пошти (НП — 14 цифр, 20…/59…): накладна з API Епіцентру.
+    const ttn = String(o.delivery?.ttn || '').replace(/\s/g, '');
+    if (/epicentr/i.test(current.order?.channel || current.crmOrder?.channel || '') && ttn && !/^(20|59)\d{12}$/.test(ttn)) {
+      const res = await fetch(`/api/epc/marking/${encodeURIComponent(ttn)}`);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Накладну Епіцентру не отримано.');
+      const url = URL.createObjectURL(await res.blob());
+      if (win) win.location.href = url; else window.open(url, '_blank');
+      toast(`Накладна ${ttn} · ${decodeURIComponent(res.headers.get('X-NP-Account') || '') || 'Епіцентр'}`);
+      return;
+    }
     const f = await api('POST', '/api/np/find', {
       ttn: o.delivery?.ttn || '', phone: o.buyer?.phone || '', date: current.crmOrder?.date || o.date || '',
       refs: [o.orderId, o.shortId, current.requestedId].filter(Boolean),
