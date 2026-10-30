@@ -19,7 +19,8 @@ const PRODUCTS = {
 };
 const OFFICES = ['5', '4', '6', '25'];
 const USERS = ['rybchuk', 'ivan', 'denys', 'vlad', 'olena'];
-const CH = ['Rozetka(oneday)', 'Prom(Amsterdam)', '', 'iHunt', 'Epicentr(Ecovent)'];
+// 6 джерел проти 5 менеджерів — поле 1 не збігається з менеджером, є замовлення Рітейлу в офісі «Маркетплейси»
+const CH = ['Rozetka(oneday)', 'Prom(Amsterdam)', '', 'iHunt', 'Riteil(Rozetka)', 'Epicentr(Ecovent)'];
 const STATUSES = [11, 14, 53, 18, 54, 58, 13];
 const DELIV = ['Нова Пошта', 'Укрпошта', 'Rozetka Delivery', 'Самовивіз', 'Нова пошта (адресна)', ''];
 const orders = new Map();
@@ -36,13 +37,14 @@ for (let d = addDays(today, -200); d <= today; d = addDays(d, 1)) {
     const code = String(1790000000000000 + id * 37);
     orders.set(code, {
       id: String(id), order_id: code, datetime: `${d} 12:00:00`, status: String(STATUSES[id % STATUSES.length]),
-      office: OFFICES[id % 4], user: USERS[id % 5], additional_1: CH[id % 5], site: '', utm_source: '',
+      office: OFFICES[id % 4], user: USERS[id % 5], additional_1: CH[id % CH.length], site: '', utm_source: '',
       total: (sum - discount).toFixed(2), products: lines, delivery: DELIV[id % DELIV.length], delivery_id: DELIV[id % DELIV.length] ? String(1 + (id % DELIV.length)) : '0',
     });
   }
 }
 let calls = 0;
 const byMethod = {};
+const ghosts = [];
 const tgSent = [];
 const fetchFn = async (url, opts = {}) => {
   if (url.startsWith('https://api.telegram.org/')) { tgSent.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ ok: true, result: {} })); }
@@ -54,7 +56,9 @@ const fetchFn = async (url, opts = {}) => {
   if (m === 'getStatuses') return json({ status: 'ok', data: { 11: 'Принят', 14: 'Отправлен', 53: 'Ожидает выкупа', 18: 'Завершено', 54: 'Відмова на пошті', 58: 'Повернуто на склад', 13: 'Відмова' } });
   if (m === 'getOrdersIdByStatus') {
     const s = p.get('status'); const a = p.get('date_start'); const b = p.get('date_end');
-    return json({ status: 'ok', data: [...orders.values()].filter((o) => o.status === s && o.datetime.slice(0, 10) >= a && o.datetime.slice(0, 10) <= b).map((o) => o.order_id) });
+    // ghosts — коди, які LP-CRM показує в списку «Принят» за сьогодні, але не віддає даними (перевірка повноти)
+    const extra = s === '11' && a <= today && today <= b ? ghosts : [];
+    return json({ status: 'ok', data: [...[...orders.values()].filter((o) => o.status === s && o.datetime.slice(0, 10) >= a && o.datetime.slice(0, 10) <= b).map((o) => o.order_id), ...extra] });
   }
   if (m === 'getOrdersByID') {
     const ids = p.get('order_id').split(',');
@@ -183,8 +187,21 @@ const cfg = await req('GET', '/api/an/config');
 const mp = cfg.depts.find((d) => d.name === 'Маркетплейси');
 await req('PUT', '/api/an/managers', [{ login: 'olena', name: 'Олена', dept_id: mp.id }]);
 const q2 = await req('POST', '/api/an/query', { from, to: today, depts: [mp.id] });
-const exp2 = expect.filter((o) => o.user === 'olena' || ['5', '25'].includes(o.office));
-assert.equal(q2.kpi.cur.cnt, exp2.length, 'відділ: менеджер має пріоритет над відділом CRM');
+// Відділ: спершу за джерелом («Поле 1», якщо воно закріплене за відділом), далі менеджер, потім відділ CRM.
+const srcDept = (o) => {
+  const v = String(o.additional_1 || '').trim().toLowerCase();
+  return v ? cfg.depts.find((d) => d.sources.some((s) => s.values.includes(v)))?.id ?? null : null;
+};
+const exp2 = expect.filter((o) => (srcDept(o) ? srcDept(o) === mp.id : o.user === 'olena' || ['5', '25'].includes(o.office)));
+assert.equal(q2.kpi.cur.cnt, exp2.length, 'відділ: джерело, далі менеджер, потім відділ CRM');
+assert.ok(expect.some((o) => srcDept(o) && srcDept(o) !== mp.id && o.user === 'olena'), 'у даних є замовлення менеджера Маркетплейсів з джерелом іншого відділу');
+// Регресія (жовтень 2026): замовлення «Riteil(Rozetka)» з офісом «Маркетплейси» (5) рахувались у Маркетплейсах.
+const rit = cfg.depts.find((d) => d.name === 'Riteil');
+const qr = await req('POST', '/api/an/query', { from, to: today, depts: [rit.id] });
+const expR = expect.filter((o) => o.additional_1 === 'Riteil(Rozetka)');
+assert.ok(expR.some((o) => o.office === '5'), 'у даних є Рітейл з офісом «Маркетплейси»');
+assert.equal(qr.kpi.cur.cnt, expR.length, 'Рітейл — усі замовлення з полем 1 Riteil, незалежно від офісу й менеджера');
+assert.equal(Math.round(qr.kpi.cur.rev * 100), Math.round(expR.reduce((s, o) => s + Number(o.total), 0) * 100), 'сума Рітейлу');
 
 // ---------- 4. Джерело за полем 1 ----------
 const rozetka = mp.sources.find((s) => s.name === 'Rozetka (OneDay)');
@@ -328,8 +345,10 @@ await req('PUT', '/api/an/managers', [{ login: 'denys', name: 'Денис', dept
 const mpSrcValues = new Set(mpS.sources.flatMap((x) => x.values));
 const ivanAll = await db.all(`SELECT ch, office, dept FROM an_orders WHERE user = 'denys'`);
 const off = new Map((await db.all(`SELECT office, dept_id FROM an_office_map`)).map((r) => [r.office, r.dept_id]));
+// джерело, закріплене за будь-яким відділом, — відділ джерела (напр. Riteil); інакше — як менеджера в кількох відділах
+const srcDeptS = new Map(cfgS.depts.flatMap((d) => d.sources.flatMap((x) => x.values.map((v) => [v, d.id]))));
 for (const o of ivanAll) {
-  const exp = mpSrcValues.has(o.ch) || off.get(o.office) === mpS.id ? mpS.id : soc.id;
+  const exp = srcDeptS.get(o.ch) ?? (mpSrcValues.has(o.ch) || off.get(o.office) === mpS.id ? mpS.id : soc.id);
   assert.equal(o.dept, exp, `відділ замовлення denys (${o.ch}, офіс ${o.office})`);
 }
 assert.ok(ivanAll.some((o) => o.dept === mpS.id) && ivanAll.some((o) => o.dept === soc.id), 'замовлення менеджера в обох відділах');
@@ -441,6 +460,30 @@ await db.run(`INSERT INTO settings (key, value) VALUES ('an_ttn_check_at', ?) ON
   const cfg = await req('GET', '/api/an/config');
   assert.ok(cfg.cronOn && cfg.ttnLast?.at);
   await db.run(`UPDATE users SET tg_chat_id = '', crm_logins = '' WHERE login = 'o'`);
+}
+
+// ---------- 10. Самоперевірка після оновлення ----------
+{
+  await runSync('daily');
+  let cfgC = await req('GET', '/api/an/config');
+  assert.ok(cfgC.check?.ok, `після звичайного оновлення все збігається: ${JSON.stringify(cfgC.check)}`);
+  // відділ, що не відповідає джерелу, — знайдено й перераховано
+  const ritC = cfgC.depts.find((d) => d.name === 'Riteil');
+  const broken = (await db.run(`UPDATE an_orders SET dept = 0 WHERE ch = 'riteil(rozetka)'`)).changes;
+  assert.ok(broken > 0);
+  await runSync('daily');
+  cfgC = await req('GET', '/api/an/config');
+  assert.ok(!cfgC.check.ok && cfgC.check.problems.some((p) => /не відповідає їхньому джерелу/.test(p)), JSON.stringify(cfgC.check));
+  assert.equal((await db.get(`SELECT COUNT(*) AS n FROM an_orders WHERE ch = 'riteil(rozetka)' AND dept != ?`, [ritC.id])).n, 0, 'відділи перераховано');
+  // LP-CRM показує в списку замовлення, яких немає в аналітиці, — розбіжність у журналі помилок
+  ghosts.push(...Array.from({ length: 6 }, (_, i) => String(1799000000000000 + i)));
+  await runSync('daily');
+  cfgC = await req('GET', '/api/an/config');
+  assert.ok(!cfgC.check.ok && cfgC.check.problems.some((p) => /«Принят»: у LP-CRM \d+, в аналітиці \d+/.test(p)), JSON.stringify(cfgC.check));
+  assert.ok((await db.get(`SELECT COUNT(*) AS n FROM error_log WHERE message LIKE '%Аналітика не збігається з LP-CRM%'`)).n >= 2, 'розбіжності — у журналі помилок');
+  ghosts.length = 0;
+  await runSync('daily');
+  assert.ok((await req('GET', '/api/an/config')).check.ok, 'після усунення — знову все збігається');
 }
 
 globalThis.setTimeout = realSetTimeout;
