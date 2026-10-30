@@ -33,6 +33,19 @@ export async function epcOrders(fetchFn, token, { limit = 10 } = {}) {
   return Array.isArray(j.items) ? j.items : [];
 }
 
+// Сторінка замовлень, змінених після updatedFrom (ISO, UTC); next — курсор наступної сторінки ('' — більше немає).
+export async function epcOrdersPage(fetchFn, token, { updatedFrom = '', cursor = '', limit = 100 } = {}) {
+  const q = new URLSearchParams({ limit: String(limit) });
+  q.append('sort[]', '-updatedAt');
+  if (updatedFrom) q.set('filter[updatedAt][from]', updatedFrom);
+  if (cursor) q.set('cursor', cursor);
+  const res = await send(fetchFn, token, `/v3/oms/orders?${q}`);
+  if (!res.ok) throw await fail(res);
+  const j = await res.json().catch(() => ({}));
+  const items = Array.isArray(j.items) ? j.items : [];
+  return { items, next: items.length && j.next && j.next !== j.current ? String(j.next) : '' };
+}
+
 // Коротко про доставку замовлення: провайдер і номер накладної.
 export const epcDelivery = (o) => ({
   provider: String(o?.address?.shipment?.provider || o?.shipment?.provider || ''),

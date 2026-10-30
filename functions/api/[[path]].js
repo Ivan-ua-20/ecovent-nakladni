@@ -10173,6 +10173,14 @@ async function rzLogin(fetchFn, username, password) {
   if (!j?.success || !j.content?.access_token) throw rzError(j);
   return { token: j.content.access_token, marketId: String(j.content.market?.id || ""), marketTitle: String(j.content.market?.title || "") };
 }
+async function rzOrdersSearch(fetchFn, token, { changedFrom = "", page = 1 } = {}) {
+  const q = new URLSearchParams({ page: String(page), sort: "-changed", expand: "delivery,status_data,purchases" });
+  if (changedFrom) q.set("changed_from", changedFrom);
+  const res = await send(fetchFn, `/orders/search?${q}`, { token });
+  const j = await res.json().catch(() => null);
+  if (!j?.success) throw rzError(j);
+  return { orders: Array.isArray(j.content?.orders) ? j.content.orders : [], pageCount: Number(j.content?._meta?.pageCount) || 1 };
+}
 async function rzTtnPdf(fetchFn, token, ttn, why = () => {
 }) {
   const res = await send(fetchFn, "/delivery-rozetka/ttn-print-batch", { method: "POST", token, body: { track_numbers: [ttn] } });
@@ -10225,10 +10233,12 @@ async function send2(fetchFn, token, path) {
   if (j.error) throw Object.assign(new Error(`Prom: ${j.error}`), { status: 400 });
   return j;
 }
-async function promOrders(fetchFn, token, { limit = 20, dateFrom = "", status = "" } = {}) {
+async function promOrders(fetchFn, token, { limit = 20, dateFrom = "", status = "", lastModifiedFrom = "", lastId = 0 } = {}) {
   const q = new URLSearchParams({ limit: String(limit) });
   if (dateFrom) q.set("date_from", dateFrom);
   if (status) q.set("status", status);
+  if (lastModifiedFrom) q.set("last_modified_from", lastModifiedFrom);
+  if (lastId) q.set("last_id", String(lastId));
   return (await send2(fetchFn, token, `/orders/list?${q}`)).orders || [];
 }
 var promDelivery = (o) => ({
@@ -10262,6 +10272,17 @@ async function epcOrders(fetchFn, token, { limit = 10 } = {}) {
   if (!res.ok) throw await fail2(res);
   const j = await res.json().catch(() => ({}));
   return Array.isArray(j.items) ? j.items : [];
+}
+async function epcOrdersPage(fetchFn, token, { updatedFrom = "", cursor = "", limit = 100 } = {}) {
+  const q = new URLSearchParams({ limit: String(limit) });
+  q.append("sort[]", "-updatedAt");
+  if (updatedFrom) q.set("filter[updatedAt][from]", updatedFrom);
+  if (cursor) q.set("cursor", cursor);
+  const res = await send3(fetchFn, token, `/v3/oms/orders?${q}`);
+  if (!res.ok) throw await fail2(res);
+  const j = await res.json().catch(() => ({}));
+  const items = Array.isArray(j.items) ? j.items : [];
+  return { items, next: items.length && j.next && j.next !== j.current ? String(j.next) : "" };
 }
 var epcDelivery = (o) => ({
   provider: String(o?.address?.shipment?.provider || o?.shipment?.provider || ""),
@@ -10725,7 +10746,23 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
     if (!acc) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E\u0433\u043E \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430: \u041D\u041F, \u0420\u043E\u0437\u0435\u0442\u043A\u0430, Prom, \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440).");
     return npTracking(fetchFn, acc.api_key, t, String(phone || "").replace(/\D/g, "").slice(-12));
   }
-  return { trackTtn };
+  const SHOP_TABLES = { rozetka: "rz_accounts", prom: "prom_accounts", epc: "epc_accounts" };
+  async function marketShops() {
+    const out = {};
+    for (const [mp, t] of Object.entries(SHOP_TABLES)) out[mp] = await db.all(`SELECT * FROM ${t} ORDER BY name, id`);
+    return out;
+  }
+  async function renameShop(mp, id, name, user) {
+    const t = SHOP_TABLES[mp];
+    const cur = t && await db.get(`SELECT id, name FROM ${t} WHERE id = ?`, [id]);
+    if (!cur) throw fail(404, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const next = String(name || "").trim().slice(0, 100);
+    if (!next) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043D\u0430\u0437\u0432\u0443 \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0443.");
+    await db.run(`UPDATE ${t} SET name = ? WHERE id = ?`, [next, cur.id]);
+    await logAudit(db, { user, kind: mp === "rozetka" ? "rz" : mp, refId: cur.id, action: "\u043F\u0435\u0440\u0435\u0439\u043C\u0435\u043D\u043E\u0432\u0430\u043D\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D", changes: [{ field: "name", from: cur.name, to: next }] });
+    return { id: cur.id, name: next };
+  }
+  return { trackTtn, marketShops, renameShop, rozetkaToken: rzToken };
 }
 
 // src/integrations/rozetka-supplier.js
@@ -12521,6 +12558,269 @@ function mountCron(app, { db, cronTasks, services = {}, shared: shared2 = {} }) 
   });
 }
 
+// src/modules/market/index.js
+var KEEP_DAYS3 = 45;
+var FIRST_DAYS = 30;
+var PAGES_PER_RUN = 3;
+var OVERLAP_MS = 10 * 6e4;
+var MARKETS = [
+  { key: "rozetka", title: "\u0420\u043E\u0437\u0435\u0442\u043A\u0430" },
+  { key: "prom", title: "Prom" },
+  { key: "epc", title: "\u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440" }
+];
+var EPC_STATUS = {
+  new: "\u041D\u043E\u0432\u0438\u0439",
+  confirmed_by_merchant: "\u041F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E \u043F\u0440\u043E\u0434\u0430\u0432\u0446\u0435\u043C",
+  confirmed: "\u041F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u0438\u0439",
+  sent: "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E",
+  delivered: "\u0413\u043E\u0442\u043E\u0432\u0438\u0439 \u0434\u043E \u0432\u0438\u0434\u0430\u0447\u0456",
+  completed: "\u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u043E",
+  closed: "\u0417\u0430\u043A\u0440\u0438\u0442\u043E",
+  canceled: "\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E",
+  returned: "\u041F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043E",
+  return_requested: "\u0417\u0430\u043F\u0438\u0442 \u043D\u0430 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F",
+  canceled_by_merchant: "\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u043F\u0440\u043E\u0434\u0430\u0432\u0446\u0435\u043C",
+  completed_merchant_rejection: "\u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u043E (\u0432\u0456\u0434\u043C\u043E\u0432\u0430 \u043F\u0440\u043E\u0434\u0430\u0432\u0446\u044F)",
+  closed_merchant_rejection: "\u0417\u0430\u043A\u0440\u0438\u0442\u043E (\u0432\u0456\u0434\u043C\u043E\u0432\u0430 \u043F\u0440\u043E\u0434\u0430\u0432\u0446\u044F)"
+};
+var EPC_DELIVERY = {
+  nova_poshta: "\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430",
+  ukrposhta: "\u0423\u043A\u0440\u043F\u043E\u0448\u0442\u0430",
+  meest: "Meest",
+  pickup: "\u0421\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437",
+  cvz_epicentr: "\u0426\u0435\u043D\u0442\u0440 \u0432\u0438\u0434\u0430\u0447\u0456 \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440",
+  parcel_box_epicentr: "\u041F\u043E\u0448\u0442\u043E\u043C\u0430\u0442 \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440",
+  courier_delivery: "\u041A\u0443\u0440'\u0454\u0440"
+};
+var kyivDT = (v) => {
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return String(v || "").slice(0, 19).replace("T", " ");
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(d);
+};
+var money2 = (v) => {
+  if (typeof v === "number") return v;
+  const n = Number(String(v ?? "").replace(/[^\d,.-]/g, "").replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+};
+var fio = (...parts) => parts.map((x) => String(x || "").trim()).filter(Boolean).join(" ");
+var ROW = {
+  rozetka: (o) => ({
+    id: String(o.id),
+    number: String(o.id),
+    created_at: String(o.created || ""),
+    changed_at: String(o.changed || ""),
+    status: String(o.status ?? ""),
+    status_name: String(o.status_data?.name_uk || o.status_data?.name || ""),
+    customer: o.user_title?.full_name || o.delivery?.recipient_title?.full_name || fio(o.delivery?.recipient_last_name, o.delivery?.recipient_first_name),
+    phone: String(o.user_phone || o.delivery?.recipient_phone || ""),
+    total: money2(o.cost ?? o.amount),
+    delivery: String(o.delivery?.delivery_service_name || o.delivery_service?.name || ""),
+    ttn: String(o.ttn || o.delivery?.ttn || ""),
+    items: (o.purchases || []).map((p) => ({ name: String(p.item_name || p.item?.name || ""), qty: Number(p.quantity) || 1, price: money2(p.price) }))
+  }),
+  prom: (o) => ({
+    id: String(o.id),
+    number: String(o.id),
+    created_at: kyivDT(o.date_created),
+    changed_at: kyivDT(o.date_modified || o.date_created),
+    status: String(o.status || ""),
+    status_name: String(o.status_name || o.status || ""),
+    customer: fio(o.client_last_name, o.client_first_name, o.client_second_name),
+    phone: String(o.phone || ""),
+    total: money2(o.full_price ?? o.price),
+    delivery: String(o.delivery_option?.name || ""),
+    ttn: String(o.delivery_provider_data?.declaration_number || ""),
+    items: (o.products || []).map((p) => ({ name: String(p.name || p.name_multilang?.uk || ""), qty: Number(p.quantity) || 1, price: money2(p.price) }))
+  }),
+  epc: (o) => ({
+    id: String(o.id),
+    number: String(o.number || o.id),
+    created_at: kyivDT(o.createdAt),
+    changed_at: kyivDT(o.updatedAt || o.createdAt),
+    status: String(o.statusCode || ""),
+    status_name: EPC_STATUS[o.statusCode] || String(o.statusCode || ""),
+    customer: fio(o.address?.lastName, o.address?.firstName, o.address?.patronymic),
+    phone: String(o.address?.phone || ""),
+    total: money2(o.subtotal),
+    delivery: EPC_DELIVERY[o.address?.shipment?.provider] || String(o.address?.shipment?.provider || ""),
+    ttn: String(o.address?.shipment?.number || ""),
+    items: (o.items || []).map((p) => ({ name: String(p.title || ""), qty: Number(p.quantity) || 1, price: money2(p.price) }))
+  })
+};
+function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
+}, onCleanup = () => {
+} }) {
+  onCleanup(async () => {
+    const border = new Date(Date.now() - KEEP_DAYS3 * 864e5).toISOString().slice(0, 10);
+    await db.run(`DELETE FROM mp_orders WHERE created_at != '' AND created_at < ?`, [border]);
+  });
+  const shopsOf = async () => await services.marking?.marketShops?.() || {};
+  async function saveRows(mp, accountId, rows) {
+    if (!rows.length) return;
+    const now = nowIso();
+    await db.batch(rows.map((r) => [
+      `INSERT INTO mp_orders (mp, account_id, id, number, created_at, changed_at, status, status_name, customer, phone, total, delivery, ttn, items, synced_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(mp, account_id, id) DO UPDATE SET number = excluded.number, created_at = excluded.created_at, changed_at = excluded.changed_at,
+         status = excluded.status, status_name = excluded.status_name, customer = excluded.customer, phone = excluded.phone, total = excluded.total,
+         delivery = excluded.delivery, ttn = excluded.ttn, items = excluded.items, synced_at = excluded.synced_at`,
+      [mp, accountId, r.id, r.number, r.created_at, r.changed_at, r.status, r.status_name, r.customer, r.phone, r.total, r.delivery, r.ttn, JSON.stringify(r.items), now]
+    ]));
+  }
+  async function fetchPage(mp, acc, from, cursor) {
+    if (mp === "prom") {
+      const list = await promOrders(fetchFn, acc.token, { limit: 100, lastModifiedFrom: new Date(from).toISOString().slice(0, 19), lastId: Number(cursor) || 0 });
+      const next = list.length >= 100 ? String(Math.min(...list.map((o) => Number(o.id))) - 1) : "";
+      return { rows: list.map(ROW.prom), next };
+    }
+    if (mp === "epc") {
+      const { items, next } = await epcOrdersPage(fetchFn, acc.token, { updatedFrom: new Date(from).toISOString(), cursor });
+      return { rows: items.map(ROW.epc), next };
+    }
+    const page = Number(cursor) || 1;
+    const opts = { changedFrom: kyivDT(from), page };
+    let r;
+    try {
+      r = await rzOrdersSearch(fetchFn, await services.marking.rozetkaToken(acc), opts);
+    } catch (e) {
+      if (!e.rzAuth) throw e;
+      r = await rzOrdersSearch(fetchFn, await services.marking.rozetkaToken(acc, true), opts);
+    }
+    return { rows: r.orders.map(ROW.rozetka), next: page < r.pageCount ? String(page + 1) : "" };
+  }
+  async function syncShop(mp, acc, { pages = PAGES_PER_RUN } = {}) {
+    const st = await db.get(`SELECT * FROM mp_sync WHERE mp = ? AND account_id = ?`, [mp, acc.id]);
+    const resume = Boolean(st?.cursor);
+    const started = resume ? st.run_started : nowIso();
+    const from = resume ? st.run_from : new Date((st?.since ? Date.parse(st.since) : Date.now() - FIRST_DAYS * 864e5) - OVERLAP_MS).toISOString();
+    let cursor = resume ? st.cursor : "";
+    let saved = 0;
+    const put = (fields) => db.run(
+      `INSERT INTO mp_sync (mp, account_id, synced_at, since, cursor, run_from, run_started, error, error_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(mp, account_id) DO UPDATE SET synced_at = excluded.synced_at, since = excluded.since, cursor = excluded.cursor,
+         run_from = excluded.run_from, run_started = excluded.run_started, error = excluded.error, error_at = excluded.error_at`,
+      [
+        mp,
+        acc.id,
+        fields.synced_at ?? st?.synced_at ?? "",
+        fields.since ?? st?.since ?? "",
+        fields.cursor ?? "",
+        fields.run_from ?? "",
+        fields.run_started ?? "",
+        fields.error ?? "",
+        fields.error_at ?? ""
+      ]
+    );
+    try {
+      for (let p = 0; p < pages; p++) {
+        const page = await fetchPage(mp, acc, from, cursor);
+        await saveRows(mp, acc.id, page.rows);
+        saved += page.rows.length;
+        cursor = page.next;
+        if (!cursor) break;
+      }
+    } catch (e) {
+      if (e.pending) {
+        await put({ cursor, run_from: from, run_started: started });
+        throw e;
+      }
+      await put({ cursor, run_from: cursor ? from : "", run_started: cursor ? started : "", error: String(e.message || e).slice(0, 300), error_at: nowIso() });
+      throw e;
+    }
+    if (cursor) await put({ cursor, run_from: from, run_started: started, synced_at: nowIso() });
+    else await put({ since: started, synced_at: nowIso() });
+    return { saved, more: Boolean(cursor) };
+  }
+  async function syncAll() {
+    const shops = await shopsOf();
+    const out = { shops: 0, saved: 0, more: 0, errors: 0 };
+    for (const { key } of MARKETS) {
+      for (const acc of (shops[key] || []).filter((a) => a.active)) {
+        try {
+          const r = await syncShop(key, acc);
+          out.shops++;
+          out.saved += r.saved;
+          if (r.more) out.more++;
+        } catch (e) {
+          if (e.pending) return { ...out, more: out.more + 1 };
+          out.errors++;
+        }
+      }
+    }
+    return out.shops || out.errors ? out : { skipped: "\u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0438 \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0456\u0432 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E" };
+  }
+  onCron("market", "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0456\u0432 (\u0420\u043E\u0437\u0435\u0442\u043A\u0430, Prom, \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440)", syncAll);
+  app.get("/api/mp/shops", async (c) => {
+    need(c, "docs.view");
+    const [shops, counts, syncs] = await Promise.all([
+      shopsOf(),
+      db.all(`SELECT mp, account_id, COUNT(*) AS n FROM mp_orders GROUP BY mp, account_id`),
+      db.all(`SELECT * FROM mp_sync`)
+    ]);
+    const cnt = new Map(counts.map((r) => [`${r.mp}:${r.account_id}`, r.n]));
+    const sy = new Map(syncs.map((r) => [`${r.mp}:${r.account_id}`, r]));
+    return c.json(MARKETS.map((m) => ({
+      ...m,
+      shops: (shops[m.key] || []).map((a) => {
+        const s = sy.get(`${m.key}:${a.id}`);
+        return { id: a.id, name: a.name, active: Boolean(a.active), orders: cnt.get(`${m.key}:${a.id}`) || 0, synced_at: s?.synced_at || "", loading: Boolean(s?.cursor), error: s?.error || "", error_at: s?.error_at || "" };
+      })
+    })));
+  });
+  app.get("/api/mp/orders", async (c) => {
+    need(c, "docs.view");
+    const mp = c.req.query("mp");
+    if (!MARKETS.some((m) => m.key === mp)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441.");
+    const where = ["mp = ?"];
+    const params = [mp];
+    const acc = Number(c.req.query("account")) || 0;
+    if (acc) {
+      where.push("account_id = ?");
+      params.push(acc);
+    }
+    const base = [...where];
+    const baseParams = [...params];
+    const status = c.req.query("status") || "";
+    if (status) {
+      where.push("status = ?");
+      params.push(status);
+    }
+    const q = String(c.req.query("q") || "").trim();
+    if (q) {
+      const digits = q.replace(/\D/g, "");
+      where.push(`(number LIKE ? OR customer LIKE ? OR ttn LIKE ?${digits.length >= 5 ? " OR phone LIKE ?" : ""})`);
+      params.push(`%${q}%`, `%${q}%`, `%${q}%`, ...digits.length >= 5 ? [`%${digits.slice(-9)}%`] : []);
+    }
+    const [rows, statuses] = await Promise.all([
+      db.all(`SELECT * FROM mp_orders WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT 300`, params),
+      db.all(`SELECT status, MAX(status_name) AS status_name, COUNT(*) AS n FROM mp_orders WHERE ${base.join(" AND ")} GROUP BY status ORDER BY n DESC`, baseParams)
+    ]);
+    return c.json({
+      rows: rows.map((r) => ({ ...r, items: (() => {
+        try {
+          return JSON.parse(r.items || "[]");
+        } catch {
+          return [];
+        }
+      })() })),
+      statuses
+    });
+  });
+  app.post("/api/mp/sync", async (c) => {
+    need(c, "docs.view");
+    const b = await c.req.json().catch(() => ({}));
+    const acc = ((await shopsOf())[b.mp] || []).find((a) => a.id === Number(b.account));
+    if (!acc) throw fail(404, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return c.json(await syncShop(b.mp, acc));
+  });
+  app.put("/api/mp/shops/:mp/:id", async (c) => {
+    need(c, "api");
+    const b = await c.req.json().catch(() => ({}));
+    return c.json(await services.marking.renameShop(c.req.param("mp"), Number(c.req.param("id")), b.name, c.get("user")));
+  });
+  return { syncAll };
+}
+
 // src/app.js
 function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, odbBase = ODB_BASE, shared: shared2 = {} }) {
   const app = new Hono3();
@@ -12584,6 +12884,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   services.rahunky = mountRahunky(app, ctx);
   services.marking = mountMarking(app, ctx);
   services.retail = mountRetail(app, ctx);
+  services.market = mountMarket(app, ctx);
   services.analytics = mountAnalytics(app, ctx);
   services.notify = mountTg(app, ctx);
   mountHome(app, ctx);
@@ -13859,8 +14160,52 @@ var schema13 = {
   ]
 };
 
+// src/modules/market/schema.js
+var schema14 = {
+  name: "market",
+  version: 1,
+  tables: [
+    // mp — rozetka | prom | epc; account_id — магазин у налаштуваннях доставки; items — JSON [{ name, qty, price }].
+    `CREATE TABLE IF NOT EXISTS mp_orders (
+    mp TEXT NOT NULL,
+    account_id INTEGER NOT NULL,
+    id TEXT NOT NULL,
+    number TEXT DEFAULT '',
+    created_at TEXT DEFAULT '',
+    changed_at TEXT DEFAULT '',
+    status TEXT DEFAULT '',
+    status_name TEXT DEFAULT '',
+    customer TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    total REAL DEFAULT 0,
+    delivery TEXT DEFAULT '',
+    ttn TEXT DEFAULT '',
+    items TEXT DEFAULT '[]',
+    synced_at TEXT DEFAULT '',
+    PRIMARY KEY (mp, account_id, id)
+  )`,
+    `CREATE INDEX IF NOT EXISTS mp_orders_list ON mp_orders (mp, account_id, created_at)`,
+    `CREATE INDEX IF NOT EXISTS mp_orders_created ON mp_orders (created_at)`,
+    // Стан синхронізації магазину: since — з якого часу брати зміни; незавершений прохід (кілька сторінок за раз) —
+    // cursor (наступна сторінка), run_from і run_started — його межі; остання помилка.
+    `CREATE TABLE IF NOT EXISTS mp_sync (
+    mp TEXT NOT NULL,
+    account_id INTEGER NOT NULL,
+    synced_at TEXT DEFAULT '',
+    since TEXT DEFAULT '',
+    cursor TEXT DEFAULT '',
+    run_from TEXT DEFAULT '',
+    run_started TEXT DEFAULT '',
+    error TEXT DEFAULT '',
+    error_at TEXT DEFAULT '',
+    PRIMARY KEY (mp, account_id)
+  )`
+  ],
+  columns: []
+};
+
 // src/migrate.js
-var MODULE_SCHEMAS = [schema, schema2, schema3, schema4, schema5, schema6, schema7, schema8, schema9, schema10, schema11, schema12, schema13];
+var MODULE_SCHEMAS = [schema, schema2, schema3, schema4, schema5, schema6, schema7, schema8, schema9, schema10, schema11, schema12, schema13, schema14];
 var versionKey = (m) => `schema:${m.name}`;
 async function migrate(db, modules = MODULE_SCHEMAS) {
   let have = {};

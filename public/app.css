@@ -234,6 +234,7 @@ body.auth-mode .shell { display: none; }
 .chip { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; min-height: 32px; }
 .chip:hover { border-color: #a9c9c2; }
 .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 .chip.on .muted, .chip.on small { color: inherit; opacity: .85; }
 .an-sync { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
 .an-sync-top { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; }

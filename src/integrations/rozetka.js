@@ -45,6 +45,17 @@ export async function rzLogin(fetchFn, username, password) {
   return { token: j.content.access_token, marketId: String(j.content.market?.id || ''), marketTitle: String(j.content.market?.title || '') };
 }
 
+// Сторінка замовлень магазину, змінених після changedFrom ('YYYY-MM-DD HH:MM:SS', київський час кабінету),
+// найновіші зміни першими; pageCount — скільки всього сторінок. Помилка з rzAuth — потрібен новий вхід.
+export async function rzOrdersSearch(fetchFn, token, { changedFrom = '', page = 1 } = {}) {
+  const q = new URLSearchParams({ page: String(page), sort: '-changed', expand: 'delivery,status_data,purchases' });
+  if (changedFrom) q.set('changed_from', changedFrom);
+  const res = await send(fetchFn, `/orders/search?${q}`, { token });
+  const j = await res.json().catch(() => null);
+  if (!j?.success) throw rzError(j);
+  return { orders: Array.isArray(j.content?.orders) ? j.content.orders : [], pageCount: Number(j.content?._meta?.pageCount) || 1 };
+}
+
 // PDF ТТН ROZETKA Delivery. null — ТТН не з цього магазину (why отримує відповідь Розетки); помилка з rzAuth — потрібен новий вхід.
 export async function rzTtnPdf(fetchFn, token, ttn, why = () => {}) {
   const res = await send(fetchFn, '/delivery-rozetka/ttn-print-batch', { method: 'POST', token, body: { track_numbers: [ttn] } });
