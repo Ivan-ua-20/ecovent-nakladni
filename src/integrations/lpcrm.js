@@ -2,33 +2,34 @@
 // Формат запиту LP-CRM: POST https://<піддомен>.lp-crm.biz/api/<метод>.html, поля key + параметри.
 
 // LP-CRM обмежує частоту запитів (відповідає 429 Too Many Requests).
-// Тому всі запити йдуть по черзі з паузою між ними, а при 429 — повтор із наростаючою затримкою.
+// Тому між запитами — пауза, а при 429 — повтор із наростаючою затримкою.
+// Пауза — бронюванням часу, без спільного ланцюжка промісів: на Cloudflare екземпляр обслуговує багато звернень, і якщо
+// звернення обірвалося посеред запиту (напр. фонова задача), його проміс уже ніколи не завершиться — ланцюжок через нього
+// навічно зупинив би всі наступні запити до LP-CRM у цьому екземплярі.
 const MIN_GAP_MS = 1500;
+const TIMEOUT_MS = 25000; // жоден запит до LP-CRM не висить довше
 const RETRY_DELAYS_MS = [3000, 6000, 12000];
-let queue = Promise.resolve();
+let nextAt = 0; // коли можна наступний запит (з урахуванням уже заброньованих)
 let lastAt = 0;
-let inQueue = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function throttled(task) {
-  inQueue++;
-  const run = queue.then(async () => {
-    const wait = lastAt + MIN_GAP_MS - Date.now();
-    if (wait > 0) await sleep(wait);
-    try { return await task(); } finally { lastAt = Date.now(); inQueue--; }
-  });
-  queue = run.catch(() => {});
-  return run;
+async function throttled(task) {
+  const now = Date.now();
+  const at = Math.max(now, nextAt);
+  nextAt = at + MIN_GAP_MS;
+  if (at > now) await sleep(at - now);
+  try { return await task(); } finally { lastAt = Date.now(); }
 }
 
-// Фонові задачі (оновлення індексу замовлень) поступаються місцем: не стають у чергу, поки хтось чекає LP-CRM
-// або щойно звертався до неї, — інакше пошук накладної чекав би, доки пройдуть усі фонові запити.
-export const lpcrmBusy = (recentMs = 5000) => inQueue > 0 || Date.now() - lastAt < recentMs;
+// Фонові задачі (оновлення індексу замовлень) поступаються місцем: не стартують, поки хтось чекає своєї черги до LP-CRM
+// або щойно звертався до неї, — інакше пошук накладної чекав би, доки пройдуть фонові запити.
+export const lpcrmBusy = (recentMs = 5000) => nextAt - MIN_GAP_MS > Date.now() || Date.now() - lastAt < recentMs;
 
 export async function call(fetchFn, subdomain, key, method, params, { sleepFn = sleep } = {}) {
   const body = new URLSearchParams({ key, ...params }).toString();
   const doFetch = (url) => throttled(() => fetchFn(url, {
     method: 'POST',
+    signal: AbortSignal.timeout(TIMEOUT_MS),
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
   }));
@@ -39,6 +40,7 @@ export async function call(fetchFn, subdomain, key, method, params, { sleepFn = 
     res = await doFetch(`https://${subdomain}.lp-crm.biz/api/${method}.html`);
   } catch (e) {
     if (e?.pending) throw e; // вичерпано ліміт запитів на звернення — продовжимо в наступному
+    if (e?.name === 'TimeoutError') throw new Error(`LP-CRM не відповіла за ${TIMEOUT_MS / 1000} с. Спробуйте ще раз.`);
     throw new Error(`Не вдалося з'єднатися з LP-CRM (${subdomain}.lp-crm.biz): ${e?.message || e}`);
   }
   for (let i = 0; res.status === 429 && i < RETRY_DELAYS_MS.length; i++) {

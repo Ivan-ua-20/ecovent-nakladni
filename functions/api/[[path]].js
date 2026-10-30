@@ -2591,32 +2591,28 @@ function mountRefs(app, { db, fetchFn }) {
 
 // src/integrations/lpcrm.js
 var MIN_GAP_MS = 1500;
+var TIMEOUT_MS = 25e3;
 var RETRY_DELAYS_MS = [3e3, 6e3, 12e3];
-var queue = Promise.resolve();
+var nextAt = 0;
 var lastAt = 0;
-var inQueue = 0;
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-function throttled(task) {
-  inQueue++;
-  const run = queue.then(async () => {
-    const wait = lastAt + MIN_GAP_MS - Date.now();
-    if (wait > 0) await sleep(wait);
-    try {
-      return await task();
-    } finally {
-      lastAt = Date.now();
-      inQueue--;
-    }
-  });
-  queue = run.catch(() => {
-  });
-  return run;
+async function throttled(task) {
+  const now = Date.now();
+  const at = Math.max(now, nextAt);
+  nextAt = at + MIN_GAP_MS;
+  if (at > now) await sleep(at - now);
+  try {
+    return await task();
+  } finally {
+    lastAt = Date.now();
+  }
 }
-var lpcrmBusy = (recentMs = 5e3) => inQueue > 0 || Date.now() - lastAt < recentMs;
+var lpcrmBusy = (recentMs = 5e3) => nextAt - MIN_GAP_MS > Date.now() || Date.now() - lastAt < recentMs;
 async function call(fetchFn, subdomain, key, method, params, { sleepFn = sleep } = {}) {
   const body = new URLSearchParams({ key, ...params }).toString();
   const doFetch = (url) => throttled(() => fetchFn(url, {
     method: "POST",
+    signal: AbortSignal.timeout(TIMEOUT_MS),
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body
   }));
@@ -2625,6 +2621,7 @@ async function call(fetchFn, subdomain, key, method, params, { sleepFn = sleep }
     res = await doFetch(`https://${subdomain}.lp-crm.biz/api/${method}.html`);
   } catch (e) {
     if (e?.pending) throw e;
+    if (e?.name === "TimeoutError") throw new Error(`LP-CRM \u043D\u0435 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u043B\u0430 \u0437\u0430 ${TIMEOUT_MS / 1e3} \u0441. \u0421\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0449\u0435 \u0440\u0430\u0437.`);
     throw new Error(`\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u0437'\u0454\u0434\u043D\u0430\u0442\u0438\u0441\u044F \u0437 LP-CRM (${subdomain}.lp-crm.biz): ${e?.message || e}`);
   }
   for (let i = 0; res.status === 429 && i < RETRY_DELAYS_MS.length; i++) {
@@ -3023,7 +3020,7 @@ function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {
     for (let k = 0; k < fresh.length; k += 100) await saveOrders2(await getOrdersBatch(fetchFn, creds, fresh.slice(k, k + 100)));
     return codes;
   }
-  const WARM_MS = 3 * 6e4;
+  const WARM_MS = 2.5 * 6e4;
   async function warmIndex() {
     const s = await settings();
     const creds = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
@@ -4299,8 +4296,8 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const gapMin = Number(st.refreshGapMin ?? AN_DEFAULTS.refreshGapMin) || 0;
     const cnt = await getJson("an_today_cnt");
     const used = cnt?.day === kyivDay() ? cnt.n || 0 : 0;
-    const nextAt = gapMin && lastSync ? new Date(Date.parse(lastSync) + gapMin * 6e4).toISOString() : "";
-    return { perDay, gapMin, used, left: perDay ? Math.max(0, perDay - used) : null, nextAt: nextAt && Date.parse(nextAt) > Date.now() ? nextAt : "" };
+    const nextAt2 = gapMin && lastSync ? new Date(Date.parse(lastSync) + gapMin * 6e4).toISOString() : "";
+    return { perDay, gapMin, used, left: perDay ? Math.max(0, perDay - used) : null, nextAt: nextAt2 && Date.parse(nextAt2) > Date.now() ? nextAt2 : "" };
   }
   const hhmm = (iso) => new Date(iso).toLocaleTimeString("uk-UA", { timeZone: "Europe/Kyiv", hour: "2-digit", minute: "2-digit" });
   function summary(s) {
