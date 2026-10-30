@@ -18,7 +18,10 @@ async function throttled(task) {
   const at = Math.max(now, nextAt);
   nextAt = at + MIN_GAP_MS;
   if (at > now) await sleep(at - now);
-  try { return await task(); } finally { lastAt = Date.now(); }
+  try { return await task(); } finally {
+    lastAt = Date.now();
+    nextAt = Math.max(nextAt, lastAt + MIN_GAP_MS); // пауза — від кінця запиту, як і раніше
+  }
 }
 
 // Фонові задачі (оновлення індексу замовлень) поступаються місцем: не стартують, поки хтось чекає своєї черги до LP-CRM
