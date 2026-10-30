@@ -1,5 +1,5 @@
 // Клієнт API продавця Розетки (https://api-seller.rozetka.com.ua). Лише те, що потрібно для маркування
-// ROZETKA Delivery (точки видачі, ТТН «RMP-…»): вхід, друк ТТН (PDF).
+// ROZETKA Delivery (точки видачі, ТТН «RMP-…», а також «PRM-…» — створені в кабінеті Prom): вхід, друк ТТН (PDF).
 // Вхід — логін і пароль кабінету продавця (пароль у base64), токен діє 24 год і продовжується при використанні.
 // Помилки приходять з HTTP 200: { success: false, errors: { message, code } }.
 
@@ -45,16 +45,17 @@ export async function rzLogin(fetchFn, username, password) {
   return { token: j.content.access_token, marketId: String(j.content.market?.id || ''), marketTitle: String(j.content.market?.title || '') };
 }
 
-// PDF ТТН ROZETKA Delivery. null — ТТН не з цього магазину; помилка з rzAuth — потрібен новий вхід.
-export async function rzTtnPdf(fetchFn, token, ttn) {
+// PDF ТТН ROZETKA Delivery. null — ТТН не з цього магазину (why отримує відповідь Розетки); помилка з rzAuth — потрібен новий вхід.
+export async function rzTtnPdf(fetchFn, token, ttn, why = () => {}) {
   const res = await send(fetchFn, '/delivery-rozetka/ttn-print-batch', { method: 'POST', token, body: { track_numbers: [ttn] } });
   const buf = new Uint8Array(await res.arrayBuffer());
   if (isPdf(buf)) return buf;
   let j = null;
-  try { j = JSON.parse(new TextDecoder().decode(buf)); } catch { return null; }
+  try { j = JSON.parse(new TextDecoder().decode(buf)); } catch { why(`HTTP ${res.status}`); return null; }
   if (!j?.success) {
     const err = rzError(j);
     if (err.rzAuth) throw err;
+    why(err.message);
     return null; // entity_not_found / access_denied / error_print_ttn — пробуємо інший магазин
   }
   // На випадок, якщо файл прийде в JSON (base64 або посилання).

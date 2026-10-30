@@ -95,6 +95,13 @@ assert.equal(r.status, 200, 'регістр і пробіли не заважа�
 assert.equal(r.shop, 'Ековент Магазин');
 assert.equal((await pdf('RMP-9999999999')).status, 404, 'чужа ТТН — 404');
 assert.equal((await pdf('20450000000000')).status, 400, 'не RMP — 400');
+// PRM (ЕН з кабінету Prom): пробуємо повний номер і 9 цифр; не вийшло — зрозуміла порада з відповіддю Розетки
+SHOPS.shop2.ttns.push('872264649');
+r = await pdf('PRM-872264649');
+assert.equal(r.status, 200, 'PRM друкується за цифрами');
+r = await pdf('PRM-111222333');
+assert.equal(r.status, 404);
+assert.match(JSON.parse(r.text).error, /кабінеті Prom.*Відповідь Розетки: Розетка: не знайдено/s);
 
 // ---------- 3. Прострочений токен → новий вхід і повтор ----------
 tokens.clear();
