@@ -76,7 +76,7 @@ const SECTIONS = [
     { id: 'nsettings', label: 'Налаштування накладних' },
     { id: 'invfops', label: 'ФОПи рахунків' },
     { id: 'rsettings', label: 'Налаштування рахунків' },
-    { id: 'np', label: 'Нова пошта і Розетка', perm: 'api' },
+    { id: 'np', label: 'Доставка: НП, Розетка, Prom', perm: 'api' },
     { id: 'rzsettings', label: 'Налаштування Розетки', perm: 'api' },
     { id: 'users', label: 'Користувачі', perm: 'people' },
     { id: 'errors', label: 'Журнал помилок', perm: 'users' },

@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'marking',
-  version: 3,
+  version: 4,
   tables: [
   // Кабінети НП (ФОП або ТОВ): ключ API бачить лише сервер.
   `CREATE TABLE IF NOT EXISTS np_accounts (
@@ -56,6 +56,15 @@ export const schema = {
     ttn TEXT PRIMARY KEY,
     account_id INTEGER NOT NULL,
     day TEXT DEFAULT ''
+  )`,
+  // Магазини Prom.ua (кабінет компанії): токен API — лише на сервері.
+  `CREATE TABLE IF NOT EXISTS prom_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL DEFAULT '',
+    token TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    checked_at TEXT DEFAULT '',
+    created_at TEXT
   )`,
   // Для щогодинної чистки за датою — без перегляду всієї таблиці.
   `CREATE INDEX IF NOT EXISTS np_docs_day ON np_docs (day)`,

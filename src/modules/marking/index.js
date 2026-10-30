@@ -16,6 +16,7 @@ import { MASK, fail, need, kyivDay } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
 import { npSender, npDocumentsPage, npMarkingPdf, npServiceType, npTracking, isDoorPickup, phone9 } from '../../integrations/novaposhta.js';
 import { rzLogin, rzTtnPdf } from '../../integrations/rozetka.js';
+import { promOrders, promDelivery } from '../../integrations/prom.js';
 
 const PAGES_PER_CALL = 12;
 const TODAY_REFRESH_MS = 5 * 60 * 1000;
@@ -108,7 +109,7 @@ export function mountMarking(app, { db, fetchFn, onCleanup }) {
     need(c, 'docs.view');
     const b = await c.req.json();
     const accounts = await activeAccounts();
-    if (!accounts.length) throw fail(400, 'Кабінети Нової пошти ще не додано: «Налаштування → Нова пошта і Розетка».');
+    if (!accounts.length) throw fail(400, 'Кабінети Нової пошти ще не додано: «Налаштування → Доставка: НП, Розетка, Prom».');
     const byId = new Map(accounts.map((a) => [a.id, a]));
     const answer = (row, source) => c.json({
       ttn: row.ttn, accountId: row.account_id || null, accountName: byId.get(row.account_id)?.name || '', source,
@@ -187,7 +188,7 @@ export function mountMarking(app, { db, fetchFn, onCleanup }) {
     const ttn = String(c.req.param('ttn')).replace(/\D/g, '');
     if (!/^\d{10,20}$/.test(ttn)) throw fail(400, 'Невірний номер ТТН.');
     const accounts = await activeAccounts();
-    if (!accounts.length) throw fail(400, 'Кабінети Нової пошти ще не додано: «Налаштування → Нова пошта і Розетка».');
+    if (!accounts.length) throw fail(400, 'Кабінети Нової пошти ще не додано: «Налаштування → Доставка: НП, Розетка, Prom».');
     const known = await db.get(`SELECT account_id, service FROM np_docs WHERE ttn = ?`, [ttn]);
     const wanted = Number(c.req.query('account')) || known?.account_id;
     const order = [...accounts.filter((a) => a.id === wanted), ...accounts.filter((a) => a.id !== wanted)];
@@ -291,7 +292,7 @@ export function mountMarking(app, { db, fetchFn, onCleanup }) {
     const ttn = String(c.req.param('ttn')).toUpperCase().replace(/\s/g, '');
     if (!/^RMP-?[0-9A-Z-]{4,30}$/.test(ttn)) throw fail(400, 'Невірний номер ТТН Розетки (має починатися з RMP).');
     const accounts = await db.all(`SELECT * FROM rz_accounts WHERE active = 1 ORDER BY hits DESC, id`);
-    if (!accounts.length) throw fail(400, 'Магазини Розетки ще не додано: «Налаштування → Нова пошта і Розетка».');
+    if (!accounts.length) throw fail(400, 'Магазини Розетки ще не додано: «Налаштування → Доставка: НП, Розетка, Prom».');
     const known = await db.get(`SELECT account_id FROM rz_docs WHERE ttn = ?`, [ttn]);
     const order = [...accounts.filter((a) => a.id === known?.account_id), ...accounts.filter((a) => a.id !== known?.account_id)];
     for (const a of order) {
@@ -319,12 +320,64 @@ export function mountMarking(app, { db, fetchFn, onCleanup }) {
     throw fail(404, `ТТН ${ttn} немає в жодному з підключених магазинів Розетки (або її скасовано).`);
   });
 
+  // ---------------------------------------------------------------- магазини Prom.ua
+  // Токен перевіряємо запитом останніх замовлень. «Перевірити» показує доставку останніх замовлень (спосіб, перевізник, ЕН) —
+  // за цими даними налаштовується маркування замовлень Prom з доставкою до магазинів Rozetka.
+  const publicProm = (a) => ({ id: a.id, name: a.name, token: keyHint(a.token), active: a.active, checked_at: a.checked_at || '' });
+  const promSample = (orders) => orders.map((o) => ({ id: o.id, date: String(o.date_created || ''), status: String(o.status_name || o.status || ''), ...promDelivery(o) }));
+  app.get('/api/prom/accounts', async (c) => {
+    need(c, 'api');
+    return c.json((await db.all(`SELECT * FROM prom_accounts ORDER BY active DESC, name`)).map(publicProm));
+  });
+  app.post('/api/prom/accounts', async (c) => {
+    need(c, 'api');
+    const b = await c.req.json();
+    const token = String(b.token || '').trim();
+    if (!/^[\w-]{20,200}$/.test(token)) throw fail(400, 'Вставте токен API з кабінету Prom.');
+    if (await db.get(`SELECT id FROM prom_accounts WHERE token = ?`, [token])) throw fail(400, 'Цей токен уже додано.');
+    const orders = await promOrders(fetchFn, token, { limit: 10 });
+    const name = String(b.name || '').trim().slice(0, 100) || 'Магазин Prom';
+    const now = new Date().toISOString();
+    const r = await db.run(`INSERT INTO prom_accounts (name, token, active, checked_at, created_at) VALUES (?, ?, 1, ?, ?)`, [name, token, now, now]);
+    await logAudit(db, { user: c.get('user'), kind: 'prom', refId: r.lastId, action: 'додано магазин Prom', changes: [{ field: 'name', from: '', to: name }] });
+    return c.json({ id: r.lastId, orders: promSample(orders) });
+  });
+  app.put('/api/prom/accounts/:id', async (c) => {
+    need(c, 'api');
+    const b = await c.req.json();
+    const cur = await db.get(`SELECT * FROM prom_accounts WHERE id = ?`, [c.req.param('id')]);
+    if (!cur) throw fail(404, 'Магазин не знайдено.');
+    const next = { ...cur };
+    if (b.name !== undefined) next.name = String(b.name).trim().slice(0, 100) || cur.name;
+    if (b.active !== undefined) next.active = b.active ? 1 : 0;
+    const t = String(b.token ?? '').trim();
+    const tokenChanged = t && !t.startsWith(MASK) && t !== cur.token;
+    if (tokenChanged && !/^[\w-]{20,200}$/.test(t)) throw fail(400, 'Вставте токен API з кабінету Prom.');
+    let orders = null;
+    if (tokenChanged || b.check) {
+      orders = await promOrders(fetchFn, tokenChanged ? t : cur.token, { limit: 10 });
+      next.checked_at = new Date().toISOString();
+      if (tokenChanged) next.token = t;
+    }
+    await db.run(`UPDATE prom_accounts SET name = ?, token = ?, active = ?, checked_at = ? WHERE id = ?`, [next.name, next.token, next.active, next.checked_at, cur.id]);
+    if (tokenChanged) await logAudit(db, { user: c.get('user'), kind: 'prom', refId: cur.id, action: 'змінено токен Prom', changes: [{ field: 'token', from: keyHint(cur.token), to: keyHint(t) }] });
+    return c.json({ ...publicProm(next), ...(orders ? { orders: promSample(orders) } : {}) });
+  });
+  app.delete('/api/prom/accounts/:id', async (c) => {
+    need(c, 'api');
+    const cur = await db.get(`SELECT * FROM prom_accounts WHERE id = ?`, [c.req.param('id')]);
+    if (!cur) throw fail(404, 'Магазин не знайдено.');
+    await db.run(`DELETE FROM prom_accounts WHERE id = ?`, [cur.id]);
+    await logAudit(db, { user: c.get('user'), kind: 'prom', refId: cur.id, action: 'видалено магазин Prom', changes: [{ field: 'name', from: cur.name, to: '' }] });
+    return c.json({ ok: true });
+  });
+
   // Статус ТТН для інших модулів (B2B: замовлення клієнтів партнера). Відстежити можна будь-яку ТТН НП ключем будь-якого кабінету.
   async function trackTtn(ttn, phone = '') {
     const t = String(ttn || '').replace(/\s/g, '');
     if (!/^\d{10,20}$/.test(t)) throw fail(400, 'ТТН Нової пошти — 10–20 цифр.');
     const acc = await db.get(`SELECT api_key FROM np_accounts WHERE active = 1 ORDER BY hits DESC, id LIMIT 1`);
-    if (!acc) throw fail(400, 'Немає підключеного кабінету Нової пошти (Налаштування → Нова пошта і Розетка).');
+    if (!acc) throw fail(400, 'Немає підключеного кабінету Нової пошти (Налаштування → Доставка: НП, Розетка, Prom).');
     return npTracking(fetchFn, acc.api_key, t, String(phone || '').replace(/\D/g, '').slice(-12));
   }
   return { trackTtn };
