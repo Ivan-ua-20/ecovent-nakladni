@@ -57,11 +57,15 @@ for (let i = 450; i < 520; i++) {
   orders.set(code, { id: String(106500 + i), order_id: code, status: '117', bayer_name: `Покупець ${i}`, phone: '380937971450', datetime: '2026-10-12 18:50:12', products: [{ product_id: '1', name: 'Очисник HOMI P300', price: '6599', quantity: '1' }] });
 }
 const warm = async () => (await createApp({ db, fetchFn, maxSubrequests: 3 }).request('/api/invoice/warm', { method: 'POST', headers: { Cookie: cookie } })).json();
+// щойно був пошук у LP-CRM — фонове оновлення поступається (не стає в чергу перед людиною)
+assert.deepEqual(await warm(), { busy: true });
+await new Promise((r) => setTimeout(r, 5100));
 let w;
 let warmRounds = 0;
 do { w = await warm(); warmRounds++; } while (w.more && warmRounds < 10);
 assert.equal(w.indexed, 520, JSON.stringify(w));
 assert.equal((await db.get(`SELECT COUNT(*) AS n FROM orders_index`)).n, 520, 'нові прийняті — в індексі');
+await new Promise((r) => setTimeout(r, 5100));
 assert.deepEqual(await warm(), { fresh: true }, 'повторно — не частіше разу на 3 хв');
 calls = 0;
 const quick = await createApp({ db, fetchFn, maxSubrequests: 6 }).request('/api/invoice/107010', { headers: { Cookie: cookie } });

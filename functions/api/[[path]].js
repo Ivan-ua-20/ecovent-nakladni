@@ -2594,8 +2594,10 @@ var MIN_GAP_MS = 1500;
 var RETRY_DELAYS_MS = [3e3, 6e3, 12e3];
 var queue = Promise.resolve();
 var lastAt = 0;
+var inQueue = 0;
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function throttled(task) {
+  inQueue++;
   const run = queue.then(async () => {
     const wait = lastAt + MIN_GAP_MS - Date.now();
     if (wait > 0) await sleep(wait);
@@ -2603,12 +2605,14 @@ function throttled(task) {
       return await task();
     } finally {
       lastAt = Date.now();
+      inQueue--;
     }
   });
   queue = run.catch(() => {
   });
   return run;
 }
+var lpcrmBusy = (recentMs = 5e3) => inQueue > 0 || Date.now() - lastAt < recentMs;
 async function call(fetchFn, subdomain, key, method, params, { sleepFn = sleep } = {}) {
   const body = new URLSearchParams({ key, ...params }).toString();
   const doFetch = (url) => throttled(() => fetchFn(url, {
@@ -3008,10 +3012,13 @@ function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {
     shared2.acceptedCodes.set(key, { at: Date.now(), codes });
     return codes;
   }
+  const missingCodes = async (codes) => {
+    const known = new Set((await db.all(`SELECT code FROM orders_index WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => r.code));
+    return codes.filter((c) => !known.has(c));
+  };
   async function loadAccepted(creds, days) {
     const codes = await acceptedCodes(creds, days);
-    const known = new Set((await db.all(`SELECT code FROM orders_index WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => r.code));
-    const fresh = codes.filter((c) => !known.has(c));
+    const fresh = await missingCodes(codes);
     for (let k = 0; k < fresh.length; k += 100) await saveOrders2(await getOrdersBatch(fetchFn, creds, fresh.slice(k, k + 100)));
     return codes;
   }
@@ -3020,17 +3027,30 @@ function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {
     const s = await settings();
     const creds = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
     if (!creds.subdomain || !creds.key) return { skipped: true };
+    if (lpcrmBusy()) return { busy: true };
     const now = Date.now();
     const claim = await db.run(
       `INSERT INTO settings (key, value) VALUES ('orders_warm_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
       [new Date(now).toISOString(), new Date(now - WARM_MS).toISOString()]
     );
     if (!claim.changes) return { fresh: true };
+    const release = () => db.run(`UPDATE settings SET value = '' WHERE key = 'orders_warm_at'`);
     try {
-      const codes = await loadAccepted(creds, Math.max(1, Number(s.lpcrm_search_days) || 30));
+      const codes = await acceptedCodes(creds, Math.max(1, Number(s.lpcrm_search_days) || 30));
+      const fresh = await missingCodes(codes);
+      if (!fresh.length) return { indexed: codes.length };
+      if (lpcrmBusy(0)) {
+        await release();
+        return { more: true };
+      }
+      await saveOrders2(await getOrdersBatch(fetchFn, creds, fresh.slice(0, 100)));
+      if (fresh.length > 100) {
+        await release();
+        return { more: true };
+      }
       return { indexed: codes.length };
     } catch (e) {
-      await db.run(`UPDATE settings SET value = '' WHERE key = 'orders_warm_at'`);
+      await release();
       if (e.pending) return { more: true };
       throw e;
     }

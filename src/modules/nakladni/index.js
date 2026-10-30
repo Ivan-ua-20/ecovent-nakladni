@@ -2,7 +2,7 @@
 // (ФОП з чека Checkbox, поля 1, відділу або вручну), версії та історія, діагностика LP-CRM.
 // Для інших модулів віддає loadOrder (замовлення з CRM) — ним користуються рахунки.
 import { fail, need, nowIso, userName, parseTpl, hash, kyivDay, loadSettings } from '../../core/common.js';
-import { getOrder, getProducts, diagnose, getStatuses, getOrderCodesByStatus, getOrdersBatch } from '../../integrations/lpcrm.js';
+import { getOrder, getProducts, diagnose, getStatuses, getOrderCodesByStatus, getOrdersBatch, lpcrmBusy } from '../../integrations/lpcrm.js';
 import { findReceiptByRef, findReceiptForOrder, hasCheckbox } from '../../integrations/checkbox.js';
 import { normalizeOrder, applyEdits } from './normalize.js';
 import { DEMO_ORDER } from './demo.js';
@@ -114,33 +114,44 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {}, 
 
   // Довантажує в індекс прийняті замовлення, яких там ще немає (по 100 за запит). Якщо вичерпано ліміт
   // зовнішніх запитів — сервер відповідає «триває», браузер повторює, і вже збережені пачки не перечитуються.
+  const missingCodes = async (codes) => {
+    const known = new Set((await db.all(`SELECT code FROM orders_index WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => r.code));
+    return codes.filter((c) => !known.has(c));
+  };
   async function loadAccepted(creds, days) {
     const codes = await acceptedCodes(creds, days);
-    const known = new Set((await db.all(`SELECT code FROM orders_index WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => r.code));
-    const fresh = codes.filter((c) => !known.has(c));
+    const fresh = await missingCodes(codes);
     for (let k = 0; k < fresh.length; k += 100) await saveOrders(await getOrdersBatch(fetchFn, creds, fresh.slice(k, k + 100)));
     return codes;
   }
 
   // Фонове оновлення індексу прийнятих замовлень, щоб номер з CRM відкривався одразу, без списку й пачок з LP-CRM.
-  // Не частіше разу на 3 хв на всі екземпляри (бронь у settings); якщо не встигли (ліміт запитів) — бронь знімаємо,
-  // і наступний виклик продовжить з того місця (збережені пачки не перечитуються).
+  // Не частіше разу на 3 хв на всі екземпляри (бронь у settings). За раз — список і щонайбільше одна пачка (2 запити),
+  // і лише коли LP-CRM ніхто не чекає: пошук накладної не повинен стояти в черзі за фоновими запитами.
+  // Не встигли все — бронь знімаємо, наступний виклик продовжить (збережені пачки не перечитуються).
   const WARM_MS = 3 * 60e3;
   async function warmIndex() {
     const s = await settings();
     const creds = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
     if (!creds.subdomain || !creds.key) return { skipped: true };
+    if (lpcrmBusy()) return { busy: true };
     const now = Date.now();
     const claim = await db.run(
       `INSERT INTO settings (key, value) VALUES ('orders_warm_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
       [new Date(now).toISOString(), new Date(now - WARM_MS).toISOString()],
     );
     if (!claim.changes) return { fresh: true };
+    const release = () => db.run(`UPDATE settings SET value = '' WHERE key = 'orders_warm_at'`);
     try {
-      const codes = await loadAccepted(creds, Math.max(1, Number(s.lpcrm_search_days) || 30));
+      const codes = await acceptedCodes(creds, Math.max(1, Number(s.lpcrm_search_days) || 30));
+      const fresh = await missingCodes(codes);
+      if (!fresh.length) return { indexed: codes.length };
+      if (lpcrmBusy(0)) { await release(); return { more: true }; } // поки йшов список — хтось став у чергу
+      await saveOrders(await getOrdersBatch(fetchFn, creds, fresh.slice(0, 100)));
+      if (fresh.length > 100) { await release(); return { more: true }; }
       return { indexed: codes.length };
     } catch (e) {
-      await db.run(`UPDATE settings SET value = '' WHERE key = 'orders_warm_at'`);
+      await release();
       if (e.pending) return { more: true };
       throw e;
     }

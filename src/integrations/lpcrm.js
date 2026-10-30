@@ -7,17 +7,23 @@ const MIN_GAP_MS = 1500;
 const RETRY_DELAYS_MS = [3000, 6000, 12000];
 let queue = Promise.resolve();
 let lastAt = 0;
+let inQueue = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function throttled(task) {
+  inQueue++;
   const run = queue.then(async () => {
     const wait = lastAt + MIN_GAP_MS - Date.now();
     if (wait > 0) await sleep(wait);
-    try { return await task(); } finally { lastAt = Date.now(); }
+    try { return await task(); } finally { lastAt = Date.now(); inQueue--; }
   });
   queue = run.catch(() => {});
   return run;
 }
+
+// Фонові задачі (оновлення індексу замовлень) поступаються місцем: не стають у чергу, поки хтось чекає LP-CRM
+// або щойно звертався до неї, — інакше пошук накладної чекав би, доки пройдуть усі фонові запити.
+export const lpcrmBusy = (recentMs = 5000) => inQueue > 0 || Date.now() - lastAt < recentMs;
 
 export async function call(fetchFn, subdomain, key, method, params, { sleepFn = sleep } = {}) {
   const body = new URLSearchParams({ key, ...params }).toString();
