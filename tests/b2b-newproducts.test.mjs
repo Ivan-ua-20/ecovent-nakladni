@@ -9,8 +9,15 @@ import { schema as b2bSchema } from '../src/modules/b2b/schema.js';
 const db = openDb(':memory:');
 await migrate(db);
 const tg = [];
+// Товари в «LP-CRM» (getProduct): ID → дані.
+const LP = {};
 const fetchFn = async (url, opts = {}) => {
   if (String(url).startsWith('https://api.telegram.org/')) { tg.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } })); }
+  if (String(url).includes('lp-crm.biz/api/getProduct')) {
+    const ids = new URLSearchParams(opts.body).get('product_id').split(',').map(Number);
+    const data = ids.filter((id) => LP[id]).map((id) => ({ id: String(id), ...LP[id] }));
+    return new Response(JSON.stringify({ status: 'ok', data }));
+  }
   return new Response(JSON.stringify({ status: 'ok', data: [] }));
 };
 const app = createApp({ db, fetchFn });
@@ -73,4 +80,26 @@ assert.equal(cat.products.find((x) => x.id === 501).is_new, true);
 assert.equal(cat.products.find((x) => x.id === 500).is_new, false, 'старий товар — без позначки');
 assert.match(await errOf(() => req('GET', '/api/b2b/new-products', null, PA)), /.+/, 'партнерові — ні');
 
-console.log('OK — B2B: новинки каталогу (лише вручну, свої бренди, позначка «Новинка»)');
+// ---------- 5. «Оновити з LP-CRM» знаходить товари, яких ще ніхто не купував ----------
+await db.run(`UPDATE settings SET value = 'shop' WHERE key = 'lpcrm_subdomain'`);
+await db.run(`INSERT INTO settings (key, value) VALUES ('lpcrm_subdomain', 'shop'), ('lpcrm_key', 'k') ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+// бренд Evoair — стандартний з аналітики; партнер А має його увімкненим
+const evo = (await db.get(`SELECT id FROM an_brands WHERE keywords LIKE '%evoair%' ORDER BY sort, id LIMIT 1`)).id;
+await db.run(`INSERT OR IGNORE INTO b2b_margins (partner_id, brand_id, margin) VALUES (?, ?, 10)`, [pa.id, evo]);
+await db.run(`INSERT INTO an_categories (id, name) VALUES (55, 'Кліматичні системи EVOAIR') ON CONFLICT(id) DO NOTHING`);
+// найбільший відомий ID — 510; нові в LP-CRM: 511 (бренд у назві), 512 (бренд лише в категорії), 600 (у другій партії)
+LP[511] = { name: 'Тепловентилятор evoair Warmix 2200 Black', category_id: '55', price: '4180.00' };
+LP[512] = { name: 'Тепловентилятор Warmix 1500 White', category_id: '55', price: '2970.00' };
+LP[600] = { name: 'Тепловентилятор evoair Warmix 2000', category_id: '55', price: '4450.00' };
+const sync = await req('POST', '/api/b2b/catalog/sync', { run: new Date().toISOString() });
+assert.equal(sync.discovered, 3, 'знайдено нові ID у двох партіях');
+const np = await req('GET', '/api/b2b/new-products');
+const ids = np.items.map((x) => x.product_id).sort((a, b) => a - b);
+assert.deepEqual(ids, [511, 512, 600], 'нові товари — у «Нових товарах» з ціною');
+assert.ok(np.items.every((x) => x.brand_id === evo), 'бренд — за назвою або категорією');
+assert.equal(np.items.find((x) => x.product_id === 511).rrp, 4180);
+assert.ok(!tg.some((m) => /Warmix/.test(m.text)), 'нічого не надіслано автоматично');
+const again = await req('POST', '/api/b2b/catalog/sync', { run: new Date().toISOString() });
+assert.equal(again.discovered, 0, 'повторно — нічого нового');
+
+console.log('OK — B2B: новинки каталогу (лише вручну, свої бренди, позначка «Новинка», пошук нових ID у LP-CRM)');

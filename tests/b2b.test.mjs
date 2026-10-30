@@ -91,11 +91,12 @@ assert.deepEqual(cat.brands.map((b) => b.name), ['TestBrand']);
 const P2 = await login('partner2', 'pass1234');
 assert.equal((await req('GET', '/api/b2b/p/catalog', null, P2)).products.length, 0, 'інший партнер не бачить чужих брендів');
 
-// повторне оновлення того ж дня — без запитів до CRM
+// повторне оновлення того ж дня — без перечитування товарів; лише один запит: чи з'явились нові ID у LP-CRM
 crmCalls = 0;
 sync = await req('POST', '/api/b2b/catalog/sync');
 assert.equal(sync.checked, 0);
-assert.equal(crmCalls, 0);
+assert.equal(sync.discovered, 0);
+assert.equal(crmCalls, 1);
 
 // зміна РРЦ у CRM → журнал змін цін
 PRICES[11] = '1300.00';

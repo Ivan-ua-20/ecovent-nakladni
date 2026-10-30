@@ -4901,6 +4901,19 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     ]);
     return c.body(out, 200, { "content-type": "application/json; charset=UTF-8" });
   });
+  async function addProducts(items) {
+    const list = (items || []).filter((p) => p.product_id > 0);
+    if (!list.length) return;
+    const [brands, cats] = await Promise.all([
+      db.all(`SELECT id, keywords FROM an_brands ORDER BY sort, id`).then((r) => r.map((b) => ({ id: b.id, kws: String(b.keywords || "").split(",").map(low).filter(Boolean) }))),
+      db.all(`SELECT id, name FROM an_categories`).then((r) => new Map(r.map((x) => [x.id, x.name])))
+    ]);
+    await db.batch(list.map((p) => [
+      `INSERT OR IGNORE INTO an_products (product_id, name, category_id, brand_id, fetched) VALUES (?, ?, ?, ?, 1)`,
+      [p.product_id, p.name, p.category_id || null, brandOf(p.name, brands) || brandOf(cats.get(p.category_id) || "", brands)]
+    ]));
+  }
+  return { addProducts };
 }
 async function hashKey(str) {
   const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(str));
@@ -9321,6 +9334,7 @@ ${h6(r.name)}${r.article ? ` (${h6(r.article)})` : ""}
 var partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 var BATCH = 50;
 var BATCHES_PER_CALL = 8;
+var DISCOVER = 3;
 var IMG_RE = /^https?:\/\/\S+\.(jpe?g|png|webp|gif)(\?\S*)?$/i;
 function collectProducts(node, depth = 0) {
   if (!node || typeof node !== "object" || depth > 4) return [];
@@ -9738,6 +9752,22 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const fresh = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(run) && Math.abs(Date.now() - Date.parse(run)) < 3 * 3600 * 1e3;
     const today3 = fresh ? run : kyivDay();
     const stamp = nowIso();
+    let discovered = 0;
+    if (services.analytics?.addProducts) {
+      const hi = (await db.get(`SELECT MAX(id) AS hi FROM (SELECT MAX(product_id) AS id FROM an_products UNION ALL SELECT MAX(product_id) FROM b2b_catalog)`))?.hi || 0;
+      for (let k = 0; hi > 0 && k < DISCOVER; k++) {
+        const from = hi + 1 + k * BATCH;
+        const ids = Array.from({ length: BATCH }, (_, i) => from + i);
+        const j = await call(fetchFn, s.lpcrm_subdomain, s.lpcrm_key, "getProduct", { product_id: ids.join(","), status_ignore: "1" }).catch((e) => {
+          if (e.pending) throw e;
+          return null;
+        });
+        const found = collectProducts(j?.data).map((p) => ({ product_id: parseInt(p.id ?? p.product_id, 10), name: String(p.name || p.title || "").trim().slice(0, 300), category_id: parseInt(p.category_id, 10) || null })).filter((p) => p.product_id >= from && p.product_id < from + BATCH);
+        if (!found.length) break;
+        await services.analytics.addProducts(found);
+        discovered += found.length;
+      }
+    }
     await db.batch([
       [`INSERT OR IGNORE INTO b2b_catalog (product_id, name, brand_id) SELECT product_id, COALESCE(name, ''), brand_id FROM an_products WHERE product_id > 0`, []],
       [`UPDATE b2b_catalog SET brand_id = (SELECT a.brand_id FROM an_products a WHERE a.product_id = b2b_catalog.product_id)
@@ -9784,7 +9814,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       [`INSERT INTO settings (key, value) VALUES ('b2b_catalog_sync', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [at]]
     ]);
     const state = await catalogState(today3);
-    return c.json({ ok: true, checked: todo.length, changed, items, left: state.stale, lastSync: at });
+    return c.json({ ok: true, checked: todo.length, changed, items, discovered, left: state.stale, lastSync: at });
   });
   app.get("/api/b2b/brands", async (c) => {
     need(c, "b2b.admin");
@@ -12118,7 +12148,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   services.rahunky = mountRahunky(app, ctx);
   services.marking = mountMarking(app, ctx);
   services.retail = mountRetail(app, ctx);
-  mountAnalytics(app, ctx);
+  services.analytics = mountAnalytics(app, ctx);
   services.notify = mountTg(app, ctx);
   mountHome(app, ctx);
   services.payments = mountOdb(app, { ...ctx, base: odbBase, notify: (...a) => services.notify.notify(...a), onTx: (ids, origin) => services.b2b?.onPayments?.(ids, origin) });
