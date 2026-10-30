@@ -842,8 +842,8 @@ export function createAnalyticsUI(ctx) {
               Нові замовлення (сьогодні й учора) перевіряються кожні 10 хв: їхня ТТН — проти інших замовлень за 7 днів; дубль — сповіщення в Telegram менеджерам цих замовлень
               (логін LP-CRM у профілі користувача), без прив’язаних — адмінам.</div>
             <div class="muted">${cfg.ttnLast ? `Остання перевірка: ${ctx.fmtDateTime(cfg.ttnLast.at)} · замовлень за 2 дні: ${cfg.ttnLast.listed} · перечитано: ${cfg.ttnLast.fetched}${cfg.ttnLast.dups ? ` · <b>дублів: ${cfg.ttnLast.dups}</b>` : ''}` : 'Швидка перевірка ще не запускалась.'}
-              ${cfg.cronOn ? '' : ' Без Cloudflare Worker перевірка запускається лише, коли хтось працює на сайті.'}</div>
-            <div class="btn-row"><button type="button" class="btn sm" id="sTtnNow">Перевірити дублі ТТН зараз</button>${ctx.can('users') ? `<button type="button" class="btn sm" id="sTtnCron">${cfg.cronOn ? 'Запуск кожні 10 хв (Worker) — налаштовано' : 'Налаштувати запуск кожні 10 хв (Cloudflare Worker)'}</button>` : ''}</div>
+              ${cfg.cronOn ? ' Запускається за розкладом (фонові задачі).' : ' Без фонових задач за розкладом перевірка запускається лише, коли хтось працює на сайті.'}</div>
+            <div class="btn-row"><button type="button" class="btn sm" id="sTtnNow">Перевірити дублі ТТН зараз</button>${ctx.can('users') ? `<a class="btn sm" href="#/cron">${cfg.cronOn ? 'Фонові задачі — працюють' : 'Налаштувати фонові задачі'}</a>` : ''}</div>
           </div>
           <div id="sSync"></div>
           <div class="btn-row">
@@ -954,30 +954,6 @@ export function createAnalyticsUI(ctx) {
       b.disabled = true;
       try { const r = await api('POST', '/api/an/ttn-check'); toast(r.skipped ? (r.reason || 'Пропущено') : `Перевірено: замовлень ${r.listed}, перечитано ${r.fetched}${r.dups ? `, дублів: ${r.dups} — сповіщення надіслано` : ', дублів немає'}`); viewSettings(); }
       catch (er) { toast(er.message, true); b.disabled = false; }
-    });
-    $('#sTtnCron') && ($('#sTtnCron').onclick = async () => {
-      let { key } = await api('GET', '/api/an/cron-key');
-      const code = () => `export default {\n  async scheduled(event, env, ctx) {\n    ctx.waitUntil(fetch('${location.origin}/api/cron/ttn', {\n      method: 'POST',\n      headers: { 'X-Cron-Key': env.CRON_KEY },\n    }));\n  },\n};`;
-      const m = modal('Запуск перевірки ТТН кожні 10 хв', `<div class="form-stack">
-          <div class="small">Сайт працює на Cloudflare Pages — там немає запуску за розкладом, тому його робить маленький Cloudflare Worker (на платному тарифі — без доплат).</div>
-          <ol class="small" style="padding-left:18px;margin:0;line-height:1.7">
-            <li><b>Ключ:</b> ${key ? 'вже створено' : 'натисніть «Створити ключ»'} — його знає лише Worker. <span class="pl-url"><input readonly id="ckKey" value="${esc(key)}" placeholder="ще не створено" aria-label="Ключ"><button type="button" class="btn sm" id="ckCopyKey">Копіювати</button><button type="button" class="btn sm" id="ckNew">${key ? 'Новий ключ' : 'Створити ключ'}</button></span></li>
-            <li>Cloudflare → <b>Workers &amp; Pages</b> → <b>Create</b> → <b>Create Worker</b> (шаблон «Hello World»), назва напр. <code>ttn-cron</code> → <b>Deploy</b>.</li>
-            <li><b>Edit code</b> → замініть увесь код на цей → <b>Deploy</b>:
-              <pre class="small" id="ckCode" style="white-space:pre-wrap;background:var(--soft,#f4f4f4);padding:8px;border-radius:6px;margin:6px 0"></pre><button type="button" class="btn sm" id="ckCopyCode">Копіювати код</button></li>
-            <li>У Worker'і: <b>Settings</b> → <b>Variables and Secrets</b> → <b>Add</b> → тип <b>Secret</b>, назва <code>CRON_KEY</code>, значення — ключ з п. 1 → <b>Deploy</b>.</li>
-            <li><b>Settings</b> → <b>Trigger Events</b> (Triggers) → <b>Add</b> → <b>Cron Triggers</b> → <code>*/10 * * * *</code> → <b>Add</b>.</li>
-            <li>За 10–20 хв тут, у «Остання перевірка», час почне оновлюватися кожні 10 хв — значить, працює.</li>
-          </ol></div>`, { wide: true, footer: '<button class="btn primary" data-close>Готово</button>' });
-      const draw = () => { $('#ckKey', m.el).value = key; $('#ckCode', m.el).textContent = code(); };
-      draw();
-      const cp = async (t, msg) => { try { await navigator.clipboard.writeText(t); toast(msg); } catch { toast('Не вдалося скопіювати', true); } };
-      $('#ckCopyKey', m.el).onclick = () => (key ? cp(key, 'Ключ скопійовано') : toast('Спершу створіть ключ', true));
-      $('#ckCopyCode', m.el).onclick = () => cp(code(), 'Код скопійовано');
-      $('#ckNew', m.el).onclick = async () => {
-        if (key && !(await ctx.confirmDanger('Створити новий ключ?', 'Старий перестане працювати — оновіть CRON_KEY у Worker’і.', 'Створити'))) return;
-        try { key = (await api('POST', '/api/an/cron-key')).key; draw(); toast('Ключ створено — додайте його в Worker як CRON_KEY'); } catch (er) { toast(er.message, true); }
-      };
     });
     $('#sToday').onclick = () => go('today');
     $('#sDaily').onclick = () => go('daily');

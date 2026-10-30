@@ -18,6 +18,7 @@ import { mountMarking } from './modules/marking/index.js';
 import { mountRetail } from './modules/retail/index.js';
 import { mountOdb, ODB_BASE } from './modules/payments/index.js';
 import { mountHome } from './modules/home/index.js';
+import { mountCron } from './modules/cron/index.js';
 
 // shared — стан, що живе довше за одне звернення (на Cloudflare застосунок створюється на кожен запит,
 // а об'єкт shared з pages-entry.js — один на ізолят): мітка останньої чистки, кеш чеків, замок синхронізації.
@@ -68,9 +69,21 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
     for (const task of cleanupTasks) await task(border);
   }
 
+  // Фонові задачі за розкладом (Cloudflare Worker викликає /api/cron/run/<назва>, кожну — окремим зверненням).
+  // Поки розклад працює (cronActive), модулі не запускають ці ж задачі «попутно» на запитах користувачів.
+  const cronTasks = new Map();
+  const onCron = (name, title, run) => cronTasks.set(name, { title, run });
+  async function cronActive() {
+    if (Date.now() - (shared.cronCheckAt || 0) < 60e3) return shared.cronOn;
+    shared.cronCheckAt = Date.now();
+    const at = (await db.get(`SELECT value FROM settings WHERE key = 'cron_at'`))?.value || '';
+    shared.cronOn = Boolean(at) && Date.now() - Date.parse(at) < 10 * 60e3;
+    return shared.cronOn;
+  }
+
   // Публічні входи модулів для інших модулів.
   const services = {};
-  const ctx = { db, fetchFn, services, onCleanup, onTick, runCleanup, shared };
+  const ctx = { db, fetchFn, services, onCleanup, onTick, onCron, cronActive, runCleanup, shared };
 
   // Порядок важливий: auth першим (його маршрути входу не потребують сесії, а далі стоїть перевірка входу).
   mountAuth(app, ctx);
@@ -86,6 +99,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   services.notify = mountTg(app, ctx);
   mountHome(app, ctx);
   services.payments = mountOdb(app, { ...ctx, base: odbBase, notify: (...a) => services.notify.notify(...a), onTx: (ids, origin) => services.b2b?.onPayments?.(ids, origin) });
+  mountCron(app, { ...ctx, cronTasks }); // останнім: задачі реєструють модулі вище
 
   return app;
 }

@@ -1,0 +1,9 @@
+# Worker фонових задач (див. worker.js). Розгортання з консолі (необов'язково — можна й через панель Cloudflare):
+#   npx wrangler deploy --config cron-worker/wrangler.toml
+#   npx wrangler secret put CRON_KEY --config cron-worker/wrangler.toml
+name = "ecovent-cron"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+[triggers]
+crons = ["*/3 * * * *"]

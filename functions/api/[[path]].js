@@ -2936,7 +2936,8 @@ var docFop = (f) => {
   return rest;
 };
 function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {
-}, shared: shared2 = {}, services = {} }) {
+}, onCron = () => {
+}, cronActive = async () => false, shared: shared2 = {}, services = {} }) {
   const settings = () => loadSettings(db);
   shared2.receiptCache ||= /* @__PURE__ */ new Map();
   const receiptCache = shared2.receiptCache;
@@ -3063,11 +3064,14 @@ function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {
       return c.json({ failed: true });
     }
   });
+  onCron("orders", "\u041D\u043E\u0432\u0456 \u043F\u0440\u0438\u0439\u043D\u044F\u0442\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM (\u0448\u0432\u0438\u0434\u043A\u0438\u0439 \u043F\u043E\u0448\u0443\u043A \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0438\u0445)", () => warmIndex());
   onTick((c) => {
     if (String(c?.req?.path || "").startsWith("/api/invoice")) return;
     if (Date.now() - (shared2.warmTry || 0) < 6e4) return;
     shared2.warmTry = Date.now();
-    const p = warmIndex().catch(() => 0);
+    const p = (async () => {
+      if (!await cronActive()) await warmIndex();
+    })().catch(() => 0);
     try {
       c?.executionCtx?.waitUntil(p);
     } catch {
@@ -3809,7 +3813,8 @@ function flattenCategories(node, parent = null, out = [], depth = 0) {
   return out;
 }
 function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {}, onTick = () => {
-} }) {
+}, onCron = () => {
+}, cronActive = async () => false }) {
   const settings = () => loadSettings(db);
   const getSt = async () => {
     const r = await db.get(`SELECT value FROM settings WHERE key = 'an_settings'`);
@@ -4006,39 +4011,27 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     return res;
   }
   services.analytics = { ...services.analytics || {}, ttnQuick };
+  async function ttnDue() {
+    const last = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_check_at'`))?.value || "";
+    if (last && Date.now() - Date.parse(last) < TTN_EVERY) return { fresh: true };
+    if (!(await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_seen'`))?.value) return { skipped: "\u0422\u0422\u041D \u0437 LP-CRM \u0449\u0435 \u043D\u0435 \u043D\u0430\u0434\u0445\u043E\u0434\u0438\u043B\u0438" };
+    return ttnQuick();
+  }
+  onCron("ttn", "\u0414\u0443\u0431\u043B\u0456 \u0422\u0422\u041D \u0443 \u043D\u043E\u0432\u0438\u0445 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F\u0445 (\u0440\u0430\u0437 \u043D\u0430 10 \u0445\u0432)", ttnDue);
   onTick((c) => {
     if (Date.now() - (shared2.ttnTry || 0) < 6e4) return;
     shared2.ttnTry = Date.now();
     const p = (async () => {
-      const last = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_check_at'`))?.value || "";
-      if (last && Date.now() - Date.parse(last) < TTN_EVERY) return;
-      if (!(await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_seen'`))?.value) return;
-      await ttnQuick();
+      if (!await cronActive()) await ttnDue();
     })().catch(() => 0);
     try {
       c?.executionCtx?.waitUntil(p);
     } catch {
     }
   });
-  app.post("/api/cron/ttn", async (c) => {
-    const key = (await db.get(`SELECT value FROM settings WHERE key = 'an_cron_key'`))?.value || "";
-    const got = c.req.header("x-cron-key") || "";
-    if (!key || got.length !== key.length || got !== key) throw fail(401, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043A\u043B\u044E\u0447.");
-    return c.json(await ttnQuick());
-  });
   app.post("/api/an/ttn-check", async (c) => {
     if (!can(c.get("user"), "analytics")) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432.");
     return c.json(await ttnQuick({ force: true }));
-  });
-  app.get("/api/an/cron-key", async (c) => {
-    need(c, "users");
-    return c.json({ key: (await db.get(`SELECT value FROM settings WHERE key = 'an_cron_key'`))?.value || "" });
-  });
-  app.post("/api/an/cron-key", async (c) => {
-    need(c, "users");
-    const key = [...crypto.getRandomValues(new Uint8Array(24))].map((x) => x.toString(16).padStart(2, "0")).join("");
-    await putSetting2("an_cron_key", key);
-    return c.json({ key });
   });
   app.get("/api/an/config", async (c) => {
     const [st, depts, sources, smap, officeMap, managers, brands, offices, statusNames, lastSync, sync, categories] = await Promise.all([
@@ -4057,7 +4050,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     ]);
     const ttnSeen = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_seen'`))?.value || "";
     const ttnLast = await getJson("an_ttn_last");
-    const cronOn = Boolean((await db.get(`SELECT value FROM settings WHERE key = 'an_cron_key'`))?.value);
+    const cronOn = await cronActive();
     return c.json({
       categories,
       settings: st,
@@ -4350,6 +4343,9 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       if (r.nextAt) throw fail(429, `\u0414\u0430\u043D\u0456 \u043E\u043D\u043E\u0432\u043B\u044E\u0432\u0430\u043B\u0438\u0441\u044C \u043E ${hhmm(last)} \u2014 \u043D\u0430\u0441\u0442\u0443\u043F\u043D\u0435 \u043E\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043C\u043E\u0436\u043D\u0430 \u043E ${hhmm(r.nextAt)}.`);
       await putSetting2("an_today_cnt", JSON.stringify({ day: kyivDay(), n: r.used + 1 }));
     }
+    return c.json(await syncBegin(mode, st));
+  });
+  async function syncBegin(mode, st) {
     const cr = await creds();
     const statusNames = await lp(cr, "getStatuses", {}).then((j) => j.status === "ok" ? j.data || {} : {}).catch(() => ({}));
     if (Object.keys(statusNames).length) await putSetting2("an_status_names", JSON.stringify(statusNames));
@@ -4386,13 +4382,13 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       warnings: []
     };
     await putSetting2("an_sync", JSON.stringify(state));
-    return c.json({ state: summary(state) });
-  });
-  app.post("/api/an/sync/step", async (c) => {
+    return { state: summary(state) };
+  }
+  async function syncStep() {
     const state = await getJson("an_sync");
-    if (!state) return c.json({ state: null });
-    if (state.phase === "done" || state.error) return c.json({ state: summary(state) });
-    if (state.lockUntil && state.lockUntil > Date.now()) return c.json({ state: summary(state), busy: true });
+    if (!state) return { state: null };
+    if (state.phase === "done" || state.error) return { state: summary(state), idle: true };
+    if (state.lockUntil && state.lockUntil > Date.now()) return { state: summary(state), busy: true };
     state.lockUntil = Date.now() + 12e4;
     await putSetting2("an_sync", JSON.stringify(state));
     const st = await getSt();
@@ -4569,7 +4565,24 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     }
     state.lockUntil = 0;
     await save();
-    return c.json({ state: summary(state) });
+    return { state: summary(state) };
+  }
+  app.post("/api/an/sync/step", async (c) => c.json(await syncStep()));
+  onCron("analytics", "\u0429\u043E\u0434\u0435\u043D\u043D\u0435 \u043E\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438 (\u0432\u043D\u043E\u0447\u0456)", async () => {
+    const cur = await getJson("an_sync");
+    if (cur && cur.phase !== "done" && !cur.error) {
+      const r = await syncStep();
+      return { step: r.state?.text || "", pct: r.state?.pct ?? null, ...r.busy ? { busy: true } : {} };
+    }
+    if (!(await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`))?.value) return { skipped: "\u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0443 \u0449\u0435 \u043D\u0435 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043E" };
+    const lastDaily = (await db.get(`SELECT value FROM settings WHERE key = 'an_last_daily'`))?.value || "";
+    const age = lastDaily ? Date.now() - Date.parse(lastDaily) : Infinity;
+    const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Kyiv", hour: "2-digit", hourCycle: "h23" }).format(/* @__PURE__ */ new Date()));
+    if (age > 30 * 36e5 || age > 20 * 36e5 && hour >= 2 && hour < 6) {
+      await syncBegin("daily", await getSt());
+      return { started: true };
+    }
+    return { fresh: true };
   });
   app.post("/api/an/sync/cancel", async (c) => {
     const s = await getJson("an_sync");
@@ -10738,7 +10751,8 @@ var userName5 = (u) => u?.name || u?.login || "";
 var lastTickTry = 0;
 var esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
-} }) {
+}, onCron = () => {
+}, cronActive = async () => false }) {
   const publicAcc = (a, origin = "") => ({
     id: a.id,
     name: a.name,
@@ -11002,19 +11016,25 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     return { saved, changed, more };
   }
   const TICK_MS = 10 * 6e4;
+  async function notifySync() {
+    const accs = await db.all(`SELECT * FROM rzs_accounts WHERE active = 1 AND (notify_inv = 1 OR notify_ttn = 1)`);
+    if (!accs.length) return { skipped: "\u0441\u043F\u043E\u0432\u0456\u0449\u0435\u043D\u043D\u044F \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E" };
+    const now = Date.now();
+    const claim = await db.run(
+      `INSERT INTO settings (key, value) VALUES ('rzs_tick_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
+      [new Date(now).toISOString(), new Date(now - TICK_MS).toISOString()]
+    );
+    if (!claim.changes) return { fresh: true };
+    let saved = 0;
+    for (const a of accs) saved += (await syncAccount(a, { days: 7 }).catch(() => ({ saved: 0 }))).saved || 0;
+    return { accounts: accs.length, saved };
+  }
+  onCron("rzs", "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u0434\u043B\u044F \u0441\u043F\u043E\u0432\u0456\u0449\u0435\u043D\u044C (\u0440\u0430\u0437 \u043D\u0430 10 \u0445\u0432)", notifySync);
   onTick((c) => {
     if (Date.now() - (lastTickTry || 0) < 6e4) return;
     lastTickTry = Date.now();
     const p = (async () => {
-      const accs = await db.all(`SELECT * FROM rzs_accounts WHERE active = 1 AND (notify_inv = 1 OR notify_ttn = 1)`);
-      if (!accs.length) return;
-      const now = Date.now();
-      const claim = await db.run(
-        `INSERT INTO settings (key, value) VALUES ('rzs_tick_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
-        [new Date(now).toISOString(), new Date(now - TICK_MS).toISOString()]
-      );
-      if (!claim.changes) return;
-      for (const a of accs) await syncAccount(a, { days: 7 }).catch(() => 0);
+      if (!await cronActive()) await notifySync();
     })().catch(() => 0);
     try {
       c?.executionCtx?.waitUntil(p);
@@ -12259,6 +12279,84 @@ function mountHome(app, { services }) {
   });
 }
 
+// src/modules/cron/index.js
+var randomKey = () => [...crypto.getRandomValues(new Uint8Array(24))].map((x) => x.toString(16).padStart(2, "0")).join("");
+function mountCron(app, { db, cronTasks, services = {}, shared: shared2 = {} }) {
+  const getVal = async (key) => (await db.get(`SELECT value FROM settings WHERE key = ?`, [key]))?.value || "";
+  const putVal = (key, value) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]);
+  const cronKey = async () => await getVal("cron_key") || await getVal("an_cron_key");
+  const checkKey = async (c) => {
+    const key = await cronKey();
+    const got = c.req.header("x-cron-key") || "";
+    if (!key || got.length !== key.length || got !== key) throw fail(401, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043A\u043B\u044E\u0447.");
+  };
+  const markTick = async () => {
+    await putVal("cron_at", nowIso());
+    shared2.cronOn = true;
+    shared2.cronCheckAt = Date.now();
+  };
+  const readLast = async () => {
+    try {
+      return JSON.parse(await getVal("cron_last")) || {};
+    } catch {
+      return {};
+    }
+  };
+  async function runTask(name) {
+    const t = cronTasks.get(name);
+    if (!t) throw fail(404, "\u041D\u0435\u043C\u0430\u0454 \u0442\u0430\u043A\u043E\u0457 \u0437\u0430\u0434\u0430\u0447\u0456.");
+    const started = Date.now();
+    let rec;
+    try {
+      rec = { ok: true, result: await t.run() ?? null };
+    } catch (e) {
+      if (e.pending) rec = { ok: true, result: { more: true } };
+      else {
+        rec = { ok: false, error: String(e.message || e).slice(0, 300) };
+        await services.errlog?.log(e, { path: `/api/cron/run/${name}`, source: "\u0424\u043E\u043D\u043E\u0432\u0456 \u0437\u0430\u0434\u0430\u0447\u0456" }).catch(() => 0);
+      }
+    }
+    const last = await readLast();
+    last[name] = { ...rec, at: nowIso(), ms: Date.now() - started };
+    await putVal("cron_last", JSON.stringify(last));
+    return last[name];
+  }
+  app.get("/api/cron/tasks", async (c) => {
+    await checkKey(c);
+    await markTick();
+    return c.json({ tasks: [...cronTasks.keys()] });
+  });
+  app.post("/api/cron/run/:name", async (c) => {
+    await checkKey(c);
+    return c.json(await runTask(c.req.param("name")));
+  });
+  app.post("/api/cron/ttn", async (c) => {
+    await checkKey(c);
+    await markTick();
+    return c.json(await runTask("ttn"));
+  });
+  app.get("/api/jobs", async (c) => {
+    need(c, "users");
+    const [key, at, last] = await Promise.all([cronKey(), getVal("cron_at"), readLast()]);
+    return c.json({
+      key,
+      lastTick: at,
+      active: Boolean(at) && Date.now() - Date.parse(at) < 10 * 6e4,
+      tasks: [...cronTasks].map(([name, t]) => ({ name, title: t.title, last: last[name] || null }))
+    });
+  });
+  app.post("/api/jobs/key", async (c) => {
+    need(c, "users");
+    const key = randomKey();
+    await putVal("cron_key", key);
+    return c.json({ key });
+  });
+  app.post("/api/jobs/run/:name", async (c) => {
+    need(c, "users");
+    return c.json(await runTask(c.req.param("name")));
+  });
+}
+
 // src/app.js
 function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, odbBase = ODB_BASE, shared: shared2 = {} }) {
   const app = new Hono3();
@@ -12302,8 +12400,17 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     const border = new Date(Date.now() - days * 864e5).toISOString();
     for (const task of cleanupTasks) await task(border);
   }
+  const cronTasks = /* @__PURE__ */ new Map();
+  const onCron = (name, title, run) => cronTasks.set(name, { title, run });
+  async function cronActive() {
+    if (Date.now() - (shared2.cronCheckAt || 0) < 6e4) return shared2.cronOn;
+    shared2.cronCheckAt = Date.now();
+    const at = (await db.get(`SELECT value FROM settings WHERE key = 'cron_at'`))?.value || "";
+    shared2.cronOn = Boolean(at) && Date.now() - Date.parse(at) < 10 * 6e4;
+    return shared2.cronOn;
+  }
   const services = {};
-  const ctx = { db, fetchFn, services, onCleanup, onTick, runCleanup, shared: shared2 };
+  const ctx = { db, fetchFn, services, onCleanup, onTick, onCron, cronActive, runCleanup, shared: shared2 };
   mountAuth(app, ctx);
   mountRefs(app, ctx);
   services.nakladni = mountNakladni(app, ctx);
@@ -12317,6 +12424,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   services.notify = mountTg(app, ctx);
   mountHome(app, ctx);
   services.payments = mountOdb(app, { ...ctx, base: odbBase, notify: (...a) => services.notify.notify(...a), onTx: (ids, origin) => services.b2b?.onPayments?.(ids, origin) });
+  mountCron(app, { ...ctx, cronTasks });
   return app;
 }
 

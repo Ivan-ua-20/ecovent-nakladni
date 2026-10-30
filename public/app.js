@@ -9,6 +9,7 @@ import { createNakladnaPages } from './pages/nakladna.js';
 import { createRefsPages } from './pages/refs.js';
 import { createSettingsPages } from './pages/settings.js';
 import { createNpPages } from './pages/np.js';
+import { createCronPages } from './pages/cron.js';
 import { createRahunkyPages } from './pages/rahunky.js';
 import { createUsersPages } from './pages/users.js';
 import { createErrorsPages } from './pages/errors.js';
@@ -80,6 +81,7 @@ const SECTIONS = [
     { id: 'rzsettings', label: 'Налаштування Розетки', perm: 'api' },
     { id: 'users', label: 'Користувачі', perm: 'people' },
     { id: 'errors', label: 'Журнал помилок', perm: 'users' },
+    { id: 'cron', label: 'Фонові задачі', perm: 'users' },
   ] },
 ];
 const visibleTabs = (sec) => sec.tabs.filter((t) => !t.perm || can(t.perm));
@@ -266,6 +268,7 @@ const { viewInvoice, viewHistory } = createNakladnaPages(ctx);
 const { viewFops, viewOffices, viewTemplates, viewInvFops } = createRefsPages(ctx);
 const { viewSettings, viewNakladniSettings, viewRahunkySettings } = createSettingsPages(ctx);
 const { viewNp } = createNpPages();
+const { viewCron } = createCronPages();
 const { viewRahunky, viewRahunkyList } = createRahunkyPages(ctx);
 const { viewUsers } = createUsersPages(ctx);
 const { viewErrors } = createErrorsPages(ctx);
@@ -294,6 +297,7 @@ const routes = {
   ansettings: (...a) => AN.viewSettings(...a),
   settings: viewSettings,
   np: viewNp,
+  cron: viewCron,
   users: viewUsers,
   errors: viewErrors,
   b2bpartners: viewPartners,
