@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 27,
+  version: 28,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -304,6 +304,9 @@ export const schema = {
     ['b2b_partners', 'manager_id', 'INTEGER'],
     ['b2b_partners', 'paused_auto', 'INTEGER DEFAULT 0'],
     ['b2b_partners', 'pause_override', "TEXT DEFAULT ''"],
+    // Новинки каталогу: коли товар уперше отримав РРЦ; коли адмін надіслав (або відмітив) його партнерам.
+    ['b2b_catalog', 'first_priced_at', "TEXT DEFAULT ''"],
+    ['b2b_catalog', 'announced_at', "TEXT DEFAULT ''"],
   ],
   // Індекси на нові колонки — після ALTER TABLE (у старих базах колонок ще немає, коли створюються таблиці).
   async seed(db) {
@@ -319,5 +322,13 @@ export const schema = {
       [`CREATE INDEX IF NOT EXISTS b2b_orders_crmext ON b2b_orders (crm_ext) WHERE crm_ext != ''`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_payments_payer ON b2b_payments (payer_code)`, []],
     ]);
+    // Один раз: усе, що вже мало РРЦ до появи новинок, — не новинка (інакше першою розсилкою пішов би весь каталог).
+    const done = await db.get(`SELECT value FROM settings WHERE key = 'b2b_newprod_init'`);
+    if (!done) {
+      await db.batch([
+        [`UPDATE b2b_catalog SET first_priced_at = 'до новинок', announced_at = 'до новинок' WHERE rrp > 0 AND first_priced_at = ''`, []],
+        [`INSERT INTO settings (key, value) VALUES ('b2b_newprod_init', ?) ON CONFLICT(key) DO NOTHING`, [new Date().toISOString()]],
+      ]);
+    }
   },
 };

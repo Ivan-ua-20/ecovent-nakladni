@@ -477,6 +477,59 @@ export function createB2bPages(ctx = {}) {
     $$('[data-ue]').forEach((b) => (b.onclick = () => userForm(users.find((x) => String(x.id) === b.dataset.ue))));
   }
 
+  // ---------------------------------------------------------------- новинки каталогу
+  // Нічого не йде партнерам само: адмін обирає товари й партнерів і натискає «Надіслати» або «Без розсилки».
+  async function newProducts() {
+    let d;
+    try { d = await api('GET', '/api/b2b/new-products'); } catch (e) { toast(e.message, true); return; }
+    if (!d.items.length) { toast('Нових товарів немає — усе вже надіслано або відмічено'); return; }
+    const day = (v) => (/^\d{4}-/.test(v || '') ? v.slice(0, 10).split('-').reverse().join('.') : '');
+    const m = modal(`Нові товари · ${d.items.length}`, `<div class="form-stack">
+        <p class="small muted" style="margin:0">Товари, що вперше отримали РРЦ у LP-CRM. Перевірте назву, бренд і ціну — партнери отримають лише відмічені, кожен лише свої бренди і зі своєю ціною.</p>
+        <div class="table-wrap"><table class="list no-paging"><thead><tr><th><input type="checkbox" id="npAll" checked aria-label="Обрати всі товари"></th><th>Товар</th><th>Бренд</th><th class="r">РРЦ</th><th>З'явився</th></tr></thead><tbody>
+          ${d.items.map((x) => `<tr><td><input type="checkbox" data-np="${x.product_id}" checked aria-label="Обрати ${esc(x.name)}"></td><td>${esc(x.name)}${x.article ? `<div class="small muted">${esc(x.article)}</div>` : ''}</td><td>${esc(x.brand)}</td><td class="r">${money(x.rrp)} грн</td><td class="small">${day(x.first_priced_at)}</td></tr>`).join('')}
+        </tbody></table></div>
+        <h4 style="margin:6px 0 0">Кому надіслати</h4>
+        <div class="form-stack" id="npParts" style="gap:6px">${d.partners.map((p) => `<label class="check"><input type="checkbox" data-npp="${p.id}" data-brands="${p.brands.join(',')}" ${p.group || p.tgUsers ? 'checked' : 'disabled'}> ${esc(p.name)}
+          <span class="small muted">· <span data-npc="${p.id}"></span> · ${p.group ? `група «${esc(p.group)}»` : p.tgUsers ? `бот (${p.tgUsers})` : 'Telegram не підключено'}</span></label>`).join('')}</div>
+      </div>`, { wide: true, footer: '<button class="btn" data-close>Скасувати</button><button class="btn" id="npMark">Без розсилки</button><button class="btn primary" id="npSend">Надіслати обраним</button>' });
+    const items = () => $$('[data-np]', m.el).filter((x) => x.checked).map((x) => Number(x.dataset.np));
+    const brandOf = new Map(d.items.map((x) => [x.product_id, x.brand_id]));
+    const recount = () => {
+      const chosen = items();
+      for (const cb of $$('[data-npp]', m.el)) {
+        const bs = new Set(cb.dataset.brands.split(',').map(Number));
+        const n = chosen.filter((id) => bs.has(brandOf.get(id))).length;
+        $(`[data-npc="${cb.dataset.npp}"]`, m.el).textContent = `${n} товар.`;
+      }
+    };
+    $('#npAll', m.el).onchange = (e) => { $$('[data-np]', m.el).forEach((x) => { x.checked = e.target.checked; }); recount(); };
+    $$('[data-np]', m.el).forEach((x) => (x.onchange = recount));
+    recount();
+    const lock = (on) => $$('#npSend, #npMark', m.el).forEach((b) => { b.disabled = on; });
+    $('#npMark', m.el).onclick = async () => {
+      const ids = items();
+      if (!ids.length) { toast('Оберіть товари', true); return; }
+      if (!(await confirmDanger(`Відмітити ${ids.length} товар. без розсилки?`, 'Партнерам нічого не надійде; товари зникнуть зі списку новинок і в кабінеті будуть позначені як «Новинка».', 'Відмітити'))) return;
+      try { await api('POST', '/api/b2b/new-products/mark', { product_ids: ids }); m.close(); toast('Відмічено без розсилки'); } catch (e) { toast(e.message, true); }
+    };
+    $('#npSend', m.el).onclick = async () => {
+      const ids = items();
+      const parts = $$('[data-npp]', m.el).filter((x) => x.checked && !x.disabled);
+      if (!ids.length || !parts.length) { toast('Оберіть товари і хоча б одного партнера', true); return; }
+      if (!(await confirmDanger(`Надіслати ${ids.length} товар. партнерам: ${parts.length}?`, 'Кожен партнер отримає в Telegram лише товари своїх брендів зі своєю ціною.', 'Надіслати'))) return;
+      lock(true);
+      const fails = [];
+      let ok = 0;
+      for (const cb of parts) {
+        try { const r = await api('POST', '/api/b2b/new-products/send', { partner_id: Number(cb.dataset.npp), product_ids: ids }); if (r.sent) ok++; else if (r.products) fails.push(r.name); } catch (e) { fails.push(e.message); }
+      }
+      try { await api('POST', '/api/b2b/new-products/mark', { product_ids: ids }); } catch (e) { fails.push(e.message); }
+      m.close();
+      toast(fails.length ? `Надіслано: ${ok}. Не вдалося: ${fails.join('; ')}` : `Надіслано партнерам: ${ok}`, !!fails.length);
+    };
+  }
+
   // ---------------------------------------------------------------- розсилка змін цін
   // Перегляд: хто що отримає і куди (група партнера або його користувачі), потім «Надіслати».
   // Спершу — свіжі РРЦ з LP-CRM: у Telegram іде рівно те, що одразу бачить партнер у кабінеті (ціни з одного каталогу).
@@ -633,7 +686,7 @@ export function createB2bPages(ctx = {}) {
     const qs = new URLSearchParams(Object.entries(catFilter).filter(([, v]) => v !== '')).toString();
     const [{ rows, state }, brands] = await Promise.all([api('GET', `/api/b2b/catalog${qs ? `?${qs}` : ''}`), api('GET', '/api/b2b/brands')]);
     main.innerHTML = `
-      <div class="head-row"><h2>Каталог і ціни</h2><div class="btn-row"><button class="btn" id="cAdd">+ Товари за ID</button><button class="btn" id="cSend">Надіслати зміни цін</button><button class="btn" id="cAnn">📢 Оголошення</button><button class="btn primary" id="cSync">Оновити з LP-CRM</button></div></div>
+      <div class="head-row"><h2>Каталог і ціни</h2><div class="btn-row"><button class="btn" id="cAdd">+ Товари за ID</button><button class="btn" id="cNew">Нові товари</button><button class="btn" id="cSend">Надіслати зміни цін</button><button class="btn" id="cAnn">📢 Оголошення</button><button class="btn primary" id="cSync">Оновити з LP-CRM</button></div></div>
       <div class="alert info help" style="margin-bottom:14px">Товари — з аналітики (усе, що продавалося) і додані вручну за ID з LP-CRM. Назва, РРЦ і фото оновлюються з LP-CRM
         для брендів, увімкнених хоча б одному партнеру. ${state.lastSync ? `Останнє оновлення: ${esc(fmtDateTime(state.lastSync))}.` : 'Ще не оновлювався.'}
         ${state.stale ? `<b>Чекають оновлення: ${state.stale}.</b>` : ''}</div>
@@ -655,6 +708,9 @@ export function createB2bPages(ctx = {}) {
     $('#cQ').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { catFilter.q = e.target.value.trim(); viewCatalog(); }, 400); };
     $('#cSync').onclick = (e) => syncCatalog(e.currentTarget);
     $('#cSend').onclick = () => sendPrices();
+    $('#cNew').onclick = () => newProducts();
+    // Скільки новинок чекає перевірки — у підписі кнопки.
+    api('GET', '/api/b2b/new-products').then((d) => { const b = $('#cNew'); if (b && d.items.length) b.insertAdjacentHTML('beforeend', ` <span class="nav-count">${d.items.length}</span>`); }).catch(() => 0);
     $('#cAnn').onclick = () => announce();
     $$('[data-vis]').forEach((cb) => (cb.onchange = async () => {
       try { await api('PUT', `/api/b2b/catalog/${cb.dataset.vis}`, { hidden: !cb.checked }); toast(cb.checked ? 'Товар показується партнерам' : 'Товар приховано від партнерів'); }

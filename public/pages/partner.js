@@ -122,7 +122,7 @@ export function createPartnerPages(ctx = {}) {
         lastBrand = gk;
         return `${head}<tr>
           <td style="width:56px">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" style="width:48px;height:48px;object-fit:contain">` : ''}</td>
-          <td><b>${esc(p.name)}</b><div class="small muted">${[p.article, catName.get(String(p.cat)), p.ordered ? `замовляли ${p.ordered} раз` : ''].filter(Boolean).map(esc).join(' · ')}</div></td>
+          <td><b>${esc(p.name)}</b>${p.is_new ? ' <span class="badge info">Новинка</span>' : ''}<div class="small muted">${[p.article, catName.get(String(p.cat)), p.ordered ? `замовляли ${p.ordered} раз` : ''].filter(Boolean).map(esc).join(' · ')}</div></td>
           <td class="small hide-m">${esc(p.brand)}</td>
           <td class="r small muted">${money(p.rrp)} грн</td>
           <td class="r small hide-m">${pct(p.margin)}<div class="muted">−${money(p.rrp - p.price)}</div></td>

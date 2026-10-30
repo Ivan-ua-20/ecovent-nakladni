@@ -18,6 +18,7 @@ import { mountB2bPay } from './odbpay.js';
 import { mountB2bEdits } from './edits.js';
 import { mountB2bHome } from './home.js';
 import { mountB2bCrm } from './crm.js';
+import { mountB2bNewProducts } from './newproducts.js';
 
 export const partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 
@@ -476,7 +477,11 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
       }
       await db.batch(st);
     }
-    await db.run(`INSERT INTO settings (key, value) VALUES ('b2b_catalog_sync', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [at]);
+    await db.batch([
+      // Товар уперше отримав РРЦ — новинка (партнерам її надсилає адмін вручну, див. newproducts.js).
+      [`UPDATE b2b_catalog SET first_priced_at = ? WHERE first_priced_at = '' AND rrp > 0`, [at]],
+      [`INSERT INTO settings (key, value) VALUES ('b2b_catalog_sync', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [at]],
+    ]);
     const state = await catalogState(today);
     return c.json({ ok: true, checked: todo.length, changed, items, left: state.stale, lastSync: at });
   });
@@ -528,7 +533,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   app.get('/api/b2b/p/catalog', async (c) => {
     const p = await myPartner(c);
     const [rows, names, cats] = await Promise.all([
-      db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.image, c.brand_id, ${PM_COLS}, COALESCE(a.cat_manual, a.category_id, 0) AS cat
+      db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.image, c.brand_id, c.announced_at, ${PM_COLS}, COALESCE(a.cat_manual, a.category_id, 0) AS cat
         FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN} LEFT JOIN an_products a ON a.product_id = c.product_id
         WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [kyivDay(), p.id]),
       brandNames(),
@@ -553,6 +558,8 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
       products: rows.map((r) => ({
         id: r.product_id, name: r.name, article: r.article, image: r.image, brand_id: r.brand_id, cat: r.cat,
         brand: names.get(r.brand_id) || 'Інші', rrp: r.rrp, price: partnerPrice(r.rrp, r.margin), margin: r.margin, special: Boolean(r.special), special_until: r.special_until || '',
+        // «Новинка» — 14 днів після того, як адмін надіслав її партнерам (до розсилки партнер про неї не дізнається).
+        is_new: /^\d{4}-/.test(r.announced_at || '') && Date.now() - Date.parse(r.announced_at) < 14 * 86400000,
         ordered: freq.get(r.product_id)?.n || 0, ordered_qty: freq.get(r.product_id)?.q || 0,
       })).sort((a, b) => b.ordered - a.ordered || b.ordered_qty - a.ordered_qty),
     });
@@ -569,7 +576,8 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   mountB2bStats(app, { db, myPartner });
   const home = mountB2bHome(app, { db, myPartner, orders });
   const crm = mountB2bCrm(app, { db, services, onCleanup });
-  const attention = async (user) => [...await home.attention(), ...await crm.attention(user)];
+  const newProducts = mountB2bNewProducts(app, { db, services, partnerPrice, brandNames });
+  const attention = async (user) => [...await home.attention(), ...await crm.attention(user), ...await newProducts.attention()];
   mountB2bPrices(app, { db, services, partnerPrice });
 
   // ---------- Telegram-група партнера ----------
