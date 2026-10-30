@@ -654,3 +654,13 @@ tr.pg-hidden { display: none !important; }
 .ic-gold { color: #b7791f; fill: #f6c445; }
 .badge .ic, .btn.sm .ic { width: 1em; height: 1em; }
 .btn.primary .ic-ok, .btn.danger.solid .ic { color: inherit; }
+
+/* Аналітика: вибір товарів для фільтра */
+.prod-pick { position: relative; display: inline-flex; }
+.prod-pick input { width: 240px; max-width: 100%; padding: 6px 12px; border-radius: 999px; border: 1px dashed #a9c9c2; font-size: 13px; }
+.prod-res { position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; width: min(420px, calc(100vw - 32px)); max-height: 320px; overflow: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(16, 32, 28, .16); padding: 4px; display: flex; flex-direction: column; }
+.prod-opt { all: unset; cursor: pointer; display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; border-radius: 6px; }
+.prod-opt:hover, .prod-opt:focus-visible { background: var(--accent-soft); }
+.prod-opt span { font-size: 12.5px; color: var(--muted); }
+.prod-opt:disabled { opacity: .5; cursor: default; }
+.prod-none { padding: 10px; color: var(--muted); font-size: 13px; }

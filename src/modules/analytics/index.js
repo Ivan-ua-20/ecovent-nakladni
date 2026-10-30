@@ -7,7 +7,7 @@
 //  - мінімум індексів, щоб не перевищити 100 тис. записів у базу на добу.
 import { call, asList, findOrders } from '../../integrations/lpcrm.js';
 import { can, crmLogins } from '../../core/auth.js';
-import { fail, need, nowIso, num, round2, kyivDay, loadSettings } from '../../core/common.js';
+import { fail, need, nowIso, num, round2, kyivDay, loadSettings, likeVariants } from '../../core/common.js';
 
 export { kyivDay };
 
@@ -1063,6 +1063,16 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
     return c.json({ ok: true });
   });
 
+  // Пошук товарів для фільтра «Товари»: за назвою (кирилиця без регістру) або ID LP-CRM.
+  app.get('/api/an/product-search', async (c) => {
+    const q = String(c.req.query('q') || '').trim().slice(0, 60);
+    if (q.length < 2) return c.json([]);
+    const v = likeVariants(q);
+    const rows = await db.all(`SELECT p.product_id AS id, p.name, b.name AS brand FROM an_products p LEFT JOIN an_brands b ON b.id = p.brand_id
+      WHERE p.product_id = ? OR ${v.map(() => 'p.name LIKE ?').join(' OR ')} ORDER BY p.name LIMIT 30`, [parseInt(q, 10) || 0, ...v]);
+    return c.json(rows.map((r) => ({ id: r.id, name: r.name || `Товар ${r.id}`, brand: r.brand || 'Інші' })));
+  });
+
   // ---------------------------------------------------------------- дашборд
   app.post('/api/an/query', async (c) => {
     const b = await c.req.json();
@@ -1079,11 +1089,13 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
       managers: (Array.isArray(b.managers) ? b.managers : []).map(low).filter(Boolean).slice(0, 40),
       brands: ints(b.brands),
       cats: ints(b.cats),
+      // Конкретні товари (ID LP-CRM) — «скільки штук продалось за період».
+      products: (Array.isArray(b.products) ? b.products : []).map((x) => parseInt(x, 10)).filter((x) => x > 0).slice(0, 100),
     };
     // Менеджер бачить лише свої замовлення; без прив'язаних логінів — порожньо.
     const own = c.get('anOwn');
     if (own) f.managers = own.length ? own : ['\u0001'];
-    const itemLevel = f.brands.length > 0 || f.cats.length > 0;
+    const itemLevel = f.brands.length > 0 || f.cats.length > 0 || f.products.length > 0;
     const ok = st.okStatuses.map(Number);
     const rf = st.refuseStatuses.map(Number);
     const tracked = [...ok, ...rf];
@@ -1095,7 +1107,8 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
     // kpi: 2 — у відповіді з'явилися завершені замовлення і сума відмов (старі збережені відповіді не підходять).
     // kpi: 3 — додано розбивку за службами доставки.
     // kpi: 4 — «Відправлено» (усі статуси, крім «Прийнято») і оборот без відмов у розбивках для порівняння.
-    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today, kpi: 4 }));
+    // kpi: 5 — усі продані товари (не лише 20), фільтр за товарами, к-сть у періоді порівняння.
+    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today, kpi: 5 }));
     const hit = await db.get(`SELECT value FROM an_cache WHERE key = ?`, [cacheKey]);
     if (hit) return c.body(hit.value, 200, { 'content-type': 'application/json; charset=UTF-8' });
 
@@ -1110,6 +1123,7 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
         join = `CROSS JOIN an_items i ON i.id BETWEEN o.id * 100 AND o.id * 100 + 99 LEFT JOIN an_products p ON p.product_id = i.product_id`; // CROSS JOIN: SQLite не переставляє таблиці (спершу замовлення за діапазоном id)
         if (f.brands.length) { where.push(`COALESCE(p.brand_id, 0) IN (${ph(f.brands)})`); params.push(...f.brands); }
         if (f.cats.length && !skipCats) { where.push(`COALESCE(p.cat_manual, p.category_id, 0) IN (${ph(f.cats)})`); params.push(...f.cats); }
+        if (f.products.length) { where.push(`i.product_id IN (${ph(f.products)})`); params.push(...f.products); }
       }
       return { from: `FROM an_orders o ${join} WHERE ${where.join(' AND ')}`, params };
     }
@@ -1127,7 +1141,7 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
       const qi = base(range, { items: true });
       const topJob = full ? db.all(`SELECT i.product_id AS id, MAX(p.name) AS name, MAX(p.brand_id) AS brand, SUM(i.amount) AS rev,
                 SUM(i.qty) AS qty, SUM(CASE WHEN ${rfExpr} = 1 THEN i.qty ELSE 0 END) AS rqty
-                ${qi.from} GROUP BY i.product_id ORDER BY rev DESC LIMIT 20`, qi.params) : Promise.resolve([]);
+                ${qi.from} GROUP BY i.product_id ORDER BY rev DESC LIMIT 2000`, qi.params) : Promise.resolve([]);
       // До ~3 місяців: замовлення читаються ОДИН раз (по днях і розрізах разом), товари — один раз (по замовленню, бренду
       // й категорії), підсумки — у коді. Ліміт D1 рахує прочитані рядки, тож це вдвічі менше читань. Довші періоди —
       // окремими запитами (інакше забагато рядків у відповіді для ліміту процесорного часу).
@@ -1175,7 +1189,8 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
 
     const [cur, prev, depts, sources, managers, brands, categories, targets, catOptions] = await Promise.all([
       period({ from, to }, true),
-      cmp ? period(cmp, false) : null,
+      // вибрані товари — і для порівняння (скільки штук було в попередньому періоді)
+      cmp ? period(cmp, f.products.length > 0) : null,
       db.all(`SELECT id, name, sort FROM an_depts ORDER BY sort, id`),
       db.all(`SELECT id, dept_id, name, sort FROM an_sources ORDER BY sort, id`),
       db.all(`SELECT login, name, dept_id FROM an_managers`),
@@ -1358,7 +1373,14 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
       id: r.id, name: r.id ? cName.get(r.id) || `Категорія ${r.id}` : 'Без категорії', rev: round2(r.rev), net: round2(r.net), qty: r.qty, cnt: r.cnt,
       prevRev: prev ? round2(prevCats.get(r.id)?.rev || 0) : null, prevNet: prev ? round2(prevCats.get(r.id)?.net || 0) : null,
     })).sort((a, b) => b.rev - a.rev);
-    const top = cur.top.map((r) => ({ id: r.id, name: r.name || `Товар ${r.id}`, brand: r.brand ? bName.get(r.brand) || 'Інші' : 'Інші', rev: round2(r.rev), qty: r.qty, rqty: r.rqty }));
+    const prevTop = new Map((prev?.top || []).map((r) => [r.id, r]));
+    const top = cur.top.map((r) => ({ id: r.id, name: r.name || `Товар ${r.id}`, brand: r.brand ? bName.get(r.brand) || 'Інші' : 'Інші', rev: round2(r.rev), qty: r.qty, rqty: r.rqty,
+      ...(f.products.length && prev ? { prevQty: prevTop.get(r.id)?.qty || 0 } : {}) }));
+    // Вибрані товари без продажів у періоді — теж у таблиці (0 шт), щоб було видно, що їх не купували.
+    const picked = f.products.length ? await db.all(`SELECT product_id AS id, name, brand_id FROM an_products WHERE product_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(f.products)]) : [];
+    for (const p of picked) {
+      if (!top.some((t) => t.id === p.id)) top.push({ id: p.id, name: p.name || `Товар ${p.id}`, brand: p.brand_id ? bName.get(p.brand_id) || 'Інші' : 'Інші', rev: 0, qty: 0, rqty: 0, ...(prev ? { prevQty: prevTop.get(p.id)?.qty || 0 } : {}) });
+    }
 
     const last = await db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`);
     const out = JSON.stringify({
@@ -1377,6 +1399,7 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
         managers: own ? own.map((l) => ({ login: l, name: managers.find((m) => m.login === l)?.name || l, dept_id: null, own: true })) : [...new Map([...managers.map((m) => [m.login, { login: m.login, name: m.name || m.login, dept_id: m.dept_id }]),
           ...byManager.filter((m) => !mgrNames.has(m.login)).map((m) => [m.login, { login: m.login, name: m.login, dept_id: null }])]).values()],
         brands: [...brands.map((x) => ({ id: x.id, name: x.name })), { id: 0, name: 'Інші' }],
+        products: f.products.map((id) => ({ id, name: picked.find((p) => p.id === id)?.name || `Товар ${id}` })),
         cats: catOptions.map((r) => ({ id: r.id, name: r.id ? cName.get(r.id) || `Категорія ${r.id}` : 'Без категорії' }))
           .sort((a, b) => (a.id === 0) - (b.id === 0) || a.name.localeCompare(b.name, 'uk')),
       },
