@@ -10204,13 +10204,19 @@ async function rzLogin(fetchFn, username, password) {
   if (!j?.success || !j.content?.access_token) throw rzError(j);
   return { token: j.content.access_token, marketId: String(j.content.market?.id || ""), marketTitle: String(j.content.market?.title || "") };
 }
-async function rzOrdersSearch(fetchFn, token, { changedFrom = "", page = 1 } = {}) {
-  const q = new URLSearchParams({ page: String(page), sort: "-changed", expand: "delivery,status_data,purchases" });
+async function rzOrdersSearch(fetchFn, token, { changedFrom = "", createdFrom = "", createdTo = "", page = 1 } = {}) {
+  const q = new URLSearchParams({ page: String(page), perPage: "100", sort: createdFrom ? "-created" : "-changed", expand: "delivery,status_data,purchases" });
   if (changedFrom) q.set("changed_from", changedFrom);
+  if (createdFrom) q.set("created_from", createdFrom);
+  if (createdTo) q.set("created_to", createdTo);
   const res = await send(fetchFn, `/orders/search?${q}`, { token });
   const j = await res.json().catch(() => null);
   if (!j?.success) throw rzError(j);
-  return { orders: Array.isArray(j.content?.orders) ? j.content.orders : [], pageCount: Number(j.content?._meta?.pageCount) || 1 };
+  return {
+    orders: Array.isArray(j.content?.orders) ? j.content.orders : [],
+    pageCount: Number(j.content?._meta?.pageCount) || 1,
+    total: Number(j.content?._meta?.totalCount) || 0
+  };
 }
 async function rzTtnPdf(fetchFn, token, ttn, why = () => {
 }) {
@@ -12591,6 +12597,9 @@ function mountCron(app, { db, cronTasks, services = {}, shared: shared2 = {} }) 
 
 // src/modules/market/index.js
 var KEEP_DAYS3 = 45;
+var HISTORY_YEARS = 4;
+var KEEP_DAYS_BY_MP = { rozetka: HISTORY_YEARS * 366 + 31 };
+var HIST_PAGES_PER_RUN = 5;
 var FIRST_DAYS = 30;
 var PAGES_PER_RUN = 3;
 var OVERLAP_MS = 10 * 6e4;
@@ -12681,9 +12690,13 @@ var ROW = {
 function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
 }, onCleanup = () => {
 } }) {
+  const borderOf = (days) => new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
   onCleanup(async () => {
-    const border = new Date(Date.now() - KEEP_DAYS3 * 864e5).toISOString().slice(0, 10);
-    await db.run(`DELETE FROM mp_orders WHERE created_at != '' AND created_at < ?`, [border]);
+    const own = Object.keys(KEEP_DAYS_BY_MP);
+    await db.batch([
+      [`DELETE FROM mp_orders WHERE mp NOT IN (SELECT value FROM json_each(?)) AND created_at != '' AND created_at < ?`, [JSON.stringify(own), borderOf(KEEP_DAYS3)]],
+      ...own.map((mp) => [`DELETE FROM mp_orders WHERE mp = ? AND created_at != '' AND created_at < ?`, [mp, borderOf(KEEP_DAYS_BY_MP[mp])]])
+    ]);
   });
   const shopsOf = async () => await services.marking?.marketShops?.() || {};
   async function saveRows(mp, accountId, rows) {
@@ -12709,15 +12722,99 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
       return { rows: items.map(ROW.epc), next };
     }
     const page = Number(cursor) || 1;
-    const opts = { changedFrom: kyivDT(from), page };
-    let r;
+    const r = await rzSearch(acc, { changedFrom: kyivDT(from), page });
+    return { rows: r.orders.map(ROW.rozetka), next: page < r.pageCount ? String(page + 1) : "" };
+  }
+  async function rzSearch(acc, opts) {
     try {
-      r = await rzOrdersSearch(fetchFn, await services.marking.rozetkaToken(acc), opts);
+      return await rzOrdersSearch(fetchFn, await services.marking.rozetkaToken(acc), opts);
     } catch (e) {
       if (!e.rzAuth) throw e;
-      r = await rzOrdersSearch(fetchFn, await services.marking.rozetkaToken(acc, true), opts);
+      return rzOrdersSearch(fetchFn, await services.marking.rozetkaToken(acc, true), opts);
     }
-    return { rows: r.orders.map(ROW.rozetka), next: page < r.pageCount ? String(page + 1) : "" };
+  }
+  const kyivDay2 = (d = /* @__PURE__ */ new Date()) => kyivDT(d).slice(0, 10);
+  const addDaysStr = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+  const histState = (st) => {
+    if (!st?.hist_from) return { started: false };
+    const today3 = kyivDay2();
+    const span = Math.max(1, Date.parse(today3) - Date.parse(st.hist_from));
+    const left = st.hist_done ? 0 : Math.max(0, Date.parse(st.hist_to) - Date.parse(st.hist_from));
+    return {
+      started: true,
+      done: Boolean(st.hist_done),
+      from: st.hist_from,
+      to: st.hist_done ? st.hist_from : st.hist_to,
+      saved: st.hist_saved || 0,
+      pct: Math.round((span - left) / span * 100),
+      error: st.hist_error || ""
+    };
+  };
+  async function histStart(mp, acc) {
+    if (mp !== "rozetka") throw fail(400, "\u0406\u0441\u0442\u043E\u0440\u0456\u044E \u0437\u0430 4 \u0440\u043E\u043A\u0438 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0443\u0454\u043C\u043E \u043B\u0438\u0448\u0435 \u0434\u043B\u044F \u0420\u043E\u0437\u0435\u0442\u043A\u0438.");
+    const from = addDaysStr(kyivDay2(), -HISTORY_YEARS * 365);
+    await db.run(
+      `INSERT INTO mp_sync (mp, account_id, hist_from, hist_to, hist_page, hist_done, hist_saved, hist_error) VALUES (?, ?, ?, ?, 1, 0, 0, '')
+      ON CONFLICT(mp, account_id) DO UPDATE SET hist_from = excluded.hist_from, hist_to = excluded.hist_to, hist_page = 1, hist_done = 0, hist_saved = 0, hist_error = ''`,
+      [mp, acc.id, from, kyivDay2()]
+    );
+    return histState(await db.get(`SELECT * FROM mp_sync WHERE mp = ? AND account_id = ?`, [mp, acc.id]));
+  }
+  async function histStep(mp, acc, pages = HIST_PAGES_PER_RUN) {
+    const st = await db.get(`SELECT * FROM mp_sync WHERE mp = ? AND account_id = ?`, [mp, acc.id]);
+    if (!st?.hist_from || st.hist_done) return histState(st);
+    let to = st.hist_to;
+    let page = st.hist_page || 1;
+    let saved = st.hist_saved || 0;
+    let done = 0;
+    let error = "";
+    try {
+      for (let p = 0; p < pages && !done; p++) {
+        const monthStart2 = `${to.slice(0, 7)}-01`;
+        const from = monthStart2 < st.hist_from ? st.hist_from : monthStart2;
+        const r = await rzSearch(acc, { createdFrom: `${from} 00:00:00`, createdTo: `${to} 23:59:59`, page });
+        await saveRows(mp, acc.id, r.orders.map(ROW.rozetka));
+        saved += r.orders.length;
+        if (page < r.pageCount && r.orders.length) page++;
+        else {
+          page = 1;
+          to = addDaysStr(from, -1);
+          if (to < st.hist_from) done = 1;
+        }
+      }
+    } catch (e) {
+      if (!e.pending) error = String(e.message || e).slice(0, 300);
+      else {
+        await saveHist();
+        throw e;
+      }
+    }
+    async function saveHist() {
+      await db.run(
+        `UPDATE mp_sync SET hist_to = ?, hist_page = ?, hist_done = ?, hist_saved = ?, hist_error = ? WHERE mp = ? AND account_id = ?`,
+        [to, page, done, saved, error, mp, acc.id]
+      );
+    }
+    await saveHist();
+    return histState({ ...st, hist_to: to, hist_page: page, hist_done: done, hist_saved: saved, hist_error: error });
+  }
+  async function histAll() {
+    const shops = ((await shopsOf()).rozetka || []).filter((a) => a.active);
+    const states = await db.all(`SELECT * FROM mp_sync WHERE mp = 'rozetka' AND hist_from != '' AND hist_done = 0`);
+    const out = { shops: 0, saved: 0, done: 0 };
+    for (const s of states) {
+      const acc = shops.find((a) => a.id === s.account_id);
+      if (!acc) continue;
+      try {
+        const r = await histStep("rozetka", acc);
+        out.shops++;
+        out.saved += r.saved - (s.hist_saved || 0);
+        if (r.done) out.done++;
+      } catch (e) {
+        if (e.pending) break;
+      }
+    }
+    return out.shops ? out : { skipped: "\u0456\u0441\u0442\u043E\u0440\u0456\u044F \u043D\u0435 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0443\u0454\u0442\u044C\u0441\u044F" };
   }
   async function syncShop(mp, acc, { pages = PAGES_PER_RUN } = {}) {
     const st = await db.get(`SELECT * FROM mp_sync WHERE mp = ? AND account_id = ?`, [mp, acc.id]);
@@ -12781,6 +12878,7 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     return out.shops || out.errors ? out : { skipped: "\u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0438 \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0456\u0432 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E" };
   }
   onCron("market", "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0456\u0432 (\u0420\u043E\u0437\u0435\u0442\u043A\u0430, Prom, \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440)", syncAll);
+  onCron("market-history", "\u0406\u0441\u0442\u043E\u0440\u0456\u044F \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u0437\u0430 4 \u0440\u043E\u043A\u0438 (\u043F\u043E\u043A\u0438 \u043D\u0435 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043E)", histAll);
   app.get("/api/mp/shops", async (c) => {
     need(c, "docs.view");
     const [shops, counts, syncs] = await Promise.all([
@@ -12794,7 +12892,17 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
       ...m,
       shops: (shops[m.key] || []).map((a) => {
         const s = sy.get(`${m.key}:${a.id}`);
-        return { id: a.id, name: a.name, active: Boolean(a.active), orders: cnt.get(`${m.key}:${a.id}`) || 0, synced_at: s?.synced_at || "", loading: Boolean(s?.cursor), error: s?.error || "", error_at: s?.error_at || "" };
+        return {
+          id: a.id,
+          name: a.name,
+          active: Boolean(a.active),
+          orders: cnt.get(`${m.key}:${a.id}`) || 0,
+          synced_at: s?.synced_at || "",
+          loading: Boolean(s?.cursor),
+          error: s?.error || "",
+          error_at: s?.error_at || "",
+          history: m.key === "rozetka" ? histState(s) : null
+        };
       })
     })));
   });
@@ -12809,6 +12917,17 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
       where.push("account_id = ?");
       params.push(acc);
     }
+    const isDay3 = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
+    const dFrom = c.req.query("from");
+    const dTo = c.req.query("to");
+    if (isDay3(dFrom)) {
+      where.push("created_at >= ?");
+      params.push(dFrom);
+    }
+    if (isDay3(dTo)) {
+      where.push("created_at < ?");
+      params.push(addDaysStr(dTo, 1));
+    }
     const base = [...where];
     const baseParams = [...params];
     const status = c.req.query("status") || "";
@@ -12822,18 +12941,22 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
       where.push(`(number LIKE ? OR customer LIKE ? OR ttn LIKE ?${digits.length >= 5 ? " OR phone LIKE ?" : ""})`);
       params.push(`%${q}%`, `%${q}%`, `%${q}%`, ...digits.length >= 5 ? [`%${digits.slice(-9)}%`] : []);
     }
-    const [rows, statuses] = await Promise.all([
-      db.all(`SELECT * FROM mp_orders WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT 300`, params),
-      db.all(`SELECT status, MAX(status_name) AS status_name, COUNT(*) AS n FROM mp_orders WHERE ${base.join(" AND ")} GROUP BY status ORDER BY n DESC`, baseParams)
+    const offset = Math.max(0, Number(c.req.query("offset")) || 0);
+    const [rows, statuses, total] = await Promise.all([
+      db.all(`SELECT * FROM mp_orders WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT 301 OFFSET ?`, [...params, offset]),
+      db.all(`SELECT status, MAX(status_name) AS status_name, COUNT(*) AS n FROM mp_orders WHERE ${base.join(" AND ")} GROUP BY status ORDER BY n DESC`, baseParams),
+      db.get(`SELECT COUNT(*) AS n, SUM(total) AS sum FROM mp_orders WHERE ${where.join(" AND ")}`, params)
     ]);
     return c.json({
-      rows: rows.map((r) => ({ ...r, items: (() => {
+      rows: rows.slice(0, 300).map((r) => ({ ...r, items: (() => {
         try {
           return JSON.parse(r.items || "[]");
         } catch {
           return [];
         }
       })() })),
+      more: rows.length > 300,
+      total: { n: total?.n || 0, sum: Math.round((total?.sum || 0) * 100) / 100 },
       statuses
     });
   });
@@ -12843,6 +12966,21 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     const acc = ((await shopsOf())[b.mp] || []).find((a) => a.id === Number(b.account));
     if (!acc) throw fail(404, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     return c.json(await syncShop(b.mp, acc));
+  });
+  const accOf = async (mp, id) => {
+    const acc = ((await shopsOf())[mp] || []).find((a) => a.id === Number(id));
+    if (!acc) throw fail(404, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return acc;
+  };
+  app.post("/api/mp/history/start", async (c) => {
+    need(c, "api");
+    const b = await c.req.json().catch(() => ({}));
+    return c.json(await histStart(b.mp, await accOf(b.mp, b.account)));
+  });
+  app.post("/api/mp/history/step", async (c) => {
+    need(c, "docs.view");
+    const b = await c.req.json().catch(() => ({}));
+    return c.json(await histStep(b.mp, await accOf(b.mp, b.account)));
   });
   app.put("/api/mp/shops/:mp/:id", async (c) => {
     need(c, "api");
@@ -14200,7 +14338,7 @@ var schema13 = {
 // src/modules/market/schema.js
 var schema14 = {
   name: "market",
-  version: 1,
+  version: 2,
   tables: [
     // mp — rozetka | prom | epc; account_id — магазин у налаштуваннях доставки; items — JSON [{ name, qty, price }].
     `CREATE TABLE IF NOT EXISTS mp_orders (
@@ -14238,7 +14376,16 @@ var schema14 = {
     PRIMARY KEY (mp, account_id)
   )`
   ],
-  columns: []
+  columns: [
+    // Історія магазину (Розетка — за 4 роки): по місяцях назад від сьогодні за датою створення.
+    // hist_from — найдавніша дата; hist_to — кінець наступного місяця-вікна; hist_page — сторінка у вікні; hist_done — усе.
+    ["mp_sync", "hist_from", "TEXT DEFAULT ''"],
+    ["mp_sync", "hist_to", "TEXT DEFAULT ''"],
+    ["mp_sync", "hist_page", "INTEGER DEFAULT 1"],
+    ["mp_sync", "hist_done", "INTEGER DEFAULT 0"],
+    ["mp_sync", "hist_saved", "INTEGER DEFAULT 0"],
+    ["mp_sync", "hist_error", "TEXT DEFAULT ''"]
+  ]
 };
 
 // src/migrate.js

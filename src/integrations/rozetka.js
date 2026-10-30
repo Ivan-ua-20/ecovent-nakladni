@@ -47,13 +47,20 @@ export async function rzLogin(fetchFn, username, password) {
 
 // Сторінка замовлень магазину, змінених після changedFrom ('YYYY-MM-DD HH:MM:SS', київський час кабінету),
 // найновіші зміни першими; pageCount — скільки всього сторінок. Помилка з rzAuth — потрібен новий вхід.
-export async function rzOrdersSearch(fetchFn, token, { changedFrom = '', page = 1 } = {}) {
-  const q = new URLSearchParams({ page: String(page), sort: '-changed', expand: 'delivery,status_data,purchases' });
+// createdFrom/createdTo — вибірка за датою створення (для завантаження історії).
+export async function rzOrdersSearch(fetchFn, token, { changedFrom = '', createdFrom = '', createdTo = '', page = 1 } = {}) {
+  const q = new URLSearchParams({ page: String(page), perPage: '100', sort: createdFrom ? '-created' : '-changed', expand: 'delivery,status_data,purchases' });
   if (changedFrom) q.set('changed_from', changedFrom);
+  if (createdFrom) q.set('created_from', createdFrom);
+  if (createdTo) q.set('created_to', createdTo);
   const res = await send(fetchFn, `/orders/search?${q}`, { token });
   const j = await res.json().catch(() => null);
   if (!j?.success) throw rzError(j);
-  return { orders: Array.isArray(j.content?.orders) ? j.content.orders : [], pageCount: Number(j.content?._meta?.pageCount) || 1 };
+  return {
+    orders: Array.isArray(j.content?.orders) ? j.content.orders : [],
+    pageCount: Number(j.content?._meta?.pageCount) || 1,
+    total: Number(j.content?._meta?.totalCount) || 0,
+  };
 }
 
 // PDF ТТН ROZETKA Delivery. null — ТТН не з цього магазину (why отримує відповідь Розетки); помилка з rzAuth — потрібен новий вхід.

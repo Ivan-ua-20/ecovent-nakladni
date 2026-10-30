@@ -8,6 +8,9 @@ import { promOrders } from '../../integrations/prom.js';
 import { epcOrdersPage } from '../../integrations/epicentr.js';
 
 const KEEP_DAYS = 45;
+const HISTORY_YEARS = 4; // Розетка: історія за 4 роки, зберігається весь цей час
+const KEEP_DAYS_BY_MP = { rozetka: HISTORY_YEARS * 366 + 31 };
+const HIST_PAGES_PER_RUN = 5;
 const FIRST_DAYS = 30; // перша синхронізація магазину — замовлення, змінені за 30 днів
 const PAGES_PER_RUN = 3;
 const OVERLAP_MS = 10 * 60e3; // беремо зміни із запасом, щоб нічого не пропустити на межі
@@ -67,9 +70,13 @@ const ROW = {
 };
 
 export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}, onCleanup = () => {} }) {
+  const borderOf = (days) => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
   onCleanup(async () => {
-    const border = new Date(Date.now() - KEEP_DAYS * 86400000).toISOString().slice(0, 10);
-    await db.run(`DELETE FROM mp_orders WHERE created_at != '' AND created_at < ?`, [border]);
+    const own = Object.keys(KEEP_DAYS_BY_MP);
+    await db.batch([
+      [`DELETE FROM mp_orders WHERE mp NOT IN (SELECT value FROM json_each(?)) AND created_at != '' AND created_at < ?`, [JSON.stringify(own), borderOf(KEEP_DAYS)]],
+      ...own.map((mp) => [`DELETE FROM mp_orders WHERE mp = ? AND created_at != '' AND created_at < ?`, [mp, borderOf(KEEP_DAYS_BY_MP[mp])]]),
+    ]);
   });
 
   const shopsOf = async () => (await services.marking?.marketShops?.()) || {};
@@ -99,15 +106,86 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
       return { rows: items.map(ROW.epc), next };
     }
     const page = Number(cursor) || 1;
-    const opts = { changedFrom: kyivDT(from), page };
-    let r;
+    const r = await rzSearch(acc, { changedFrom: kyivDT(from), page });
+    return { rows: r.orders.map(ROW.rozetka), next: page < r.pageCount ? String(page + 1) : '' };
+  }
+  async function rzSearch(acc, opts) {
     try {
-      r = await rzOrdersSearch(fetchFn, await services.marking.rozetkaToken(acc), opts);
+      return await rzOrdersSearch(fetchFn, await services.marking.rozetkaToken(acc), opts);
     } catch (e) {
       if (!e.rzAuth) throw e;
-      r = await rzOrdersSearch(fetchFn, await services.marking.rozetkaToken(acc, true), opts); // токен прострочено — вхід заново
+      return rzOrdersSearch(fetchFn, await services.marking.rozetkaToken(acc, true), opts); // токен прострочено — вхід заново
     }
-    return { rows: r.orders.map(ROW.rozetka), next: page < r.pageCount ? String(page + 1) : '' };
+  }
+
+  // ---------- історія Розетки за 4 роки: по місяцях назад за датою створення ----------
+  const kyivDay = (d = new Date()) => kyivDT(d).slice(0, 10);
+  const addDaysStr = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+  const histState = (st) => {
+    if (!st?.hist_from) return { started: false };
+    const today = kyivDay();
+    const span = Math.max(1, Date.parse(today) - Date.parse(st.hist_from));
+    const left = st.hist_done ? 0 : Math.max(0, Date.parse(st.hist_to) - Date.parse(st.hist_from));
+    return { started: true, done: Boolean(st.hist_done), from: st.hist_from, to: st.hist_done ? st.hist_from : st.hist_to, saved: st.hist_saved || 0,
+      pct: Math.round(((span - left) / span) * 100), error: st.hist_error || '' };
+  };
+  async function histStart(mp, acc) {
+    if (mp !== 'rozetka') throw fail(400, 'Історію за 4 роки завантажуємо лише для Розетки.');
+    const from = addDaysStr(kyivDay(), -HISTORY_YEARS * 365);
+    await db.run(`INSERT INTO mp_sync (mp, account_id, hist_from, hist_to, hist_page, hist_done, hist_saved, hist_error) VALUES (?, ?, ?, ?, 1, 0, 0, '')
+      ON CONFLICT(mp, account_id) DO UPDATE SET hist_from = excluded.hist_from, hist_to = excluded.hist_to, hist_page = 1, hist_done = 0, hist_saved = 0, hist_error = ''`,
+    [mp, acc.id, from, kyivDay()]);
+    return histState(await db.get(`SELECT * FROM mp_sync WHERE mp = ? AND account_id = ?`, [mp, acc.id]));
+  }
+  // Кілька сторінок історії; прогрес — у mp_sync (наступний виклик продовжить з того ж місця).
+  async function histStep(mp, acc, pages = HIST_PAGES_PER_RUN) {
+    const st = await db.get(`SELECT * FROM mp_sync WHERE mp = ? AND account_id = ?`, [mp, acc.id]);
+    if (!st?.hist_from || st.hist_done) return histState(st);
+    let to = st.hist_to;
+    let page = st.hist_page || 1;
+    let saved = st.hist_saved || 0;
+    let done = 0;
+    let error = '';
+    try {
+      for (let p = 0; p < pages && !done; p++) {
+        const monthStart = `${to.slice(0, 7)}-01`;
+        const from = monthStart < st.hist_from ? st.hist_from : monthStart;
+        const r = await rzSearch(acc, { createdFrom: `${from} 00:00:00`, createdTo: `${to} 23:59:59`, page });
+        await saveRows(mp, acc.id, r.orders.map(ROW.rozetka));
+        saved += r.orders.length;
+        if (page < r.pageCount && r.orders.length) page++;
+        else {
+          page = 1;
+          to = addDaysStr(from, -1);
+          if (to < st.hist_from) done = 1;
+        }
+      }
+    } catch (e) {
+      if (!e.pending) error = String(e.message || e).slice(0, 300);
+      else { await saveHist(); throw e; }
+    }
+    async function saveHist() {
+      await db.run(`UPDATE mp_sync SET hist_to = ?, hist_page = ?, hist_done = ?, hist_saved = ?, hist_error = ? WHERE mp = ? AND account_id = ?`,
+        [to, page, done, saved, error, mp, acc.id]);
+    }
+    await saveHist();
+    return histState({ ...st, hist_to: to, hist_page: page, hist_done: done, hist_saved: saved, hist_error: error });
+  }
+  async function histAll() {
+    const shops = ((await shopsOf()).rozetka || []).filter((a) => a.active);
+    const states = await db.all(`SELECT * FROM mp_sync WHERE mp = 'rozetka' AND hist_from != '' AND hist_done = 0`);
+    const out = { shops: 0, saved: 0, done: 0 };
+    for (const s of states) {
+      const acc = shops.find((a) => a.id === s.account_id);
+      if (!acc) continue;
+      try {
+        const r = await histStep('rozetka', acc);
+        out.shops++; out.saved += r.saved - (s.hist_saved || 0); if (r.done) out.done++;
+      } catch (e) {
+        if (e.pending) break;
+      }
+    }
+    return out.shops ? out : { skipped: 'історія не завантажується' };
   }
 
   async function syncShop(mp, acc, { pages = PAGES_PER_RUN } = {}) {
@@ -160,6 +238,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     return out.shops || out.errors ? out : { skipped: 'магазини маркетплейсів не підключено' };
   }
   onCron('market', 'Замовлення маркетплейсів (Розетка, Prom, Епіцентр)', syncAll);
+  onCron('market-history', 'Історія замовлень Розетки за 4 роки (поки не завантажено)', histAll);
 
   // ---------- для сторінки «Маркетплейси» ----------
   app.get('/api/mp/shops', async (c) => {
@@ -175,7 +254,8 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
       ...m,
       shops: (shops[m.key] || []).map((a) => {
         const s = sy.get(`${m.key}:${a.id}`);
-        return { id: a.id, name: a.name, active: Boolean(a.active), orders: cnt.get(`${m.key}:${a.id}`) || 0, synced_at: s?.synced_at || '', loading: Boolean(s?.cursor), error: s?.error || '', error_at: s?.error_at || '' };
+        return { id: a.id, name: a.name, active: Boolean(a.active), orders: cnt.get(`${m.key}:${a.id}`) || 0, synced_at: s?.synced_at || '', loading: Boolean(s?.cursor), error: s?.error || '', error_at: s?.error_at || '',
+          history: m.key === 'rozetka' ? histState(s) : null };
       }),
     })));
   });
@@ -188,6 +268,12 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     const params = [mp];
     const acc = Number(c.req.query('account')) || 0;
     if (acc) { where.push('account_id = ?'); params.push(acc); }
+    // період за датою створення (YYYY-MM-DD)
+    const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
+    const dFrom = c.req.query('from');
+    const dTo = c.req.query('to');
+    if (isDay(dFrom)) { where.push('created_at >= ?'); params.push(dFrom); }
+    if (isDay(dTo)) { where.push('created_at < ?'); params.push(addDaysStr(dTo, 1)); }
     const base = [...where];
     const baseParams = [...params];
     const status = c.req.query('status') || '';
@@ -198,12 +284,16 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
       where.push(`(number LIKE ? OR customer LIKE ? OR ttn LIKE ?${digits.length >= 5 ? ' OR phone LIKE ?' : ''})`);
       params.push(`%${q}%`, `%${q}%`, `%${q}%`, ...(digits.length >= 5 ? [`%${digits.slice(-9)}%`] : []));
     }
-    const [rows, statuses] = await Promise.all([
-      db.all(`SELECT * FROM mp_orders WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT 300`, params),
+    const offset = Math.max(0, Number(c.req.query('offset')) || 0);
+    const [rows, statuses, total] = await Promise.all([
+      db.all(`SELECT * FROM mp_orders WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT 301 OFFSET ?`, [...params, offset]),
       db.all(`SELECT status, MAX(status_name) AS status_name, COUNT(*) AS n FROM mp_orders WHERE ${base.join(' AND ')} GROUP BY status ORDER BY n DESC`, baseParams),
+      db.get(`SELECT COUNT(*) AS n, SUM(total) AS sum FROM mp_orders WHERE ${where.join(' AND ')}`, params),
     ]);
     return c.json({
-      rows: rows.map((r) => ({ ...r, items: (() => { try { return JSON.parse(r.items || '[]'); } catch { return []; } })() })),
+      rows: rows.slice(0, 300).map((r) => ({ ...r, items: (() => { try { return JSON.parse(r.items || '[]'); } catch { return []; } })() })),
+      more: rows.length > 300,
+      total: { n: total?.n || 0, sum: Math.round((total?.sum || 0) * 100) / 100 },
       statuses,
     });
   });
@@ -215,6 +305,23 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     const acc = ((await shopsOf())[b.mp] || []).find((a) => a.id === Number(b.account));
     if (!acc) throw fail(404, 'Магазин не знайдено.');
     return c.json(await syncShop(b.mp, acc));
+  });
+
+  // Історія Розетки за 4 роки: почати (адміни) і довантажити кілька сторінок зараз (поки відкрита сторінка).
+  const accOf = async (mp, id) => {
+    const acc = ((await shopsOf())[mp] || []).find((a) => a.id === Number(id));
+    if (!acc) throw fail(404, 'Магазин не знайдено.');
+    return acc;
+  };
+  app.post('/api/mp/history/start', async (c) => {
+    need(c, 'api');
+    const b = await c.req.json().catch(() => ({}));
+    return c.json(await histStart(b.mp, await accOf(b.mp, b.account)));
+  });
+  app.post('/api/mp/history/step', async (c) => {
+    need(c, 'docs.view');
+    const b = await c.req.json().catch(() => ({}));
+    return c.json(await histStep(b.mp, await accOf(b.mp, b.account)));
   });
 
   // Перейменувати магазин (як у налаштуваннях доставки) — адміни.
