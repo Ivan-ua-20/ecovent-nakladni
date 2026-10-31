@@ -82,7 +82,7 @@ const fetchFn = async (url, opts = {}) => {
       const list = HIST.filter((o) => o.created >= cf && o.created <= u.searchParams.get('created_to'));
       return json({ success: true, content: { orders: list.slice((page - 1) * 2, page * 2), _meta: { pageCount: Math.max(1, Math.ceil(list.length / 2)), totalCount: list.length, currentPage: page } } });
     }
-    return json({ success: true, content: { orders: [{ id: 700000 + page, created: '2026-10-29 12:00:00', changed: '2026-10-29 12:30:00', cost: '2500.00', status: 1, status_data: { name_uk: 'Нове замовлення' }, user_phone: '380661112233', ttn: page === 2 ? 'RMP-1000000001' : '', user_title: { full_name: 'Сидоренко Ольга' }, delivery: { delivery_service_name: 'ROZETKA Delivery' }, purchases: [{ item_name: 'Зволожувач', quantity: 1, price: '2500.00' }] }], _meta: { pageCount: 2, currentPage: page } } });
+    return json({ success: true, content: { orders: [{ id: 700000 + page, created: '2026-10-29 12:00:00', changed: '2026-10-29 12:30:00', cost: '2500.00', status: 1, status_data: { name_uk: 'Нове замовлення' }, user_phone: '380661112233', ttn: page === 2 ? 'RMP-1000000001' : '', user_title: { full_name: 'Сидоренко Ольга' }, delivery: { delivery_service_name: 'ROZETKA Delivery', ...(page === 2 ? { recipient_title: 'Петренко Іван', recipient_phone: '380501234567' } : { recipient_title: { full_name: 'Сидоренко Ольга' }, recipient_phone: '+380661112233' }) }, purchases: [{ item_id: 555, item_name: 'Зволожувач', quantity: 1, price: '2500.00' }] }], _meta: { pageCount: 2, currentPage: page } } });
   }
   throw new Error(`неочікуваний запит ${url}`);
 };
@@ -129,7 +129,8 @@ let o = (await req('GET', '/api/mp/orders?mp=rozetka')).j;
 assert.equal(o.rows.length, 2);
 assert.equal(o.rows.find((x) => x.ttn).ttn, 'RMP-1000000001');
 assert.equal(o.rows[0].customer, 'Сидоренко Ольга');
-assert.deepEqual(o.rows[0].items, [{ name: 'Зволожувач', qty: 1, price: 2500 }]);
+assert.deepEqual(o.rows[0].items, [{ id: '555', name: 'Зволожувач', qty: 1, price: 2500 }]);
+assert.deepEqual(o.rows.map((x) => [x.id, x.recipient, x.recipient_phone]).sort(), [['700001', '', ''], ['700002', 'Петренко Іван', '380501234567']], 'отримувач — лише якщо інша людина');
 o = (await req('GET', '/api/mp/orders?mp=prom&status=received')).j;
 assert.equal(o.rows.length, 175);
 assert.equal(o.rows[0].total, 1289.5);
@@ -173,7 +174,7 @@ assert.equal((await db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE mp = 'roze
 assert.ok(histCalls.every(() => true) && calls.filter((c) => c.includes('created_from=')).every((c) => c.includes('types=1')), 'історія — теж усі замовлення');
 // разовий перезапуск історії (була завантажена без успішних/неуспішних): ще раз з поточного місяця, без дублів
 const before = (await db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE mp = 'rozetka'`)).n;
-await db.run(`DELETE FROM settings WHERE key = 'mp_hist_v2'`);
+await db.run(`DELETE FROM settings WHERE key = 'mp_hist_v3'`);
 const sh = (await req('GET', '/api/mp/shops')).j;
 assert.ok(!sh[0].shops.find((s) => s.id === 1).history.done, 'історію перезапущено');
 // денна норма: вичерпана — пауза без запитів до Розетки
@@ -220,7 +221,7 @@ let ord = await db.get(`SELECT review_n, review_mark FROM mp_orders WHERE mp = '
 assert.deepEqual([ord.review_n, ord.review_mark], [2, 3], 'два відгуки, найнижча оцінка');
 ord = await db.get(`SELECT review_n, review_mark FROM mp_orders WHERE mp = 'rozetka' AND id = '600001'`);
 assert.deepEqual([ord.review_n, ord.review_mark], [1, 0]);
-assert.equal((await db.get(`SELECT goods FROM mp_reviews WHERE id = '1'`)).goods, 'Очищувач');
+assert.deepEqual({ ...(await db.get(`SELECT goods, goods_id FROM mp_reviews WHERE id = '1'`)) }, { goods: 'Очищувач', goods_id: '1' });
 rvCalls.length = 0;
 r = await runRv();
 assert.ok(r.result.skipped && !rvCalls.length, 'наступні 3 год — без запитів');
@@ -243,6 +244,8 @@ o = (await req('GET', `/api/mp/orders?${per}`)).j;
 assert.deepEqual(o.reviews.stats, { done: inRange, reviewed: 3, toask: inRange - 3, asked: 0, asked_reviewed: 0 }, JSON.stringify(o.reviews));
 assert.equal(o.reviews.days, 3);
 assert.ok(o.rows.find((x) => x.id === '600000').ok && !o.rows.find((x) => x.id === '700001').ok, 'нове замовлення — не виконане');
+assert.deepEqual(o.rows.find((x) => x.id === '600000').reviews.map((v) => [v.goods_id, v.goods, v.mark]), [['1', 'Очищувач', 5], ['2', 'Фільтр', 3]], 'відгуки замовлення — по товарах');
+assert.deepEqual(o.rows.find((x) => x.id === '600010').reviews, [], 'без відгуку — порожньо');
 assert.equal((await req('GET', `/api/mp/orders?${per}&rv=has`)).j.total.n, 3);
 assert.equal((await req('GET', `/api/mp/orders?${per}&rv=ask`)).j.total.n, inRange - 3);
 assert.equal((await req('GET', `/api/mp/orders?${per}&rv=none`)).j.total.n, inRange - 3);

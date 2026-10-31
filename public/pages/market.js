@@ -96,17 +96,35 @@ export function createMarketPages({ can }) {
 
     const name = new Map(shops.map((s) => [s.id, s.name]));
     const byKey = new Map(); // замовлення на екрані — для вікна нагадування
+    // Відгуки замовлення по товарах: на які товари вже є відгук (за кодом товару, для старих рядків — за назвою).
+    const revInfo = (o) => {
+      const seen = new Set();
+      const items = o.items.filter((it) => { const k = it.id || it.name; if (seen.has(k)) return false; seen.add(k); return true; });
+      const revs = o.reviews || [];
+      const norm = (x) => String(x || '').trim().toLowerCase();
+      const done = items.map((it) => revs.some((v) => (it.id && v.goods_id && v.goods_id === it.id) || (it.name && norm(v.goods) === norm(it.name))));
+      let doneN = done.filter(Boolean).length;
+      if (!doneN && o.review_n > 0) doneN = Math.min(items.length || 1, new Set(revs.map((v) => v.goods_id || v.goods)).size || 1); // не зіставилось — хоча б кількість
+      return { items, done, doneN, total: Math.max(items.length, 1), two: Boolean(o.recipient) };
+    };
     const rvCell = (o) => {
       byKey.set(`${o.account_id}:${o.id}`, o);
-      if (o.review_n > 0) return `<span class="badge ok">✓ відгук${o.review_mark ? ` ★${o.review_mark}` : ''}</span>${o.review_n > 1 ? ` <span class="muted">×${o.review_n}</span>` : ''}`;
+      const ri = revInfo(o);
+      const twoNote = ri.two && o.review_n < 2 ? '<div class="muted" title="Замовник і отримувач — різні люди: відгук може залишити кожен">👥 можна 2 відгуки</div>' : '';
       const asked = o.asked_at ? `<div class="muted">нагадав ${esc(dDay(o.asked_at.slice(0, 10)))}${o.asked_by ? ` · ${esc(o.asked_by)}` : ''}${o.asked_via ? ` · ${esc(VIA[o.asked_via] || o.asked_via)}` : ''}</div>` : '';
+      if (o.review_n > 0) {
+        const tip = (o.reviews || []).map((v) => `★${v.mark || '—'} ${v.goods}${v.name ? ` — ${v.name}` : ''}`).join('\n');
+        const part = ri.total > 1 ? `<div class="${ri.doneN < ri.total ? '' : 'muted'}">товарів з відгуком: ${ri.doneN} з ${ri.total}</div>` : '';
+        const more = o.ok && (ri.doneN < ri.total || (ri.two && o.review_n < 2));
+        return `<span class="badge ok" title="${esc(tip)}">✓ відгук${o.review_mark ? ` ★${o.review_mark}` : ''}</span>${o.review_n > 1 ? ` <span class="muted">×${o.review_n}</span>` : ''}${part}${twoNote}${more ? `${asked}<button class="btn sm" data-rvask="${esc(o.account_id)}:${esc(o.id)}">Нагадати ще</button>` : ''}`;
+      }
       if (!o.ok) return asked || '<span class="muted">—</span>';
-      return `${asked}<button class="btn sm ${o.asked_at ? '' : 'primary'}" data-rvask="${esc(o.account_id)}:${esc(o.id)}">${o.asked_at ? 'Ще раз' : 'Нагадати'}</button>`;
+      return `${twoNote}${asked}<button class="btn sm ${o.asked_at ? '' : 'primary'}" data-rvask="${esc(o.account_id)}:${esc(o.id)}">${o.asked_at ? 'Ще раз' : 'Нагадати'}</button>`;
     };
     const rowHtml = (o) => `<tr>
           <td><b>${esc(o.number)}</b><div class="small muted">${esc(dt(o.created_at))}</div></td>
           ${acc ? '' : `<td class="small">${esc(name.get(o.account_id) || '')}</td>`}
-          <td>${esc(o.customer || '—')}<div class="small muted">${esc(o.phone || '')}</div></td>
+          <td>${esc(o.customer || '—')}<div class="small muted">${esc(o.phone || '')}</div>${o.recipient ? `<div class="small muted">отримувач: ${esc(o.recipient)}${o.recipient_phone ? ` · ${esc(o.recipient_phone)}` : ''}</div>` : ''}</td>
           <td class="small">${o.items.length ? `${esc(o.items[0].name)}${o.items[0].qty > 1 ? ` × ${o.items[0].qty}` : ''}${o.items.length > 1 ? ` <span class="muted">+${o.items.length - 1}</span>` : ''}` : '—'}</td>
           <td class="r"><b>${uah(o.total)}</b></td>
           <td class="small">${esc(o.delivery || '—')}${o.ttn ? `<div class="muted">ТТН ${esc(o.ttn)}</div>` : ''}</td>
@@ -154,21 +172,31 @@ export function createMarketPages({ can }) {
     }
     const fillTpl = (o) => String(rvSet?.tpl || '')
       .replaceAll("{ім'я}", firstName(o.customer)).replaceAll('{імʼя}', firstName(o.customer))
-      .replaceAll('{товар}', String(o.items[0]?.name || 'товар').slice(0, 90)).replaceAll('{замовлення}', o.number).replaceAll('{магазин}', name.get(o.account_id) || '')
+      .replaceAll('{товар}', String((revInfo(o).items.find((_, i) => !revInfo(o).done[i]) || o.items[0])?.name || 'товар').slice(0, 90)).replaceAll('{замовлення}', o.number).replaceAll('{магазин}', name.get(o.account_id) || '')
       .replace(/ ,/g, ',').replace(/\s{2,}/g, ' ');
     function askModal(o) {
       if (!o) return;
-      const ph = intlPhone(o.phone);
-      const digits = ph.replace(/\D/g, '');
+      const ri = revInfo(o);
+      // замовник і (якщо інша людина) отримувач — кожному свої кнопки
+      const people = [{ role: 'Замовник', name: o.customer, phone: o.phone }, ...(o.recipient ? [{ role: 'Отримувач', name: o.recipient, phone: o.recipient_phone }] : [])];
+      const personHtml = (p, i) => {
+        const ph = intlPhone(p.phone);
+        const d = ph.replace(/\D/g, '');
+        return `<div style="margin:6px 0"><span class="small muted">${p.role}:</span> <b>${esc(p.name || '—')}</b>${ph ? ` · ${esc(ph)}` : ''}
+          <div class="btn-row" style="flex-wrap:wrap;margin-top:4px">${ph ? `<a class="btn sm" data-via="viber" data-p="${i}" href="viber://chat?number=%2B${d}">Viber</a>
+          <a class="btn sm" data-via="telegram" data-p="${i}" href="https://t.me/+${d}" target="_blank" rel="noopener">Telegram</a>
+          <a class="btn sm" data-via="phone" data-p="${i}" href="tel:${esc(ph)}">Подзвонити</a>` : '<span class="small muted">телефону немає</span>'}</div></div>`;
+      };
       const md = modal(`Нагадати про відгук · №${o.number}`, `
-        <div class="small" style="margin-bottom:8px"><b>${esc(o.customer || '—')}</b>${ph ? ` · ${esc(ph)}` : ''}<div class="muted">${o.items.map((i) => esc(i.name)).join('<br>') || '—'}</div>
-          <div class="muted">${esc(o.status_name || '')} · ${esc(dt(o.changed_at))}</div></div>
+        <div class="small" style="margin-bottom:8px">
+          <div class="muted">${esc(o.status_name || '')} · ${esc(dt(o.changed_at))}</div>
+          <div style="margin:4px 0">${ri.items.map((it, i) => `${ri.done[i] ? '✅' : '▫️'} ${esc(it.name)}`).join('<br>') || '—'}</div>
+          ${ri.items.length > 1 ? '<div class="muted">✅ — на цей товар відгук уже є; відгук можна залишити на кожен товар.</div>' : ''}
+          ${o.recipient ? '<div class="muted">👥 Замовник і отримувач — різні люди: відгук може залишити кожен.</div>' : ''}
+          ${people.map(personHtml).join('')}</div>
         <label class="f"><span>Повідомлення (можна змінити)</span><textarea id="rvText" rows="6" style="width:100%">${esc(fillTpl(o))}</textarea></label>
-        <div class="small muted" style="margin:4px 0 10px">Viber і Telegram відкриють чат з покупцем — текст уже буде скопійовано, лишиться вставити. У чат Розетки — без посилань і телефонів.</div>
+        <div class="small muted" style="margin:4px 0 10px">Viber і Telegram відкриють чат — текст уже буде скопійовано (з ім'ям того, кому пишете), лишиться вставити. У чат Розетки (його бачить замовник) — без посилань і телефонів.</div>
         <div class="btn-row" style="flex-wrap:wrap">
-          ${ph ? `<a class="btn" data-via="viber" href="viber://chat?number=%2B${digits}">Viber</a>
-          <a class="btn" data-via="telegram" href="https://t.me/+${digits}" target="_blank" rel="noopener">Telegram</a>
-          <a class="btn" data-via="phone" href="tel:${esc(ph)}">Подзвонити</a>` : '<span class="small muted">Телефону покупця немає.</span>'}
           <button class="btn" data-via="copy">Скопіювати текст</button>
           <button class="btn" id="rvChat">Надіслати в чат Розетки</button>
         </div>`,
@@ -178,8 +206,15 @@ export function createMarketPages({ can }) {
         try { Object.assign(o, await api('POST', '/api/mp/review/ask', { account: o.account_id, id: o.id, via })); toast(`Позначено: нагадав (${VIA[via]})`); load(); }
         catch (er) { toast(er.message, true); }
       };
+      // текст для отримувача — з його ім'ям замість імені замовника
+      const textFor = (i) => {
+        const t = text();
+        const was = firstName(o.customer);
+        const now = firstName(people[Number(i) || 0]?.name);
+        return was && now && was !== now ? t.split(was).join(now) : t;
+      };
       $$('[data-via]', md.el).forEach((b) => (b.onclick = async () => {
-        if (b.dataset.via !== 'phone') await copyText(text());
+        if (b.dataset.via !== 'phone') await copyText(textFor(b.dataset.p));
         mark(b.dataset.via); // посилання відкривається саме (href)
       }));
       $('#rvManual', md.el).onclick = async () => { await mark('manual'); md.close(); };
