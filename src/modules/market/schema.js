@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'market',
-  version: 2,
+  version: 3,
   tables: [
   // mp — rozetka | prom | epc; account_id — магазин у налаштуваннях доставки; items — JSON [{ name, qty, price }].
   `CREATE TABLE IF NOT EXISTS mp_orders (
@@ -50,5 +50,7 @@ export const schema = {
     ['mp_sync', 'hist_done', 'INTEGER DEFAULT 0'],
     ['mp_sync', 'hist_saved', 'INTEGER DEFAULT 0'],
     ['mp_sync', 'hist_error', "TEXT DEFAULT ''"],
+    // Для пошуку без урахування регістру (SQLite LIKE не вміє це для кирилиці): номер, клієнт, телефон, ТТН малими літерами.
+    ['mp_orders', 'search', "TEXT DEFAULT ''"],
   ],
 };

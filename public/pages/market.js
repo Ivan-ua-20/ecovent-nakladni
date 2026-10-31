@@ -15,7 +15,8 @@ export function createMarketPages({ can }) {
   let pump = 0; // id «швидшого» завантаження історії (зупиняється, коли пішли зі сторінки)
 
   async function viewMarket(mp, account = '') {
-    if (mp !== lastMp) { Object.assign(state, { status: '', q: '', from: '', to: '' }); lastMp = mp; }
+    // за замовчуванням — останні 30 днів (історія Розетки — десятки тисяч замовлень, «Увесь час» — кнопкою)
+    if (mp !== lastMp) { Object.assign(state, { status: '', q: '', from: addDays(todayKyiv(), -30), to: '' }); lastMp = mp; }
     pump++;
     const all = await api('GET', '/api/mp/shops');
     const m = all.find((x) => x.key === mp);
@@ -39,11 +40,12 @@ export function createMarketPages({ can }) {
           <button class="btn sm primary" data-hstart="${s.id}" style="margin-left:8px">Завантажити історію за 4 роки</button></div>` : '';
       }
       if (h.done) return `<div class="small muted" style="margin-bottom:6px">✅ Історія «${esc(s.name)}» завантажена з ${esc(dDay(h.from))} · ${h.saved} замовлень</div>`;
+      const pausedNote = h.paused ? '<div class="small muted" style="margin:4px 0">На сьогодні денну норму завантажено — продовжиться завтра автоматично (щоб не перевищити ліміт бази для решти сайту).</div>' : '';
       return `<div class="card small" style="margin-bottom:10px">
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>⏳ Історія «${esc(s.name)}»: завантажено до ${esc(dDay(h.to))} · ${h.saved} замовлень</span><b>${h.pct}%</b></div>
         <div style="height:6px;background:var(--line);border-radius:4px;margin:6px 0"><div style="height:6px;width:${h.pct}%;background:var(--accent);border-radius:4px"></div></div>
-        ${h.error ? `<div class="alert warn small" style="margin:6px 0">Остання спроба: ${esc(h.error)}</div>` : ''}
-        <span class="muted">Вантажиться у фоні (кожні 3 хв). </span><button class="btn sm" data-hfast="${s.id}">Вантажити швидше, поки сторінка відкрита</button></div>`;
+        ${h.error ? `<div class="alert warn small" style="margin:6px 0">Остання спроба: ${esc(h.error)}</div>` : ''}${pausedNote}
+        ${h.paused ? '' : `<span class="muted">Вантажиться у фоні (кожні 3 хв). </span><button class="btn sm" data-hfast="${s.id}">Вантажити швидше, поки сторінка відкрита</button>`}</div>`;
     };
     main.innerHTML = `
       <div class="head-row"><h2>${esc(m.title)}${acc ? ` · ${esc(acc.name)}` : ''}</h2>
@@ -137,6 +139,7 @@ export function createMarketPages({ can }) {
         try { h = await api('POST', '/api/mp/history/step', { mp, account: id }); } catch (er) { toast(er.message, true); b.disabled = false; return; }
         b.textContent = `Вантажу… ${h.pct}% · до ${dDay(h.to)} · ${h.saved} замовлень`;
         if (h.done) { toast('Історію завантажено'); viewMarket(mp, account); return; }
+        if (h.paused) { toast('Денну норму завантажено — історія продовжиться завтра'); viewMarket(mp, account); return; }
         if (h.error) { toast(h.error, true); b.disabled = false; return; }
       }
     }));

@@ -253,13 +253,14 @@ const next = await req('GET', `/api/an/targets?month=${addDays(monthStart(today)
 assert.equal(next.rows.length, 3, 'таргет скопійовано на наступні місяці');
 
 // ---------- 7. Оновлення: зміна статусу і нове замовлення ----------
-const someCode = expect.find((o) => o.status === '11').order_id;
+const someCode = expect.find((o) => o.status === '11' && o.datetime.slice(0, 10) >= addDays(today, -28)).order_id;
 orders.get(someCode).status = '54';
 orders.get(someCode).total = '123.00'; // зі зміною статусу змінилась і сума — має підтягнутися
 const quiet = expect.find((o) => o.status === '18' && o.datetime.slice(0, 10) < today && o.order_id !== someCode);
 const quietTotal = (await db.get(`SELECT total FROM an_orders WHERE code = ?`, [quiet.order_id])).total;
 orders.get(quiet.order_id).total = '1.00'; // статус той самий — щоденне оновлення повні дані не перечитує
-const leave = expect.find((o) => o.status === '14' && o.order_id !== someCode).order_id;
+// у межах щоденного оновлення (30 днів): інакше 31-го числа замовлення з 1-го до нього не потрапляє
+const leave = expect.find((o) => o.status === '14' && o.order_id !== someCode && o.datetime.slice(0, 10) >= addDays(today, -28)).order_id;
 orders.get(leave).status = '13'; // пішло у невідстежуваний статус
 id++;
 const newCode = String(1790000000000000 + id * 37);

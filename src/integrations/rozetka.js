@@ -48,8 +48,10 @@ export async function rzLogin(fetchFn, username, password) {
 // Сторінка замовлень магазину, змінених після changedFrom ('YYYY-MM-DD HH:MM:SS', київський час кабінету),
 // найновіші зміни першими; pageCount — скільки всього сторінок. Помилка з rzAuth — потрібен новий вхід.
 // createdFrom/createdTo — вибірка за датою створення (для завантаження історії).
+// types=1 — усі замовлення (без нього Розетка віддає лише ті, що в роботі: без «Успішних» і «Неуспішних»).
+// Групи як у кабінеті: 1 усі, 4 нові, 2 в обробці, 5 доставляються, 3 успішні, 6 неуспішні.
 export async function rzOrdersSearch(fetchFn, token, { changedFrom = '', createdFrom = '', createdTo = '', page = 1 } = {}) {
-  const q = new URLSearchParams({ page: String(page), perPage: '100', sort: createdFrom ? '-created' : '-changed', expand: 'delivery,status_data,purchases' });
+  const q = new URLSearchParams({ page: String(page), perPage: '100', types: '1', sort: createdFrom ? '-created' : '-changed', expand: 'delivery,status_data,purchases' });
   if (changedFrom) q.set('changed_from', changedFrom);
   if (createdFrom) q.set('created_from', createdFrom);
   if (createdTo) q.set('created_to', createdTo);
