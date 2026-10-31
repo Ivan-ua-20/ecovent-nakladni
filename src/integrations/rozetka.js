@@ -92,3 +92,39 @@ export async function rzTtnPdf(fetchFn, token, ttn, why = () => {}) {
   }
   return null;
 }
+
+// ---------- відгуки на товари й чат замовлення ----------
+async function getContent(fetchFn, token, path, opts = {}) {
+  const res = await send(fetchFn, path, { token, ...opts });
+  const j = await res.json().catch(() => null);
+  if (!j?.success) throw rzError(j);
+  return j.content;
+}
+
+// Сторінка відгуків на товари магазину (лише відгуки, без питань). createdFrom — 'YYYY-MM-DD';
+// sort 'created' — від найдавніших (для першого завантаження: нові відгуки не зсувають сторінки), '-created' — найновіші першими.
+export async function rzItemComments(fetchFn, token, { page = 1, createdFrom = '', sort = '-created' } = {}) {
+  const q = new URLSearchParams({ page: String(page), perPage: '100', type: 'comment', sort });
+  if (createdFrom) q.set('createdFrom', createdFrom);
+  const c = await getContent(fetchFn, token, `/item-comments/search?${q}`);
+  return {
+    comments: Array.isArray(c?.itemComments) ? c.itemComments : [],
+    pageCount: Number(c?._meta?.pageCount) || 1,
+  };
+}
+
+// Коди статусів групи «Успішні» (2) — щоб відрізнити виконані замовлення від скасованих.
+export async function rzSuccessStatuses(fetchFn, token) {
+  const c = await getContent(fetchFn, token, `/order-statuses/search?${new URLSearchParams({ status_group: '2', perPage: '100' })}`);
+  return (Array.isArray(c?.orderStatus) ? c.orderStatus : []).map((s) => String(s.id));
+}
+
+// Чат замовлення з покупцем і повідомлення в нього (Розетка перевіряє повідомлення на модерації:
+// без посилань, телефонів та інших контактів).
+export async function rzOrderChat(fetchFn, token, orderId) {
+  const c = await getContent(fetchFn, token, `/messages/${encodeURIComponent(orderId)}/order-chat`);
+  return c?.id ? { id: Number(c.id), userId: Number(c.user_id || c.user?.id) || 0 } : null;
+}
+export async function rzSendMessage(fetchFn, token, { chatId, receiverId, body }) {
+  return getContent(fetchFn, token, '/messages/create', { method: 'POST', body: { chat_id: chatId, receiver_id: receiverId, body, sendEmailUser: 1 } });
+}

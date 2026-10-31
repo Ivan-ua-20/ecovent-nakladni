@@ -31,6 +31,16 @@ for (let mth = 0; mth < 50; mth++) {
     HIST.push({ id: 600000 + mth * 10 + k, created: `${day} 10:00:00`, changed: `${day} 11:00:00`, cost: '100.00', status: 6, status_data: { name_uk: 'Виконано' }, user_phone: '380', user_title: { full_name: `Архів ${mth}` }, purchases: [] });
   }
 }
+// Відгуки на товари: до замовлень історії (поточний місяць), відповідь продавця й відгук без замовлення — не враховуються
+const REVIEWS = [
+  { id: 1, parent_id: 0, type: 'comment', orders_id: 600000, mark: 5, name: 'Архів', text: 'Чудово', status: 'active', created: '2026-01-01 10:00:00', changed: '2026-01-01 10:00:00', record: '{"id":"1","title":"Очищувач"}' },
+  { id: 2, parent_id: 0, type: 'comment', orders_id: 600000, mark: 3, text: '', dignity: 'тихий', status: 'active', created: '2026-01-02 10:00:00', changed: '2026-01-02 10:00:00', record: { id: '2', title: 'Фільтр' } },
+  { id: 3, parent_id: 0, type: 'comment', orders_id: 600001, mark: 0, text: 'Без оцінки', status: 'auto_activated', created: '2026-01-03 10:00:00', changed: '2026-01-03 10:00:00' },
+  { id: 4, parent_id: 1, type: 'comment', orders_id: 600000, mark: 0, text: 'Дякуємо!', created: '2026-01-04 10:00:00', changed: '2026-01-04 10:00:00' },
+  { id: 5, parent_id: 0, type: 'comment', orders_id: 0, mark: 4, text: 'Без замовлення', created: '2026-01-05 10:00:00', changed: '2026-01-05 10:00:00' },
+];
+const rvCalls = [];
+const chatSent = [];
 const histCalls = [];
 const calls = [];
 const fetchFn = async (url, opts = {}) => {
@@ -51,6 +61,19 @@ const fetchFn = async (url, opts = {}) => {
   }
   if (u.host === 'api-seller.rozetka.com.ua') {
     assert.equal(opts.headers.Authorization, 'Bearer rztok', 'вимкнений магазин не синхронізується');
+    if (u.pathname === '/item-comments/search') { // по 2 на сторінку
+      const pg = Number(u.searchParams.get('page'));
+      rvCalls.push(`${u.searchParams.get('sort')}|${u.searchParams.get('createdFrom') || ''}|${pg}|${u.searchParams.get('type')}`);
+      const from = u.searchParams.get('createdFrom') || '';
+      const list = REVIEWS.filter((x) => x.created.slice(0, 10) >= from);
+      return json({ success: true, content: { itemComments: list.slice((pg - 1) * 2, pg * 2), _meta: { pageCount: Math.max(1, Math.ceil(list.length / 2)), currentPage: pg } } });
+    }
+    if (u.pathname === '/order-statuses/search') {
+      assert.equal(u.searchParams.get('status_group'), '2');
+      return json({ success: true, content: { orderStatus: [{ id: 6, name_uk: 'Виконано', status_group: 2 }], _meta: { pageCount: 1 } } });
+    }
+    if (/^\/messages\/\d+\/order-chat$/.test(u.pathname)) return json({ success: true, content: { id: 777, order_id: Number(u.pathname.split('/')[2]), user_id: 4242, type: 0 } });
+    if (u.pathname === '/messages/create') { chatSent.push(JSON.parse(opts.body)); return json({ success: true, content: { chat_id: 777, body: 'x', status: 1 } }); }
     const page = Number(u.searchParams.get('page'));
     const cf = u.searchParams.get('created_from');
     if (cf) { // історія: за датою створення, по 2 на сторінку
@@ -185,4 +208,69 @@ await db.run(`INSERT INTO settings (key, value) VALUES ('cleanup_at', '2000-01-0
 await req('GET', '/api/mp/shops');
 assert.equal((await db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE mp = 'prom' AND id = '5000'`)).n, 0, 'старе замовлення Prom прибрано');
 assert.equal((await db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE mp = 'rozetka' AND id = '600000'`)).n, 1, 'історія Розетки лишається');
-console.log('OK — маркетплейси: синхронізація Розетки, Prom і Епіцентру, продовження, фільтри, перейменування, історія Розетки');
+
+// ---------- відгуки на товари Розетки ----------
+const runRv = async () => (await (await mk().request('/api/cron/run/market-reviews', { method: 'POST', headers: { 'X-Cron-Key': key } })).json());
+r = await runRv();
+assert.ok(r.ok && r.result.shops === 1, JSON.stringify(r));
+assert.deepEqual(rvCalls, ['created||1|comment', 'created||2|comment', 'created||3|comment'], 'перше завантаження — усі відгуки від найдавніших');
+assert.equal((await db.get(`SELECT COUNT(*) AS n FROM mp_reviews`)).n, 3, 'без відповідей продавця і відгуків без замовлення');
+let ord = await db.get(`SELECT review_n, review_mark FROM mp_orders WHERE mp = 'rozetka' AND id = '600000'`);
+assert.deepEqual([ord.review_n, ord.review_mark], [2, 3], 'два відгуки, найнижча оцінка');
+ord = await db.get(`SELECT review_n, review_mark FROM mp_orders WHERE mp = 'rozetka' AND id = '600001'`);
+assert.deepEqual([ord.review_n, ord.review_mark], [1, 0]);
+assert.equal((await db.get(`SELECT goods FROM mp_reviews WHERE id = '1'`)).goods, 'Очищувач');
+rvCalls.length = 0;
+r = await runRv();
+assert.ok(r.result.skipped && !rvCalls.length, 'наступні 3 год — без запитів');
+// через 3 год — лише нові (з запасом у 7 днів від минулого проходу), найновіші першими
+const rvAt = new Date(Date.now() - 4 * 3600e3).toISOString();
+await db.run(`UPDATE mp_sync SET rv_at = ? WHERE mp = 'rozetka' AND account_id = 1`, [rvAt]);
+REVIEWS.push({ id: 6, parent_id: 0, type: 'comment', orders_id: 600002, mark: 4, text: 'Новий', status: 'active', created: `${kyivToday} 09:00:00`, changed: `${kyivToday} 09:00:00` });
+const writesBefore = (await db.get(`SELECT COUNT(*) AS n FROM mp_reviews`)).n;
+r = await runRv();
+const since = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv' }).format(new Date(Date.parse(rvAt) - 7 * 86400e3));
+assert.deepEqual(rvCalls, [`-created|${since}|1|comment`], 'нові відгуки — з датою');
+assert.equal((await db.get(`SELECT COUNT(*) AS n FROM mp_reviews`)).n, writesBefore + 1);
+assert.equal((await db.get(`SELECT review_n FROM mp_orders WHERE mp = 'rozetka' AND id = '600002'`)).review_n, 1);
+let sh3 = (await req('GET', '/api/mp/shops')).j[0].shops.find((s) => s.id === 1).reviews;
+assert.ok(sh3.full && sh3.n === 4 && !sh3.loading, JSON.stringify(sh3));
+
+// фільтри на сторінці: виконані (статус 6 — група «Успішні», з Розетки) без відгуку
+const per = `mp=rozetka&account=1&from=${h.from}`;
+o = (await req('GET', `/api/mp/orders?${per}`)).j;
+assert.deepEqual(o.reviews.stats, { done: inRange, reviewed: 3, toask: inRange - 3, asked: 0, asked_reviewed: 0 }, JSON.stringify(o.reviews));
+assert.equal(o.reviews.days, 3);
+assert.ok(o.rows.find((x) => x.id === '600000').ok && !o.rows.find((x) => x.id === '700001').ok, 'нове замовлення — не виконане');
+assert.equal((await req('GET', `/api/mp/orders?${per}&rv=has`)).j.total.n, 3);
+assert.equal((await req('GET', `/api/mp/orders?${per}&rv=ask`)).j.total.n, inRange - 3);
+assert.equal((await req('GET', `/api/mp/orders?${per}&rv=none`)).j.total.n, inRange - 3);
+// нагадав (менеджер, Viber) → «нагадали, чекаємо»; статистика по менеджерах
+assert.equal((await req('POST', '/api/mp/review/ask', { account: 1, id: '600010', via: 'sms' }, M)).status, 400);
+r = await req('POST', '/api/mp/review/ask', { account: 1, id: '600010', via: 'viber' }, M);
+assert.equal(r.status, 200);
+assert.deepEqual([r.j.asked_by, r.j.asked_via], ['man', 'viber']);
+assert.equal((await req('GET', `/api/mp/orders?${per}&rv=asked`)).j.rows[0].id, '600010');
+o = (await req('GET', `/api/mp/orders?${per}&rv=ask`)).j;
+assert.equal(o.total.n, inRange - 4, 'кому нагадали — більше не в «Можна нагадати»');
+assert.deepEqual(o.reviews.by, [{ who: 'man', n: 1, reviewed: 0 }]);
+r = await req('POST', '/api/mp/review/ask', { account: 1, id: '600010', undo: true }, M);
+assert.equal((await db.get(`SELECT asked_at FROM mp_orders WHERE mp = 'rozetka' AND id = '600010'`)).asked_at, '', 'позначку знято');
+// свіже виконане (2 дні тому) — ще рано нагадувати
+await db.run(`UPDATE mp_orders SET changed_at = ? WHERE mp = 'rozetka' AND id = '600011'`, [new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv', dateStyle: 'short', timeStyle: 'medium' }).format(new Date(Date.now() - 2 * 86400e3))]);
+assert.equal((await req('GET', `/api/mp/orders?${per}&rv=ask`)).j.total.n, inRange - 4, 'отримано менше 3 днів тому — ще рано');
+// чат Розетки: без посилань і телефонів
+assert.equal((await req('POST', '/api/mp/review/chat', { account: 1, id: '600012', text: 'Залиште відгук https://rozetka.com.ua/x' }, M)).status, 400);
+assert.equal((await req('POST', '/api/mp/review/chat', { account: 1, id: '600012', text: 'Пишіть +380 66 111 22 33' }, M)).status, 400);
+assert.equal(chatSent.length, 0);
+r = await req('POST', '/api/mp/review/chat', { account: 1, id: '600012', text: 'Добрий день! Будемо вдячні за відгук про товар.' }, M);
+assert.equal(r.status, 200, JSON.stringify(r.j));
+assert.deepEqual([chatSent[0].chat_id, chatSent[0].receiver_id, chatSent[0].body], [777, 4242, 'Добрий день! Будемо вдячні за відгук про товар.']);
+assert.equal((await db.get(`SELECT asked_via FROM mp_orders WHERE mp = 'rozetka' AND id = '600012'`)).asked_via, 'chat');
+// налаштування: текст і дні — адміни
+assert.equal((await req('PUT', '/api/mp/review/settings', { days: 5, tpl: 'x' }, M)).status, 403);
+assert.equal((await req('PUT', '/api/mp/review/settings', { days: 99, tpl: 'x' })).status, 400);
+assert.deepEqual((await req('PUT', '/api/mp/review/settings', { days: 5, tpl: "Вітаю, {ім'я}!" })).j, { days: 5, tpl: "Вітаю, {ім'я}!" });
+assert.equal((await req('GET', '/api/mp/review/settings', null, M)).j.days, 5);
+assert.ok(!(await req('GET', '/api/mp/orders?mp=prom')).j.reviews, 'відгуки — лише для Розетки');
+console.log('OK — маркетплейси: синхронізація Розетки, Prom і Епіцентру, продовження, фільтри, перейменування, історія Розетки, відгуки й нагадування');

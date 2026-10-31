@@ -10253,6 +10253,32 @@ async function rzTtnPdf(fetchFn, token, ttn, why = () => {
   }
   return null;
 }
+async function getContent(fetchFn, token, path, opts = {}) {
+  const res = await send(fetchFn, path, { token, ...opts });
+  const j = await res.json().catch(() => null);
+  if (!j?.success) throw rzError(j);
+  return j.content;
+}
+async function rzItemComments(fetchFn, token, { page = 1, createdFrom = "", sort = "-created" } = {}) {
+  const q = new URLSearchParams({ page: String(page), perPage: "100", type: "comment", sort });
+  if (createdFrom) q.set("createdFrom", createdFrom);
+  const c = await getContent(fetchFn, token, `/item-comments/search?${q}`);
+  return {
+    comments: Array.isArray(c?.itemComments) ? c.itemComments : [],
+    pageCount: Number(c?._meta?.pageCount) || 1
+  };
+}
+async function rzSuccessStatuses(fetchFn, token) {
+  const c = await getContent(fetchFn, token, `/order-statuses/search?${new URLSearchParams({ status_group: "2", perPage: "100" })}`);
+  return (Array.isArray(c?.orderStatus) ? c.orderStatus : []).map((s) => String(s.id));
+}
+async function rzOrderChat(fetchFn, token, orderId) {
+  const c = await getContent(fetchFn, token, `/messages/${encodeURIComponent(orderId)}/order-chat`);
+  return c?.id ? { id: Number(c.id), userId: Number(c.user_id || c.user?.id) || 0 } : null;
+}
+async function rzSendMessage(fetchFn, token, { chatId, receiverId, body }) {
+  return getContent(fetchFn, token, "/messages/create", { method: "POST", body: { chat_id: chatId, receiver_id: receiverId, body, sendEmailUser: 1 } });
+}
 
 // src/integrations/prom.js
 var PROM_API = "https://my.prom.ua/api/v1";
@@ -12605,6 +12631,16 @@ var COUNTS_TTL_MS = 30 * 6e4;
 var FIRST_DAYS = 30;
 var PAGES_PER_RUN = 3;
 var OVERLAP_MS = 10 * 6e4;
+var RV_PAGES_PER_RUN = 8;
+var RV_EVERY_MS = 3 * 36e5;
+var RV_RECHECK_DAYS = 7;
+var RV_DEFAULT = {
+  days: 3,
+  // через скільки днів після отримання пропонувати нагадати
+  tpl: "\u0414\u043E\u0431\u0440\u0438\u0439 \u0434\u0435\u043D\u044C, {\u0456\u043C'\u044F}! \u0414\u044F\u043A\u0443\u0454\u043C\u043E \u0437\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2116{\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F} \u043D\u0430 \u0420\u043E\u0437\u0435\u0442\u0446\u0456. \u042F\u043A \u0432\u0430\u043C {\u0442\u043E\u0432\u0430\u0440}? \u0411\u0443\u0434\u0435\u043C\u043E \u0434\u0443\u0436\u0435 \u0432\u0434\u044F\u0447\u043D\u0456 \u0437\u0430 \u0447\u0435\u0441\u043D\u0438\u0439 \u0432\u0456\u0434\u0433\u0443\u043A \u043D\u0430 \u0441\u0442\u043E\u0440\u0456\u043D\u0446\u0456 \u0442\u043E\u0432\u0430\u0440\u0443 \u2014 \u0432\u0456\u043D \u0434\u043E\u043F\u043E\u043C\u043E\u0436\u0435 \u0456\u043D\u0448\u0438\u043C \u043F\u043E\u043A\u0443\u043F\u0446\u044F\u043C \u0437 \u0432\u0438\u0431\u043E\u0440\u043E\u043C."
+};
+var RV_VIA = { viber: "Viber", telegram: "Telegram", phone: "\u0434\u0437\u0432\u0456\u043D\u043E\u043A", copy: "\u0441\u043A\u043E\u043F\u0456\u0439\u043E\u0432\u0430\u043D\u043E \u0442\u0435\u043A\u0441\u0442", chat: "\u0447\u0430\u0442 \u0420\u043E\u0437\u0435\u0442\u043A\u0438", manual: "\u0432\u0440\u0443\u0447\u043D\u0443" };
+var CHAT_FORBIDDEN = /(https?:\/\/|www\.|t\.me\/|viber:|@[a-z0-9_]{3,}|\b[a-z0-9-]+\.(com|ua|net|org|me|shop|store)\b|\+?\d[\d\s()-]{8,}\d)/i;
 var MARKETS = [
   { key: "rozetka", title: "\u0420\u043E\u0437\u0435\u0442\u043A\u0430" },
   { key: "prom", title: "Prom" },
@@ -12653,6 +12689,7 @@ var ROW = {
     changed_at: String(o.changed || ""),
     status: String(o.status ?? ""),
     status_name: String(o.status_data?.name_uk || o.status_data?.name || ""),
+    status_group: Number(o.status_group) || 0,
     customer: o.user_title?.full_name || o.delivery?.recipient_title?.full_name || fio(o.delivery?.recipient_last_name, o.delivery?.recipient_first_name),
     phone: String(o.user_phone || o.delivery?.recipient_phone || ""),
     total: money2(o.cost ?? o.amount),
@@ -12697,7 +12734,8 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     const own = Object.keys(KEEP_DAYS_BY_MP);
     await db.batch([
       [`DELETE FROM mp_orders WHERE mp NOT IN (SELECT value FROM json_each(?)) AND created_at != '' AND created_at < ?`, [JSON.stringify(own), borderOf(KEEP_DAYS3)]],
-      ...own.map((mp) => [`DELETE FROM mp_orders WHERE mp = ? AND created_at != '' AND created_at < ?`, [mp, borderOf(KEEP_DAYS_BY_MP[mp])]])
+      ...own.map((mp) => [`DELETE FROM mp_orders WHERE mp = ? AND created_at != '' AND created_at < ?`, [mp, borderOf(KEEP_DAYS_BY_MP[mp])]]),
+      [`DELETE FROM mp_reviews WHERE created_at != '' AND created_at < ?`, [borderOf(KEEP_DAYS_BY_MP.rozetka)]]
     ]);
   });
   const shopsOf = async () => await services.marking?.marketShops?.() || {};
@@ -12706,14 +12744,15 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     if (!rows.length) return;
     const now = nowIso();
     await db.batch(rows.map((r) => [
-      `INSERT INTO mp_orders (mp, account_id, id, number, created_at, changed_at, status, status_name, customer, phone, total, delivery, ttn, items, synced_at, search)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO mp_orders (mp, account_id, id, number, created_at, changed_at, status, status_name, customer, phone, total, delivery, ttn, items, synced_at, search, status_group)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(mp, account_id, id) DO UPDATE SET number = excluded.number, created_at = excluded.created_at, changed_at = excluded.changed_at,
          status = excluded.status, status_name = excluded.status_name, customer = excluded.customer, phone = excluded.phone, total = excluded.total,
-         delivery = excluded.delivery, ttn = excluded.ttn, items = excluded.items, synced_at = excluded.synced_at, search = excluded.search
+         delivery = excluded.delivery, ttn = excluded.ttn, items = excluded.items, synced_at = excluded.synced_at, search = excluded.search,
+         status_group = excluded.status_group
        WHERE mp_orders.changed_at IS NOT excluded.changed_at OR mp_orders.status IS NOT excluded.status OR mp_orders.ttn IS NOT excluded.ttn
-         OR mp_orders.total IS NOT excluded.total OR mp_orders.search IS NOT excluded.search`,
-      [mp, accountId, r.id, r.number, r.created_at, r.changed_at, r.status, r.status_name, r.customer, r.phone, r.total, r.delivery, r.ttn, JSON.stringify(r.items), now, searchOf(r)]
+         OR mp_orders.total IS NOT excluded.total OR mp_orders.search IS NOT excluded.search OR mp_orders.status_group IS NOT excluded.status_group`,
+      [mp, accountId, r.id, r.number, r.created_at, r.changed_at, r.status, r.status_name, r.customer, r.phone, r.total, r.delivery, r.ttn, JSON.stringify(r.items), now, searchOf(r), r.status_group || 0]
     ]));
   }
   async function rehistOnce() {
@@ -12747,14 +12786,15 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     const r = await rzSearch(acc, { changedFrom: kyivDT(from), page });
     return { rows: r.orders.map(ROW.rozetka), next: page < r.pageCount ? String(page + 1) : "" };
   }
-  async function rzSearch(acc, opts) {
+  async function rzCall(acc, fn) {
     try {
-      return await rzOrdersSearch(fetchFn, await services.marking.rozetkaToken(acc), opts);
+      return await fn(await services.marking.rozetkaToken(acc));
     } catch (e) {
       if (!e.rzAuth) throw e;
-      return rzOrdersSearch(fetchFn, await services.marking.rozetkaToken(acc, true), opts);
+      return fn(await services.marking.rozetkaToken(acc, true));
     }
   }
+  const rzSearch = (acc, opts) => rzCall(acc, (t) => rzOrdersSearch(fetchFn, t, opts));
   const kyivDay2 = (d = /* @__PURE__ */ new Date()) => kyivDT(d).slice(0, 10);
   const addDaysStr = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
   const histState = (st) => {
@@ -12846,6 +12886,133 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     }
     return out.shops ? out : { skipped: "\u0456\u0441\u0442\u043E\u0440\u0456\u044F \u043D\u0435 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0443\u0454\u0442\u044C\u0441\u044F" };
   }
+  const getSetting = async (key, def) => {
+    try {
+      return JSON.parse((await db.get(`SELECT value FROM settings WHERE key = ?`, [key]))?.value || "null") ?? def;
+    } catch {
+      return def;
+    }
+  };
+  const putSetting2 = (key, v) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, JSON.stringify(v)]);
+  const rvSettings = async () => ({ ...RV_DEFAULT, ...await getSetting("mp_review", {}) });
+  async function successIds(acc = null) {
+    let v = await getSetting("mp_rz_success", null);
+    if (acc && (!v || Date.now() - v.at > 7 * 864e5)) {
+      try {
+        const ids = await rzCall(acc, (t) => rzSuccessStatuses(fetchFn, t));
+        if (ids.length) {
+          v = { at: Date.now(), ids };
+          await putSetting2("mp_rz_success", v);
+        }
+      } catch (e) {
+        if (e.pending) throw e;
+      }
+    }
+    return v?.ids || [];
+  }
+  const SUCCESS_SQL = `(status_group = 2 OR (status_group = 0 AND status IN (SELECT value FROM json_each(?))))`;
+  const recordTitle = (c) => {
+    let r = c.record;
+    if (typeof r === "string") {
+      try {
+        r = JSON.parse(r);
+      } catch {
+        r = null;
+      }
+    }
+    return String(r?.title || c.item?.name_ua || c.item?.name || "");
+  };
+  async function saveReviews(accountId, comments) {
+    const rows = comments.filter((c) => !Number(c.parent_id) && Number(c.orders_id) > 0 && (!c.type || c.type === "comment")).map((c) => ({
+      id: String(c.id),
+      order_id: String(c.orders_id),
+      goods: recordTitle(c).slice(0, 300),
+      mark: Math.max(0, Math.min(5, Number(c.mark) || 0)),
+      name: String(c.name || "").slice(0, 120),
+      text: [c.text, c.dignity && `\u041F\u0435\u0440\u0435\u0432\u0430\u0433\u0438: ${c.dignity}`, c.shortcomings && `\u041D\u0435\u0434\u043E\u043B\u0456\u043A\u0438: ${c.shortcomings}`].filter(Boolean).join("\n").slice(0, 600),
+      status: String(c.status || ""),
+      created_at: String(c.created || ""),
+      changed_at: String(c.changed || c.created || "")
+    }));
+    if (!rows.length) return 0;
+    const sub = (what) => `(SELECT ${what} FROM mp_reviews r WHERE r.mp = mp_orders.mp AND r.account_id = mp_orders.account_id AND r.order_id = mp_orders.id)`;
+    const n = sub("COUNT(*)");
+    const mk = `COALESCE(${sub("MIN(NULLIF(mark, 0))")}, 0)`;
+    await db.batch([
+      ...rows.map((r) => [
+        `INSERT INTO mp_reviews (mp, account_id, id, order_id, goods, mark, name, text, status, created_at, changed_at) VALUES ('rozetka', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(mp, account_id, id) DO UPDATE SET order_id = excluded.order_id, goods = excluded.goods, mark = excluded.mark, name = excluded.name,
+           text = excluded.text, status = excluded.status, created_at = excluded.created_at, changed_at = excluded.changed_at
+         WHERE mp_reviews.changed_at IS NOT excluded.changed_at OR mp_reviews.status IS NOT excluded.status OR mp_reviews.mark IS NOT excluded.mark
+           OR mp_reviews.order_id IS NOT excluded.order_id`,
+        [accountId, r.id, r.order_id, r.goods, r.mark, r.name, r.text, r.status, r.created_at, r.changed_at]
+      ]),
+      [
+        `UPDATE mp_orders SET review_n = ${n}, review_mark = ${mk}
+        WHERE mp = 'rozetka' AND account_id = ? AND id IN (SELECT value FROM json_each(?)) AND (review_n IS NOT ${n} OR review_mark IS NOT ${mk})`,
+        [accountId, JSON.stringify([...new Set(rows.map((r) => r.order_id))])]
+      ]
+    ]);
+    return rows.length;
+  }
+  async function reviewsStep(acc, { pages = RV_PAGES_PER_RUN, force = false } = {}) {
+    const st = await db.get(`SELECT * FROM mp_sync WHERE mp = 'rozetka' AND account_id = ?`, [acc.id]);
+    const full = !st?.rv_full;
+    let page = st?.rv_page || 0;
+    let run = st?.rv_run || "";
+    if (!page) {
+      if (!force && !full && st?.rv_at && Date.now() - Date.parse(st.rv_at) < RV_EVERY_MS) return { skipped: true };
+      page = 1;
+      run = nowIso();
+    }
+    const from = full ? "" : kyivDay2(new Date(Date.parse(st.rv_at || run) - RV_RECHECK_DAYS * 864e5));
+    let saved = 0;
+    let done = false;
+    let error = "";
+    const save = async () => {
+      const total = done ? (await db.get(`SELECT COUNT(*) AS n FROM mp_reviews WHERE mp = 'rozetka' AND account_id = ?`, [acc.id])).n : st?.rv_n || 0;
+      await db.run(
+        `INSERT INTO mp_sync (mp, account_id, rv_page, rv_run, rv_full, rv_at, rv_n, rv_error) VALUES ('rozetka', ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(mp, account_id) DO UPDATE SET rv_page = excluded.rv_page, rv_run = excluded.rv_run, rv_full = excluded.rv_full,
+          rv_at = excluded.rv_at, rv_n = excluded.rv_n, rv_error = excluded.rv_error`,
+        [acc.id, done ? 0 : page, done ? "" : run, full ? done ? 1 : 0 : 1, done ? run : st?.rv_at || "", total, error]
+      );
+    };
+    try {
+      await successIds(acc);
+      for (let p = 0; p < pages && !done; p++) {
+        const r = await rzCall(acc, (t) => rzItemComments(fetchFn, t, { page, createdFrom: from, sort: full ? "created" : "-created" }));
+        saved += await saveReviews(acc.id, r.comments);
+        if (page >= r.pageCount || !r.comments.length) done = true;
+        else page++;
+      }
+    } catch (e) {
+      if (e.pending) {
+        await save();
+        throw e;
+      }
+      error = String(e.message || e).slice(0, 300);
+    }
+    await save();
+    return { saved, done, full, error };
+  }
+  async function reviewsAll() {
+    const shops = ((await shopsOf()).rozetka || []).filter((a) => a.active);
+    const out = { shops: 0, saved: 0, errors: 0 };
+    for (const acc of shops) {
+      try {
+        const r = await reviewsStep(acc);
+        if (r.skipped) continue;
+        out.shops++;
+        out.saved += r.saved;
+        if (r.error) out.errors++;
+      } catch (e) {
+        if (e.pending) break;
+        out.errors++;
+      }
+    }
+    return out.shops || out.errors ? out : { skipped: shops.length ? "\u0432\u0456\u0434\u0433\u0443\u043A\u0438 \u0432\u0436\u0435 \u043E\u043D\u043E\u0432\u043B\u0435\u043D\u043E" : "\u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0456\u0432 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u043D\u0435\u043C\u0430\u0454" };
+  }
   async function syncShop(mp, acc, { pages = PAGES_PER_RUN } = {}) {
     const st = await db.get(`SELECT * FROM mp_sync WHERE mp = ? AND account_id = ?`, [mp, acc.id]);
     const resume = Boolean(st?.cursor);
@@ -12909,6 +13076,7 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
   }
   onCron("market", "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0456\u0432 (\u0420\u043E\u0437\u0435\u0442\u043A\u0430, Prom, \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440)", syncAll);
   onCron("market-history", "\u0406\u0441\u0442\u043E\u0440\u0456\u044F \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u0437\u0430 4 \u0440\u043E\u043A\u0438 (\u043F\u043E\u043A\u0438 \u043D\u0435 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043E)", histAll);
+  onCron("market-reviews", "\u0412\u0456\u0434\u0433\u0443\u043A\u0438 \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u0438 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (\u0440\u0430\u0437 \u043D\u0430 3 \u0433\u043E\u0434)", reviewsAll);
   async function cachedCounts() {
     let c = null;
     try {
@@ -12939,7 +13107,8 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
           loading: Boolean(s?.cursor),
           error: s?.error || "",
           error_at: s?.error_at || "",
-          history: m.key === "rozetka" ? histState(s) : null
+          history: m.key === "rozetka" ? histState(s) : null,
+          reviews: m.key === "rozetka" ? { full: Boolean(s?.rv_full), n: s?.rv_n || 0, at: s?.rv_at || "", loading: Boolean(s?.rv_page), error: s?.rv_error || "" } : null
         };
       })
     })));
@@ -12968,6 +13137,21 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     }
     const base = [...where];
     const baseParams = [...params];
+    const rz = mp === "rozetka";
+    const okIds = rz ? JSON.stringify(await successIds()) : "[]";
+    const rvs = rz ? await rvSettings() : RV_DEFAULT;
+    const border = kyivDT(Date.now() - rvs.days * 864e5);
+    const rv = rz ? String(c.req.query("rv") || "") : "";
+    if (rv === "ask") {
+      where.push(`${SUCCESS_SQL} AND review_n = 0 AND asked_at = '' AND changed_at <= ?`);
+      params.push(okIds, border);
+    }
+    if (rv === "none") {
+      where.push(`${SUCCESS_SQL} AND review_n = 0`);
+      params.push(okIds);
+    }
+    if (rv === "asked") where.push(`asked_at != '' AND review_n = 0`);
+    if (rv === "has") where.push("review_n > 0");
     const status = c.req.query("status") || "";
     if (status) {
       where.push("status = ?");
@@ -12980,10 +13164,15 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
       params.push(`%${q.toLowerCase()}%`, `%${q}%`, `%${q}%`, `%${q}%`, ...digits.length >= 5 ? [`%${digits.slice(-9)}%`, `%${digits.slice(-9)}%`] : []);
     }
     const offset = Math.max(0, Number(c.req.query("offset")) || 0);
-    const [rows, statuses, total] = await Promise.all([
-      db.all(`SELECT * FROM mp_orders WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT 301 OFFSET ?`, [...params, offset]),
+    const [rows, statuses, total, rvStats, rvBy] = await Promise.all([
+      db.all(`SELECT *, ${rz ? SUCCESS_SQL : "0"} AS ok FROM mp_orders WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT 301 OFFSET ?`, [...rz ? [okIds] : [], ...params, offset]),
       db.all(`SELECT status, MAX(status_name) AS status_name, COUNT(*) AS n FROM mp_orders WHERE ${base.join(" AND ")} GROUP BY status ORDER BY n DESC`, baseParams),
-      db.get(`SELECT COUNT(*) AS n, SUM(total) AS sum FROM mp_orders WHERE ${where.join(" AND ")}`, params)
+      db.get(`SELECT COUNT(*) AS n, SUM(total) AS sum FROM mp_orders WHERE ${where.join(" AND ")}`, params),
+      // відгуки за період і магазин (без фільтрів статусу й пошуку): виконані, з відгуком, кому вже можна нагадати, кому нагадали
+      rz ? db.get(`SELECT SUM(ok) AS done, SUM(ok AND review_n > 0) AS reviewed, SUM(ok AND review_n = 0 AND asked_at = '' AND changed_at <= ?) AS toask,
+          SUM(asked_at != '') AS asked, SUM(asked_at != '' AND review_n > 0) AS asked_reviewed
+        FROM (SELECT ${SUCCESS_SQL} AS ok, review_n, asked_at, changed_at FROM mp_orders WHERE ${base.join(" AND ")})`, [border, okIds, ...baseParams]) : null,
+      rz ? db.all(`SELECT asked_by AS who, COUNT(*) AS n, SUM(review_n > 0) AS reviewed FROM mp_orders WHERE ${base.join(" AND ")} AND asked_at != '' GROUP BY asked_by ORDER BY n DESC`, baseParams) : []
     ]);
     return c.json({
       rows: rows.slice(0, 300).map((r) => ({ ...r, items: (() => {
@@ -12995,15 +13184,72 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
       })() })),
       more: rows.length > 300,
       total: { n: total?.n || 0, sum: Math.round((total?.sum || 0) * 100) / 100 },
-      statuses
+      statuses,
+      ...rz ? { reviews: { days: rvs.days, stats: Object.fromEntries(Object.entries(rvStats || {}).map(([k, v]) => [k, v || 0])), by: rvBy } } : {}
     });
+  });
+  app.get("/api/mp/review/settings", async (c) => {
+    need(c, "docs.view");
+    return c.json(await rvSettings());
+  });
+  app.put("/api/mp/review/settings", async (c) => {
+    need(c, "api");
+    const b = await c.req.json().catch(() => ({}));
+    const days = Number(b.days);
+    if (!Number.isInteger(days) || days < 0 || days > 60) throw fail(400, "\u041A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C \u0434\u043D\u0456\u0432 \u2014 \u0432\u0456\u0434 0 \u0434\u043E 60.");
+    const tpl = String(b.tpl || "").trim();
+    if (!tpl || tpl.length > 1e3) throw fail(400, "\u0422\u0435\u043A\u0441\u0442 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F \u2014 \u0432\u0456\u0434 1 \u0434\u043E 1000 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432.");
+    await putSetting2("mp_review", { days, tpl });
+    return c.json({ days, tpl });
+  });
+  const rzOrderOf = async (b) => {
+    const o = await db.get(`SELECT * FROM mp_orders WHERE mp = 'rozetka' AND account_id = ? AND id = ?`, [Number(b.account) || 0, String(b.id || "")]);
+    if (!o) throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return o;
+  };
+  const markAsked = async (o, user, via) => {
+    const at = nowIso();
+    const by = String(user?.name || user?.login || "").slice(0, 80);
+    await db.run(`UPDATE mp_orders SET asked_at = ?, asked_by = ?, asked_via = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ?`, [at, by, via, o.account_id, o.id]);
+    return { asked_at: at, asked_by: by, asked_via: via };
+  };
+  app.post("/api/mp/review/ask", async (c) => {
+    need(c, "docs.view");
+    const b = await c.req.json().catch(() => ({}));
+    const o = await rzOrderOf(b);
+    if (b.undo) {
+      await db.run(`UPDATE mp_orders SET asked_at = '', asked_by = '', asked_via = '' WHERE mp = 'rozetka' AND account_id = ? AND id = ?`, [o.account_id, o.id]);
+      return c.json({ asked_at: "", asked_by: "", asked_via: "" });
+    }
+    if (!RV_VIA[b.via] || b.via === "chat") throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u0441\u043F\u043E\u0441\u0456\u0431.");
+    return c.json(await markAsked(o, c.get("user"), b.via));
+  });
+  app.post("/api/mp/review/chat", async (c) => {
+    need(c, "docs.view");
+    const b = await c.req.json().catch(() => ({}));
+    const text = String(b.text || "").trim();
+    if (!text || text.length > 1e3) throw fail(400, "\u041D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F (\u0434\u043E 1000 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432).");
+    if (CHAT_FORBIDDEN.test(text)) throw fail(400, "\u0423 \u0447\u0430\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u043D\u0435 \u043C\u043E\u0436\u043D\u0430 \u043D\u0430\u0434\u0441\u0438\u043B\u0430\u0442\u0438 \u043F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F, \u0442\u0435\u043B\u0435\u0444\u043E\u043D\u0438 \u0439 \u0456\u043D\u0448\u0456 \u043A\u043E\u043D\u0442\u0430\u043A\u0442\u0438 \u2014 \u043F\u0440\u0438\u0431\u0435\u0440\u0456\u0442\u044C \u0457\u0445 \u0437 \u0442\u0435\u043A\u0441\u0442\u0443.");
+    const o = await rzOrderOf(b);
+    const acc = await accOf("rozetka", o.account_id);
+    const chat = await rzCall(acc, (t) => rzOrderChat(fetchFn, t, o.id)).catch((e) => {
+      if (e.pending) throw e;
+      return null;
+    });
+    if (!chat?.id || !chat.userId) throw fail(400, "\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u043D\u0435 \u0434\u0430\u043B\u0430 \u0447\u0430\u0442 \u0446\u044C\u043E\u0433\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2014 \u043D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u043F\u043E\u043A\u0443\u043F\u0446\u044E \u0443 Viber \u0430\u0431\u043E Telegram.");
+    await rzCall(acc, (t) => rzSendMessage(fetchFn, t, { chatId: chat.id, receiverId: chat.userId, body: text }));
+    return c.json(await markAsked(o, c.get("user"), "chat"));
   });
   app.post("/api/mp/sync", async (c) => {
     need(c, "docs.view");
     const b = await c.req.json().catch(() => ({}));
     const acc = ((await shopsOf())[b.mp] || []).find((a) => a.id === Number(b.account));
     if (!acc) throw fail(404, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
-    return c.json(await syncShop(b.mp, acc));
+    const r = await syncShop(b.mp, acc);
+    if (b.mp === "rozetka") await reviewsStep(acc, { pages: 2, force: true }).catch((e) => {
+      if (e.pending) throw e;
+    });
+    return c.json(r);
   });
   const accOf = async (mp, id) => {
     const acc = ((await shopsOf())[mp] || []).find((a) => a.id === Number(id));
@@ -14376,7 +14622,7 @@ var schema13 = {
 // src/modules/market/schema.js
 var schema14 = {
   name: "market",
-  version: 3,
+  version: 4,
   tables: [
     // mp — rozetka | prom | epc; account_id — магазин у налаштуваннях доставки; items — JSON [{ name, qty, price }].
     `CREATE TABLE IF NOT EXISTS mp_orders (
@@ -14412,7 +14658,23 @@ var schema14 = {
     error TEXT DEFAULT '',
     error_at TEXT DEFAULT '',
     PRIMARY KEY (mp, account_id)
-  )`
+  )`,
+    // Відгуки на товари Розетки, прив'язані до замовлень (orders_id у відгуку) — щоб бачити, хто з покупців ще не залишив відгук.
+    `CREATE TABLE IF NOT EXISTS mp_reviews (
+    mp TEXT NOT NULL,
+    account_id INTEGER NOT NULL,
+    id TEXT NOT NULL,
+    order_id TEXT DEFAULT '',
+    goods TEXT DEFAULT '',
+    mark INTEGER DEFAULT 0,
+    name TEXT DEFAULT '',
+    text TEXT DEFAULT '',
+    status TEXT DEFAULT '',
+    created_at TEXT DEFAULT '',
+    changed_at TEXT DEFAULT '',
+    PRIMARY KEY (mp, account_id, id)
+  )`,
+    `CREATE INDEX IF NOT EXISTS mp_reviews_order ON mp_reviews (mp, account_id, order_id)`
   ],
   columns: [
     // Історія магазину (Розетка — за 4 роки): по місяцях назад від сьогодні за датою створення.
@@ -14424,7 +14686,24 @@ var schema14 = {
     ["mp_sync", "hist_saved", "INTEGER DEFAULT 0"],
     ["mp_sync", "hist_error", "TEXT DEFAULT ''"],
     // Для пошуку без урахування регістру (SQLite LIKE не вміє це для кирилиці): номер, клієнт, телефон, ТТН малими літерами.
-    ["mp_orders", "search", "TEXT DEFAULT ''"]
+    ["mp_orders", "search", "TEXT DEFAULT ''"],
+    // Відгуки (Розетка): status_group — група статусу (2 — успішні; 0 — невідомо, для старих рядків — за кодом статусу);
+    // review_n — скільки відгуків на товари з цього замовлення, review_mark — найнижча оцінка (1–5, 0 — без оцінки);
+    // asked_* — менеджер нагадав про відгук: коли, хто, яким способом.
+    ["mp_orders", "status_group", "INTEGER DEFAULT 0"],
+    ["mp_orders", "review_n", "INTEGER DEFAULT 0"],
+    ["mp_orders", "review_mark", "INTEGER DEFAULT 0"],
+    ["mp_orders", "asked_at", "TEXT DEFAULT ''"],
+    ["mp_orders", "asked_by", "TEXT DEFAULT ''"],
+    ["mp_orders", "asked_via", "TEXT DEFAULT ''"],
+    // Завантаження відгуків магазину: rv_page — сторінка незавершеного проходу (0 — немає), rv_run — коли він почався,
+    // rv_full — перше (повне) завантаження зроблено, rv_at — початок останнього завершеного проходу, rv_n — усього відгуків.
+    ["mp_sync", "rv_page", "INTEGER DEFAULT 0"],
+    ["mp_sync", "rv_run", "TEXT DEFAULT ''"],
+    ["mp_sync", "rv_full", "INTEGER DEFAULT 0"],
+    ["mp_sync", "rv_at", "TEXT DEFAULT ''"],
+    ["mp_sync", "rv_n", "INTEGER DEFAULT 0"],
+    ["mp_sync", "rv_error", "TEXT DEFAULT ''"]
   ]
 };
 
