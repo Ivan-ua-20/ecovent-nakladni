@@ -12682,6 +12682,19 @@ var money2 = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 var fio = (...parts) => parts.map((x) => String(x || "").trim()).filter(Boolean).join(" ");
+var rzRecipient = (o) => {
+  const t = o.delivery?.recipient_title;
+  return String((typeof t === "string" ? t : t?.full_name) || fio(o.delivery?.recipient_last_name, o.delivery?.recipient_first_name, o.delivery?.recipient_second_name)).trim();
+};
+var digits9 = (p) => String(p || "").replace(/\D/g, "").slice(-9);
+var rzOther = (o) => {
+  const name = rzRecipient(o);
+  const phone = String(o.delivery?.recipient_phone || o.recipient_phone || "");
+  const buyer = String(o.user_title?.full_name || "").trim();
+  const samePhone = !phone || !o.user_phone || digits9(phone) === digits9(o.user_phone);
+  const sameName2 = !name || !buyer || name.toLowerCase() === buyer.toLowerCase();
+  return samePhone && sameName2 ? { recipient: "", recipient_phone: "" } : { recipient: name, recipient_phone: phone };
+};
 var ROW = {
   rozetka: (o) => ({
     id: String(o.id),
@@ -12691,12 +12704,13 @@ var ROW = {
     status: String(o.status ?? ""),
     status_name: String(o.status_data?.name_uk || o.status_data?.name || ""),
     status_group: Number(o.status_group) || 0,
-    customer: o.user_title?.full_name || o.delivery?.recipient_title?.full_name || fio(o.delivery?.recipient_last_name, o.delivery?.recipient_first_name),
+    customer: o.user_title?.full_name || rzRecipient(o) || "",
     phone: String(o.user_phone || o.delivery?.recipient_phone || ""),
     total: money2(o.cost ?? o.amount),
     delivery: String(o.delivery?.delivery_service_name || o.delivery_service?.name || ""),
     ttn: String(o.ttn || o.delivery?.ttn || ""),
-    items: (o.purchases || []).map((p) => ({ name: String(p.item_name || p.item?.name || ""), qty: Number(p.quantity) || 1, price: money2(p.price) }))
+    items: (o.purchases || []).map((p) => ({ id: String(p.item_id || p.item?.id || ""), name: String(p.item_name || p.item?.name || ""), qty: Number(p.quantity) || 1, price: money2(p.price) })),
+    ...rzOther(o)
   }),
   prom: (o) => ({
     id: String(o.id),
@@ -12754,22 +12768,24 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     if (!rows.length) return;
     const now = nowIso();
     await db.batch(rows.map((r) => [
-      `INSERT INTO mp_orders (mp, account_id, id, number, created_at, changed_at, status, status_name, customer, phone, total, delivery, ttn, items, synced_at, search, status_group)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO mp_orders (mp, account_id, id, number, created_at, changed_at, status, status_name, customer, phone, total, delivery, ttn, items, synced_at, search, status_group, recipient, recipient_phone)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(mp, account_id, id) DO UPDATE SET number = excluded.number, created_at = excluded.created_at, changed_at = excluded.changed_at,
          status = excluded.status, status_name = excluded.status_name, customer = excluded.customer, phone = excluded.phone, total = excluded.total,
          delivery = excluded.delivery, ttn = excluded.ttn, items = excluded.items, synced_at = excluded.synced_at, search = excluded.search,
-         status_group = excluded.status_group
+         status_group = excluded.status_group, recipient = excluded.recipient, recipient_phone = excluded.recipient_phone
        WHERE mp_orders.changed_at IS NOT excluded.changed_at OR mp_orders.status IS NOT excluded.status OR mp_orders.ttn IS NOT excluded.ttn
-         OR mp_orders.total IS NOT excluded.total OR mp_orders.search IS NOT excluded.search OR mp_orders.status_group IS NOT excluded.status_group`,
-      [mp, accountId, r.id, r.number, r.created_at, r.changed_at, r.status, r.status_name, r.customer, r.phone, r.total, r.delivery, r.ttn, JSON.stringify(r.items), now, searchOf(r), r.status_group || 0]
+         OR mp_orders.total IS NOT excluded.total OR mp_orders.search IS NOT excluded.search OR mp_orders.status_group IS NOT excluded.status_group
+         OR mp_orders.recipient IS NOT excluded.recipient OR mp_orders.recipient_phone IS NOT excluded.recipient_phone OR mp_orders.items IS NOT excluded.items`,
+      [mp, accountId, r.id, r.number, r.created_at, r.changed_at, r.status, r.status_name, r.customer, r.phone, r.total, r.delivery, r.ttn, JSON.stringify(r.items), now, searchOf(r), r.status_group || 0, r.recipient || "", r.recipient_phone || ""]
     ]));
   }
   async function rehistOnce() {
-    if ((await db.get(`SELECT value FROM settings WHERE key = 'mp_hist_v2'`))?.value) return;
+    if ((await db.get(`SELECT value FROM settings WHERE key = 'mp_hist_v3'`))?.value) return;
     await db.batch([
-      [`UPDATE mp_sync SET hist_to = ?, hist_page = 1, hist_done = 0, hist_saved = 0, hist_error = '' WHERE mp = 'rozetka' AND hist_from != ''`, [kyivDT(/* @__PURE__ */ new Date()).slice(0, 10)]],
-      [`INSERT INTO settings (key, value) VALUES ('mp_hist_v2', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`, []]
+      [`UPDATE mp_sync SET hist_to = CASE WHEN hist_end != '' THEN hist_end ELSE ? END, hist_page = 1, hist_done = 0, hist_saved = 0, hist_error = ''
+        WHERE mp = 'rozetka' AND hist_from != ''`, [kyivDT(/* @__PURE__ */ new Date()).slice(0, 10)]],
+      [`INSERT INTO settings (key, value) VALUES ('mp_hist_v3', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`, []]
     ]);
   }
   async function histBudget() {
@@ -12934,6 +12950,18 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     return v?.ids || [];
   }
   const SUCCESS_SQL = `(status_group = 2 OR (status_group = 0 AND status IN (SELECT value FROM json_each(?))))`;
+  const recordOf = (c) => {
+    let r = c.record;
+    if (typeof r === "string") {
+      try {
+        r = JSON.parse(r);
+      } catch {
+        r = null;
+      }
+    }
+    return r || {};
+  };
+  const recordId = (c) => String(recordOf(c).id || c.item?.id || c.record_id || "");
   const recordTitle = (c) => {
     let r = c.record;
     if (typeof r === "string") {
@@ -12950,6 +12978,7 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
       id: String(c.id),
       order_id: String(c.orders_id),
       goods: recordTitle(c).slice(0, 300),
+      goods_id: recordId(c),
       mark: Math.max(0, Math.min(5, Number(c.mark) || 0)),
       name: String(c.name || "").slice(0, 120),
       text: [c.text, c.dignity && `\u041F\u0435\u0440\u0435\u0432\u0430\u0433\u0438: ${c.dignity}`, c.shortcomings && `\u041D\u0435\u0434\u043E\u043B\u0456\u043A\u0438: ${c.shortcomings}`].filter(Boolean).join("\n").slice(0, 600),
@@ -12963,12 +12992,12 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     const mk = `COALESCE(${sub("MIN(NULLIF(mark, 0))")}, 0)`;
     await db.batch([
       ...rows.map((r) => [
-        `INSERT INTO mp_reviews (mp, account_id, id, order_id, goods, mark, name, text, status, created_at, changed_at) VALUES ('rozetka', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(mp, account_id, id) DO UPDATE SET order_id = excluded.order_id, goods = excluded.goods, mark = excluded.mark, name = excluded.name,
+        `INSERT INTO mp_reviews (mp, account_id, id, order_id, goods, mark, name, text, status, created_at, changed_at, goods_id) VALUES ('rozetka', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(mp, account_id, id) DO UPDATE SET order_id = excluded.order_id, goods = excluded.goods, goods_id = excluded.goods_id, mark = excluded.mark, name = excluded.name,
            text = excluded.text, status = excluded.status, created_at = excluded.created_at, changed_at = excluded.changed_at
          WHERE mp_reviews.changed_at IS NOT excluded.changed_at OR mp_reviews.status IS NOT excluded.status OR mp_reviews.mark IS NOT excluded.mark
-           OR mp_reviews.order_id IS NOT excluded.order_id`,
-        [accountId, r.id, r.order_id, r.goods, r.mark, r.name, r.text, r.status, r.created_at, r.changed_at]
+           OR mp_reviews.order_id IS NOT excluded.order_id OR mp_reviews.goods_id IS NOT excluded.goods_id`,
+        [accountId, r.id, r.order_id, r.goods, r.mark, r.name, r.text, r.status, r.created_at, r.changed_at, r.goods_id]
       ]),
       [
         `UPDATE mp_orders SET review_n = ${n}, review_mark = ${mk}
@@ -13197,14 +13226,23 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
         FROM (SELECT ${SUCCESS_SQL} AS ok, review_n, asked_at, changed_at FROM mp_orders WHERE ${base.join(" AND ")})`, [border, okIds, ...baseParams]) : null,
       rz ? db.all(`SELECT asked_by AS who, COUNT(*) AS n, SUM(review_n > 0) AS reviewed FROM mp_orders WHERE ${base.join(" AND ")} AND asked_at != '' GROUP BY asked_by ORDER BY n DESC`, baseParams) : []
     ]);
+    const shown = rows.slice(0, 300);
+    const revs = rz && shown.some((r) => r.review_n > 0) ? await db.all(
+      `SELECT account_id, order_id, goods_id, goods, mark, name, created_at FROM mp_reviews WHERE mp = 'rozetka' AND order_id IN (SELECT value FROM json_each(?)) ORDER BY created_at`,
+      [JSON.stringify(shown.filter((r) => r.review_n > 0).map((r) => r.id))]
+    ) : [];
     return c.json({
-      rows: rows.slice(0, 300).map((r) => ({ ...r, items: (() => {
-        try {
-          return JSON.parse(r.items || "[]");
-        } catch {
-          return [];
-        }
-      })() })),
+      rows: shown.map((r) => ({
+        ...r,
+        items: (() => {
+          try {
+            return JSON.parse(r.items || "[]");
+          } catch {
+            return [];
+          }
+        })(),
+        ...rz ? { reviews: revs.filter((v) => v.account_id === r.account_id && v.order_id === r.id).map(({ account_id: _a, order_id: _o, ...v }) => v) } : {}
+      })),
       more: rows.length > 300,
       total: { n: total?.n || 0, sum: Math.round((total?.sum || 0) * 100) / 100 },
       statuses,
@@ -14645,7 +14683,7 @@ var schema13 = {
 // src/modules/market/schema.js
 var schema14 = {
   name: "market",
-  version: 5,
+  version: 6,
   tables: [
     // mp — rozetka | prom | epc; account_id — магазин у налаштуваннях доставки; items — JSON [{ name, qty, price }].
     `CREATE TABLE IF NOT EXISTS mp_orders (
@@ -14714,6 +14752,10 @@ var schema14 = {
     // keep_from — з якої дати зберігати замовлення магазину (найдавніша з усіх завантажених історій; '' — 4 роки).
     ["mp_sync", "hist_end", "TEXT DEFAULT ''"],
     ["mp_sync", "keep_from", "TEXT DEFAULT ''"],
+    // Розетка: отримувач, якщо інший за замовника (тоді відгук можуть залишити обидва); товар відгуку.
+    ["mp_orders", "recipient", "TEXT DEFAULT ''"],
+    ["mp_orders", "recipient_phone", "TEXT DEFAULT ''"],
+    ["mp_reviews", "goods_id", "TEXT DEFAULT ''"],
     // Відгуки (Розетка): status_group — група статусу (2 — успішні; 0 — невідомо, для старих рядків — за кодом статусу);
     // review_n — скільки відгуків на товари з цього замовлення, review_mark — найнижча оцінка (1–5, 0 — без оцінки);
     // asked_* — менеджер нагадав про відгук: коли, хто, яким способом.

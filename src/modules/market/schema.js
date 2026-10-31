@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'market',
-  version: 5,
+  version: 6,
   tables: [
   // mp — rozetka | prom | epc; account_id — магазин у налаштуваннях доставки; items — JSON [{ name, qty, price }].
   `CREATE TABLE IF NOT EXISTS mp_orders (
@@ -72,6 +72,10 @@ export const schema = {
     // keep_from — з якої дати зберігати замовлення магазину (найдавніша з усіх завантажених історій; '' — 4 роки).
     ['mp_sync', 'hist_end', "TEXT DEFAULT ''"],
     ['mp_sync', 'keep_from', "TEXT DEFAULT ''"],
+    // Розетка: отримувач, якщо інший за замовника (тоді відгук можуть залишити обидва); товар відгуку.
+    ['mp_orders', 'recipient', "TEXT DEFAULT ''"],
+    ['mp_orders', 'recipient_phone', "TEXT DEFAULT ''"],
+    ['mp_reviews', 'goods_id', "TEXT DEFAULT ''"],
     // Відгуки (Розетка): status_group — група статусу (2 — успішні; 0 — невідомо, для старих рядків — за кодом статусу);
     // review_n — скільки відгуків на товари з цього замовлення, review_mark — найнижча оцінка (1–5, 0 — без оцінки);
     // asked_* — менеджер нагадав про відгук: коли, хто, яким способом.
