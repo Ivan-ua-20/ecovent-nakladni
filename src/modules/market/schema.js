@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'market',
-  version: 4,
+  version: 5,
   tables: [
   // mp — rozetka | prom | epc; account_id — магазин у налаштуваннях доставки; items — JSON [{ name, qty, price }].
   `CREATE TABLE IF NOT EXISTS mp_orders (
@@ -68,6 +68,10 @@ export const schema = {
     ['mp_sync', 'hist_error', "TEXT DEFAULT ''"],
     // Для пошуку без урахування регістру (SQLite LIKE не вміє це для кирилиці): номер, клієнт, телефон, ТТН малими літерами.
     ['mp_orders', 'search', "TEXT DEFAULT ''"],
+    // Період історії обирають при запуску: hist_end — його кінець (для відсотка прогресу);
+    // keep_from — з якої дати зберігати замовлення магазину (найдавніша з усіх завантажених історій; '' — 4 роки).
+    ['mp_sync', 'hist_end', "TEXT DEFAULT ''"],
+    ['mp_sync', 'keep_from', "TEXT DEFAULT ''"],
     // Відгуки (Розетка): status_group — група статусу (2 — успішні; 0 — невідомо, для старих рядків — за кодом статусу);
     // review_n — скільки відгуків на товари з цього замовлення, review_mark — найнижча оцінка (1–5, 0 — без оцінки);
     // asked_* — менеджер нагадав про відгук: коли, хто, яким способом.

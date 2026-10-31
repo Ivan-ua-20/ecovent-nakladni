@@ -8,7 +8,8 @@ import { promOrders } from '../../integrations/prom.js';
 import { epcOrdersPage } from '../../integrations/epicentr.js';
 
 const KEEP_DAYS = 45;
-const HISTORY_YEARS = 4; // Розетка: історія за 4 роки, зберігається весь цей час
+const HISTORY_YEARS = 4; // Розетка: історія типово за 4 роки (період можна обрати), зберігається весь цей час
+const HIST_MIN_DAY = '2010-01-01';
 const KEEP_DAYS_BY_MP = { rozetka: HISTORY_YEARS * 366 + 31 };
 const HIST_PAGES_PER_RUN = 5;
 // Скільки замовлень історії записувати за добу: ліміт записів D1 (100 тис. рядків на день, з індексами) спільний
@@ -91,8 +92,13 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     const own = Object.keys(KEEP_DAYS_BY_MP);
     await db.batch([
       [`DELETE FROM mp_orders WHERE mp NOT IN (SELECT value FROM json_each(?)) AND created_at != '' AND created_at < ?`, [JSON.stringify(own), borderOf(KEEP_DAYS)]],
-      ...own.map((mp) => [`DELETE FROM mp_orders WHERE mp = ? AND created_at != '' AND created_at < ?`, [mp, borderOf(KEEP_DAYS_BY_MP[mp])]]),
-      [`DELETE FROM mp_reviews WHERE created_at != '' AND created_at < ?`, [borderOf(KEEP_DAYS_BY_MP.rozetka)]],
+      // магазин з історією за обраний період, давнішу за 4 роки, — зберігається з початку того періоду (keep_from)
+      ...own.map((mp) => [`DELETE FROM mp_orders WHERE mp = ? AND created_at != '' AND created_at < ?
+        AND created_at < COALESCE((SELECT NULLIF(s.keep_from, '') FROM mp_sync s WHERE s.mp = mp_orders.mp AND s.account_id = mp_orders.account_id), ?)`,
+      [mp, borderOf(KEEP_DAYS_BY_MP[mp]), borderOf(KEEP_DAYS_BY_MP[mp])]]),
+      [`DELETE FROM mp_reviews WHERE created_at != '' AND created_at < ?
+        AND created_at < COALESCE((SELECT NULLIF(s.keep_from, '') FROM mp_sync s WHERE s.mp = mp_reviews.mp AND s.account_id = mp_reviews.account_id), ?)`,
+      [borderOf(KEEP_DAYS_BY_MP.rozetka), borderOf(KEEP_DAYS_BY_MP.rozetka)]],
     ]);
   });
 
@@ -164,18 +170,32 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
   const addDaysStr = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
   const histState = (st) => {
     if (!st?.hist_from) return { started: false };
-    const today = kyivDay();
-    const span = Math.max(1, Date.parse(today) - Date.parse(st.hist_from));
-    const left = st.hist_done ? 0 : Math.max(0, Date.parse(st.hist_to) - Date.parse(st.hist_from));
-    return { started: true, done: Boolean(st.hist_done), from: st.hist_from, to: st.hist_done ? st.hist_from : st.hist_to, saved: st.hist_saved || 0,
+    const end = st.hist_end || kyivDay();
+    const span = Math.max(1, Date.parse(end) - Date.parse(st.hist_from));
+    const left = st.hist_done ? 0 : Math.max(0, Math.min(Date.parse(st.hist_to), Date.parse(end)) - Date.parse(st.hist_from));
+    return { started: true, done: Boolean(st.hist_done), from: st.hist_from, end, to: st.hist_done ? st.hist_from : st.hist_to, saved: st.hist_saved || 0,
       pct: Math.round(((span - left) / span) * 100), error: st.hist_error || '', paused: Boolean(st.paused) };
   };
-  async function histStart(mp, acc) {
-    if (mp !== 'rozetka') throw fail(400, 'Історію за 4 роки завантажуємо лише для Розетки.');
-    const from = addDaysStr(kyivDay(), -HISTORY_YEARS * 365);
-    await db.run(`INSERT INTO mp_sync (mp, account_id, hist_from, hist_to, hist_page, hist_done, hist_saved, hist_error) VALUES (?, ?, ?, ?, 1, 0, 0, '')
-      ON CONFLICT(mp, account_id) DO UPDATE SET hist_from = excluded.hist_from, hist_to = excluded.hist_to, hist_page = 1, hist_done = 0, hist_saved = 0, hist_error = ''`,
-    [mp, acc.id, from, kyivDay()]);
+  // Почати завантаження історії за період (типово — 4 роки до сьогодні). Інший період можна завантажити пізніше:
+  // уже завантажені замовлення лишаються, зберігання — з найдавнішої дати з усіх періодів.
+  async function histStart(mp, acc, period = {}) {
+    if (mp !== 'rozetka') throw fail(400, 'Історію завантажуємо лише для Розетки.');
+    const isDay = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) && !Number.isNaN(Date.parse(v));
+    const today = kyivDay();
+    const from = period.from ? String(period.from) : addDaysStr(today, -HISTORY_YEARS * 365);
+    const to = period.to ? String(period.to) : today;
+    if (!isDay(from) || !isDay(to)) throw fail(400, 'Вкажіть дати періоду.');
+    if (from > to) throw fail(400, 'Початок періоду — пізніше за кінець.');
+    if (from < HIST_MIN_DAY) throw fail(400, 'Найдавніша дата — 01.01.2010.');
+    const end = to > today ? today : to;
+    const st = await db.get(`SELECT keep_from FROM mp_sync WHERE mp = ? AND account_id = ?`, [mp, acc.id]);
+    const defKeep = addDaysStr(today, -(KEEP_DAYS_BY_MP[mp] || KEEP_DAYS));
+    const oldest = [from, st?.keep_from || defKeep].sort()[0];
+    const keep = oldest < defKeep ? oldest : ''; // '' — звичайні 4 роки
+    await db.run(`INSERT INTO mp_sync (mp, account_id, hist_from, hist_to, hist_end, keep_from, hist_page, hist_done, hist_saved, hist_error) VALUES (?, ?, ?, ?, ?, ?, 1, 0, 0, '')
+      ON CONFLICT(mp, account_id) DO UPDATE SET hist_from = excluded.hist_from, hist_to = excluded.hist_to, hist_end = excluded.hist_end, keep_from = excluded.keep_from,
+        hist_page = 1, hist_done = 0, hist_saved = 0, hist_error = ''`,
+    [mp, acc.id, from, end, end, keep]);
     return histState(await db.get(`SELECT * FROM mp_sync WHERE mp = ? AND account_id = ?`, [mp, acc.id]));
   }
   // Кілька сторінок історії; прогрес — у mp_sync (наступний виклик продовжить з того ж місця).
@@ -392,7 +412,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     return out.shops || out.errors ? out : { skipped: 'магазини маркетплейсів не підключено' };
   }
   onCron('market', 'Замовлення маркетплейсів (Розетка, Prom, Епіцентр)', syncAll);
-  onCron('market-history', 'Історія замовлень Розетки за 4 роки (поки не завантажено)', histAll);
+  onCron('market-history', 'Історія замовлень Розетки за обраний період (поки не завантажено)', histAll);
   onCron('market-reviews', 'Відгуки на товари Розетки (раз на 3 год)', reviewsAll);
 
   // ---------- для сторінки «Маркетплейси» ----------
@@ -550,7 +570,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
   app.post('/api/mp/history/start', async (c) => {
     need(c, 'api');
     const b = await c.req.json().catch(() => ({}));
-    return c.json(await histStart(b.mp, await accOf(b.mp, b.account)));
+    return c.json(await histStart(b.mp, await accOf(b.mp, b.account), { from: b.from, to: b.to }));
   });
   app.post('/api/mp/history/step', async (c) => {
     need(c, 'docs.view');

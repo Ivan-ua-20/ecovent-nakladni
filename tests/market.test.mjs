@@ -21,6 +21,7 @@ const PROM = Array.from({ length: 350 }, (_, i) => ({
   products: [{ name: 'Очищувач HOMI', quantity: 1, price: '1 289,50 грн' }],
 }));
 // Історія Розетки: по 3 замовлення на місяць за 50 місяців (останні 2 роки… 4+ роки тому — понад межу)
+const addDaysT = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 const kyivToday = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv' }).format(new Date());
 const HIST = [];
 for (let mth = 0; mth < 50; mth++) {
@@ -273,4 +274,26 @@ assert.equal((await req('PUT', '/api/mp/review/settings', { days: 99, tpl: 'x' }
 assert.deepEqual((await req('PUT', '/api/mp/review/settings', { days: 5, tpl: "Вітаю, {ім'я}!" })).j, { days: 5, tpl: "Вітаю, {ім'я}!" });
 assert.equal((await req('GET', '/api/mp/review/settings', null, M)).j.days, 5);
 assert.ok(!(await req('GET', '/api/mp/orders?mp=prom')).j.reviews, 'відгуки — лише для Розетки');
-console.log('OK — маркетплейси: синхронізація Розетки, Prom і Епіцентру, продовження, фільтри, перейменування, історія Розетки, відгуки й нагадування');
+
+// ---------- історія за обраний період (старий кабінет — давніше за 4 роки) ----------
+assert.equal((await req('POST', '/api/mp/history/start', { mp: 'rozetka', account: 1, from: '2026-05-01', to: '2026-01-01' })).status, 400, 'початок пізніше за кінець');
+assert.equal((await req('POST', '/api/mp/history/start', { mp: 'rozetka', account: 1, from: '2009-12-31', to: '2026-01-01' })).status, 400, 'не давніше 2010');
+assert.equal((await req('POST', '/api/mp/history/start', { mp: 'rozetka', account: 1, from: 'вчора' })).status, 400);
+const oldest = HIST.map((x) => x.created.slice(0, 10)).sort()[0];
+const oldTo = addDaysT(h.from, -1);
+let hp = (await req('POST', '/api/mp/history/start', { mp: 'rozetka', account: 1, from: oldest, to: oldTo })).j;
+assert.ok(hp.started && !hp.done && hp.from === oldest && hp.end === oldTo && hp.pct === 0, JSON.stringify(hp));
+histCalls.length = 0;
+steps = 0;
+do { hp = (await req('POST', '/api/mp/history/step', { mp: 'rozetka', account: 1 })).j; steps++; } while (!hp.done && steps < 100);
+assert.ok(hp.done && hp.pct === 100, JSON.stringify(hp));
+assert.ok(histCalls[0].startsWith(`${oldTo.slice(0, 7)}-01 00:00:00..${oldTo} 23:59:59`), `з кінця обраного періоду: ${histCalls[0]}`);
+assert.equal((await db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE mp = 'rozetka' AND account_id = 1 AND customer LIKE 'Архів%'`)).n, HIST.length, 'давніші за 4 роки — теж у базі');
+assert.equal((await db.get(`SELECT keep_from FROM mp_sync WHERE mp = 'rozetka' AND account_id = 1`)).keep_from, oldest);
+// новий, коротший період не скорочує зберігання; прибирання не чіпає завантажене
+await req('POST', '/api/mp/history/start', { mp: 'rozetka', account: 1, from: addDaysT(kyivToday, -30) });
+assert.equal((await db.get(`SELECT keep_from FROM mp_sync WHERE mp = 'rozetka' AND account_id = 1`)).keep_from, oldest);
+await db.run(`UPDATE settings SET value = '2000-01-01T00:00:00Z' WHERE key = 'cleanup_at'`);
+await req('GET', '/api/mp/shops');
+assert.equal((await db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE mp = 'rozetka' AND account_id = 1 AND customer LIKE 'Архів%'`)).n, HIST.length, 'прибирання зберігає обраний період');
+console.log('OK — маркетплейси: синхронізація Розетки, Prom і Епіцентру, продовження, фільтри, перейменування, історія Розетки (й за обраний період), відгуки й нагадування');
