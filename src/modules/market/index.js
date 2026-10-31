@@ -11,6 +11,10 @@ const KEEP_DAYS = 45;
 const HISTORY_YEARS = 4; // Розетка: історія за 4 роки, зберігається весь цей час
 const KEEP_DAYS_BY_MP = { rozetka: HISTORY_YEARS * 366 + 31 };
 const HIST_PAGES_PER_RUN = 5;
+// Скільки замовлень історії записувати за добу: ліміт записів D1 (100 тис. рядків на день, з індексами) спільний
+// для всього сайту — історія розтягується на кілька днів, щоб рахунки й накладні не зупинились.
+const HIST_DAY_CAP = 15000;
+const COUNTS_TTL_MS = 30 * 60e3; // кількість замовлень у магазинах — з кешу (повний підрахунок дорогий за читаннями)
 const FIRST_DAYS = 30; // перша синхронізація магазину — замовлення, змінені за 30 днів
 const PAGES_PER_RUN = 3;
 const OVERLAP_MS = 10 * 60e3; // беремо зміни із запасом, щоб нічого не пропустити на межі
@@ -81,18 +85,39 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
 
   const shopsOf = async () => (await services.marking?.marketShops?.()) || {};
 
+  const searchOf = (r) => [r.number, r.customer, String(r.phone || '').replace(/\D/g, ''), r.ttn].filter(Boolean).join(' ').toLowerCase();
+  // Незмінене замовлення не перезаписується (економія записів D1 при повторних проходах і перезапуску історії).
   async function saveRows(mp, accountId, rows) {
     if (!rows.length) return;
     const now = nowIso();
     await db.batch(rows.map((r) => [
-      `INSERT INTO mp_orders (mp, account_id, id, number, created_at, changed_at, status, status_name, customer, phone, total, delivery, ttn, items, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO mp_orders (mp, account_id, id, number, created_at, changed_at, status, status_name, customer, phone, total, delivery, ttn, items, synced_at, search)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(mp, account_id, id) DO UPDATE SET number = excluded.number, created_at = excluded.created_at, changed_at = excluded.changed_at,
          status = excluded.status, status_name = excluded.status_name, customer = excluded.customer, phone = excluded.phone, total = excluded.total,
-         delivery = excluded.delivery, ttn = excluded.ttn, items = excluded.items, synced_at = excluded.synced_at`,
-      [mp, accountId, r.id, r.number, r.created_at, r.changed_at, r.status, r.status_name, r.customer, r.phone, r.total, r.delivery, r.ttn, JSON.stringify(r.items), now],
+         delivery = excluded.delivery, ttn = excluded.ttn, items = excluded.items, synced_at = excluded.synced_at, search = excluded.search
+       WHERE mp_orders.changed_at IS NOT excluded.changed_at OR mp_orders.status IS NOT excluded.status OR mp_orders.ttn IS NOT excluded.ttn
+         OR mp_orders.total IS NOT excluded.total OR mp_orders.search IS NOT excluded.search`,
+      [mp, accountId, r.id, r.number, r.created_at, r.changed_at, r.status, r.status_name, r.customer, r.phone, r.total, r.delivery, r.ttn, JSON.stringify(r.items), now, searchOf(r)],
     ]));
   }
+
+  // Разово: історію Розетки, завантажену без «Успішних» і «Неуспішних» (до types=1), — перезавантажити.
+  async function rehistOnce() {
+    if ((await db.get(`SELECT value FROM settings WHERE key = 'mp_hist_v2'`))?.value) return;
+    await db.batch([
+      [`UPDATE mp_sync SET hist_to = ?, hist_page = 1, hist_done = 0, hist_saved = 0, hist_error = '' WHERE mp = 'rozetka' AND hist_from != ''`, [kyivDT(new Date()).slice(0, 10)]],
+      [`INSERT INTO settings (key, value) VALUES ('mp_hist_v2', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`, []],
+    ]);
+  }
+  // Денний ліміт записів історії (спільний для всіх магазинів).
+  async function histBudget() {
+    const day = kyivDT(new Date()).slice(0, 10);
+    let v = {};
+    try { v = JSON.parse((await db.get(`SELECT value FROM settings WHERE key = 'mp_hist_day'`))?.value || '{}'); } catch { /* */ }
+    return { day, used: v.day === day ? Number(v.n) || 0 : 0 };
+  }
+  const histSpend = (day, n) => db.run(`INSERT INTO settings (key, value) VALUES ('mp_hist_day', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify({ day, n })]);
 
   // Одна сторінка змін магазину: рядки й курсор наступної ('' — сторінок більше немає).
   async function fetchPage(mp, acc, from, cursor) {
@@ -127,7 +152,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     const span = Math.max(1, Date.parse(today) - Date.parse(st.hist_from));
     const left = st.hist_done ? 0 : Math.max(0, Date.parse(st.hist_to) - Date.parse(st.hist_from));
     return { started: true, done: Boolean(st.hist_done), from: st.hist_from, to: st.hist_done ? st.hist_from : st.hist_to, saved: st.hist_saved || 0,
-      pct: Math.round(((span - left) / span) * 100), error: st.hist_error || '' };
+      pct: Math.round(((span - left) / span) * 100), error: st.hist_error || '', paused: Boolean(st.paused) };
   };
   async function histStart(mp, acc) {
     if (mp !== 'rozetka') throw fail(400, 'Історію за 4 роки завантажуємо лише для Розетки.');
@@ -139,20 +164,25 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
   }
   // Кілька сторінок історії; прогрес — у mp_sync (наступний виклик продовжить з того ж місця).
   async function histStep(mp, acc, pages = HIST_PAGES_PER_RUN) {
+    await rehistOnce();
     const st = await db.get(`SELECT * FROM mp_sync WHERE mp = ? AND account_id = ?`, [mp, acc.id]);
     if (!st?.hist_from || st.hist_done) return histState(st);
+    const budget = await histBudget();
+    if (budget.used >= HIST_DAY_CAP) return histState({ ...st, paused: true });
+    let spent = 0;
     let to = st.hist_to;
     let page = st.hist_page || 1;
     let saved = st.hist_saved || 0;
     let done = 0;
     let error = '';
     try {
-      for (let p = 0; p < pages && !done; p++) {
+      for (let p = 0; p < pages && !done && budget.used + spent < HIST_DAY_CAP; p++) {
         const monthStart = `${to.slice(0, 7)}-01`;
         const from = monthStart < st.hist_from ? st.hist_from : monthStart;
         const r = await rzSearch(acc, { createdFrom: `${from} 00:00:00`, createdTo: `${to} 23:59:59`, page });
         await saveRows(mp, acc.id, r.orders.map(ROW.rozetka));
         saved += r.orders.length;
+        spent += r.orders.length;
         if (page < r.pageCount && r.orders.length) page++;
         else {
           page = 1;
@@ -167,11 +197,13 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     async function saveHist() {
       await db.run(`UPDATE mp_sync SET hist_to = ?, hist_page = ?, hist_done = ?, hist_saved = ?, hist_error = ? WHERE mp = ? AND account_id = ?`,
         [to, page, done, saved, error, mp, acc.id]);
+      if (spent) await histSpend(budget.day, budget.used + spent);
     }
     await saveHist();
-    return histState({ ...st, hist_to: to, hist_page: page, hist_done: done, hist_saved: saved, hist_error: error });
+    return histState({ ...st, hist_to: to, hist_page: page, hist_done: done, hist_saved: saved, hist_error: error, paused: !done && budget.used + spent >= HIST_DAY_CAP });
   }
   async function histAll() {
+    await rehistOnce();
     const shops = ((await shopsOf()).rozetka || []).filter((a) => a.active);
     const states = await db.all(`SELECT * FROM mp_sync WHERE mp = 'rozetka' AND hist_from != '' AND hist_done = 0`);
     const out = { shops: 0, saved: 0, done: 0 };
@@ -241,13 +273,20 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
   onCron('market-history', 'Історія замовлень Розетки за 4 роки (поки не завантажено)', histAll);
 
   // ---------- для сторінки «Маркетплейси» ----------
+  // Кількість замовлень у магазинах — з кешу на 30 хв (повний підрахунок читає всі рядки, а з історією їх десятки тисяч).
+  async function cachedCounts() {
+    let c = null;
+    try { c = JSON.parse((await db.get(`SELECT value FROM settings WHERE key = 'mp_counts'`))?.value || 'null'); } catch { /* */ }
+    if (c && Date.now() - c.at < COUNTS_TTL_MS) return c.rows;
+    const rows = await db.all(`SELECT mp, account_id, COUNT(*) AS n FROM mp_orders GROUP BY mp, account_id`);
+    await db.run(`INSERT INTO settings (key, value) VALUES ('mp_counts', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify({ at: Date.now(), rows })]);
+    return rows;
+  }
+
   app.get('/api/mp/shops', async (c) => {
     need(c, 'docs.view');
-    const [shops, counts, syncs] = await Promise.all([
-      shopsOf(),
-      db.all(`SELECT mp, account_id, COUNT(*) AS n FROM mp_orders GROUP BY mp, account_id`),
-      db.all(`SELECT * FROM mp_sync`),
-    ]);
+    await rehistOnce();
+    const [shops, counts, syncs] = await Promise.all([shopsOf(), cachedCounts(), db.all(`SELECT * FROM mp_sync`)]);
     const cnt = new Map(counts.map((r) => [`${r.mp}:${r.account_id}`, r.n]));
     const sy = new Map(syncs.map((r) => [`${r.mp}:${r.account_id}`, r]));
     return c.json(MARKETS.map((m) => ({
@@ -281,8 +320,9 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     const q = String(c.req.query('q') || '').trim();
     if (q) {
       const digits = q.replace(/\D/g, '');
-      where.push(`(number LIKE ? OR customer LIKE ? OR ttn LIKE ?${digits.length >= 5 ? ' OR phone LIKE ?' : ''})`);
-      params.push(`%${q}%`, `%${q}%`, `%${q}%`, ...(digits.length >= 5 ? [`%${digits.slice(-9)}%`] : []));
+      // search — малими літерами (кирилиця без урахування регістру); старі рядки без search — за колонками
+      where.push(`(search LIKE ? OR number LIKE ? OR customer LIKE ? OR ttn LIKE ?${digits.length >= 5 ? ' OR phone LIKE ? OR search LIKE ?' : ''})`);
+      params.push(`%${q.toLowerCase()}%`, `%${q}%`, `%${q}%`, `%${q}%`, ...(digits.length >= 5 ? [`%${digits.slice(-9)}%`, `%${digits.slice(-9)}%`] : []));
     }
     const offset = Math.max(0, Number(c.req.query('offset')) || 0);
     const [rows, statuses, total] = await Promise.all([

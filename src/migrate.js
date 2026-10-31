@@ -39,8 +39,20 @@ export async function migrate(db, modules = MODULE_SCHEMAS) {
   // Нові колонки для старих баз.
   const cols = todo.flatMap((m) => m.columns);
   const alters = [];
-  for (const table of [...new Set(cols.map((x) => x[0]))]) {
-    const existing = new Set((await db.all(`PRAGMA table_info(${table})`)).map((r) => r.name));
+  const tables = [...new Set(cols.map((x) => x[0]))];
+  // Наявні колонки всіх таблиць — одним запитом (ліміт D1 — 50 запитів на звернення); якщо не вийде — по таблиці.
+  let haveCols = null;
+  if (tables.length) {
+    try {
+      haveCols = new Set((await db.all(
+        `SELECT m.name AS t, p.name AS c FROM sqlite_master m, pragma_table_info(m.name) p WHERE m.type = 'table' AND m.name IN (SELECT value FROM json_each(?))`,
+        [JSON.stringify(tables)],
+      )).map((r) => `${r.t}.${r.c}`));
+    } catch { haveCols = null; }
+  }
+  for (const table of tables) {
+    const existing = haveCols ? new Set([...haveCols].filter((k) => k.startsWith(`${table}.`)).map((k) => k.slice(table.length + 1)))
+      : new Set((await db.all(`PRAGMA table_info(${table})`)).map((r) => r.name));
     for (const [t, col, type] of cols) if (t === table && !existing.has(col)) alters.push([`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`, []]);
   }
   await db.batch(alters);
