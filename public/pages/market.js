@@ -1,6 +1,6 @@
 // Маркетплейси: замовлення магазинів Розетки (кабінет продавця), Prom і Епіцентру — вкладка на маркетплейс,
 // підвкладки — магазини (назви як у «Налаштування → Доставка»; адміни можуть перейменувати). Лише перегляд.
-// Розетка: історія за 4 роки (завантажується у фоні; поки сторінка відкрита — можна швидше);
+// Розетка: історія за обраний період, типово 4 роки (завантажується у фоні; поки сторінка відкрита — можна швидше);
 // відгуки на товари — фільтр «хто ще не залишив відгук» і нагадування (Viber, Telegram, дзвінок, чат Розетки).
 import { esc } from '../invoice.js';
 import { $, $$, main, api, toast, modal, fmtDateTime, todayKyiv } from '../core/ui.js';
@@ -59,12 +59,13 @@ export function createMarketPages({ can }) {
       if (!h) return '';
       if (!h.started) {
         return can('api') ? `<div class="card small" style="margin-bottom:10px">Історія «${esc(s.name)}»: зараз лише останні 30 днів.
-          <button class="btn sm primary" data-hstart="${s.id}" style="margin-left:8px">Завантажити історію за 4 роки</button></div>` : '';
+          <button class="btn sm primary" data-hstart="${s.id}" style="margin-left:8px">Завантажити історію…</button></div>` : '';
       }
-      if (h.done) return `<div class="small muted" style="margin-bottom:6px">✅ Історія «${esc(s.name)}» завантажена з ${esc(dDay(h.from))} · ${h.saved} замовлень</div>`;
+      const other = can('api') ? ` <button class="btn sm" data-hstart="${s.id}">${h.done ? 'Завантажити інший період' : 'Змінити період'}</button>` : '';
+      if (h.done) return `<div class="small muted" style="margin-bottom:6px">✅ Історія «${esc(s.name)}» завантажена за ${esc(dDay(h.from))} – ${esc(dDay(h.end))} · ${h.saved} замовлень${other}</div>`;
       const pausedNote = h.paused ? '<div class="small muted" style="margin:4px 0">На сьогодні денну норму завантажено — продовжиться завтра автоматично (щоб не перевищити ліміт бази для решти сайту).</div>' : '';
       return `<div class="card small" style="margin-bottom:10px">
-        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>⏳ Історія «${esc(s.name)}»: завантажено до ${esc(dDay(h.to))} · ${h.saved} замовлень</span><b>${h.pct}%</b></div>
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>⏳ Історія «${esc(s.name)}» за ${esc(dDay(h.from))} – ${esc(dDay(h.end))}: завантажено до ${esc(dDay(h.to))} · ${h.saved} замовлень${other}</span><b>${h.pct}%</b></div>
         <div style="height:6px;background:var(--line);border-radius:4px;margin:6px 0"><div style="height:6px;width:${h.pct}%;background:var(--accent);border-radius:4px"></div></div>
         ${h.error ? `<div class="alert warn small" style="margin:6px 0">Остання спроба: ${esc(h.error)}</div>` : ''}${pausedNote}
         ${h.paused ? '' : `<span class="muted">Вантажиться у фоні (кожні 3 хв). </span><button class="btn sm" data-hfast="${s.id}">Вантажити швидше, поки сторінка відкрита</button>`}</div>`;
@@ -228,10 +229,32 @@ export function createMarketPages({ can }) {
         catch (er) { toast(er.message, true); }
       };
     };
-    $$('[data-hstart]').forEach((b) => (b.onclick = async () => {
-      b.disabled = true;
-      try { await api('POST', '/api/mp/history/start', { mp, account: Number(b.dataset.hstart) }); toast('Історію почато — вантажиться у фоні'); viewMarket(mp, account); }
-      catch (er) { toast(er.message, true); b.disabled = false; }
+    // Період історії: типово 4 роки до сьогодні; можна давніший (старий кабінет) або інший відрізок.
+    $$('[data-hstart]').forEach((b) => (b.onclick = () => {
+      const s = shops.find((x) => x.id === Number(b.dataset.hstart));
+      const h = s?.history || {};
+      const today = todayKyiv();
+      const md = modal(`Історія «${s?.name || ''}»`, `<form id="hsF" class="form-stack">
+        <div class="btn-row" style="flex-wrap:wrap">
+          <label class="f"><span>З</span><input type="date" name="from" min="2010-01-01" max="${today}" value="${addDays(today, -4 * 365)}" required></label>
+          <label class="f"><span>По</span><input type="date" name="to" min="2010-01-01" max="${today}" value="${today}" required></label>
+        </div>
+        <div class="btn-row" style="flex-wrap:wrap"><span class="small muted">Швидко:</span>
+          ${[[1, 'рік'], [2, '2 роки'], [4, '4 роки'], [8, '8 років']].map(([y, t]) => `<button type="button" class="btn sm" data-hy="${y}">${t}</button>`).join('')}
+          <button type="button" class="btn sm" data-hy="all">з 2010 року</button></div>
+        <div class="small muted">Завантажене раніше лишається в базі. За добу — до 15 000 замовлень (щоб не перевищити ліміт бази для решти сайту), більші періоди довантажаться наступними днями.
+          ${h.started && !h.done ? '<br><b>Поточне завантаження зупиниться</b> — почнеться новий період.' : ''}</div></form>`,
+      { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="hsGo">Завантажити</button>' });
+      const f = $('#hsF', md.el);
+      $$('[data-hy]', md.el).forEach((x) => (x.onclick = () => { f.from.value = x.dataset.hy === 'all' ? '2010-01-01' : addDays(today, -Number(x.dataset.hy) * 365); f.to.value = today; }));
+      $('#hsGo', md.el).onclick = async (e) => {
+        const go = e.currentTarget;
+        go.disabled = true;
+        try {
+          await api('POST', '/api/mp/history/start', { mp, account: s.id, from: f.from.value, to: f.to.value });
+          md.close(); toast('Історію почато — вантажиться у фоні'); viewMarket(mp, account);
+        } catch (er) { toast(er.message, true); go.disabled = false; }
+      };
     }));
     $$('[data-hfast]').forEach((b) => (b.onclick = async () => {
       const my = ++pump;
