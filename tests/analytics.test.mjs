@@ -120,7 +120,8 @@ const chk = await db.get(`SELECT o.total AS t, (SELECT SUM(amount) FROM an_items
 assert.ok(Math.abs(chk.t - chk.s) < 0.05, 'сума рядків = сума замовлення зі знижкою');
 
 // ---------- 2. Дашборд за поточний місяць ----------
-const from = monthStart(today);
+// На початку місяця (до 10-го) за поточний місяць замало даних — беремо з початку минулого.
+const from = Number(today.slice(8)) < 10 ? monthStart(addDays(today, -12)) : monthStart(today);
 const prevFrom = addDays(from, -daysInMonth(addDays(from, -1)));
 const cmpTo = addDays(prevFrom, daysBetween(from, today) - 1);
 const q = await req('POST', '/api/an/query', { from, to: today, cmpFrom: prevFrom, cmpTo });
@@ -158,14 +159,14 @@ for (const m of q.byManager) {
 assert.equal(q.daily.cur.length, daysBetween(from, today));
 assert.ok(q.kpi.prev && q.kpi.prev.cnt > 0, 'є порівняння');
 assert.ok(q.byStatus.find((x) => x.id === 54).refuse);
-// Служби доставки: усі статуси за період, схожі назви — в одну групу.
+// Служби доставки: усі статуси за період, схожі назви — в одну групу (на початку місяця якоїсь служби може не бути — тоді 0).
 const dv = Object.fromEntries(q.byDelivery.map((r) => [r.name, r]));
 const dcnt = (names) => expect.filter((o) => names.includes(o.delivery)).length;
-assert.equal(dv['Нова пошта'].cnt, dcnt(['Нова Пошта', 'Нова пошта (адресна)']), '«Нова Пошта» і «Нова пошта (адресна)» — одна група');
-assert.equal(dv['Укрпошта'].cnt, dcnt(['Укрпошта']));
-assert.equal(dv['Розетка'].cnt, dcnt(['Rozetka Delivery']));
-assert.equal(dv['Самовивіз'].cnt, dcnt(['Самовивіз']));
-assert.equal(dv['Не вказано'].cnt, dcnt(['']));
+assert.equal(dv['Нова пошта']?.cnt || 0, dcnt(['Нова Пошта', 'Нова пошта (адресна)']), '«Нова Пошта» і «Нова пошта (адресна)» — одна група');
+assert.equal(dv['Укрпошта']?.cnt || 0, dcnt(['Укрпошта']));
+assert.equal(dv['Розетка']?.cnt || 0, dcnt(['Rozetka Delivery']));
+assert.equal(dv['Самовивіз']?.cnt || 0, dcnt(['Самовивіз']));
+assert.equal(dv['Не вказано']?.cnt || 0, dcnt(['']));
 assert.equal(q.byDelivery.reduce((a, r) => a + r.cnt, 0), q.kpi.cur.cnt, 'служби доставки покривають усі замовлення');
 assert.ok(q.byDelivery.every((r) => r.prevCnt != null), 'є порівняння з попереднім періодом');
 
@@ -242,8 +243,9 @@ assert.ok((await req('GET', '/api/an/product-search?q=965')).some((x) => x.id ==
 // ---------- 6. Таргети ----------
 const month = today.slice(0, 7);
 await req('PUT', '/api/an/targets', { month, rows: [{ kind: 'src', ref_id: rozetka.id, amount: 300000 }, { kind: 'src', ref_id: mp.sources[1].id, amount: 100000 }, { kind: 'dept', ref_id: cfg.depts[1].id, amount: 50000 }], copyMonths: 2 });
-const tq = await req('POST', '/api/an/query', { from, to: today });
-const plan = Math.round(((300000 + 100000 + 50000) / daysInMonth(today)) * daysBetween(from, today) * 100) / 100;
+const tFrom = monthStart(today); // план — у межах поточного місяця
+const tq = await req('POST', '/api/an/query', { from: tFrom, to: today });
+const plan = Math.round(((300000 + 100000 + 50000) / daysInMonth(today)) * daysBetween(tFrom, today) * 100) / 100;
 assert.ok(Math.abs(tq.target.plan - plan) < 1, `план за період ${tq.target.plan} ≈ ${plan}`);
 assert.ok(tq.target.month && tq.target.month.plan === 450000, 'місячний план = сума джерел + відділ');
 assert.equal(tq.target.fact, tq.kpi.cur.net, 'факт для таргету — оборот без відмов');

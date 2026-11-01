@@ -387,8 +387,11 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const lim = limitsOf(p);
     const open = await getOpen(p.id);
     const cnt = open ? (await db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled'`, [open.id])).n : 0;
+    const drafts = (await hooks.draftsOf?.(p.id)) || [];
     return c.json({
       open: { id: open?.id || null, number: open ? orderNo(open.id) : '', total: open?.total || 0, limit: lim.open, orders: cnt },
+      // чернетки закупівель, куди за замовчуванням ідуть замовлення клієнтів без закупівлі (найновіша — першою)
+      drafts: drafts.map((d) => ({ id: d.id, number: orderNo(d.id), total: d.total, entity: String(d.entity || '').split('\n')[0].split(',')[0] })),
       unpaid: { total: await unpaidTotal(p.id), limit: lim.unpaid },
       postpay: await postpayInfo(p),
       debt: await debtOf(p.id),
@@ -461,7 +464,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       if (o.pending) { try { const x = JSON.parse(o.pending); pend = { changes: x.changes || [], by: x.by || '', at: x.at || '', crm_old: x.crm_old || '' }; } catch { pend = { changes: [] }; } }
       out.pending = pend;
     }
-    if (o.kind === 'client') Object.assign(out, { no_supply: !o.supply_id || o.supply_status === 'open', open_supply: o.supply_status === 'open', pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : '' });
+    if (o.kind === 'client') Object.assign(out, { no_supply: !o.supply_id || o.supply_status === 'open', open_supply: o.supply_status === 'open', draft_supply: o.supply_status === 'draft', pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : '' });
     return out;
   };
   // Залишок товарів закупівлі для замовлень клієнтів (без скасованих; exceptId — замовлення, що зараз змінюється).
@@ -585,8 +588,10 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const o = await orderOf(c.req.param('id'), p.id);
     if (o.kind !== 'supply') throw fail(404, 'Замовлення не знайдено.');
     if (o.status === 'draft') { // чернетку — видаляємо (у кошик: видно, хто видалив)
-      await hooks.toTrash(o, c.get('user'), { byPartner: true });
-      return c.json({ ok: true, deleted: true });
+      // її замовлення клієнтів повертаються «без закупівлі» — у відкриту закупівлю
+      const moved = (await hooks.detachDraft?.(o, c.get('user'))) || 0;
+      await hooks.toTrash(await orderOf(o.id, p.id), c.get('user'), { byPartner: true });
+      return c.json({ ok: true, deleted: true, moved });
     }
     if (o.status === 'confirm') { // закупівля від менеджера — партнер відхиляє
       const claim = await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ? AND status = 'confirm'`, [nowIso(), o.id]);

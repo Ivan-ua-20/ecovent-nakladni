@@ -26,7 +26,7 @@ const kyivToday = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv' }).
 const HIST = [];
 for (let mth = 0; mth < 50; mth++) {
   const d = new Date(Date.parse(`${kyivToday.slice(0, 7)}-15T12:00:00Z`));
-  d.setUTCMonth(d.getUTCMonth() - mth);
+  d.setUTCMonth(d.getUTCMonth() - mth - 1); // з минулого місяця: дні 10–12 поточного могли ще не настати
   for (let k = 0; k < 3; k++) {
     const day = `${d.toISOString().slice(0, 8)}${String(10 + k).padStart(2, '0')}`;
     HIST.push({ id: 600000 + mth * 10 + k, created: `${day} 10:00:00`, changed: `${day} 11:00:00`, cost: '100.00', status: 6, status_data: { name_uk: 'Виконано' }, user_phone: '380', user_title: { full_name: `Архів ${mth}` }, purchases: [] });
