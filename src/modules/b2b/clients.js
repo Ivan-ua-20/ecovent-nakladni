@@ -2,6 +2,8 @@
 // Партнер оформлює замовлення клієнта (ПІБ, телефон, свою ТТН, файл маркування) з товарів конкретної закупівлі — у межах
 // залишку. Закупівля ще не оплачена — замовлення можна оформити, але воно позначене «Не оплачено». Без закупівлі — теж
 // можна (товари з каталогу за ціною партнера), таке замовлення підсвічене червоним; адмін пізніше додає рахунок/накладну.
+// Якщо в партнера є чернетка закупівлі (з доставкою клієнтам), замовлення без закупівлі за замовчуванням додається в неї
+// (найновішу або обрану) — один рахунок разом із чернеткою; «нова закупівля» — як раніше, у відкриту закупівлю.
 // Адмін або власник натискає «Додати в CRM» (LP-CRM addNewOrder, відділ B2B, ціни партнера, «Поле 1» порожнє) або вписує
 // номер замовлення з CRM вручну. Статус замовлення в CRM партнер бачить у кабінеті (оновлюється не частіше ніж раз на 10 хв).
 // Передачу в CRM вмикає адмін у «Налаштуваннях CRM» (ID відділу + перемикач) — коли ключ LP-CRM отримає дозвіл на addNewOrder.
@@ -188,13 +190,27 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
   }
   // Позиції замовлення. Без закупівлі — товари з каталогу йдуть у відкриту закупівлю партнера (у межах лімітів).
   // own — поточний внесок цього ж замовлення у відкриту закупівлю (при зміні).
-  async function buildItems(p, b, exceptId = 0, own = { openId: null, total: 0 }, { skipLimits = false } = {}) {
+  // Куди йде замовлення без закупівлі: b.into — 'new' (відкрита закупівля), id чернетки або порожньо (за замовчуванням:
+  // при зміні — та сама чернетка, у новому замовленні — найновіша підходяща чернетка). own.draftId — чернетка, де замовлення зараз.
+  async function buildItems(p, b, exceptId = 0, own = { openId: null, total: 0, draftId: null }, { skipLimits = false } = {}) {
     const supplyId = parseInt(b.supply_id, 10) || null;
     if (supplyId) {
       const items = await supplyItems(p, supplyId, b.items, exceptId);
       return { supplyId, items, total: totalOf(items) };
     }
-    const items = await priceItems(p, b.items);
+    let items = await priceItems(p, b.items);
+    let draft = null;
+    if (b.into !== 'new') {
+      if (parseInt(b.into, 10)) draft = await pickDraft(p.id, b.into);
+      else if (own.draftId) draft = (await draftsOf(p.id)).find((d) => d.id === own.draftId) || null;
+      else if (!exceptId) draft = await pickDraft(p.id);
+    }
+    if (draft) {
+      // ціна товару, що вже є в чернетці, — як у чернетці (рахунок виставляється за чернеткою)
+      const dp = new Map((await db.all(`SELECT product_id, price FROM b2b_order_items WHERE order_id = ?`, [draft.id])).map((r) => [r.product_id, r.price]));
+      items = items.map((i) => (dp.has(i.product_id) ? { ...i, price: dp.get(i.product_id) } : i));
+      return { supplyId: null, draftId: draft.id, items, total: totalOf(items) };
+    }
     const total = totalOf(items);
     const lim = limitsOf(p);
     const open = await getOpen(p.id);
@@ -237,6 +253,63 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     return r.lastId;
   }
   const supplyOf = (id) => (id ? db.get(`SELECT id, status FROM b2b_orders WHERE id = ?`, [id]) : null);
+
+  // ---------- чернетки закупівель як «кошик» для замовлень клієнтів без закупівлі ----------
+  // Підходять лише чернетки з доставкою клієнтам (не самовивіз і не склад партнера); найновіша — першою.
+  const draftsOf = (partnerId) => db.all(`SELECT id, total, entity, created_at FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status = 'draft'
+    AND COALESCE(delivery, 'np') NOT IN ('pickup', 'warehouse') ORDER BY id DESC`, [partnerId]);
+  hooks.draftsOf = draftsOf;
+  async function pickDraft(partnerId, into = '') {
+    const ds = await draftsOf(partnerId);
+    const want = parseInt(into, 10) || 0;
+    if (!want) return ds[0] || null;
+    const d = ds.find((x) => x.id === want);
+    if (!d) throw fail(400, `Чернетку ${orderNo(want)} уже відправлено, видалено або вона не для відправки клієнтам — оновіть сторінку й оберіть іншу.`);
+    return d;
+  }
+  // Додати (qty > 0) або прибрати (qty < 0) товари в чернетці; позиції з нульовою кількістю зникають.
+  async function draftAdjust(draftId, delta) {
+    if (!draftId || !delta.length) return;
+    const cur = await db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [draftId]);
+    const map = new Map(cur.map((i) => [i.product_id, { ...i }]));
+    for (const d of delta) {
+      const x = map.get(d.product_id);
+      if (x) x.qty += d.qty;
+      else if (d.qty > 0) map.set(d.product_id, { product_id: d.product_id, name: d.name, article: d.article || '', qty: d.qty, price: d.price, rrp: d.rrp ?? 0 });
+    }
+    const items = [...map.values()].filter((i) => i.qty > 0);
+    await db.batch([
+      [`DELETE FROM b2b_order_items WHERE order_id = ?`, [draftId]],
+      ...itemRows(draftId, items),
+      [`UPDATE b2b_orders SET total = ?, updated_at = ? WHERE id = ? AND status = 'draft'`, [totalOf(items), nowIso(), draftId]],
+    ]);
+  }
+  const neg = (items) => items.map((i) => ({ ...i, qty: -i.qty }));
+  const orderItems = (id) => db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [id]);
+  // Перенести замовлення клієнта між «джерелами»: з чернетки (товари прибираються) — у чернетку (товари додаються).
+  async function moveDraftItems(fromDraft, oldItems, toDraft, newItems) {
+    if (fromDraft && fromDraft === toDraft) {
+      await draftAdjust(fromDraft, [...neg(oldItems), ...newItems]);
+      return;
+    }
+    if (fromDraft) await draftAdjust(fromDraft, neg(oldItems));
+    if (toDraft) await draftAdjust(toDraft, newItems);
+  }
+  // Чернетку видаляють: її замовлення клієнтів повертаються «без закупівлі» (у відкриту закупівлю), а їхні товари
+  // прибираються з чернетки (у кошику лишаються лише товари, які партнер додав сам).
+  async function detachDraft(draft, u) {
+    const rows = await db.all(`SELECT id, client_name FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled'`, [draft.id]);
+    if (!rows.length) return 0;
+    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [draft.partner_id]);
+    const openId = await ensureOpen(p);
+    for (const r of rows) await draftAdjust(draft.id, neg(await orderItems(r.id)));
+    await db.run(`UPDATE b2b_orders SET supply_id = ?, updated_at = ? WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled'`, [openId, nowIso(), draft.id]);
+    for (const r of rows) await log(r.id, u, `чернетку ${orderNo(draft.id)} видалено — замовлення перенесено у відкриту закупівлю ${orderNo(openId)}`);
+    await rebuildOpen(openId);
+    return rows.length;
+  }
+  hooks.detachDraft = detachDraft;
+  hooks.draftAdjust = draftAdjust;
   // Відвантаження без оплати (замовлення з неоплаченої закупівлі пішло в CRM) — адмінам і власнику особисто.
   async function warnUnpaidShipped(c, o) {
     const s = o.supply_id ? await db.get(`SELECT id, status, pay_terms, due_date FROM b2b_orders WHERE id = ?`, [o.supply_id]) : null;
@@ -300,7 +373,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
   const tgNew = async (c, p, id, f, it, verb = 'Нове замовлення клієнта') => {
     const lines = it.items.slice(0, 60).map((i) => `${h(i.name)} — ${i.qty} шт — ${uah(i.price)}`).join('\n');
     const text = `📦 <b>${verb} ${orderNo(id)}</b> від «${h(p.name)}»\n\n<b>Клієнт:</b> ${h(f.client_name)}, ${h(f.client_phone)}${f.ttn ? `\n<b>ТТН:</b> ${h(f.ttn)}` : ''}\n`
-      + `${it.supplyId ? `Із закупівлі ${orderNo(it.supplyId)}` : `🔴 <b>Без закупівлі</b> — у відкриту закупівлю ${orderNo(it.openId)}`}\n\n<b>Товари:</b>\n${lines}\n\n<b>Разом: ${uah(it.total)}</b>`;
+      + `${it.supplyId ? `Із закупівлі ${orderNo(it.supplyId)}` : it.draftId ? `Без закупівлі — у чернетку закупівлі ${orderNo(it.draftId)}` : `🔴 <b>Без закупівлі</b> — у відкриту закупівлю ${orderNo(it.openId)}`}\n\n<b>Товари:</b>\n${lines}\n\n<b>Разом: ${uah(it.total)}</b>`;
     await tgAdmins(`${text}\n\n${link(c, `b2bclients/${id}`)}`);
   };
   // Закупівлю розписано повністю й усі її замовлення клієнтів уже в LP-CRM з номерами — один підсумок у групу партнера.
@@ -413,10 +486,15 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     const r = await db.run(
       `INSERT INTO b2b_orders (partner_id, kind, status, supply_id, client_name, client_phone, ttn, total, comment, created_by, created_at, updated_at)
        VALUES (?, 'client', 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [p.id, it.supplyId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, userName(u), now, now],
+      [p.id, it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, userName(u), now, now],
     );
     await db.batch([...itemRows(r.lastId, it.items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-      [r.lastId, now, userName(u), `оформлено замовлення клієнта на ${uah(it.total)}${it.supplyId ? ` із закупівлі ${orderNo(it.supplyId)}` : ` без закупівлі (відкрита закупівля ${orderNo(it.openId)})`}`]]]);
+      [r.lastId, now, userName(u), `оформлено замовлення клієнта на ${uah(it.total)}${it.supplyId ? ` із закупівлі ${orderNo(it.supplyId)}`
+        : it.draftId ? ` без закупівлі — у чернетку закупівлі ${orderNo(it.draftId)}` : ` без закупівлі (відкрита закупівля ${orderNo(it.openId)})`}`]]]);
+    if (it.draftId) {
+      await draftAdjust(it.draftId, it.items);
+      await log(it.draftId, u, `додано замовлення клієнта ${orderNo(r.lastId)} (${f.client_name}): ${it.items.length} поз., ${uah(it.total)}`);
+    }
     if (it.openId) await rebuildOpen(it.openId);
     await tgNew(c, p, r.lastId, f, it);
     return c.json({ id: r.lastId, number: orderNo(r.lastId), total: it.total });
@@ -432,17 +510,20 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     const f = clientFields(b);
     if (f.ttn) { const dup = await labelDup({ ttn: f.ttn }, o.id); if (dup) throw fail(400, await ttnDupMsg(f.ttn, dup, p.id)); }
     const cur = await supplyOf(o.supply_id);
-    const it = await buildItems(p, b, o.id, { openId: cur?.status === 'open' ? cur.id : null, total: o.total });
+    const curDraft = cur?.status === 'draft' ? cur.id : null;
+    const it = await buildItems(p, b, o.id, { openId: cur?.status === 'open' ? cur.id : null, total: o.total, draftId: curDraft });
     if (it.toOpen) it.openId = await ensureOpen(p);
+    const oldItems = curDraft || it.draftId ? await orderItems(o.id) : [];
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, it.items),
       [`UPDATE b2b_orders SET supply_id = ?, client_name = ?, client_phone = ?, ttn = ?, total = ?, comment = ?, updated_at = ? WHERE id = ?`,
-        [it.supplyId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, nowIso(), o.id]],
+        [it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, nowIso(), o.id]],
     ]);
+    await moveDraftItems(curDraft, oldItems, it.draftId, it.items);
     if (it.openId) await rebuildOpen(it.openId);
     if (cur?.status === 'open' && cur.id !== it.openId) await rebuildOpen(cur.id);
-    await log(o.id, c.get('user'), `змінено замовлення клієнта: ${it.items.length} поз., ${uah(it.total)}`);
+    await log(o.id, c.get('user'), `змінено замовлення клієнта: ${it.items.length} поз., ${uah(it.total)}${it.draftId ? ` (у чернетці закупівлі ${orderNo(it.draftId)})` : ''}`);
     await tgNew(c, p, o.id, f, it, 'Змінено замовлення клієнта');
     return c.json({ ok: true, total: it.total });
   });
@@ -520,8 +601,10 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     }
     const before = o.pending ? JSON.parse(o.pending).before : await snapOf(o);
     const cur = await supplyOf(o.supply_id);
-    const it = await buildItems(p, b, o.id, { openId: cur?.status === 'open' ? cur.id : null, total: o.total }, { skipLimits: true });
+    const curDraft = cur?.status === 'draft' ? cur.id : null;
+    const it = await buildItems(p, b, o.id, { openId: cur?.status === 'open' ? cur.id : null, total: o.total, draftId: curDraft }, { skipLimits: true });
     if (it.toOpen) it.openId = await ensureOpen(p);
+    const oldItems = curDraft || it.draftId ? await orderItems(o.id) : [];
     const wasCrm = o.status === 'crm';
     const oldCrm = o.crm_id || o.crm_ext || '';
     const now = nowIso();
@@ -529,10 +612,11 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, it.items),
       [`UPDATE b2b_orders SET supply_id = ?, client_name = ?, client_phone = ?, ttn = ?, total = ?, comment = ?, updated_at = ? WHERE id = ?`,
-        [it.supplyId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, now, o.id]],
+        [it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, now, o.id]],
       // Було в CRM — старе замовлення анульоване: знову «Нове», після підтвердження партнером передається в CRM як нове.
       ...(wasCrm ? [[`UPDATE b2b_orders SET status = 'new', crm_id = '', crm_ext = '', crm_status = '', crm_sent_at = '', crm_old = ? WHERE id = ?`, [oldCrm, o.id]]] : []),
     ]);
+    await moveDraftItems(curDraft, oldItems, it.draftId, it.items);
     if (it.openId) await rebuildOpen(it.openId);
     if (cur?.status === 'open' && cur.id !== it.openId) await rebuildOpen(cur.id);
     o = await orderOf(o.id);
@@ -579,11 +663,13 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     const bf = pend.before;
     const s = bf.supply_id ? await db.get(`SELECT id, status FROM b2b_orders WHERE id = ?`, [bf.supply_id]) : null;
     if (bf.supply_id && (!s || s.status === 'cancelled')) throw fail(400, 'Попередньої закупівлі вже немає — повернути як було не вийде. Зверніться до менеджера.');
-    if (s && s.status !== 'open') {
+    if (s && !['open', 'draft'].includes(s.status)) {
       const left = new Map((await supplyLeft(s.id, o.id)).map((r) => [r.product_id, r.left]));
       for (const i of bf.items) if ((left.get(i.product_id) ?? 0) < i.qty) throw fail(400, `У закупівлі ${orderNo(s.id)} уже немає «${i.name}» (${i.qty} шт.) — повернути як було не вийде. Зверніться до менеджера.`);
     }
     const curSupply = o.supply_id;
+    const curS = await supplyOf(curSupply);
+    const curItems = await orderItems(o.id);
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, bf.items.map((i) => ({ ...i, article: i.article || '' }))),
@@ -591,6 +677,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
           crm_old = '', pending = '', updated_at = ? WHERE id = ?`,
         [bf.supply_id, bf.client_name, bf.client_phone, bf.ttn, bf.comment, bf.total, bf.status, bf.crm_id, bf.crm_ext, bf.crm_status, bf.crm_sent_at, nowIso(), o.id]],
     ]);
+    await moveDraftItems(curS?.status === 'draft' ? curS.id : null, curItems, s?.status === 'draft' ? s.id : null, bf.items);
     if (s?.status === 'open') await rebuildOpen(s.id);
     if (curSupply && curSupply !== bf.supply_id) await rebuildOpen(curSupply);
     await log(o.id, c.get('user'), 'партнер відхилив зміни менеджера — повернуто як було');
@@ -602,9 +689,20 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     const p = await myPartner(c);
     const o = await myClientOrder(c, p);
     if (o.status !== 'new') throw fail(400, 'Замовлення вже передане в роботу — скасувати його може лише менеджер.');
-    await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+    const s = await supplyOf(o.supply_id);
+    const inDraft = s?.status === 'draft';
+    // Замовлення в чернетці закупівлі — скасування лише з підтвердженням (його товари приберуться з чернетки).
+    if (inDraft && !(await c.req.json().catch(() => ({}))).confirm) {
+      throw fail(400, `Підтвердіть скасування: товари замовлення буде прибрано з чернетки закупівлі ${orderNo(s.id)}.`);
+    }
+    const claim = await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ? AND status = 'new'`, [nowIso(), o.id]);
+    if (!claim.changes) throw fail(409, 'Замовлення вже змінено — оновіть сторінку.');
+    if (inDraft) {
+      await draftAdjust(s.id, neg(await orderItems(o.id)));
+      await log(s.id, c.get('user'), `скасовано замовлення клієнта ${orderNo(o.id)} (${o.client_name}) — його товари прибрано з чернетки`);
+    }
     if (o.supply_id) await rebuildOpen(o.supply_id);
-    await log(o.id, c.get('user'), 'партнер скасував замовлення клієнта');
+    await log(o.id, c.get('user'), `партнер скасував замовлення клієнта${inDraft ? ` (товари прибрано з чернетки ${orderNo(s.id)})` : ''}`);
     await tgAdmins(`❌ <b>Скасовано замовлення клієнта ${orderNo(o.id)}</b> («${h(p.name)}»)\n${link(c, `b2bclients/${o.id}`)}`);
     return c.json({ ok: true });
   });
@@ -878,9 +976,14 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     need(c, 'b2b.admin');
     const o = await clientOrder(c);
     if (o.status === 'cancelled') throw fail(400, 'Уже скасовано.');
+    const s = await supplyOf(o.supply_id);
     await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+    if (s?.status === 'draft') {
+      await draftAdjust(s.id, neg(await orderItems(o.id)));
+      await log(s.id, c.get('user'), `скасовано замовлення клієнта ${orderNo(o.id)} (${o.client_name}) — його товари прибрано з чернетки`);
+    }
     if (o.supply_id) await rebuildOpen(o.supply_id);
-    await log(o.id, c.get('user'), 'менеджер скасував замовлення клієнта');
+    await log(o.id, c.get('user'), `менеджер скасував замовлення клієнта${s?.status === 'draft' ? ` (товари прибрано з чернетки ${orderNo(s.id)})` : ''}`);
     await tgPartner(o.partner_id, `❌ Замовлення ${orderNo(o.id)} (${h(o.client_name)}) скасовано менеджером.`);
     return c.json({ ok: true, inCrm: !!o.crm_id });
   });

@@ -154,12 +154,22 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
   app.delete('/api/b2b/orders/:id', async (c) => {
     need(c, 'b2b.admin');
     const o = await orderOf(c.req.param('id'));
-    if (o.kind === 'supply') {
+    let o2 = o;
+    // замовлення клієнта в чернетці закупівлі — його товари прибираються з чернетки
+    const inDraft = o.kind === 'client' && o.supply_id && o.status !== 'cancelled'
+      && (await db.get(`SELECT status FROM b2b_orders WHERE id = ?`, [o.supply_id]))?.status === 'draft';
+    const draftItems = inDraft ? await db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ?`, [o.id]) : [];
+    if (o.kind === 'supply' && o.status === 'draft') {
+      // чернетка: її замовлення клієнтів повертаються «без закупівлі» — у відкриту закупівлю
+      await hooks.detachDraft?.(o, c.get('user'));
+      o2 = await orderOf(o.id);
+    } else if (o.kind === 'supply') {
       const n = (await db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled'`, [o.id])).n;
       if (n) throw fail(400, `З цієї закупівлі є замовлення клієнтів (${n}) — спершу видаліть або скасуйте їх.`);
     }
-    await toTrash(o, c.get('user'));
+    await toTrash(o2, c.get('user'));
     await hooks.finClosed?.(o.id, '🗑 видалено', o).catch(() => 0);
+    if (inDraft) await hooks.draftAdjust?.(o.supply_id, draftItems.map((i) => ({ ...i, qty: -i.qty })));
     if (o.kind === 'client' && o.supply_id) await rebuildOpen(o.supply_id);
     if (o.status !== 'draft') {
       await tgPartner(o.partner_id, `🗑 ${o.kind === 'client' ? `Замовлення клієнта ${orderNo(o.id)} (${h(o.client_name)})` : `Закупівлю ${orderNo(o.id)}`} видалив менеджер — його видно в «Кошику».`);
@@ -202,9 +212,12 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
     if (!o.id) throw fail(400, 'Немає даних для відновлення.');
     if (await db.get(`SELECT id FROM b2b_orders WHERE id = ?`, [o.id])) throw fail(409, `${orderNo(o.id)} уже є.`);
     let openId = null;
+    let restoreToDraft = null;
     if (o.kind === 'client' && o.status !== 'cancelled') {
       const s = o.supply_id ? await db.get(`SELECT id, status FROM b2b_orders WHERE id = ?`, [o.supply_id]) : null;
-      if (s && !['open', 'cancelled'].includes(s.status)) {
+      if (s?.status === 'draft') {
+        restoreToDraft = s.id; // товари повертаються в чернетку
+      } else if (s && !['open', 'cancelled'].includes(s.status)) {
         const left = new Map((await supplyLeft(s.id)).map((r) => [r.product_id, r.left]));
         for (const i of d.items || []) {
           if ((left.get(i.product_id) ?? 0) < i.qty) throw fail(400, `У закупівлі ${orderNo(s.id)} уже немає залишку «${i.name}» (${i.qty} шт.) — звільніть товар або змініть закупівлю.`);
@@ -230,6 +243,7 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
       [`UPDATE b2b_trash SET restored_at = ?, restored_by = ? WHERE id = ?`, [now, userName(u), t.id]],
     ]);
     if (openId) await rebuildOpen(openId);
+    if (restoreToDraft) await hooks.draftAdjust?.(restoreToDraft, (d.items || []).map((i) => ({ ...i, article: i.article || '' })));
     await tgPartner(o.partner_id, `↩️ ${o.kind === 'client' ? `Замовлення клієнта ${orderNo(o.id)} (${h(o.client_name)})` : `Закупівлю ${orderNo(o.id)}`} відновлено з кошика.`);
     return c.json({ ok: true, id: o.id, kind: o.kind });
   });

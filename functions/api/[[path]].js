@@ -6151,8 +6151,11 @@ ${link(c, `b2borders/${r.lastId}`)}`);
     const lim = limitsOf(p);
     const open = await getOpen(p.id);
     const cnt = open ? (await db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled'`, [open.id])).n : 0;
+    const drafts = await hooks.draftsOf?.(p.id) || [];
     return c.json({
       open: { id: open?.id || null, number: open ? orderNo(open.id) : "", total: open?.total || 0, limit: lim.open, orders: cnt },
+      // чернетки закупівель, куди за замовчуванням ідуть замовлення клієнтів без закупівлі (найновіша — першою)
+      drafts: drafts.map((d) => ({ id: d.id, number: orderNo(d.id), total: d.total, entity: String(d.entity || "").split("\n")[0].split(",")[0] })),
       unpaid: { total: await unpaidTotal(p.id), limit: lim.unpaid },
       postpay: await postpayInfo(p),
       debt: await debtOf(p.id),
@@ -6243,7 +6246,7 @@ ${link(c, `porders/${open.id}`)}`);
       }
       out.pending = pend;
     }
-    if (o.kind === "client") Object.assign(out, { no_supply: !o.supply_id || o.supply_status === "open", open_supply: o.supply_status === "open", pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : "" });
+    if (o.kind === "client") Object.assign(out, { no_supply: !o.supply_id || o.supply_status === "open", open_supply: o.supply_status === "open", draft_supply: o.supply_status === "draft", pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : "" });
     return out;
   };
   async function supplyLeft(supplyId, exceptId = 0) {
@@ -6371,8 +6374,9 @@ ${link(c, `b2borders/${o.id}`)}`);
     const o = await orderOf(c.req.param("id"), p.id);
     if (o.kind !== "supply") throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     if (o.status === "draft") {
-      await hooks.toTrash(o, c.get("user"), { byPartner: true });
-      return c.json({ ok: true, deleted: true });
+      const moved = await hooks.detachDraft?.(o, c.get("user")) || 0;
+      await hooks.toTrash(await orderOf(o.id, p.id), c.get("user"), { byPartner: true });
+      return c.json({ ok: true, deleted: true, moved });
     }
     if (o.status === "confirm") {
       const claim = await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ? AND status = 'confirm'`, [nowIso(), o.id]);
@@ -6946,13 +6950,24 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
       return { product_id: id, name: r.name, article: r.article || "", qty, price: r.price, rrp: r.rrp };
     });
   }
-  async function buildItems(p, b, exceptId = 0, own = { openId: null, total: 0 }, { skipLimits = false } = {}) {
+  async function buildItems(p, b, exceptId = 0, own = { openId: null, total: 0, draftId: null }, { skipLimits = false } = {}) {
     const supplyId = parseInt(b.supply_id, 10) || null;
     if (supplyId) {
       const items2 = await supplyItems(p, supplyId, b.items, exceptId);
       return { supplyId, items: items2, total: totalOf(items2) };
     }
-    const items = await priceItems(p, b.items);
+    let items = await priceItems(p, b.items);
+    let draft = null;
+    if (b.into !== "new") {
+      if (parseInt(b.into, 10)) draft = await pickDraft(p.id, b.into);
+      else if (own.draftId) draft = (await draftsOf(p.id)).find((d) => d.id === own.draftId) || null;
+      else if (!exceptId) draft = await pickDraft(p.id);
+    }
+    if (draft) {
+      const dp = new Map((await db.all(`SELECT product_id, price FROM b2b_order_items WHERE order_id = ?`, [draft.id])).map((r) => [r.product_id, r.price]));
+      items = items.map((i) => dp.has(i.product_id) ? { ...i, price: dp.get(i.product_id) } : i);
+      return { supplyId: null, draftId: draft.id, items, total: totalOf(items) };
+    }
     const total = totalOf(items);
     const lim = limitsOf2(p);
     const open = await getOpen(p.id);
@@ -6989,6 +7004,56 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     return r.lastId;
   }
   const supplyOf = (id) => id ? db.get(`SELECT id, status FROM b2b_orders WHERE id = ?`, [id]) : null;
+  const draftsOf = (partnerId) => db.all(`SELECT id, total, entity, created_at FROM b2b_orders WHERE partner_id = ? AND kind = 'supply' AND status = 'draft'
+    AND COALESCE(delivery, 'np') NOT IN ('pickup', 'warehouse') ORDER BY id DESC`, [partnerId]);
+  hooks.draftsOf = draftsOf;
+  async function pickDraft(partnerId, into = "") {
+    const ds = await draftsOf(partnerId);
+    const want = parseInt(into, 10) || 0;
+    if (!want) return ds[0] || null;
+    const d = ds.find((x) => x.id === want);
+    if (!d) throw fail(400, `\u0427\u0435\u0440\u043D\u0435\u0442\u043A\u0443 ${orderNo(want)} \u0443\u0436\u0435 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E, \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u0430\u0431\u043E \u0432\u043E\u043D\u0430 \u043D\u0435 \u0434\u043B\u044F \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0438 \u043A\u043B\u0456\u0454\u043D\u0442\u0430\u043C \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443 \u0439 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0456\u043D\u0448\u0443.`);
+    return d;
+  }
+  async function draftAdjust(draftId, delta) {
+    if (!draftId || !delta.length) return;
+    const cur = await db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [draftId]);
+    const map = new Map(cur.map((i) => [i.product_id, { ...i }]));
+    for (const d of delta) {
+      const x = map.get(d.product_id);
+      if (x) x.qty += d.qty;
+      else if (d.qty > 0) map.set(d.product_id, { product_id: d.product_id, name: d.name, article: d.article || "", qty: d.qty, price: d.price, rrp: d.rrp ?? 0 });
+    }
+    const items = [...map.values()].filter((i) => i.qty > 0);
+    await db.batch([
+      [`DELETE FROM b2b_order_items WHERE order_id = ?`, [draftId]],
+      ...itemRows(draftId, items),
+      [`UPDATE b2b_orders SET total = ?, updated_at = ? WHERE id = ? AND status = 'draft'`, [totalOf(items), nowIso(), draftId]]
+    ]);
+  }
+  const neg = (items) => items.map((i) => ({ ...i, qty: -i.qty }));
+  const orderItems = (id) => db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [id]);
+  async function moveDraftItems(fromDraft, oldItems, toDraft, newItems) {
+    if (fromDraft && fromDraft === toDraft) {
+      await draftAdjust(fromDraft, [...neg(oldItems), ...newItems]);
+      return;
+    }
+    if (fromDraft) await draftAdjust(fromDraft, neg(oldItems));
+    if (toDraft) await draftAdjust(toDraft, newItems);
+  }
+  async function detachDraft(draft, u) {
+    const rows = await db.all(`SELECT id, client_name FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled'`, [draft.id]);
+    if (!rows.length) return 0;
+    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [draft.partner_id]);
+    const openId = await ensureOpen(p);
+    for (const r of rows) await draftAdjust(draft.id, neg(await orderItems(r.id)));
+    await db.run(`UPDATE b2b_orders SET supply_id = ?, updated_at = ? WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled'`, [openId, nowIso(), draft.id]);
+    for (const r of rows) await log(r.id, u, `\u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 ${orderNo(draft.id)} \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u2014 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0435\u043D\u043E \u0443 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(openId)}`);
+    await rebuildOpen(openId);
+    return rows.length;
+  }
+  hooks.detachDraft = detachDraft;
+  hooks.draftAdjust = draftAdjust;
   async function warnUnpaidShipped(c, o) {
     const s = o.supply_id ? await db.get(`SELECT id, status, pay_terms, due_date FROM b2b_orders WHERE id = ?`, [o.supply_id]) : null;
     const st = s?.status || "";
@@ -7061,7 +7126,7 @@ ${link(base, `b2bclients/${o.id}`)}` : ""}`);
 
 <b>\u041A\u043B\u0456\u0454\u043D\u0442:</b> ${h7(f.client_name)}, ${h7(f.client_phone)}${f.ttn ? `
 <b>\u0422\u0422\u041D:</b> ${h7(f.ttn)}` : ""}
-${it.supplyId ? `\u0406\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : `\u{1F534} <b>\u0411\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456</b> \u2014 \u0443 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(it.openId)}`}
+${it.supplyId ? `\u0406\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : it.draftId ? `\u0411\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u2014 \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)}` : `\u{1F534} <b>\u0411\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456</b> \u2014 \u0443 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(it.openId)}`}
 
 <b>\u0422\u043E\u0432\u0430\u0440\u0438:</b>
 ${lines}
@@ -7178,12 +7243,16 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     const r = await db.run(
       `INSERT INTO b2b_orders (partner_id, kind, status, supply_id, client_name, client_phone, ttn, total, comment, created_by, created_at, updated_at)
        VALUES (?, 'client', 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [p.id, it.supplyId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, userName6(u), now, now]
+      [p.id, it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, userName6(u), now, now]
     );
     await db.batch([...itemRows(r.lastId, it.items), [
       `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-      [r.lastId, now, userName6(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah3(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}`]
+      [r.lastId, now, userName6(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah3(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : it.draftId ? ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u2014 \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}`]
     ]]);
+    if (it.draftId) {
+      await draftAdjust(it.draftId, it.items);
+      await log(it.draftId, u, `\u0434\u043E\u0434\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(r.lastId)} (${f.client_name}): ${it.items.length} \u043F\u043E\u0437., ${uah3(it.total)}`);
+    }
     if (it.openId) await rebuildOpen(it.openId);
     await tgNew(c, p, r.lastId, f, it);
     return c.json({ id: r.lastId, number: orderNo(r.lastId), total: it.total });
@@ -7200,19 +7269,22 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
       if (dup) throw fail(400, await ttnDupMsg(f.ttn, dup, p.id));
     }
     const cur = await supplyOf(o.supply_id);
-    const it = await buildItems(p, b, o.id, { openId: cur?.status === "open" ? cur.id : null, total: o.total });
+    const curDraft = cur?.status === "draft" ? cur.id : null;
+    const it = await buildItems(p, b, o.id, { openId: cur?.status === "open" ? cur.id : null, total: o.total, draftId: curDraft });
     if (it.toOpen) it.openId = await ensureOpen(p);
+    const oldItems = curDraft || it.draftId ? await orderItems(o.id) : [];
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, it.items),
       [
         `UPDATE b2b_orders SET supply_id = ?, client_name = ?, client_phone = ?, ttn = ?, total = ?, comment = ?, updated_at = ? WHERE id = ?`,
-        [it.supplyId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, nowIso(), o.id]
+        [it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, nowIso(), o.id]
       ]
     ]);
+    await moveDraftItems(curDraft, oldItems, it.draftId, it.items);
     if (it.openId) await rebuildOpen(it.openId);
     if (cur?.status === "open" && cur.id !== it.openId) await rebuildOpen(cur.id);
-    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430: ${it.items.length} \u043F\u043E\u0437., ${uah3(it.total)}`);
+    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430: ${it.items.length} \u043F\u043E\u0437., ${uah3(it.total)}${it.draftId ? ` (\u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u0446\u0456 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)})` : ""}`);
     await tgNew(c, p, o.id, f, it, "\u0417\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430");
     return c.json({ ok: true, total: it.total });
   });
@@ -7306,8 +7378,10 @@ ${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah3(i.price)}`).join(
     }
     const before = o.pending ? JSON.parse(o.pending).before : await snapOf(o);
     const cur = await supplyOf(o.supply_id);
-    const it = await buildItems(p, b, o.id, { openId: cur?.status === "open" ? cur.id : null, total: o.total }, { skipLimits: true });
+    const curDraft = cur?.status === "draft" ? cur.id : null;
+    const it = await buildItems(p, b, o.id, { openId: cur?.status === "open" ? cur.id : null, total: o.total, draftId: curDraft }, { skipLimits: true });
     if (it.toOpen) it.openId = await ensureOpen(p);
+    const oldItems = curDraft || it.draftId ? await orderItems(o.id) : [];
     const wasCrm = o.status === "crm";
     const oldCrm = o.crm_id || o.crm_ext || "";
     const now = nowIso();
@@ -7316,11 +7390,12 @@ ${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah3(i.price)}`).join(
       ...itemRows(o.id, it.items),
       [
         `UPDATE b2b_orders SET supply_id = ?, client_name = ?, client_phone = ?, ttn = ?, total = ?, comment = ?, updated_at = ? WHERE id = ?`,
-        [it.supplyId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, now, o.id]
+        [it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, now, o.id]
       ],
       // Було в CRM — старе замовлення анульоване: знову «Нове», після підтвердження партнером передається в CRM як нове.
       ...wasCrm ? [[`UPDATE b2b_orders SET status = 'new', crm_id = '', crm_ext = '', crm_status = '', crm_sent_at = '', crm_old = ? WHERE id = ?`, [oldCrm, o.id]]] : []
     ]);
+    await moveDraftItems(curDraft, oldItems, it.draftId, it.items);
     if (it.openId) await rebuildOpen(it.openId);
     if (cur?.status === "open" && cur.id !== it.openId) await rebuildOpen(cur.id);
     o = await orderOf(o.id);
@@ -7377,11 +7452,13 @@ ${link(c, `b2bclients/${o.id}`)}`);
     const bf = pend.before;
     const s = bf.supply_id ? await db.get(`SELECT id, status FROM b2b_orders WHERE id = ?`, [bf.supply_id]) : null;
     if (bf.supply_id && (!s || s.status === "cancelled")) throw fail(400, "\u041F\u043E\u043F\u0435\u0440\u0435\u0434\u043D\u044C\u043E\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0432\u0436\u0435 \u043D\u0435\u043C\u0430\u0454 \u2014 \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u0442\u0438 \u044F\u043A \u0431\u0443\u043B\u043E \u043D\u0435 \u0432\u0438\u0439\u0434\u0435. \u0417\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.");
-    if (s && s.status !== "open") {
+    if (s && !["open", "draft"].includes(s.status)) {
       const left = new Map((await supplyLeft(s.id, o.id)).map((r) => [r.product_id, r.left]));
       for (const i of bf.items) if ((left.get(i.product_id) ?? 0) < i.qty) throw fail(400, `\u0423 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(s.id)} \u0443\u0436\u0435 \u043D\u0435\u043C\u0430\u0454 \xAB${i.name}\xBB (${i.qty} \u0448\u0442.) \u2014 \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u0442\u0438 \u044F\u043A \u0431\u0443\u043B\u043E \u043D\u0435 \u0432\u0438\u0439\u0434\u0435. \u0417\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.`);
     }
     const curSupply = o.supply_id;
+    const curS = await supplyOf(curSupply);
+    const curItems = await orderItems(o.id);
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, bf.items.map((i) => ({ ...i, article: i.article || "" }))),
@@ -7391,6 +7468,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
         [bf.supply_id, bf.client_name, bf.client_phone, bf.ttn, bf.comment, bf.total, bf.status, bf.crm_id, bf.crm_ext, bf.crm_status, bf.crm_sent_at, nowIso(), o.id]
       ]
     ]);
+    await moveDraftItems(curS?.status === "draft" ? curS.id : null, curItems, s?.status === "draft" ? s.id : null, bf.items);
     if (s?.status === "open") await rebuildOpen(s.id);
     if (curSupply && curSupply !== bf.supply_id) await rebuildOpen(curSupply);
     await log(o.id, c.get("user"), "\u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0432\u0456\u0434\u0445\u0438\u043B\u0438\u0432 \u0437\u043C\u0456\u043D\u0438 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430 \u2014 \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u0442\u043E \u044F\u043A \u0431\u0443\u043B\u043E");
@@ -7402,9 +7480,19 @@ ${link(c, `b2bclients/${o.id}`)}`);
     const p = await myPartner(c);
     const o = await myClientOrder(c, p);
     if (o.status !== "new") throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u0435 \u0432 \u0440\u043E\u0431\u043E\u0442\u0443 \u2014 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438 \u0439\u043E\u0433\u043E \u043C\u043E\u0436\u0435 \u043B\u0438\u0448\u0435 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440.");
-    await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+    const s = await supplyOf(o.supply_id);
+    const inDraft = s?.status === "draft";
+    if (inDraft && !(await c.req.json().catch(() => ({}))).confirm) {
+      throw fail(400, `\u041F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0456\u0442\u044C \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u043D\u043D\u044F: \u0442\u043E\u0432\u0430\u0440\u0438 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0431\u0443\u0434\u0435 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(s.id)}.`);
+    }
+    const claim = await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ? AND status = 'new'`, [nowIso(), o.id]);
+    if (!claim.changes) throw fail(409, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u0437\u043C\u0456\u043D\u0435\u043D\u043E \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443.");
+    if (inDraft) {
+      await draftAdjust(s.id, neg(await orderItems(o.id)));
+      await log(s.id, c.get("user"), `\u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${o.client_name}) \u2014 \u0439\u043E\u0433\u043E \u0442\u043E\u0432\u0430\u0440\u0438 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438`);
+    }
     if (o.supply_id) await rebuildOpen(o.supply_id);
-    await log(o.id, c.get("user"), "\u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430");
+    await log(o.id, c.get("user"), `\u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430${inDraft ? ` (\u0442\u043E\u0432\u0430\u0440\u0438 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438 ${orderNo(s.id)})` : ""}`);
     await tgAdmins(`\u274C <b>\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)}</b> (\xAB${h7(p.name)}\xBB)
 ${link(c, `b2bclients/${o.id}`)}`);
     return c.json({ ok: true });
@@ -7680,9 +7768,14 @@ ${link(c, `pclients/${o.id}`)}`);
     need(c, "b2b.admin");
     const o = await clientOrder(c);
     if (o.status === "cancelled") throw fail(400, "\u0423\u0436\u0435 \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.");
+    const s = await supplyOf(o.supply_id);
     await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+    if (s?.status === "draft") {
+      await draftAdjust(s.id, neg(await orderItems(o.id)));
+      await log(s.id, c.get("user"), `\u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${o.client_name}) \u2014 \u0439\u043E\u0433\u043E \u0442\u043E\u0432\u0430\u0440\u0438 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438`);
+    }
     if (o.supply_id) await rebuildOpen(o.supply_id);
-    await log(o.id, c.get("user"), "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430");
+    await log(o.id, c.get("user"), `\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430${s?.status === "draft" ? ` (\u0442\u043E\u0432\u0430\u0440\u0438 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438 ${orderNo(s.id)})` : ""}`);
     await tgPartner(o.partner_id, `\u274C \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h7(o.client_name)}) \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u043E\u043C.`);
     return c.json({ ok: true, inCrm: !!o.crm_id });
   });
@@ -9055,12 +9148,19 @@ ${link(c, `porders/${o.id}`)}`);
   app.delete("/api/b2b/orders/:id", async (c) => {
     need(c, "b2b.admin");
     const o = await orderOf(c.req.param("id"));
-    if (o.kind === "supply") {
+    let o2 = o;
+    const inDraft = o.kind === "client" && o.supply_id && o.status !== "cancelled" && (await db.get(`SELECT status FROM b2b_orders WHERE id = ?`, [o.supply_id]))?.status === "draft";
+    const draftItems = inDraft ? await db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ?`, [o.id]) : [];
+    if (o.kind === "supply" && o.status === "draft") {
+      await hooks.detachDraft?.(o, c.get("user"));
+      o2 = await orderOf(o.id);
+    } else if (o.kind === "supply") {
       const n = (await db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled'`, [o.id])).n;
       if (n) throw fail(400, `\u0417 \u0446\u0456\u0454\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0454 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 (${n}) \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0432\u0438\u0434\u0430\u043B\u0456\u0442\u044C \u0430\u0431\u043E \u0441\u043A\u0430\u0441\u0443\u0439\u0442\u0435 \u0457\u0445.`);
     }
-    await toTrash(o, c.get("user"));
+    await toTrash(o2, c.get("user"));
     await hooks.finClosed?.(o.id, "\u{1F5D1} \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E", o).catch(() => 0);
+    if (inDraft) await hooks.draftAdjust?.(o.supply_id, draftItems.map((i) => ({ ...i, qty: -i.qty })));
     if (o.kind === "client" && o.supply_id) await rebuildOpen(o.supply_id);
     if (o.status !== "draft") {
       await tgPartner(o.partner_id, `\u{1F5D1} ${o.kind === "client" ? `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${h7(o.client_name)})` : `\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)}`} \u0432\u0438\u0434\u0430\u043B\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u2014 \u0439\u043E\u0433\u043E \u0432\u0438\u0434\u043D\u043E \u0432 \xAB\u041A\u043E\u0448\u0438\u043A\u0443\xBB.`);
@@ -9109,9 +9209,12 @@ ${link(c, `porders/${o.id}`)}`);
     if (!o.id) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u0434\u0430\u043D\u0438\u0445 \u0434\u043B\u044F \u0432\u0456\u0434\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
     if (await db.get(`SELECT id FROM b2b_orders WHERE id = ?`, [o.id])) throw fail(409, `${orderNo(o.id)} \u0443\u0436\u0435 \u0454.`);
     let openId = null;
+    let restoreToDraft = null;
     if (o.kind === "client" && o.status !== "cancelled") {
       const s = o.supply_id ? await db.get(`SELECT id, status FROM b2b_orders WHERE id = ?`, [o.supply_id]) : null;
-      if (s && !["open", "cancelled"].includes(s.status)) {
+      if (s?.status === "draft") {
+        restoreToDraft = s.id;
+      } else if (s && !["open", "cancelled"].includes(s.status)) {
         const left = new Map((await supplyLeft(s.id)).map((r) => [r.product_id, r.left]));
         for (const i of d.items || []) {
           if ((left.get(i.product_id) ?? 0) < i.qty) throw fail(400, `\u0423 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(s.id)} \u0443\u0436\u0435 \u043D\u0435\u043C\u0430\u0454 \u0437\u0430\u043B\u0438\u0448\u043A\u0443 \xAB${i.name}\xBB (${i.qty} \u0448\u0442.) \u2014 \u0437\u0432\u0456\u043B\u044C\u043D\u0456\u0442\u044C \u0442\u043E\u0432\u0430\u0440 \u0430\u0431\u043E \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E.`);
@@ -9139,6 +9242,7 @@ ${link(c, `porders/${o.id}`)}`);
       [`UPDATE b2b_trash SET restored_at = ?, restored_by = ? WHERE id = ?`, [now, userName4(u), t.id]]
     ]);
     if (openId) await rebuildOpen(openId);
+    if (restoreToDraft) await hooks.draftAdjust?.(restoreToDraft, (d.items || []).map((i) => ({ ...i, article: i.article || "" })));
     await tgPartner(o.partner_id, `\u21A9\uFE0F ${o.kind === "client" ? `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${h7(o.client_name)})` : `\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)}`} \u0432\u0456\u0434\u043D\u043E\u0432\u043B\u0435\u043D\u043E \u0437 \u043A\u043E\u0448\u0438\u043A\u0430.`);
     return c.json({ ok: true, id: o.id, kind: o.kind });
   });
