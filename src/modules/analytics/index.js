@@ -353,7 +353,7 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
   });
 
   // ШІ-помічник: питання звичайною мовою, відповіді — з цієї ж аналітики (ai.js).
-  mountAnalyticsAi(app, { db, fetchFn, kyivDay, addDays });
+  mountAnalyticsAi(app, { db, fetchFn, kyivDay, addDays, remap, rebrand, bump, getSt });
 
   // ---------------------------------------------------------------- дублі ТТН у LP-CRM
   // Після завантаження замовлень: та сама ТТН у кількох замовленнях (без тих, що вийшли з відстежуваних статусів) —

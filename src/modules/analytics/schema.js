@@ -214,7 +214,7 @@ async function upgradeV10(db) {
 
 export const schema = {
   name: 'analytics',
-  version: 6,
+  version: 7,
   tables: [
   // ---------- Аналітика ----------
   // Замовлення: id = короткий номер LP-CRM (зростає з часом), code = довгий код для API.
@@ -257,6 +257,24 @@ export const schema = {
   `CREATE TABLE IF NOT EXISTS an_ttn_recent (code TEXT PRIMARY KEY, ttn TEXT NOT NULL DEFAULT '', day TEXT NOT NULL, user TEXT DEFAULT '', status INTEGER NOT NULL DEFAULT 0)`,
   `CREATE INDEX IF NOT EXISTS an_ttn_recent_ttn ON an_ttn_recent(ttn)`,
   `CREATE INDEX IF NOT EXISTS an_ttn_recent_day ON an_ttn_recent(day)`,
+  // Журнал змін налаштувань аналітики через ШІ: хто попросив (і що саме написав), що ШІ запропонував, хто застосував
+  // чи скасував, знімок налаштувань до зміни (для відкату). status: pending | applied | cancelled | failed | reverted.
+  `CREATE TABLE IF NOT EXISTS an_ai_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    asked_by TEXT DEFAULT '',
+    question TEXT DEFAULT '',
+    summary TEXT DEFAULT '',
+    ops TEXT NOT NULL DEFAULT '[]',
+    preview TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'pending',
+    done_by TEXT DEFAULT '',
+    done_at TEXT DEFAULT '',
+    error TEXT DEFAULT '',
+    snapshot TEXT DEFAULT '',
+    reverted_by TEXT DEFAULT '',
+    reverted_at TEXT DEFAULT ''
+  )`,
   ],
   columns: [
     ['an_managers', 'depts', "TEXT DEFAULT ''"],

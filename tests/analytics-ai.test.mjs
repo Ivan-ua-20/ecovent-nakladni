@@ -10,8 +10,8 @@ const db = openDb(':memory:');
 await migrate(db);
 const today = kyivDay();
 // замовлення в базі аналітики: 2 сьогодні (менеджери ivan і olena)
-const ord = (id, user, total) => [`INSERT INTO an_orders (id, code, day, status, user, total, dept, src, office) VALUES (?, ?, ?, 11, ?, ?, 0, 0, '')`, [id, `c${id}`, today, user, total]];
-await db.batch([ord(1, 'ivan', 1000), ord(2, 'olena', 500), [`INSERT INTO an_day_bounds (day, min_id, max_id) VALUES (?, 1, 2)`, [today]]]);
+const ord = (id, user, total, ch = '') => [`INSERT INTO an_orders (id, code, day, status, user, total, dept, src, office, ch) VALUES (?, ?, ?, 11, ?, ?, 0, 0, '', ?)`, [id, `c${id}`, today, user, total, ch]];
+await db.batch([ord(1, 'ivan', 1000), ord(2, 'olena', 500, 'b2b(ecovent)'), [`INSERT INTO an_day_bounds (day, min_id, max_id) VALUES (?, 1, 2)`, [today]]]);
 
 const claude = []; // запити до Anthropic
 let script = []; // наступні відповіді ШІ
@@ -102,6 +102,92 @@ assert.match(r.j.error, /невірний ключ/);
 script = [() => new Response(JSON.stringify({ error: { message: 'Your credit balance is too low' } }), { status: 400 })];
 assert.match((await ask('?')).j.error, /закінчились кошти/);
 
+// ---------- зміни налаштувань: ШІ пропонує, людина застосовує; журнал і відкат ----------
+const cfg0 = (await req('GET', '/api/an/config')).j;
+const depts0 = cfg0.depts.map((d) => d.name);
+const month = today.slice(0, 7);
+const proposeUse = (ops, summary = 'Окремий відділ B2B') => ({ stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 }, content: [{ type: 'tool_use', id: 'p1', name: 'propose_changes', input: { summary, ops } }] });
+const OPS = [
+  { type: 'dept_add', name: 'Опт' },
+  { type: 'source_add', dept: 'Опт', name: 'Опт партнери' },
+  { type: 'values_map', source: 'Опт партнери', values: ['B2B(Ecovent)'] },
+  { type: 'manager_set', login: 'ivan', name: 'Іван', dept: 'Опт' },
+  { type: 'office_set', office: '27', dept: 'Опт' },
+  { type: 'target_set', month, kind: 'dept', ref: 'Опт', amount: 100000 },
+  { type: 'settings_set', targetBase: 'all' },
+];
+claude.length = 0;
+script = [
+  { stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 }, content: [{ type: 'tool_use', id: 'g1', name: 'get_settings', input: {} }] },
+  proposeUse([{ type: 'source_add', dept: 'Немає такого', name: 'X' }]), // помилка — ШІ бачить її і виправляє
+  proposeUse(OPS),
+  final('Запропонував окремий відділ B2B — натисніть «Застосувати».'),
+];
+r = await ask('B2B показується неправильно — зроби окремий відділ');
+assert.equal(r.status, 200, JSON.stringify(r.j));
+assert.ok(claude[0].body.tools.some((t) => t.name === 'propose_changes'), 'адміну — інструменти змін');
+assert.match(claude[0].body.system, /НІЧОГО не змінює/);
+const gs = JSON.parse(claude[1].body.messages.at(-1).content[0].content);
+assert.ok(gs.depts.length && gs.field1Values.some((v) => v.value === 'b2b(ecovent)' && v.orders === 1 && !v.mapped), 'get_settings: значення «Поле 1» з кількістю');
+const bad = claude[2].body.messages.at(-1).content[0];
+assert.ok(bad.is_error && /Відділ «Немає такого» не знайдено/.test(bad.content), 'невірна пропозиція — помилка для ШІ');
+assert.equal(r.j.proposals.length, 1);
+const prop = r.j.proposals[0];
+assert.ok(prop.lines.some((l) => /Новий відділ «Опт»/.test(l)) && prop.lines.some((l) => /«b2b\(ecovent\)»: без джерела → «Опт партнери»/.test(l)), JSON.stringify(prop.lines));
+assert.ok(prop.lines.some((l) => /Менеджер ivan \(Іван\): новий → «Опт»/.test(l)));
+assert.ok(prop.lines.some((l) => /таргет рахується від: обороту без відмов → суми всіх замовлень/.test(l)));
+assert.deepEqual((await req('GET', '/api/an/config')).j.depts.map((d) => d.name), depts0, 'до підтвердження нічого не змінилось');
+let j = (await req('GET', '/api/an/ai/changes')).j;
+assert.deepEqual([j.rows[0].id, j.rows[0].status, j.rows[0].asked_by, j.rows[0].question], [prop.id, 'pending', 'owner', 'B2B показується неправильно — зроби окремий відділ'], 'журнал: хто попросив і що написав');
+
+// застосувати
+r = await req('POST', `/api/an/ai/changes/${prop.id}/apply`);
+assert.equal(r.status, 200, JSON.stringify(r.j));
+assert.deepEqual([r.j.change.status, r.j.change.done_by], ['applied', 'owner']);
+const cfg1 = (await req('GET', '/api/an/config')).j;
+const b2b = cfg1.depts.find((d) => d.name === 'Опт');
+assert.ok(b2b && b2b.sources[0].name === 'Опт партнери' && b2b.sources[0].values.includes('b2b(ecovent)'), 'відділ, джерело, значення');
+assert.equal(cfg1.managers.find((m) => m.login === 'ivan').dept_id, b2b.id);
+assert.equal(cfg1.officeMap.find((o) => o.office === '27').dept_id, b2b.id);
+assert.equal(cfg1.settings.targetBase, 'all');
+assert.deepEqual((await req('GET', `/api/an/targets?month=${month}`)).j.rows.find((t) => t.kind === 'dept' && t.ref_id === b2b.id)?.amount, 100000);
+let qB = (await req('POST', '/api/an/query', { from: today, to: today, depts: [b2b.id] })).j;
+assert.deepEqual([qB.kpi.cur.cnt, qB.kpi.cur.rev], [2, 1500], 'обидва замовлення — в «Опт»: за джерелом і за менеджером');
+assert.ok(await db.get(`SELECT id FROM audit_log WHERE kind = 'analytics' AND action LIKE 'застосовано зміни аналітики від ШІ%'`), 'запис у журналі змін');
+assert.equal((await req('POST', `/api/an/ai/changes/${prop.id}/apply`)).status, 400, 'двічі не застосувати');
+
+// друга пропозиція: скасувати; третя: застосувати — відкотити можна лише останню
+const mk2 = async (ops, text) => { script = [proposeUse(ops), final('Ок.')]; return (await ask(text)).j.proposals[0]; };
+const p2 = await mk2([{ type: 'dept_rename', dept: 'Опт', name: 'Оптові партнери' }], 'перейменуй B2B');
+assert.equal((await req('POST', `/api/an/ai/changes/${p2.id}/cancel`)).j.change.status, 'cancelled');
+assert.equal((await req('POST', `/api/an/ai/changes/${p2.id}/apply`)).status, 400, 'скасоване не застосувати');
+const p3 = await mk2([{ type: 'brand_set', name: 'Warmix', keywords: 'warmix, вармікс' }], 'додай бренд Warmix');
+assert.equal((await req('POST', `/api/an/ai/changes/${p3.id}/apply`)).status, 200);
+assert.equal((await req('POST', `/api/an/ai/changes/${prop.id}/revert`)).status, 400, 'спершу відкотити пізнішу');
+j = (await req('GET', '/api/an/ai/changes')).j;
+assert.deepEqual(j.rows.filter((x) => x.can_revert).map((x) => x.id), [p3.id]);
+assert.equal((await req('POST', `/api/an/ai/changes/${p3.id}/revert`)).j.change.status, 'reverted');
+assert.ok(!(await req('GET', '/api/an/config')).j.brands.some((x) => x.name === 'Warmix'));
+// тепер можна відкотити першу — усе як було
+r = await req('POST', `/api/an/ai/changes/${prop.id}/revert`);
+assert.deepEqual([r.status, r.j.change.status, r.j.change.reverted_by], [200, 'reverted', 'owner']);
+const cfg2 = (await req('GET', '/api/an/config')).j;
+assert.deepEqual(cfg2.depts.map((d) => d.name), depts0, 'відділи як були');
+assert.deepEqual(cfg2.managers, cfg0.managers, 'менеджери як були');
+assert.deepEqual(cfg2.officeMap.sort((a, b) => a.office.localeCompare(b.office)), cfg0.officeMap.sort((a, b) => a.office.localeCompare(b.office)), 'відділи CRM як були');
+assert.deepEqual(cfg2.depts.map((d) => [d.id, d.sources.map((x) => [x.id, x.values.length])]), cfg0.depts.map((d) => [d.id, d.sources.map((x) => [x.id, x.values.length])]), 'ті самі id і значення');
+assert.equal(cfg2.settings.targetBase, cfg0.settings.targetBase);
+qB = (await req('POST', '/api/an/query', { from: today, to: today })).j;
+assert.ok(!qB.byDept.some((d) => d.name === 'Опт'), 'замовлення знову розподілені як раніше');
+
+// невдале застосування — налаштування лишаються як були
+const p4 = await mk2([{ type: 'dept_add', name: 'Тимчасовий' }], 'додай відділ');
+await db.run(`INSERT INTO an_depts (name, sort) VALUES ('Тимчасовий', 99)`); // хтось додав вручну, поки чекало
+r = await req('POST', `/api/an/ai/changes/${p4.id}/apply`);
+assert.equal(r.status, 400);
+assert.match(r.j.error, /уже є.*лишились як були/);
+assert.equal((await req('GET', '/api/an/ai/changes')).j.rows.find((x) => x.id === p4.id).status, 'failed');
+
 // ---------- менеджер: питати може, лише по своїх замовленнях; налаштування — ні ----------
 const cu = (await req('POST', '/api/users', { login: 'man', password: 'pass1234', role: 'manager' })).j;
 await req('PUT', `/api/users/${cu.id}`, { crm_logins: 'ivan' });
@@ -110,11 +196,14 @@ const MH = { 'Content-Type': 'application/json', Cookie: ml.headers.get('set-coo
 assert.equal((await req('GET', '/api/an/ai/settings', null, MH)).status, 403, 'налаштування ШІ — лише адміни');
 assert.equal((await req('PUT', '/api/an/ai/settings', { key: '' }, MH)).status, 403);
 assert.deepEqual((await req('GET', '/api/an/ai/status', null, MH)).j, { enabled: true });
+assert.equal((await req('GET', '/api/an/ai/changes', null, MH)).status, 403, 'журнал змін — лише адміни');
+assert.equal((await req('POST', `/api/an/ai/changes/${p4.id}/apply`, null, MH)).status, 403);
 claude.length = 0;
 script = [toolUse({ from: today, to: today, managers: ['olena'] }), final('Ваші продажі: 1 000 ₴.')];
 r = await ask('Скільки продав я і Олена?', MH);
 assert.equal(r.status, 200, JSON.stringify(r.j));
 assert.match(claude[0].body.system, /менеджер: йому доступні лише його замовлення \(ivan\)/);
+assert.ok(!claude[0].body.tools.some((t) => t.name === 'propose_changes'), 'менеджеру — без змін налаштувань');
 const mdata = JSON.parse(claude[1].body.messages.at(-1).content[0].content);
 assert.deepEqual([mdata.kpi.cnt, mdata.kpi.rev], [1, 1000], 'навіть з фільтром «olena» — лише свої замовлення');
 assert.match(mdata.scope, /лише замовлення менеджера/);
@@ -122,4 +211,4 @@ assert.match(mdata.scope, /лише замовлення менеджера/);
 // відключити
 await req('PUT', '/api/an/ai/settings', { key: '' });
 assert.deepEqual((await req('GET', '/api/an/ai/status')).j, { enabled: false });
-console.log('OK — аналітика: питання до ШІ (підключення, інструменти, права менеджера, помилки, облік)');
+console.log('OK — аналітика: питання до ШІ (підключення, інструменти, права менеджера, помилки, облік) і зміни налаштувань через ШІ (пропозиція, застосування, журнал, відкат)');

@@ -3,6 +3,7 @@
 // Модель не бачить бази напряму і не вигадує цифр: лише підсумки, які повернула аналітика (без ПІБ і телефонів клієнтів).
 // Ключ API і модель — у «Налаштуваннях аналітики» (власник і адміністратори); ключ не показується після збереження.
 import { fail, MASK } from '../../core/common.js';
+import { CHANGE_TOOLS, mountAiChanges } from './ai-changes.js';
 
 const AI_URL = 'https://api.anthropic.com/v1/messages';
 export const AI_MODELS = [
@@ -86,7 +87,7 @@ function compactQuery(q) {
   };
 }
 
-export function mountAnalyticsAi(app, { db, fetchFn, kyivDay, addDays }) {
+export function mountAnalyticsAi(app, { db, fetchFn, kyivDay, addDays, remap, rebrand, bump, getSt }) {
   const getVal = async (key) => (await db.get(`SELECT value FROM settings WHERE key = ?`, [key]))?.value || '';
   const setVal = (key, value) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]);
   const modelOf = async () => {
@@ -137,6 +138,9 @@ export function mountAnalyticsAi(app, { db, fetchFn, kyivDay, addDays }) {
     if (!r.ok) throw new Error(j.error || `помилка ${r.status}`);
     return j;
   }
+  // Зміни налаштувань (лише власник і адміністратори): ШІ пропонує, людина застосовує; журнал — ai-changes.js.
+  const changes = mountAiChanges(app, { db, inner, remap, rebrand, bump, getSt });
+
   async function runTool(c, name, input) {
     if (name === 'query_analytics') {
       const ids = (a) => (Array.isArray(a) ? a : []);
@@ -209,6 +213,17 @@ export function mountAnalyticsAi(app, { db, fetchFn, kyivDay, addDays }) {
       `Категорії (id: назва): ${list(o.cats, (x) => `${x.id}: ${x.name}`)}.`,
     ].join('\n');
 
+    const admin = changes.allowed(c);
+    const tools = admin ? [...TOOLS, ...CHANGE_TOOLS] : TOOLS;
+    const sys = admin ? `${system}\n${[
+      'Ти також можеш налаштовувати аналітику: get_settings — поточні налаштування й нерозподілене, get_products — товари, propose_changes — запропонувати зміни.',
+      'propose_changes НІЧОГО не змінює: користувач побачить картку «було → стане» і сам натисне «Застосувати». Ніколи не пиши, що вже змінив — лише що запропонував і що треба натиснути «Застосувати».',
+      'Коли щось «показується неправильно»: спершу зʼясуй причину (get_settings: які значення «Поле 1», менеджери й відділи CRM куди віднесені і скільки в них замовлень; query_analytics з фільтрами), поясни її коротко, потім запропонуй мінімальні зміни.',
+      'Відділ замовлення визначається так: спершу джерело («Поле 1», якщо воно віднесене до джерела), далі — за налаштуванням deptPriority: менеджер або відділ CRM (офіс).',
+      'Видалення (відділу, джерела, бренду) пропонуй лише коли користувач прямо про це просить.',
+    ].join('\n')}` : system;
+    const question = hist[hist.length - 1].content;
+    const proposals = [];
     const model = await modelOf();
     const messages = [...hist];
     const used = { asks: 1, input: 0, output: 0 };
@@ -217,7 +232,7 @@ export function mountAnalyticsAi(app, { db, fetchFn, kyivDay, addDays }) {
     try {
       for (let round = 0; round <= MAX_ROUNDS; round++) {
         const last = round === MAX_ROUNDS; // останній крок — без інструментів: відповісти з того, що є
-        const r = await callClaude(key, { model, max_tokens: 2000, system, messages, ...(last ? {} : { tools: TOOLS }) });
+        const r = await callClaude(key, { model, max_tokens: 4000, system: sys, messages, ...(last ? {} : { tools }) });
         used.input += r.usage?.input_tokens || 0;
         used.output += r.usage?.output_tokens || 0;
         const content = Array.isArray(r.content) ? r.content : [];
@@ -230,8 +245,11 @@ export function mountAnalyticsAi(app, { db, fetchFn, kyivDay, addDays }) {
         const results = [];
         for (const t of calls) {
           try {
-            const out = await runTool(c, t.name, t.input || {});
-            steps.push(t.name === 'query_analytics' ? `аналітика ${t.input.from} – ${t.input.to}${t.input.compare_from ? ` (порівняння з ${t.input.compare_from} – ${t.input.compare_to})` : ''}` : `пошук товару «${t.input.q}»`);
+            const own = admin ? await changes.runTool(c, t.name, t.input || {}, question, proposals) : undefined;
+            const out = own !== undefined ? own : await runTool(c, t.name, t.input || {});
+            steps.push({ query_analytics: () => `аналітика ${t.input.from} – ${t.input.to}${t.input.compare_from ? ` (порівняння з ${t.input.compare_from} – ${t.input.compare_to})` : ''}`,
+              find_products: () => `пошук товару «${t.input.q}»`, get_settings: () => 'налаштування аналітики', get_products: () => 'товари',
+              propose_changes: () => 'підготовлено зміни' }[t.name]?.() || t.name);
             results.push({ type: 'tool_result', tool_use_id: t.id, content: JSON.stringify(out) });
           } catch (e) {
             if (e.pending) throw e;
@@ -244,6 +262,6 @@ export function mountAnalyticsAi(app, { db, fetchFn, kyivDay, addDays }) {
       await addUsage(used).catch(() => 0);
     }
     if (!answer) answer = 'Не вдалося сформувати відповідь — спробуйте переформулювати питання.';
-    return c.json({ answer, steps, model, usage: { input: used.input, output: used.output } });
+    return c.json({ answer, steps, model, proposals, usage: { input: used.input, output: used.output } });
   });
 }
