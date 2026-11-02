@@ -11,6 +11,7 @@ import { createSettingsPages } from './pages/settings.js';
 import { createNpPages } from './pages/np.js';
 import { createCronPages } from './pages/cron.js';
 import { createMarketPages } from './pages/market.js';
+import { createAnAiPages } from './pages/anai.js';
 import { createRahunkyPages } from './pages/rahunky.js';
 import { createUsersPages } from './pages/users.js';
 import { createErrorsPages } from './pages/errors.js';
@@ -40,6 +41,7 @@ const SECTIONS = [
   ] },
   { id: 'an', label: 'Аналітика', perm: 'an.view', home: 'an', tabs: [
     { id: 'an', label: 'Дашборд' },
+    { id: 'anai', label: 'Питання до ШІ' },
     { id: 'anpay', label: 'Оплати', perm: 'analytics' },
     { id: 'ansettings', label: 'Налаштування аналітики', perm: 'analytics' },
   ] },
@@ -276,6 +278,7 @@ const { viewSettings, viewNakladniSettings, viewRahunkySettings } = createSettin
 const { viewNp } = createNpPages();
 const { viewCron } = createCronPages();
 const { viewMarket } = createMarketPages({ can });
+const { viewAsk } = createAnAiPages({ can });
 const { viewRahunky, viewRahunkyList } = createRahunkyPages(ctx);
 const { viewUsers } = createUsersPages(ctx);
 const { viewErrors } = createErrorsPages(ctx);
@@ -302,6 +305,7 @@ const routes = {
   rsettings: viewRahunkySettings,
   an: (...a) => AN.viewDashboard(...a),
   ansettings: (...a) => AN.viewSettings(...a),
+  anai: () => viewAsk(),
   settings: viewSettings,
   np: viewNp,
   cron: viewCron,

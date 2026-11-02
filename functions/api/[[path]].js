@@ -3630,6 +3630,251 @@ function mountRahunky(app, { db, services, onCleanup }) {
   return { search };
 }
 
+// src/modules/analytics/ai.js
+var AI_URL = "https://api.anthropic.com/v1/messages";
+var AI_MODELS = [
+  { id: "claude-sonnet-5-5", name: "Sonnet 5.5 \u2014 \u0437\u0431\u0430\u043B\u0430\u043D\u0441\u043E\u0432\u0430\u043D\u043E (\u0440\u0435\u043A\u043E\u043C\u0435\u043D\u0434\u043E\u0432\u0430\u043D\u043E)" },
+  { id: "claude-haiku-5-5", name: "Haiku 5.5 \u2014 \u0448\u0432\u0438\u0434\u043A\u043E \u0439 \u0434\u0435\u0448\u0435\u0432\u0448\u0435" },
+  { id: "claude-opus-5-5", name: "Opus 5.5 \u2014 \u043D\u0430\u0439\u0433\u043B\u0438\u0431\u0448\u0456 \u0432\u0438\u0441\u043D\u043E\u0432\u043A\u0438, \u0434\u043E\u0440\u043E\u0436\u0447\u0435" }
+];
+var MAX_ROUNDS = 6;
+var MAX_HISTORY = 10;
+var r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+var TOOLS = [
+  {
+    name: "query_analytics",
+    description: "\u041F\u0456\u0434\u0441\u0443\u043C\u043A\u0438 \u043F\u0440\u043E\u0434\u0430\u0436\u0456\u0432 (\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM) \u0437\u0430 \u043F\u0435\u0440\u0456\u043E\u0434 \u0437 \u0444\u0456\u043B\u044C\u0442\u0440\u0430\u043C\u0438 \u2014 \u0442\u0435 \u0441\u0430\u043C\u0435, \u0449\u043E \u043F\u043E\u043A\u0430\u0437\u0443\u0454 \u0434\u0430\u0448\u0431\u043E\u0440\u0434 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438. \u041F\u043E\u0432\u0435\u0440\u0442\u0430\u0454: KPI (\u0441\u0443\u043C\u0430, \u043E\u0431\u043E\u0440\u043E\u0442 \u0431\u0435\u0437 \u0432\u0456\u0434\u043C\u043E\u0432, \u043A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C, \u0432\u0456\u0434\u043C\u043E\u0432\u0438, \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0456, \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0456), \u0440\u043E\u0437\u0431\u0438\u0432\u043A\u0438 \u0437\u0430 \u0432\u0456\u0434\u0434\u0456\u043B\u0430\u043C\u0438, \u0434\u0436\u0435\u0440\u0435\u043B\u0430\u043C\u0438 (\xAB\u041F\u043E\u043B\u0435 1\xBB), \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430\u043C\u0438, \u0433\u0440\u0443\u043F\u0430\u043C\u0438 \u0441\u0442\u0430\u0442\u0443\u0441\u0456\u0432, \u0441\u043B\u0443\u0436\u0431\u0430\u043C\u0438 \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0438, \u0431\u0440\u0435\u043D\u0434\u0430\u043C\u0438, \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044F\u043C\u0438, \u0442\u043E\u043F \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0456 \u0434\u0430\u043D\u0456 \u043F\u043E \u0434\u043D\u044F\u0445. \u042F\u043A\u0449\u043E \u0437\u0430\u0434\u0430\u0442\u0438 \u043F\u0435\u0440\u0456\u043E\u0434 \u043F\u043E\u0440\u0456\u0432\u043D\u044F\u043D\u043D\u044F, \u043A\u043E\u0436\u0435\u043D \u0440\u044F\u0434\u043E\u043A \u043C\u0430\u0454 \u0449\u0435 \u0439 prev-\u0437\u043D\u0430\u0447\u0435\u043D\u043D\u044F. \u0424\u0456\u043B\u044C\u0442\u0440\u0438 \u2014 id \u0437 \u0434\u043E\u0432\u0456\u0434\u043D\u0438\u043A\u0430 \u0432 \u0441\u0438\u0441\u0442\u0435\u043C\u043D\u0438\u0445 \u0456\u043D\u0441\u0442\u0440\u0443\u043A\u0446\u0456\u044F\u0445 (\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0438 \u2014 \u043B\u043E\u0433\u0456\u043D).",
+    input_schema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "\u041F\u043E\u0447\u0430\u0442\u043E\u043A \u043F\u0435\u0440\u0456\u043E\u0434\u0443, YYYY-MM-DD" },
+        to: { type: "string", description: "\u041A\u0456\u043D\u0435\u0446\u044C \u043F\u0435\u0440\u0456\u043E\u0434\u0443 \u0432\u043A\u043B\u044E\u0447\u043D\u043E, YYYY-MM-DD" },
+        compare_from: { type: "string", description: "\u041F\u043E\u0447\u0430\u0442\u043E\u043A \u043F\u0435\u0440\u0456\u043E\u0434\u0443 \u0434\u043B\u044F \u043F\u043E\u0440\u0456\u0432\u043D\u044F\u043D\u043D\u044F, YYYY-MM-DD (\u043D\u0435\u043E\u0431\u043E\u0432\u02BC\u044F\u0437\u043A\u043E\u0432\u043E)" },
+        compare_to: { type: "string", description: "\u041A\u0456\u043D\u0435\u0446\u044C \u043F\u0435\u0440\u0456\u043E\u0434\u0443 \u0434\u043B\u044F \u043F\u043E\u0440\u0456\u0432\u043D\u044F\u043D\u043D\u044F, YYYY-MM-DD (\u043D\u0435\u043E\u0431\u043E\u0432\u02BC\u044F\u0437\u043A\u043E\u0432\u043E)" },
+        depts: { type: "array", items: { type: "integer" }, description: "id \u0432\u0456\u0434\u0434\u0456\u043B\u0456\u0432" },
+        sources: { type: "array", items: { type: "integer" }, description: "id \u0434\u0436\u0435\u0440\u0435\u043B (\xAB\u041F\u043E\u043B\u0435 1\xBB)" },
+        managers: { type: "array", items: { type: "string" }, description: "\u043B\u043E\u0433\u0456\u043D\u0438 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0456\u0432 LP-CRM" },
+        brands: { type: "array", items: { type: "integer" }, description: "id \u0431\u0440\u0435\u043D\u0434\u0456\u0432" },
+        cats: { type: "array", items: { type: "integer" }, description: "id \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0439" },
+        products: { type: "array", items: { type: "integer" }, description: "id \u0442\u043E\u0432\u0430\u0440\u0456\u0432 LP-CRM (\u0437\u043D\u0430\u0439\u0442\u0438 \u2014 find_products)" }
+      },
+      required: ["from", "to"]
+    }
+  },
+  {
+    name: "find_products",
+    description: "\u041F\u043E\u0448\u0443\u043A \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0437\u0430 \u043D\u0430\u0437\u0432\u043E\u044E \u0430\u0431\u043E ID \u2014 \u043F\u043E\u0432\u0435\u0440\u0442\u0430\u0454 id \u0456 \u043D\u0430\u0437\u0432\u0438 \u0434\u043B\u044F \u0444\u0456\u043B\u044C\u0442\u0440\u0430 products \u0443 query_analytics.",
+    input_schema: { type: "object", properties: { q: { type: "string", description: "\u0427\u0430\u0441\u0442\u0438\u043D\u0430 \u043D\u0430\u0437\u0432\u0438 \u0430\u0431\u043E ID \u0442\u043E\u0432\u0430\u0440\u0443" } }, required: ["q"] }
+  }
+];
+function compactQuery(q) {
+  const hasPrev = Boolean(q.cmp);
+  const row = (r, extra = {}) => ({
+    name: r.name ?? r.login,
+    rev: r2(r.rev),
+    net: r2(r.net),
+    cnt: r.cnt,
+    rcnt: r.rcnt,
+    ...hasPrev ? { prevRev: r2(r.prevRev), prevNet: r2(r.prevNet), prevCnt: r.prevCnt } : {},
+    ...extra
+  });
+  const days = q.daily?.cur || [];
+  let series;
+  if (days.length <= 62) series = days.map((d) => [d.day, d.cnt, r2(d.rev), r2(d.net)]);
+  else {
+    const wk = /* @__PURE__ */ new Map();
+    for (const d of days) {
+      const dt = /* @__PURE__ */ new Date(`${d.day}T12:00:00Z`);
+      dt.setUTCDate(dt.getUTCDate() - (dt.getUTCDay() + 6) % 7);
+      const k = dt.toISOString().slice(0, 10);
+      const w = wk.get(k) || [k, 0, 0, 0];
+      w[1] += d.cnt;
+      w[2] = r2(w[2] + d.rev);
+      w[3] = r2(w[3] + d.net);
+      wk.set(k, w);
+    }
+    series = [...wk.values()];
+  }
+  return {
+    period: q.range,
+    compare: q.cmp || (q.compareEnabled ? null : "\u043F\u043E\u0440\u0456\u0432\u043D\u044F\u043D\u043D\u044F \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u0435 \u0432 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438"),
+    scope: q.own ? `\u043B\u0438\u0448\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430 (${q.own.logins.join(", ") || "\u043B\u043E\u0433\u0456\u043D \u043D\u0435 \u043F\u0440\u0438\u0432\u02BC\u044F\u0437\u0430\u043D\u043E"})` : "\u0443\u0441\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F",
+    kpi: q.kpi?.cur,
+    kpiPrev: q.kpi?.prev,
+    target: q.target?.applicable ? { plan: q.target.plan, fact: q.target.fact, pct: q.target.pct, base: q.target.base } : null,
+    byDept: (q.byDept || []).map((r) => row(r, r.plan ? { plan: r.plan } : {})),
+    bySource: (q.bySource || []).slice(0, 30).map((r) => row(r, r.plan ? { plan: r.plan } : {})),
+    byManager: (q.byManager || []).slice(0, 30).map((r) => row(r, { login: r.login })),
+    byStatusGroup: (q.byStatusGroup || []).map((r) => ({ name: r.name, cnt: r.cnt, rev: r2(r.rev), ...hasPrev ? { prevCnt: r.prevCnt, prevRev: r2(r.prevRev) } : {} })),
+    byDelivery: (q.byDelivery || []).map((r) => ({ name: r.name, cnt: r.cnt, rcnt: r.rcnt, rev: r2(r.rev), ...hasPrev ? { prevCnt: r.prevCnt } : {} })),
+    byBrand: (q.byBrand || []).slice(0, 20).map((r) => row(r, { qty: r.qty })),
+    byCategory: (q.byCategory || []).slice(0, 20).map((r) => row(r, { qty: r.qty })),
+    topProducts: (q.top || []).slice(0, 25).map((r) => ({ id: r.id, name: r.name, brand: r.brand, qty: r.qty, refusedQty: r.rqty, rev: r2(r.rev), ...r.prevQty != null ? { prevQty: r.prevQty } : {} })),
+    series: { columns: ["date", "cnt", "rev", "net"], step: days.length <= 62 ? "day" : "week", rows: series },
+    lastSync: q.lastSync
+  };
+}
+function mountAnalyticsAi(app, { db, fetchFn, kyivDay: kyivDay2, addDays: addDays5 }) {
+  const getVal = async (key) => (await db.get(`SELECT value FROM settings WHERE key = ?`, [key]))?.value || "";
+  const setVal = (key, value) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]);
+  const modelOf = async () => {
+    const m = await getVal("an_ai_model");
+    return AI_MODELS.some((x) => x.id === m) ? m : AI_MODELS[0].id;
+  };
+  async function usage() {
+    try {
+      return JSON.parse(await getVal("an_ai_usage")) || {};
+    } catch {
+      return {};
+    }
+  }
+  async function addUsage(u) {
+    const month = kyivDay2().slice(0, 7);
+    const cur = await usage();
+    const v = cur.month === month ? cur : { month, asks: 0, input: 0, output: 0 };
+    v.asks += u.asks || 0;
+    v.input += u.input || 0;
+    v.output += u.output || 0;
+    await setVal("an_ai_usage", JSON.stringify(v));
+  }
+  app.get("/api/an/ai/settings", async (c) => {
+    const key = await getVal("an_ai_key");
+    return c.json({ key: key ? MASK : "", model: await modelOf(), models: AI_MODELS, usage: await usage() });
+  });
+  app.put("/api/an/ai/settings", async (c) => {
+    const b = await c.req.json().catch(() => ({}));
+    if (b.model !== void 0) {
+      if (!AI_MODELS.some((x) => x.id === b.model)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0430 \u043C\u043E\u0434\u0435\u043B\u044C.");
+      await setVal("an_ai_model", b.model);
+    }
+    if (b.key !== void 0 && b.key !== MASK) {
+      const key = String(b.key || "").trim();
+      if (key && !/^sk-ant-[\w-]{20,}$/.test(key)) throw fail(400, "\u041A\u043B\u044E\u0447 Anthropic API \u043F\u043E\u0447\u0438\u043D\u0430\u0454\u0442\u044C\u0441\u044F \u0437 \xABsk-ant-\xBB \u2014 \u0441\u043A\u043E\u043F\u0456\u044E\u0439\u0442\u0435 \u0439\u043E\u0433\u043E \u0437 console.anthropic.com \u2192 API Keys.");
+      await setVal("an_ai_key", key);
+    }
+    return c.json({ ok: true, key: await getVal("an_ai_key") ? MASK : "", model: await modelOf() });
+  });
+  app.get("/api/an/ai/status", async (c) => c.json({ enabled: Boolean(await getVal("an_ai_key")) }));
+  async function inner(c, method, path, body) {
+    const r = await app.request(path, {
+      method,
+      headers: { cookie: c.req.header("cookie") || "", "content-type": "application/json" },
+      body: body ? JSON.stringify(body) : void 0
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${r.status}`);
+    return j;
+  }
+  async function runTool(c, name, input) {
+    if (name === "query_analytics") {
+      const ids = (a) => Array.isArray(a) ? a : [];
+      const q = await inner(c, "POST", "/api/an/query", {
+        from: input.from,
+        to: input.to,
+        cmpFrom: input.compare_from,
+        cmpTo: input.compare_to,
+        depts: ids(input.depts),
+        sources: ids(input.sources),
+        managers: ids(input.managers),
+        brands: ids(input.brands),
+        cats: ids(input.cats),
+        products: ids(input.products)
+      });
+      return compactQuery(q);
+    }
+    if (name === "find_products") {
+      const r = await inner(c, "GET", `/api/an/product-search?q=${encodeURIComponent(String(input.q || "").slice(0, 80))}`);
+      return (Array.isArray(r) ? r : []).slice(0, 30).map((p) => ({ id: p.id, name: p.name }));
+    }
+    throw new Error(`\u043D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u0456\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442 ${name}`);
+  }
+  async function callClaude(key, body) {
+    let res;
+    try {
+      res = await fetchFn(AI_URL, {
+        method: "POST",
+        headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify(body)
+      });
+    } catch (e) {
+      if (e.pending) throw e;
+      throw fail(502, "\u0428\u0406 \u043D\u0435 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0430\u0454 \u2014 \u0441\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0449\u0435 \u0440\u0430\u0437 \u0437\u0430 \u0445\u0432\u0438\u043B\u0438\u043D\u0443.");
+    }
+    const j = await res.json().catch(() => null);
+    if (!res.ok) {
+      const msg = j?.error?.message || `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${res.status}`;
+      if (res.status === 401) throw fail(400, "\u0428\u0406: \u043D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043A\u043B\u044E\u0447 API \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0439\u043E\u0433\u043E \u0432 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438\xBB.");
+      if (res.status === 429) throw fail(429, "\u0428\u0406: \u0437\u0430\u0431\u0430\u0433\u0430\u0442\u043E \u0437\u0430\u043F\u0438\u0442\u0456\u0432 \u0430\u0431\u043E \u0432\u0438\u0447\u0435\u0440\u043F\u0430\u043D\u043E \u043B\u0456\u043C\u0456\u0442 \u2014 \u0441\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0437\u0430 \u0445\u0432\u0438\u043B\u0438\u043D\u0443.");
+      if (res.status === 400 && /credit|balance|billing/i.test(msg)) throw fail(400, "\u0428\u0406: \u043D\u0430 \u0440\u0430\u0445\u0443\u043D\u043A\u0443 Anthropic \u0437\u0430\u043A\u0456\u043D\u0447\u0438\u043B\u0438\u0441\u044C \u043A\u043E\u0448\u0442\u0438 \u2014 \u043F\u043E\u043F\u043E\u0432\u043D\u0456\u0442\u044C \u0431\u0430\u043B\u0430\u043D\u0441 \u0443 console.anthropic.com.");
+      throw fail(502, `\u0428\u0406: ${msg}`.slice(0, 300));
+    }
+    return j;
+  }
+  app.post("/api/an/ai/ask", async (c) => {
+    const key = await getVal("an_ai_key");
+    if (!key) throw fail(400, "\u0428\u0406 \u0449\u0435 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E: \u0432\u043B\u0430\u0441\u043D\u0438\u043A \u0430\u0431\u043E \u0430\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440 \u0432\u0432\u043E\u0434\u0438\u0442\u044C \u043A\u043B\u044E\u0447 Anthropic API \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438\xBB.");
+    const b = await c.req.json().catch(() => ({}));
+    const hist = (Array.isArray(b.messages) ? b.messages : []).filter((m) => ["user", "assistant"].includes(m.role) && String(m.text || "").trim()).slice(-(MAX_HISTORY + 1)).map((m) => ({ role: m.role, content: String(m.text).slice(0, 4e3) }));
+    while (hist.length && hist[0].role !== "user") hist.shift();
+    if (!hist.length || hist[hist.length - 1].role !== "user") throw fail(400, "\u041D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u043F\u0438\u0442\u0430\u043D\u043D\u044F.");
+    const today3 = kyivDay2();
+    const base = await inner(c, "POST", "/api/an/query", { from: addDays5(today3, -6), to: today3 });
+    const o = base.options || {};
+    const list = (a, f) => (a || []).map(f).join("; ");
+    const system = [
+      "\u0422\u0438 \u2014 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A \u043F\u0440\u043E\u0434\u0430\u0436\u0456\u0432 \u043A\u043E\u043C\u043F\u0430\u043D\u0456\u0457 (e-commerce: \u0440\u043E\u0437\u0434\u0440\u0456\u0431, \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438, B2B). \u0412\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0430\u0439 \u0443\u043A\u0440\u0430\u0457\u043D\u0441\u044C\u043A\u043E\u044E, \u043A\u043E\u0440\u043E\u0442\u043A\u043E \u0456 \u043F\u043E \u0441\u0443\u0442\u0456.",
+      `\u0421\u044C\u043E\u0433\u043E\u0434\u043D\u0456 ${today3} (\u041A\u0438\u0457\u0432). \u0414\u0430\u043D\u0456 \u2014 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM, \u043E\u043D\u043E\u0432\u043B\u0435\u043D\u0456 ${base.lastSync || "\u043D\u0435\u0432\u0456\u0434\u043E\u043C\u043E \u043A\u043E\u043B\u0438"}.`,
+      base.own ? `\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447 \u2014 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440: \u0439\u043E\u043C\u0443 \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0456 \u043B\u0438\u0448\u0435 \u0439\u043E\u0433\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F (${base.own.logins.join(", ")}). \u041D\u0435 \u043E\u0431\u0456\u0446\u044F\u0439 \u0434\u0430\u043D\u0438\u0445 \u043F\u043E \u0456\u043D\u0448\u0438\u0445 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430\u0445.` : "\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0443 \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0456 \u0432\u0441\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.",
+      "\u0426\u0438\u0444\u0440\u0438 \u0431\u0435\u0440\u0438 \u041B\u0418\u0428\u0415 \u0437 \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u0456\u0432 \u0456\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0456\u0432, \u043D\u0456\u0447\u043E\u0433\u043E \u043D\u0435 \u0432\u0438\u0433\u0430\u0434\u0443\u0439 \u0456 \u043D\u0435 \u043E\u043A\u0440\u0443\u0433\u043B\u044E\u0439 \u0434\u043E \u043D\u0435\u043F\u0440\u0430\u0432\u0434\u0438. \u042F\u043A\u0449\u043E \u0434\u0430\u043D\u0438\u0445 \u043D\u0435\u043C\u0430\u0454 \u0430\u0431\u043E \u043F\u0435\u0440\u0456\u043E\u0434 \u0449\u0435 \u043D\u0435 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043E \u2014 \u0442\u0430\u043A \u0456 \u0441\u043A\u0430\u0436\u0438.",
+      "\u041F\u0435\u0440\u0435\u0434 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0434\u044E \u0432\u0438\u043A\u043B\u0438\u043A\u0430\u0439 query_analytics \u0437 \u043F\u043E\u0442\u0440\u0456\u0431\u043D\u0438\u043C \u043F\u0435\u0440\u0456\u043E\u0434\u043E\u043C \u0456 \u0444\u0456\u043B\u044C\u0442\u0440\u0430\u043C\u0438; \u0434\u043B\u044F \u043F\u043E\u0440\u0456\u0432\u043D\u044F\u043D\u043D\u044F \u0437\u0430\u0434\u0430\u0432\u0430\u0439 compare_from/compare_to. \u041C\u043E\u0436\u043D\u0430 \u043A\u0456\u043B\u044C\u043A\u0430 \u0432\u0438\u043A\u043B\u0438\u043A\u0456\u0432 (\u043D\u0430\u043F\u0440\u0438\u043A\u043B\u0430\u0434, \u043E\u043A\u0440\u0435\u043C\u043E \u043F\u043E \u0431\u0440\u0435\u043D\u0434\u0430\u0445 \u0447\u0438 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430\u0445).",
+      "\u0422\u0435\u0440\u043C\u0456\u043D\u0438: rev \u2014 \u0441\u0443\u043C\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C (\u0443\u0441\u0456 \u0441\u0442\u0430\u0442\u0443\u0441\u0438), net \u2014 \u043E\u0431\u043E\u0440\u043E\u0442 \u0431\u0435\u0437 \u0432\u0456\u0434\u043C\u043E\u0432 \u0456 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u044C, cnt \u2014 \u043A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C, rcnt \u2014 \u0432\u0456\u0434\u043C\u043E\u0432\u0438 \u0439 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F, rpct \u2014 % \u0432\u0456\u0434\u043C\u043E\u0432, drev/dcnt \u2014 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0456, srev/scnt \u2014 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0456 (\u0443\u0441\u0456, \u043A\u0440\u0456\u043C \xAB\u041F\u0440\u0438\u0439\u043D\u044F\u0442\u043E\xBB), avg \u2014 \u0441\u0435\u0440\u0435\u0434\u043D\u0456\u0439 \u0447\u0435\u043A. \u0413\u0440\u043E\u0448\u0456 \u2014 \u0443 \u0433\u0440\u0438\u0432\u043D\u044F\u0445 (\u20B4).",
+      "\xAB\u0426\u0435\u0439 \u0442\u0438\u0436\u0434\u0435\u043D\u044C\xBB \u2014 \u0437 \u043F\u043E\u043D\u0435\u0434\u0456\u043B\u043A\u0430 \u043F\u043E \u0441\u044C\u043E\u0433\u043E\u0434\u043D\u0456; \xAB\u043C\u0438\u043D\u0443\u043B\u0438\u0439 \u043C\u0456\u0441\u044F\u0446\u044C\xBB \u2014 \u043F\u043E\u0432\u043D\u0438\u0439 \u043A\u0430\u043B\u0435\u043D\u0434\u0430\u0440\u043D\u0438\u0439 \u043C\u0456\u0441\u044F\u0446\u044C. \u0417\u0430\u0432\u0436\u0434\u0438 \u043D\u0430\u0437\u0432\u0438 \u043F\u0435\u0440\u0456\u043E\u0434, \u0437\u0430 \u044F\u043A\u0438\u0439 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0430\u0454\u0448.",
+      "\u0424\u043E\u0440\u043C\u0430\u0442: \u043F\u0435\u0440\u0448\u0435 \u0440\u0435\u0447\u0435\u043D\u043D\u044F \u2014 \u0433\u043E\u043B\u043E\u0432\u043D\u0430 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u044C \u0437 \u0446\u0438\u0444\u0440\u043E\u044E; \u0434\u0430\u043B\u0456 \u0437\u0430 \u043F\u043E\u0442\u0440\u0435\u0431\u0438 \u043A\u043E\u0440\u043E\u0442\u043A\u0438\u0439 \u0441\u043F\u0438\u0441\u043E\u043A \u0430\u0431\u043E \u043D\u0435\u0432\u0435\u043B\u0438\u043A\u0430 \u0442\u0430\u0431\u043B\u0438\u0446\u044F markdown; \u043D\u0430\u043F\u0440\u0438\u043A\u0456\u043D\u0446\u0456 \u2014 1\u20132 \u0432\u0438\u0441\u043D\u043E\u0432\u043A\u0438 \u0447\u0438 \u0449\u043E \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438. \u0411\u0435\u0437 \u0432\u0441\u0442\u0443\u043F\u0456\u0432.",
+      `\u0412\u0456\u0434\u0434\u0456\u043B\u0438 (id: \u043D\u0430\u0437\u0432\u0430): ${list(o.depts, (x) => `${x.id}: ${x.name}`)}.`,
+      `\u0414\u0436\u0435\u0440\u0435\u043B\u0430 \xAB\u041F\u043E\u043B\u0435 1\xBB (id: \u043D\u0430\u0437\u0432\u0430): ${list(o.sources, (x) => `${x.id}: ${x.name}`)}.`,
+      `\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0438 (\u043B\u043E\u0433\u0456\u043D: \u0456\u043C\u02BC\u044F): ${list(o.managers, (x) => `${x.login}: ${x.name}`)}.`,
+      `\u0411\u0440\u0435\u043D\u0434\u0438 (id: \u043D\u0430\u0437\u0432\u0430): ${list(o.brands, (x) => `${x.id}: ${x.name}`)}.`,
+      `\u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457 (id: \u043D\u0430\u0437\u0432\u0430): ${list(o.cats, (x) => `${x.id}: ${x.name}`)}.`
+    ].join("\n");
+    const model = await modelOf();
+    const messages = [...hist];
+    const used = { asks: 1, input: 0, output: 0 };
+    const steps = [];
+    let answer = "";
+    try {
+      for (let round = 0; round <= MAX_ROUNDS; round++) {
+        const last = round === MAX_ROUNDS;
+        const r = await callClaude(key, { model, max_tokens: 2e3, system, messages, ...last ? {} : { tools: TOOLS } });
+        used.input += r.usage?.input_tokens || 0;
+        used.output += r.usage?.output_tokens || 0;
+        const content = Array.isArray(r.content) ? r.content : [];
+        const calls = content.filter((x) => x.type === "tool_use");
+        if (r.stop_reason !== "tool_use" || !calls.length) {
+          answer = content.filter((x) => x.type === "text").map((x) => x.text).join("\n").trim();
+          break;
+        }
+        messages.push({ role: "assistant", content });
+        const results = [];
+        for (const t of calls) {
+          try {
+            const out = await runTool(c, t.name, t.input || {});
+            steps.push(t.name === "query_analytics" ? `\u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0430 ${t.input.from} \u2013 ${t.input.to}${t.input.compare_from ? ` (\u043F\u043E\u0440\u0456\u0432\u043D\u044F\u043D\u043D\u044F \u0437 ${t.input.compare_from} \u2013 ${t.input.compare_to})` : ""}` : `\u043F\u043E\u0448\u0443\u043A \u0442\u043E\u0432\u0430\u0440\u0443 \xAB${t.input.q}\xBB`);
+            results.push({ type: "tool_result", tool_use_id: t.id, content: JSON.stringify(out) });
+          } catch (e) {
+            if (e.pending) throw e;
+            results.push({ type: "tool_result", tool_use_id: t.id, content: `\u041F\u043E\u043C\u0438\u043B\u043A\u0430: ${String(e.message || e).slice(0, 300)}`, is_error: true });
+          }
+        }
+        messages.push({ role: "user", content: results });
+      }
+    } finally {
+      await addUsage(used).catch(() => 0);
+    }
+    if (!answer) answer = "\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u0441\u0444\u043E\u0440\u043C\u0443\u0432\u0430\u0442\u0438 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u044C \u2014 \u0441\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u043F\u0435\u0440\u0435\u0444\u043E\u0440\u043C\u0443\u043B\u044E\u0432\u0430\u0442\u0438 \u043F\u0438\u0442\u0430\u043D\u043D\u044F.";
+    return c.json({ answer, steps, model, usage: { input: used.input, output: used.output } });
+  });
+}
+
 // src/modules/analytics/index.js
 var toUtc = (day) => Date.UTC(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10));
 var fromUtc = (ms) => new Date(ms).toISOString().slice(0, 10);
@@ -3915,7 +4160,15 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     await putSetting2("an_values", JSON.stringify(cur));
     return cur;
   }
-  const OWN_ALLOWED = /* @__PURE__ */ new Set(["POST /api/an/query", "GET /api/an/sync", "POST /api/an/sync/start", "POST /api/an/sync/step"]);
+  const OWN_ALLOWED = /* @__PURE__ */ new Set([
+    "POST /api/an/query",
+    "GET /api/an/sync",
+    "POST /api/an/sync/start",
+    "POST /api/an/sync/step",
+    "GET /api/an/product-search",
+    "GET /api/an/ai/status",
+    "POST /api/an/ai/ask"
+  ]);
   app.use("/api/an/*", async (c, next) => {
     const user = c.get("user");
     if (!can(user, "analytics")) {
@@ -3935,6 +4188,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     }
     return next();
   });
+  mountAnalyticsAi(app, { db, fetchFn, kyivDay, addDays });
   async function checkTtnDups(orders, { firstRun = false } = {}) {
     const ttns = [...new Set(orders.map((o) => o.ttn).filter(Boolean))];
     if (!ttns.length) return 0;
@@ -4749,26 +5003,26 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
         };
         const dm = /* @__PURE__ */ new Map();
         const gm = /* @__PURE__ */ new Map();
-        for (const r2 of rows) {
-          const d = add(dm, r2.day, () => ({ day: r2.day, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
-          const g = add(gm, `${r2.dept}|${r2.src}|${r2.user}|${r2.status}|${r2.deliv}`, () => ({ dept: r2.dept, src: r2.src, user: r2.user, status: r2.status, deliv: r2.deliv, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
+        for (const r3 of rows) {
+          const d = add(dm, r3.day, () => ({ day: r3.day, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
+          const g = add(gm, `${r3.dept}|${r3.src}|${r3.user}|${r3.status}|${r3.deliv}`, () => ({ dept: r3.dept, src: r3.src, user: r3.user, status: r3.status, deliv: r3.deliv, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
           for (const x of [d, g]) {
-            x.rev += r2.rev || 0;
-            x.net += r2.net || 0;
-            x.cnt += r2.cnt || 0;
-            x.rcnt += r2.rcnt || 0;
+            x.rev += r3.rev || 0;
+            x.net += r3.net || 0;
+            x.cnt += r3.cnt || 0;
+            x.rcnt += r3.rcnt || 0;
           }
         }
         const bm = /* @__PURE__ */ new Map();
         const cm = /* @__PURE__ */ new Map();
-        for (const r2 of oi) {
-          for (const [m, k] of [[bm, r2.b], [cm, r2.c]]) {
+        for (const r3 of oi) {
+          for (const [m, k] of [[bm, r3.b], [cm, r3.c]]) {
             const x = add(m, k, () => ({ id: k, rev: 0, net: 0, qty: 0, orders: /* @__PURE__ */ new Set(), rorders: /* @__PURE__ */ new Set() }));
-            x.rev += r2.rev || 0;
-            x.qty += r2.qty || 0;
-            if (!r2.rf) x.net += r2.rev || 0;
-            x.orders.add(r2.oid);
-            if (r2.rf) x.rorders.add(r2.oid);
+            x.rev += r3.rev || 0;
+            x.qty += r3.qty || 0;
+            if (!r3.rf) x.net += r3.rev || 0;
+            x.orders.add(r3.oid);
+            if (r3.rf) x.rorders.add(r3.oid);
           }
         }
         const fin = (m) => [...m.values()].map(({ orders, rorders, ...x }) => ({ ...x, cnt: orders.size, rcnt: rorders.size }));
@@ -6046,12 +6300,12 @@ ${e.email}` : ""}`;
     const payDays = terms === "postpay" ? Number(p.postpay_days) : 0;
     const now = nowIso();
     if (draft) {
-      const r2 = await db.run(
+      const r3 = await db.run(
         `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [p.id, e.id, entityText(e), total, String(b.comment || "").trim().slice(0, 1e3), userName2(c.get("user")), now, now, deliveryOf(b.delivery), terms, payDays]
       );
-      await db.batch([...itemRows(r2.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r2.lastId, now, userName2(c.get("user")), `\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u043D\u0430 ${uah2(total)}`]]]);
-      return c.json({ id: r2.lastId, number: orderNo(r2.lastId), total, draft: true });
+      await db.batch([...itemRows(r3.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r3.lastId, now, userName2(c.get("user")), `\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u043D\u0430 ${uah2(total)}`]]]);
+      return c.json({ id: r3.lastId, number: orderNo(r3.lastId), total, draft: true });
     }
     const r = await db.run(
       `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -9651,14 +9905,14 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const ship = new Map((await db.all(`SELECT s.partner_id, SUM(co.total) AS sum, COUNT(co.id) AS n FROM b2b_orders s
       JOIN b2b_orders co ON co.supply_id = s.id AND co.kind = 'client' AND co.status = 'crm'
       WHERE s.kind = 'supply' AND s.status IN ('open', 'invoice_wait') GROUP BY s.partner_id`)).map((r) => [r.partner_id, r]));
-    const r2 = (n) => Math.round((n || 0) * 100) / 100;
+    const r22 = (n) => Math.round((n || 0) * 100) / 100;
     return c.json(rows.map((r) => ({
       ...r,
-      debt: r2((debt.get(r.id)?.due || 0) + (ship.get(r.id)?.sum || 0)),
-      debt_invoiced: r2(debt.get(r.id)?.due),
-      debt_shipped: r2(ship.get(r.id)?.sum),
+      debt: r22((debt.get(r.id)?.due || 0) + (ship.get(r.id)?.sum || 0)),
+      debt_invoiced: r22(debt.get(r.id)?.due),
+      debt_shipped: r22(ship.get(r.id)?.sum),
       debt_shipped_cnt: ship.get(r.id)?.n || 0,
-      debt_overdue: r2(debt.get(r.id)?.overdue),
+      debt_overdue: r22(debt.get(r.id)?.overdue),
       debt_cnt: debt.get(r.id)?.n || 0
     })));
   });
@@ -11376,7 +11630,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     let more = false;
     try {
       for (let page = 1; page <= SYNC_PAGES; page++) {
-        if (page > 1) await new Promise((r2) => setTimeout(r2, PAGE_PAUSE_MS));
+        if (page > 1) await new Promise((r3) => setTimeout(r3, PAGE_PAUSE_MS));
         const r = await rzsOrdersPage(fetchFn, a.token, { dateFrom, page });
         saved += await saveOrders2(r.orders, a.id);
         changed += saveOrders2.changed || 0;

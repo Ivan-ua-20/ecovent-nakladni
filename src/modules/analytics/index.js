@@ -5,6 +5,7 @@
 //  - завантаження йде кроками (кожне звернення — до ~8 запитів у LP-CRM), браузер повторює кроки сам;
 //  - підсумки рахує база (GROUP BY), щоб воркер не витрачав процесорний час;
 //  - мінімум індексів, щоб не перевищити 100 тис. записів у базу на добу.
+import { mountAnalyticsAi } from './ai.js';
 import { call, asList, findOrders } from '../../integrations/lpcrm.js';
 import { can, crmLogins } from '../../core/auth.js';
 import { fail, need, nowIso, num, round2, kyivDay, loadSettings, likeVariants } from '../../core/common.js';
@@ -328,7 +329,9 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
 
   // Доступ: власник і адміністратори — усе; менеджер — лише дашборд зі своїми замовленнями
   // (за логінами LP-CRM, прив'язаними в «Користувачах») і оновлення даних.
-  const OWN_ALLOWED = new Set(['POST /api/an/query', 'GET /api/an/sync', 'POST /api/an/sync/start', 'POST /api/an/sync/step']);
+  // Менеджеру (лише «an.view») — дашборд зі своїми замовленнями і питання до ШІ (теж лише по своїх замовленнях).
+  const OWN_ALLOWED = new Set(['POST /api/an/query', 'GET /api/an/sync', 'POST /api/an/sync/start', 'POST /api/an/sync/step',
+    'GET /api/an/product-search', 'GET /api/an/ai/status', 'POST /api/an/ai/ask']);
   app.use('/api/an/*', async (c, next) => {
     const user = c.get('user');
     if (!can(user, 'analytics')) {
@@ -348,6 +351,9 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
     }
     return next();
   });
+
+  // ШІ-помічник: питання звичайною мовою, відповіді — з цієї ж аналітики (ai.js).
+  mountAnalyticsAi(app, { db, fetchFn, kyivDay, addDays });
 
   // ---------------------------------------------------------------- дублі ТТН у LP-CRM
   // Після завантаження замовлень: та сама ТТН у кількох замовленнях (без тих, що вийшли з відстежуваних статусів) —
