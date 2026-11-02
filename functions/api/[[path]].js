@@ -6915,6 +6915,11 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
       for (const r of sup) await supplyInWork(r.supply_id).catch(() => 0);
     }
   }
+  function onlyHeadNoSupply(c, b) {
+    if (!parseInt(b.supply_id, 10) && !can(c.get("user"), "b2b.team")) {
+      throw fail(403, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043E\u0444\u043E\u0440\u043C\u043B\u044E\u0454 \u043B\u0438\u0448\u0435 \u043A\u0435\u0440\u0456\u0432\u043D\u0438\u043A \u0432\u0430\u0448\u043E\u0457 \u043A\u043E\u043C\u0430\u043D\u0434\u0438 \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E.");
+    }
+  }
   function clientFields(b) {
     const name = String(b.client_name ?? "").trim().replace(/\s+/g, " ").slice(0, 150);
     let phone = String(b.client_phone ?? "").replace(/\D/g, "");
@@ -7228,6 +7233,7 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
   app.post("/api/b2b/p/clients", async (c) => {
     const p = await myPartner(c);
     const b = await c.req.json();
+    onlyHeadNoSupply(c, b);
     const f = clientFields(b);
     if (f.ttn) {
       const dup = await labelDup({ ttn: f.ttn });
@@ -7263,6 +7269,7 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     if (o.status !== "new") throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u0435 \u0432 \u0440\u043E\u0431\u043E\u0442\u0443 \u2014 \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u0439\u043E\u0433\u043E \u043C\u043E\u0436\u0435 \u043B\u0438\u0448\u0435 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440.");
     if (o.pending) throw fail(400, "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0437\u043C\u0456\u043D\u0438\u0432 \u0446\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0456\u0442\u044C \u0430\u0431\u043E \u0432\u0456\u0434\u0445\u0438\u043B\u0456\u0442\u044C \u0437\u043C\u0456\u043D\u0438.");
     const b = await c.req.json();
+    onlyHeadNoSupply(c, b);
     const f = clientFields(b);
     if (f.ttn) {
       const dup = await labelDup({ ttn: f.ttn }, o.id);

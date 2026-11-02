@@ -140,4 +140,12 @@ assert.deepEqual(await draftItems(dB.id), [[12, 1, 4500]]);
 const tr = await db.get(`SELECT id FROM b2b_trash WHERE order_id = ? AND kind = 'client'`, [c10.id]);
 await req('POST', `/api/b2b/trash/${tr.id}/restore`, {});
 assert.deepEqual(await draftItems(dB.id), [[11, 1, 9000], [12, 1, 4500]], 'відновлено — товари в чернетці');
+// ---------- менеджер партнера: без закупівлі — ні (ні у відкриту, ні в чернетку), лише керівник ----------
+await req('POST', '/api/b2b/p/team', { login: 'olena', name: 'Олена', password: 'pass1234', partner_role: 'staff' }, A);
+const S = await login('olena', 'pass1234');
+const st = (extra) => req('POST', '/api/b2b/p/clients', { client_name: 'Від менеджера', client_phone: '0501112233', items: [{ product_id: 12, qty: 1 }], ...extra }, S);
+assert.match(await errOf(() => st({})), /лише керівник/, 'менеджер — без закупівлі не можна');
+assert.match(await errOf(() => st({ into: 'new' })), /лише керівник/);
+assert.match(await errOf(() => st({ into: dB.id })), /лише керівник/, 'і в чернетку — теж ні');
+assert.match(await errOf(() => req('PUT', `/api/b2b/p/clients/${c10.id}`, { client_name: 'Клієнт 10', client_phone: '0501112233', items: [{ product_id: 11, qty: 1 }] }, S)), /лише керівник/, 'змінити замовлення без закупівлі менеджер теж не може');
 console.log('OK — B2B: замовлення клієнтів без закупівлі йдуть у чернетку закупівлі (вибір, зміна, скасування з підтвердженням, видалення чернетки, відправка)');
