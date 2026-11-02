@@ -8,6 +8,7 @@
 // номер замовлення з CRM вручну. Статус замовлення в CRM партнер бачить у кабінеті (оновлюється не частіше ніж раз на 10 хв).
 // Передачу в CRM вмикає адмін у «Налаштуваннях CRM» (ID відділу + перемикач) — коли ключ LP-CRM отримає дозвіл на addNewOrder.
 import { fail, need, nowIso, loadSettings, MASK } from '../../core/common.js';
+import { can } from '../../core/auth.js';
 import { addNewOrder, getOrdersBatch, getStatuses, phpSerialize, phpUrlencode } from '../../integrations/lpcrm.js';
 import { CLIENT_STATUS, ORDER_STATUS, CLOSED_SQL, payState, orderNo, overdueDays } from './orders.js';
 import { listFilter } from './filters.js';
@@ -147,6 +148,14 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     if (linked.length) {
       const sup = await db.all(`SELECT DISTINCT supply_id FROM b2b_orders WHERE id IN (SELECT value FROM json_each(?)) AND supply_id IS NOT NULL`, [JSON.stringify(linked.map(([id]) => id))]);
       for (const r of sup) await supplyInWork(r.supply_id).catch(() => 0);
+    }
+  }
+
+  // Без закупівлі (у відкриту закупівлю чи чернетку) оформлює лише керівник команди партнера;
+  // менеджер — тільки з закупівель (оплачених або тих, що чекають на оплату).
+  function onlyHeadNoSupply(c, b) {
+    if (!parseInt(b.supply_id, 10) && !can(c.get('user'), 'b2b.team')) {
+      throw fail(403, 'Замовлення без закупівлі оформлює лише керівник вашої команди — оберіть закупівлю.');
     }
   }
 
@@ -477,6 +486,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
   app.post('/api/b2b/p/clients', async (c) => {
     const p = await myPartner(c);
     const b = await c.req.json();
+    onlyHeadNoSupply(c, b);
     const f = clientFields(b);
     if (f.ttn) { const dup = await labelDup({ ttn: f.ttn }); if (dup) throw fail(400, await ttnDupMsg(f.ttn, dup, p.id)); }
     const it = await buildItems(p, b);
@@ -507,6 +517,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     if (o.status !== 'new') throw fail(400, 'Замовлення вже передане в роботу — змінити його може лише менеджер.');
     if (o.pending) throw fail(400, 'Менеджер змінив це замовлення — спершу підтвердіть або відхиліть зміни.');
     const b = await c.req.json();
+    onlyHeadNoSupply(c, b);
     const f = clientFields(b);
     if (f.ttn) { const dup = await labelDup({ ttn: f.ttn }, o.id); if (dup) throw fail(400, await ttnDupMsg(f.ttn, dup, p.id)); }
     const cur = await supplyOf(o.supply_id);

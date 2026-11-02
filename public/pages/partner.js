@@ -575,7 +575,10 @@ export function createPartnerPages(ctx = {}) {
       }
     }
     const lim = await api('GET', '/api/b2b/p/limits');
+    // Без закупівлі — лише керівник команди; менеджер обирає закупівлю (оплачену або ту, що чекає на оплату).
+    const head = ctx.can ? ctx.can('b2b.team') : true;
     let source = cur ? String(cur.order.open_supply || cur.order.draft_supply ? '' : (cur.order.supply_id || '')) : (presetSupply || (supplies[0] ? String(supplies[0].id) : ''));
+    if (!head && source === '' && supplies[0]) source = String(supplies[0].id);
     // Без закупівлі: у чернетку закупівлі (за замовчуванням — найновішу; при зміні — ту, де замовлення зараз) або нова закупівля.
     const drafts = lim.drafts || [];
     let into = cur ? (cur.order.draft_supply ? String(cur.order.supply_id) : 'new') : (drafts[0] ? String(drafts[0].id) : 'new');
@@ -597,7 +600,7 @@ export function createPartnerPages(ctx = {}) {
                 <span class="small muted">${s.invoice_no ? `Рахунок № ${esc(s.invoice_no)} · ` : 'Рахунок ще готується · '}${esc(fmtDay(s.created_at))}${s.total ? ` · ${uah(s.total)}` : ''}</span>
                 <span class="small">Залишок: ${s.items.filter((i) => i.left > 0).map((i) => `${esc(i.name)} — ${i.left}`).join('; ')}</span>
               </label>`).join('')}
-              <label class="src-card bad ${source === '' ? 'on' : ''}">
+              ${head ? `<label class="src-card bad ${source === '' ? 'on' : ''}">
                 <input type="radio" name="cfSrc" value="" ${source === '' ? 'checked' : ''}>
                 <span class="src-head"><b>Без закупівлі</b>${drafts.length ? '<span class="badge warn">у чернетку</span>' : '<span class="badge bad">червоним</span>'}</span>
                 ${drafts.length ? `<span class="small muted">Товари з каталогу за вашою ціною — додаються в чернетку закупівлі; рахунок прийде разом із нею.</span>
@@ -607,9 +610,10 @@ export function createPartnerPages(ctx = {}) {
                   </select>` : ''}
                 <span class="small muted" id="cfOpenNote" ${drafts.length && into !== 'new' ? 'hidden' : ''}>Товари з каталогу за вашою ціною — додаються у відкриту закупівлю${lim.open.id ? ` ${esc(lim.open.number)}` : ''}:
                   <b>${uah(lim.open.total)}</b> з ліміту ${uah(lim.open.limit)}. Рахунок на неї формуєте самі.</span>
-              </label>
+              </label>` : ''}
             </div>
-            ${supplies.length ? '' : '<div class="small muted">Закупівель із залишком немає — можна оформити без закупівлі або спершу оформити закупівлю.</div>'}
+            ${head ? (supplies.length ? '' : '<div class="small muted">Закупівель із залишком немає — можна оформити без закупівлі або спершу оформити закупівлю.</div>')
+    : `<div class="small muted">${supplies.length ? '' : '<b>Закупівель із залишком немає.</b> '}Замовлення без закупівлі оформлює лише керівник вашої команди.</div>`}
           </div>
           <h3 style="margin:4px 0 0">2. Товари й кількість</h3>
           <div id="cfWarn"></div>
@@ -640,7 +644,7 @@ export function createPartnerPages(ctx = {}) {
     const often = new Map(catalog.products.map((p, i) => [p.id, { n: p.ordered || 0, i }]));
     const byOften = (a, b) => (often.get(b.product_id)?.n || 0) - (often.get(a.product_id)?.n || 0) || (often.get(a.product_id)?.i ?? 1e9) - (often.get(b.product_id)?.i ?? 1e9);
     const lines = () => {
-      if (!source) return catalog.products.map((p) => ({ product_id: p.id, name: p.name, article: p.article, price: p.price, left: null }));
+      if (!source) return head ? catalog.products.map((p) => ({ product_id: p.id, name: p.name, article: p.article, price: p.price, left: null })) : [];
       return [...(supplies.find((s) => String(s.id) === source)?.items || [])].sort(byOften); // часті — першими
     };
     const sum = () => {
@@ -650,7 +654,8 @@ export function createPartnerPages(ctx = {}) {
     };
     const draw = () => {
       const s = supplies.find((x) => String(x.id) === source);
-      $('#cfWarn').innerHTML = !source && into !== 'new' ? `<div class="alert warn"><b>У чернетку закупівлі ${esc(intoName())}.</b> Товари буде додано в чернетку — рахунок на них прийде разом із нею, коли чернетку відправлять.</div>`
+      $('#cfWarn').innerHTML = !source && !head ? '<div class="alert warn">Оберіть закупівлю — замовлення без закупівлі оформлює лише керівник вашої команди.</div>'
+        : !source && into !== 'new' ? `<div class="alert warn"><b>У чернетку закупівлі ${esc(intoName())}.</b> Товари буде додано в чернетку — рахунок на них прийде разом із нею, коли чернетку відправлять.</div>`
         : !source ? '<div class="alert bad"><b>Без закупівлі.</b> Замовлення буде підсвічене червоним; менеджер виставить рахунок на ці товари окремо.</div>'
         : (s && s.pay && s.pay !== 'paid' ? `<div class="alert warn">Закупівля ${esc(s.number)} ще не оплачена — замовлення буде позначене як неоплачене.</div>` : '');
       const ls = lines();
@@ -877,6 +882,7 @@ export function createPartnerPages(ctx = {}) {
           Якщо керівник налаштував додаткові документи (чек, гарантійний талон тощо — «Налаштування»), для кожного буде окреме поле; обов'язкові — позначені *.</p>
         <p><b>Без закупівлі.</b> Можна оформити замовлення з товарів каталогу без закупівлі — воно потрапляє у <b>відкриту закупівлю</b> (червоний банер угорі,
           ліміт типово 20 000 грн). Коли зберете потрібне, натисніть «Сформувати рахунок на закупівлю» — ми виставимо рахунок, а нові замовлення почнуть нову відкриту закупівлю.</p>
+        <p>Замовлення без закупівлі оформлює лише <b>керівник</b> команди; менеджер оформлює замовлення клієнтів тільки з закупівель.</p>
         <p><b>Є чернетка закупівлі?</b> Тоді замовлення без закупівлі за замовчуванням додається в неї (у найновішу; можна обрати іншу або «Нова закупівля») —
           рахунок на ці товари прийде разом із чернеткою, коли її відправлять. Скасоване замовлення прибирає свої товари з чернетки; видалена чернетка повертає
           свої замовлення у відкриту закупівлю.</p>
