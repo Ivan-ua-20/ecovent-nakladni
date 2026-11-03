@@ -795,6 +795,50 @@ export function createB2bPages(ctx = {}) {
     $$('[data-o]').forEach((tr) => (tr.onclick = () => { location.hash = `#/b2borders/${tr.dataset.o}`; }));
   }
 
+  // Таблиця товарів, де ціну й РРЦ можна змінити одразу (без «Змінити»): «Зберегти ціни» з'являється після правки.
+  // Нова РРЦ без зміни ціни — ціна з тією ж знижкою від РРЦ.
+  const fmtIn = (v) => String(Math.round(Number(v || 0) * 100) / 100).replace('.', ',');
+  const numIn = (v) => { const x = parseFloat(String(v ?? '').replace(/\s/g, '').replace(',', '.')); return Number.isFinite(x) ? Math.round(x * 100) / 100 : NaN; };
+  function priceTable(items, note = '') {
+    const sum = (i) => Math.round(i.qty * i.price * 100) / 100;
+    return `<table class="list"><thead><tr><th>Товар</th><th class="r">К-сть</th><th class="r">РРЦ</th><th class="r">Ціна</th><th class="r">Сума</th></tr></thead><tbody>
+      ${items.map((i, n) => `<tr><td>${esc(i.name)}${i.article ? `<div class="small muted">${esc(i.article)}</div>` : ''}</td>
+        <td class="r">${i.qty}</td>
+        <td class="r"><input data-ir="${n}" inputmode="decimal" value="${fmtIn(i.rrp)}" style="width:96px;text-align:right" aria-label="РРЦ: ${esc(i.name)}"></td>
+        <td class="r"><input data-ip="${n}" inputmode="decimal" value="${fmtIn(i.price)}" style="width:96px;text-align:right" aria-label="Ціна: ${esc(i.name)}"></td>
+        <td class="r nowrap"><b data-is="${n}">${money(sum(i))}</b></td></tr>`).join('')}
+      <tr><td colspan="4" class="r"><b>Разом (з ПДВ)</b></td><td class="r nowrap"><b id="ipTot">${uah(items.reduce((t, i) => t + sum(i), 0))}</b></td></tr></tbody></table>
+      <div class="btn-row" id="ipBar" hidden style="margin-top:8px;align-items:center"><button class="btn primary" id="ipSave">Зберегти ціни</button><button class="btn" id="ipUndo">Скасувати</button></div>
+      <div class="small muted" style="margin-top:6px">Ціну й РРЦ можна змінити прямо тут. Змінили РРЦ, а ціну ні — ціна перерахується з тією ж знижкою.${note ? ` ${note}` : ''}</div>`;
+  }
+  function wirePriceTable(items, save) {
+    const cur = items.map((i) => ({ ...i }));
+    const ip = (n) => $(`[data-ip="${n}"]`);
+    const ir = (n) => $(`[data-ir="${n}"]`);
+    const refresh = () => {
+      let tot = 0;
+      cur.forEach((r, n) => { const sm = Math.round(r.qty * r.price * 100) / 100; tot += sm; $(`[data-is="${n}"]`).textContent = money(sm); });
+      $('#ipTot').textContent = uah(tot);
+      $('#ipBar').hidden = !cur.some((r, n) => r.price !== items[n].price || r.rrp !== items[n].rrp);
+    };
+    cur.forEach((r, n) => {
+      ir(n).onchange = () => {
+        const v = numIn(ir(n).value);
+        if (!(v >= 0)) { ir(n).value = fmtIn(r.rrp); return; }
+        if (r.price === items[n].price && items[n].rrp > 0 && v !== items[n].rrp) { r.price = Math.round((items[n].price / items[n].rrp) * v * 100) / 100; ip(n).value = fmtIn(r.price); }
+        r.rrp = v;
+        refresh();
+      };
+      ip(n).onchange = () => { const v = numIn(ip(n).value); if (!(v >= 0)) { ip(n).value = fmtIn(r.price); return; } r.price = v; refresh(); };
+    });
+    $('#ipUndo').onclick = () => { cur.forEach((r, n) => { r.price = items[n].price; r.rrp = items[n].rrp; ip(n).value = fmtIn(r.price); ir(n).value = fmtIn(r.rrp); }); refresh(); };
+    $('#ipSave').onclick = async (e) => {
+      const b = e.currentTarget;
+      b.disabled = true;
+      try { if ((await save(cur)) === false) b.disabled = false; } catch (er) { toast(er.message, true); b.disabled = false; }
+    };
+  }
+
   async function viewOrder(id) {
     const d = await api('GET', `/api/b2b/orders/${id}`);
     if (d.order.kind === 'client') { location.hash = `#/b2bclients/${id}`; return; }
@@ -808,7 +852,7 @@ export function createB2bPages(ctx = {}) {
       ${o.status === 'draft' ? '<div class="alert warn" style="margin-bottom:12px"><b>Чернетка партнера</b> — команда партнера ще збирає товари. Відправити її (як від партнера) може керівник партнера або ви.</div>' : ''}
       <div class="form-page">
         <div class="form-stack">
-          <div class="card">${itemsTable(items, { rrp: true })}</div>
+          <div class="card">${closed ? itemsTable(items, { rrp: true }) : priceTable(items, o.status === 'open' ? 'Нові ціни перейдуть і в замовлення клієнтів цієї закупівлі.' : o.status === 'draft' ? 'Ціни в замовленнях клієнтів цієї чернетки теж оновляться.' : o.invoice_no ? `Рахунок № ${esc(o.invoice_no)} доведеться переробити.` : '')}</div>
           ${o.comment ? `<div class="card small"><b>Коментар:</b> ${esc(o.comment)}</div>` : ''}
           ${o.delivery === 'warehouse' && !closed ? `<div class="card form-stack"><h3>🏬 Відправка на склад партнера</h3>
             ${o.crm_id || o.crm_ext ? `<div>Передано в LP-CRM${o.crm_id ? `: № <b>${esc(o.crm_id)}</b>` : ''}${o.crm_sent_at && !String(o.crm_sent_at).startsWith('sending') ? ` · ${esc(fmtDateTime(o.crm_sent_at))}` : ''}</div>`
@@ -881,6 +925,13 @@ export function createB2bPages(ctx = {}) {
       try { await api('DELETE', `/api/b2b/orders/${o.id}`); toast('Закупівлю перенесено в кошик'); location.hash = '#/b2borders'; } catch (er) { toast(er.message, true); }
     };
     $('#oEdit') && ($('#oEdit').onclick = () => editSupply(o, items));
+    if (!closed) wirePriceTable(items, async (rows) => {
+      if (o.invoice_no && ['pay_wait', 'partial', 'paid', 'done'].includes(o.status)
+        && !(await confirmDanger(`Змінити ціни в закупівлі з рахунком № ${o.invoice_no}?`, 'Рахунок доведеться переробити: бухгалтер отримає запит у «Фінансові питання», партнер — сповіщення.', 'Зберегти ціни'))) return false;
+      const r = await api('PUT', `/api/b2b/orders/${o.id}/edit`, { items: rows.map((x) => ({ product_id: x.product_id, qty: x.qty, price: x.price, rrp: x.rrp })) });
+      toast(!r.changed ? 'Змін немає' : r.reinvoice ? 'Ціни збережено — запит переробити рахунок надіслано' : 'Ціни збережено, партнеру надіслано сповіщення');
+      viewOrder(o.id);
+    });
     $$('[data-fdel]').forEach((b) => (b.onclick = async () => {
       if (!(await confirmDanger('Видалити файл?', 'Партнер більше не зможе його завантажити.', 'Видалити'))) return;
       try { await api('DELETE', `/api/b2b/files/${b.dataset.fdel}`); toast('Видалено'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
@@ -1141,7 +1192,7 @@ export function createB2bPages(ctx = {}) {
       ${!o.no_supply && o.pay !== 'paid' && !closed ? `<div class="alert warn" style="margin-bottom:12px">Закупівля <a href="#/b2borders/${o.supply_id}">${esc(o.supply_number)}</a> ще не оплачена.</div>` : ''}
       <div class="form-page">
         <div class="form-stack">
-          <div class="card">${itemsTable(items, { rrp: true })}</div>
+          <div class="card">${closed ? itemsTable(items, { rrp: true }) : priceTable(items, o.draft_supply ? `Замовлення в чернетці закупівлі <a href="#/b2borders/${o.supply_id}">${esc(o.supply_number)}</a>: ціна товару зміниться в усій чернетці (і в інших її замовленнях клієнтів).` : o.crm_id ? `У LP-CRM (№ ${esc(o.crm_id)}) ціни змініть вручну.` : '')}</div>
           ${o.comment ? `<div class="card small"><b>Коментар партнера:</b> ${esc(o.comment)}</div>` : ''}
           <div class="card form-stack ${o.no_supply && !closed ? 'card-bad' : ''}">
             <h3>Клієнт і доставка</h3>
@@ -1220,6 +1271,11 @@ export function createB2bPages(ctx = {}) {
       try { await api('DELETE', `/api/b2b/orders/${o.id}`); toast('Замовлення перенесено в кошик'); location.hash = '#/b2bclients'; } catch (er) { toast(er.message, true); }
     };
     $('#clEdit') && ($('#clEdit').onclick = () => editClient(o, items));
+    if (!closed) wirePriceTable(items, async (rows) => {
+      const r = await api('PUT', `/api/b2b/clients/${o.id}/prices`, { items: rows.map((x) => ({ product_id: x.product_id, price: x.price, rrp: x.rrp })) });
+      toast(!r.changed ? 'Змін немає' : r.draft ? `Ціни змінено в чернетці ${r.draft} — для всіх її замовлень` : `Ціни збережено, партнеру надіслано сповіщення${r.crm ? `. У LP-CRM № ${r.crm} змініть вручну` : ''}`);
+      viewClient(o.id);
+    });
     $('#clCancel') && ($('#clCancel').onclick = async () => {
       if (!(await confirmDanger(`Скасувати ${o.number}?`, o.crm_id ? `Замовлення № ${o.crm_id} у LP-CRM скасуйте вручну.` : 'Партнер отримає сповіщення.', 'Скасувати замовлення'))) return;
       try { await api('POST', `/api/b2b/clients/${o.id}/cancel`); toast('Скасовано'); re(); } catch (er) { toast(er.message, true); }
@@ -1296,74 +1352,90 @@ export function createB2bPages(ctx = {}) {
   }
 
   // Замовлення клієнта: клієнт, телефон, ТТН, коментар, закупівля-джерело, товари — у будь-якому статусі, крім скасованого.
+  // Зверху — товари, що вже в замовленні (к-сть, ціна, ✕ прибрати); нижче — додати або замінити на інший товар.
   async function editClient(o, items) {
     const opt = await api('GET', `/api/b2b/clients/${o.id}/edit-options`);
-    const qty = new Map(items.map((i) => [i.product_id, i.qty]));
-    let src = o.no_supply ? '' : String(o.supply_id || '');
+    const origSrc = o.no_supply ? '' : String(o.supply_id || '');
+    let src = origSrc;
     if (src && !opt.supplies.some((s) => String(s.id) === src)) src = '';
-    let q = '';
+    const catMap = new Map(opt.catalog.map((p) => [p.product_id, p]));
+    // обрані товари: ціна — як зараз у замовленні; змінена вручну — priceSet
+    const chosen = new Map(items.map((i) => [i.product_id, { product_id: i.product_id, name: i.name, article: i.article, qty: i.qty, price: i.price, orig: true, priceSet: false }]));
+    const sup = () => opt.supplies.find((s) => String(s.id) === src);
+    const leftOf = (id) => sup()?.items.find((x) => x.product_id === id)?.left;
+    const srcPrice = (id) => (src ? sup()?.items.find((x) => x.product_id === id)?.price : undefined) ?? catMap.get(id)?.price;
     const m = modal(`Змінити замовлення ${o.number}`, `<form id="ceF" class="form-stack">
         ${o.status === 'crm' ? `<div class="alert warn small">Замовлення вже в LP-CRM${o.crm_id ? ` (№ <b>${esc(o.crm_id)}</b>)` : ''}. Після збереження старе замовлення вважається анульованим: партнер (особисто й у групі) отримає, що було і що буде, замовлення повернеться в «Нові»; скасуйте старе в CRM і передайте нове після підтвердження партнером.</div>`
           : '<div class="small muted">Після збереження партнер має підтвердити зміни — до того замовлення не передається в LP-CRM.</div>'}
         <div class="grid2"><label class="f"><span>ПІБ клієнта</span><input name="client_name" value="${esc(o.client_name)}"></label>
           <label class="f"><span>Телефон</span><input name="client_phone" value="${esc(o.client_phone)}" inputmode="tel"></label></div>
         <div class="grid2"><label class="f"><span>ТТН</span><input name="ttn" value="${esc(o.ttn || '')}" inputmode="numeric"></label>
-          <label class="f"><span>Товари з</span><select id="ceSrc"><option value="">Без закупівлі (відкрита закупівля, з каталогу)</option>
+          <label class="f"><span>Товари з</span><select id="ceSrc"><option value="">Без закупівлі (${o.draft_supply ? 'чернетка закупівлі' : 'відкрита закупівля'}, з каталогу)</option>
             ${opt.supplies.map((s) => `<option value="${s.id}" ${String(s.id) === src ? 'selected' : ''}>${esc(s.number)} · ${esc(s.status_name)}</option>`).join('')}</select></label></div>
         <div id="ceList"></div>
+        <label class="f"><span>Додати або замінити товар</span><input id="ceAdd" list="ceCat" placeholder="Почніть вводити назву або ID"><datalist id="ceCat"></datalist></label>
         <label class="f"><span>Коментар</span><textarea name="comment" rows="2">${esc(o.comment || '')}</textarea></label>
       </form>`, { wide: true, footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="ceSave">Зберегти</button>' });
-    const extra = new Map(); // інші товари з каталогу, яких немає в закупівлі-джерелі
-    const catMap = new Map(opt.catalog.map((p) => [p.product_id, p]));
-    for (const i of items) if (!o.no_supply && !(opt.supplies.find((s) => String(s.id) === src)?.items || []).some((x) => x.product_id === i.product_id)) extra.set(i.product_id, { product_id: i.product_id, name: i.name, price: i.price, left: 0 });
-    const list = () => {
-      if (src) {
-        const sItems = (opt.supplies.find((s) => String(s.id) === src)?.items || []).map((i) => ({ ...i, hint: `залишок ${i.left}` }));
-        return [...sItems, ...[...extra.values()].filter((x) => !sItems.some((i) => i.product_id === x.product_id)).map((x) => ({ ...x, hint: 'немає в закупівлі — буде додано' }))];
-      }
-      const ql = q.trim().toLowerCase();
-      const all = opt.catalog.map((p) => ({ ...p, hint: '' }));
-      return all.filter((p) => qty.get(p.product_id) || !ql || p.name.toLowerCase().includes(ql) || String(p.product_id) === ql).slice(0, 120);
+    const fillCat = () => {
+      const sIt = src ? (sup()?.items || []) : [];
+      $('#ceCat', m.el).innerHTML = [
+        ...sIt.map((x) => `<option value="${x.product_id} · ${esc(x.name)} — із закупівлі, залишок ${x.left}">`),
+        ...opt.catalog.filter((p) => !sIt.some((x) => x.product_id === p.product_id)).map((p) => `<option value="${p.product_id} · ${esc(p.name)}${src ? ' — немає в закупівлі' : ''}">`),
+      ].join('');
     };
     const draw = () => {
-      const l = list();
-      $('#ceList', m.el).innerHTML = `${src ? `<label class="f"><span>Замінити / додати інший товар (з каталогу партнера)</span><input id="ceAdd" list="ceCat" placeholder="Почніть вводити назву або ID">
-          <datalist id="ceCat">${opt.catalog.map((p) => `<option value="${p.product_id} · ${esc(p.name)}">`).join('')}</datalist></label>` : `<input id="ceQ" placeholder="Пошук товару в каталозі партнера" value="${esc(q)}">`}
-        <table class="list"><thead><tr><th>Товар</th><th class="r">Ціна</th><th class="r">К-сть</th></tr></thead><tbody>
-        ${l.map((p) => `<tr><td>${esc(p.name)}<div class="small muted">ID ${p.product_id}${p.hint ? ` · ${esc(p.hint)}` : ''}</div></td><td class="r nowrap">${money(p.price)}</td>
-          <td class="r"><input data-cq="${p.product_id}" type="number" min="0" step="1" value="${qty.get(p.product_id) || ''}" style="width:76px" aria-label="Кількість"></td></tr>`).join('')
-          || '<tr><td colspan="3" class="small muted">Немає товарів.</td></tr>'}</tbody></table>`;
-      $$('[data-cq]', m.el).forEach((x) => (x.onchange = () => { const v = Math.max(0, Math.floor(n2(x.value))); if (v) qty.set(Number(x.dataset.cq), v); else qty.delete(Number(x.dataset.cq)); }));
-      const ai = $('#ceAdd', m.el);
-      if (ai) ai.onchange = () => {
-        const p = catMap.get(parseInt(ai.value, 10));
-        if (!p) { toast('Оберіть товар зі списку', true); return; }
-        if (!list().some((x) => x.product_id === p.product_id)) extra.set(p.product_id, { product_id: p.product_id, name: p.name, price: p.price, left: 0 });
-        qty.set(p.product_id, (qty.get(p.product_id) || 0) + 1);
-        draw();
-      };
-      const qi = $('#ceQ', m.el);
-      if (qi) qi.oninput = () => { q = qi.value; const pos = qi.selectionStart; draw(); const n = $('#ceQ', m.el); n.focus(); n.setSelectionRange(pos, pos); };
+      const rows = [...chosen.values()];
+      const total = rows.reduce((t, r) => t + Math.round(r.qty * r.price * 100) / 100, 0);
+      $('#ceList', m.el).innerHTML = `<div class="small" style="margin-bottom:4px"><b>Товари в замовленні</b></div>
+        <table class="list"><thead><tr><th>Товар</th><th class="r">К-сть</th><th class="r">Ціна, грн</th><th class="r">Сума</th><th></th></tr></thead><tbody>
+        ${rows.map((r) => { const left = leftOf(r.product_id); const hint = src ? (left == null ? 'немає в закупівлі — буде додано' : `залишок у закупівлі ${left}`) : ''; return `<tr>
+          <td>${esc(r.name)}${r.orig ? '' : ' <span class="badge info">новий</span>'}<div class="small muted">ID ${r.product_id}${r.article ? ` · ${esc(r.article)}` : ''}${hint ? ` · ${esc(hint)}` : ''}</div></td>
+          <td class="r"><input data-cq="${r.product_id}" type="number" min="1" step="1" value="${r.qty}" style="width:70px" aria-label="Кількість: ${esc(r.name)}"></td>
+          <td class="r"><input data-cp="${r.product_id}" inputmode="decimal" value="${fmtIn(r.price)}" style="width:96px;text-align:right" aria-label="Ціна: ${esc(r.name)}"></td>
+          <td class="r nowrap">${money(Math.round(r.qty * r.price * 100) / 100)}</td>
+          <td class="r"><button type="button" class="btn sm danger" data-cx="${r.product_id}" aria-label="Прибрати ${esc(r.name)}">✕</button></td></tr>`; }).join('')
+          || '<tr><td colspan="5" class="small muted">Товарів немає — додайте нижче.</td></tr>'}
+        <tr><td colspan="3" class="r"><b>Разом</b></td><td class="r nowrap"><b>${uah(total)}</b></td><td></td></tr></tbody></table>
+        <div class="small muted">Зменшіть кількість, змініть ціну або ✕ — прибрати; щоб замінити товар, приберіть його й додайте інший нижче.</div>`;
+      $$('[data-cq]', m.el).forEach((x) => (x.onchange = () => { const v = Math.floor(n2(x.value)); const r = chosen.get(Number(x.dataset.cq)); if (v > 0) r.qty = v; else chosen.delete(r.product_id); draw(); }));
+      $$('[data-cp]', m.el).forEach((x) => (x.onchange = () => { const v = numIn(x.value); const r = chosen.get(Number(x.dataset.cp)); if (v >= 0) { r.price = v; r.priceSet = true; } draw(); }));
+      $$('[data-cx]', m.el).forEach((b) => (b.onclick = () => { chosen.delete(Number(b.dataset.cx)); draw(); }));
     };
-    $('#ceSrc', m.el).onchange = (e) => { src = e.target.value; draw(); };
+    $('#ceAdd', m.el).onchange = (e) => {
+      const id = parseInt(e.target.value, 10);
+      e.target.value = '';
+      const p = catMap.get(id) || sup()?.items.find((x) => x.product_id === id);
+      if (!p) { toast('Оберіть товар зі списку', true); return; }
+      const have = chosen.get(id);
+      if (have) have.qty += 1;
+      else chosen.set(id, { product_id: id, name: p.name, article: p.article || '', qty: 1, price: srcPrice(id) ?? p.price, orig: false, priceSet: false });
+      draw();
+    };
+    $('#ceSrc', m.el).onchange = (e) => {
+      src = e.target.value;
+      // інше джерело — ціни з нього (крім змінених вручну)
+      for (const r of chosen.values()) if (!r.priceSet) r.price = (src === origSrc && r.orig ? items.find((i) => i.product_id === r.product_id)?.price : undefined) ?? srcPrice(r.product_id) ?? r.price;
+      fillCat();
+      draw();
+    };
+    fillCat();
     draw();
     $('#ceSave', m.el).onclick = async (e) => {
       const f = Object.fromEntries(new FormData($('#ceF', m.el)));
-      const ids = new Set(list().map((p) => p.product_id));
-      const its = [...qty].filter(([id, n]) => n > 0 && (src ? ids.has(id) : true)).map(([product_id, n]) => ({ product_id, qty: n }));
-      if (!its.length) { toast('Вкажіть кількість хоча б одного товару', true); return; }
+      const rows = [...chosen.values()].filter((r) => r.qty > 0);
+      if (!rows.length) { toast('Додайте хоча б один товар', true); return; }
+      // ціна йде на сервер, якщо змінена вручну або товар лишився з того самого джерела (щоб не загубити поточну ціну)
+      const its = rows.map((r) => ({ product_id: r.product_id, qty: r.qty, ...(r.priceSet || (r.orig && src === origSrc) ? { price: r.price } : {}) }));
       // Бракує в закупівлі — додати в закупівлю (з рахунком — перевиставлення).
       let addToSupply = false;
       if (src) {
-        const l = new Map(list().map((x) => [x.product_id, x.left ?? 0]));
-        const short = its.filter((x) => x.qty > Math.max(0, l.get(x.product_id) ?? 0)).map((x) => `${(list().find((p) => p.product_id === x.product_id) || {}).name || x.product_id} × ${x.qty - Math.max(0, l.get(x.product_id) ?? 0)}`);
-        const sup = opt.supplies.find((s) => String(s.id) === src);
+        const short = rows.filter((r) => r.qty > Math.max(0, leftOf(r.product_id) ?? 0)).map((r) => `${r.name} × ${r.qty - Math.max(0, leftOf(r.product_id) ?? 0)}`);
         if (short.length) {
-          if (!(await confirmDanger(`Додати в закупівлю ${sup?.number || ''}?`, `Бракує в закупівлі: ${short.join(', ')}. Товар буде додано в закупівлю${/Очікує рахунок|Чернетка/.test(sup?.status_name || '') ? '' : ' — рахунок доведеться переробити (запит у «Фінансові питання»)'}.`, 'Додати й зберегти'))) return;
+          if (!(await confirmDanger(`Додати в закупівлю ${sup()?.number || ''}?`, `Бракує в закупівлі: ${short.join(', ')}. Товар буде додано в закупівлю${/Очікує рахунок|Чернетка/.test(sup()?.status_name || '') ? '' : ' — рахунок доведеться переробити (запит у «Фінансові питання»)'}.`, 'Додати й зберегти'))) return;
           addToSupply = true;
         }
       }
-      const btn = e.target.closest("button");
+      const btn = e.target.closest('button');
       btn.disabled = true;
       try {
         const r = await api('PUT', `/api/b2b/clients/${o.id}/edit`, { ...f, supply_id: src || null, items: its, add_to_supply: addToSupply });
