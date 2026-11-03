@@ -1360,10 +1360,11 @@ export function createB2bPages(ctx = {}) {
     if (src && !opt.supplies.some((s) => String(s.id) === src)) src = '';
     const catMap = new Map(opt.catalog.map((p) => [p.product_id, p]));
     // обрані товари: ціна — як зараз у замовленні; змінена вручну — priceSet
-    const chosen = new Map(items.map((i) => [i.product_id, { product_id: i.product_id, name: i.name, article: i.article, qty: i.qty, price: i.price, orig: true, priceSet: false }]));
+    const chosen = new Map(items.map((i) => [i.product_id, { product_id: i.product_id, name: i.name, article: i.article, qty: i.qty, price: i.price, rrp: i.rrp, orig: true, priceSet: false, rrpSet: false }]));
     const sup = () => opt.supplies.find((s) => String(s.id) === src);
     const leftOf = (id) => sup()?.items.find((x) => x.product_id === id)?.left;
     const srcPrice = (id) => (src ? sup()?.items.find((x) => x.product_id === id)?.price : undefined) ?? catMap.get(id)?.price;
+    const srcRrp = (id) => (src ? sup()?.items.find((x) => x.product_id === id)?.rrp : undefined) ?? catMap.get(id)?.rrp;
     const m = modal(`Змінити замовлення ${o.number}`, `<form id="ceF" class="form-stack">
         ${o.status === 'crm' ? `<div class="alert warn small">Замовлення вже в LP-CRM${o.crm_id ? ` (№ <b>${esc(o.crm_id)}</b>)` : ''}. Після збереження старе замовлення вважається анульованим: партнер (особисто й у групі) отримає, що було і що буде, замовлення повернеться в «Нові»; скасуйте старе в CRM і передайте нове після підтвердження партнером.</div>`
           : '<div class="small muted">Після збереження партнер має підтвердити зміни — до того замовлення не передається в LP-CRM.</div>'}
@@ -1387,18 +1388,24 @@ export function createB2bPages(ctx = {}) {
       const rows = [...chosen.values()];
       const total = rows.reduce((t, r) => t + Math.round(r.qty * r.price * 100) / 100, 0);
       $('#ceList', m.el).innerHTML = `<div class="small" style="margin-bottom:4px"><b>Товари в замовленні</b></div>
-        <table class="list"><thead><tr><th>Товар</th><th class="r">К-сть</th><th class="r">Ціна, грн</th><th class="r">Сума</th><th></th></tr></thead><tbody>
+        <table class="list"><thead><tr><th>Товар</th><th class="r">К-сть</th><th class="r">РРЦ, грн</th><th class="r">Ціна, грн</th><th class="r">Сума</th><th></th></tr></thead><tbody>
         ${rows.map((r) => { const left = leftOf(r.product_id); const hint = src ? (left == null ? 'немає в закупівлі — буде додано' : `залишок у закупівлі ${left}`) : ''; return `<tr>
           <td>${esc(r.name)}${r.orig ? '' : ' <span class="badge info">новий</span>'}<div class="small muted">ID ${r.product_id}${r.article ? ` · ${esc(r.article)}` : ''}${hint ? ` · ${esc(hint)}` : ''}</div></td>
           <td class="r"><input data-cq="${r.product_id}" type="number" min="1" step="1" value="${r.qty}" style="width:70px" aria-label="Кількість: ${esc(r.name)}"></td>
+          <td class="r"><input data-cr="${r.product_id}" inputmode="decimal" value="${fmtIn(r.rrp)}" style="width:96px;text-align:right" aria-label="РРЦ: ${esc(r.name)}"></td>
           <td class="r"><input data-cp="${r.product_id}" inputmode="decimal" value="${fmtIn(r.price)}" style="width:96px;text-align:right" aria-label="Ціна: ${esc(r.name)}"></td>
           <td class="r nowrap">${money(Math.round(r.qty * r.price * 100) / 100)}</td>
           <td class="r"><button type="button" class="btn sm danger" data-cx="${r.product_id}" aria-label="Прибрати ${esc(r.name)}">✕</button></td></tr>`; }).join('')
-          || '<tr><td colspan="5" class="small muted">Товарів немає — додайте нижче.</td></tr>'}
-        <tr><td colspan="3" class="r"><b>Разом</b></td><td class="r nowrap"><b>${uah(total)}</b></td><td></td></tr></tbody></table>
-        <div class="small muted">Зменшіть кількість, змініть ціну або ✕ — прибрати; щоб замінити товар, приберіть його й додайте інший нижче.</div>`;
+          || '<tr><td colspan="6" class="small muted">Товарів немає — додайте нижче.</td></tr>'}
+        <tr><td colspan="4" class="r"><b>Разом</b></td><td class="r nowrap"><b>${uah(total)}</b></td><td></td></tr></tbody></table>
+        <div class="small muted">Зменшіть кількість, змініть ціну чи РРЦ (змінили лише РРЦ — ціна перерахується з тією ж знижкою) або ✕ — прибрати; щоб замінити товар, приберіть його й додайте інший нижче.</div>`;
       $$('[data-cq]', m.el).forEach((x) => (x.onchange = () => { const v = Math.floor(n2(x.value)); const r = chosen.get(Number(x.dataset.cq)); if (v > 0) r.qty = v; else chosen.delete(r.product_id); draw(); }));
       $$('[data-cp]', m.el).forEach((x) => (x.onchange = () => { const v = numIn(x.value); const r = chosen.get(Number(x.dataset.cp)); if (v >= 0) { r.price = v; r.priceSet = true; } draw(); }));
+      $$('[data-cr]', m.el).forEach((x) => (x.onchange = () => {
+        const v = numIn(x.value); const r = chosen.get(Number(x.dataset.cr));
+        if (v >= 0 && v !== r.rrp) { if (!r.priceSet && r.rrp > 0) r.price = Math.round((r.price / r.rrp) * v * 100) / 100; r.rrp = v; r.rrpSet = true; }
+        draw();
+      }));
       $$('[data-cx]', m.el).forEach((b) => (b.onclick = () => { chosen.delete(Number(b.dataset.cx)); draw(); }));
     };
     $('#ceAdd', m.el).onchange = (e) => {
@@ -1408,12 +1415,13 @@ export function createB2bPages(ctx = {}) {
       if (!p) { toast('Оберіть товар зі списку', true); return; }
       const have = chosen.get(id);
       if (have) have.qty += 1;
-      else chosen.set(id, { product_id: id, name: p.name, article: p.article || '', qty: 1, price: srcPrice(id) ?? p.price, orig: false, priceSet: false });
+      else chosen.set(id, { product_id: id, name: p.name, article: p.article || '', qty: 1, price: srcPrice(id) ?? p.price, rrp: srcRrp(id) ?? p.rrp ?? 0, orig: false, priceSet: false, rrpSet: false });
       draw();
     };
     $('#ceSrc', m.el).onchange = (e) => {
       src = e.target.value;
       // інше джерело — ціни з нього (крім змінених вручну)
+      for (const r of chosen.values()) if (!r.rrpSet) r.rrp = (src === origSrc && r.orig ? items.find((i) => i.product_id === r.product_id)?.rrp : undefined) ?? srcRrp(r.product_id) ?? r.rrp;
       for (const r of chosen.values()) if (!r.priceSet) r.price = (src === origSrc && r.orig ? items.find((i) => i.product_id === r.product_id)?.price : undefined) ?? srcPrice(r.product_id) ?? r.price;
       fillCat();
       draw();
@@ -1425,7 +1433,7 @@ export function createB2bPages(ctx = {}) {
       const rows = [...chosen.values()].filter((r) => r.qty > 0);
       if (!rows.length) { toast('Додайте хоча б один товар', true); return; }
       // ціна йде на сервер, якщо змінена вручну або товар лишився з того самого джерела (щоб не загубити поточну ціну)
-      const its = rows.map((r) => ({ product_id: r.product_id, qty: r.qty, ...(r.priceSet || (r.orig && src === origSrc) ? { price: r.price } : {}) }));
+      const its = rows.map((r) => ({ product_id: r.product_id, qty: r.qty, ...(r.priceSet || r.rrpSet || (r.orig && src === origSrc) ? { price: r.price } : {}), ...(r.rrpSet ? { rrp: r.rrp } : {}) }));
       // Бракує в закупівлі — додати в закупівлю (з рахунком — перевиставлення).
       let addToSupply = false;
       if (src) {
