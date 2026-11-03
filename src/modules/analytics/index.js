@@ -161,12 +161,14 @@ export function normalizeAnOrder(raw) {
   };
 }
 
-// ТТН із замовлення LP-CRM (назва поля може відрізнятися): лише цифри й латинські літери, 8–20 символів.
+// ТТН із замовлення LP-CRM (назва поля може відрізнятися) — будь-якої служби доставки: Нова пошта (14 цифр),
+// Укрпошта, Meest, ROZETKA Delivery («RMP-…», зокрема створені через Prom — «PRM-…») тощо.
+// Цифри, латинські літери й дефіс, 8–24 символи, щонайменше 6 цифр (щоб не брати випадковий текст).
 const TTN_KEYS = ['ttn', 'ttn_number', 'np_ttn', 'declaration', 'tracking_number'];
 export function ttnOf(raw) {
   for (const k of TTN_KEYS) {
     const v = String(raw?.[k] ?? '').replace(/\s/g, '').toUpperCase();
-    if (/^[0-9A-Z]{8,20}$/.test(v) && !/^0+$/.test(v)) return v;
+    if (/^[0-9A-Z][0-9A-Z-]{6,22}[0-9A-Z]$/.test(v) && (v.match(/\d/g) || []).length >= 6 && !/^0+$/.test(v)) return v;
   }
   return '';
 }
@@ -424,6 +426,11 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
       if (j?.status === 'ok') for (const code of asList(j.data).map(String).filter(Boolean)) listed.set(code, x);
     }
     const codes = [...listed.keys()];
+    // Разово: раніше ТТН з дефісом (ROZETKA Delivery «RMP-…», Prom «PRM-…») не розпізнавались — свіжі замовлення без ТТН перечитати.
+    if (!(await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_v2'`))?.value) {
+      await db.run(`DELETE FROM an_ttn_recent WHERE ttn = ''`);
+      await putSetting('an_ttn_v2', '1');
+    }
     let fetched = 0;
     let found = 0;
     if (codes.length) {

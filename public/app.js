@@ -19,6 +19,7 @@ import { createB2bPages } from './pages/b2b.js';
 import { createPartnerPages } from './pages/partner.js';
 import { createHomePages } from './pages/home.js';
 import { createB2bStats } from './pages/b2b-stats.js';
+import { createPriceLogPages } from './pages/b2b-pricelog.js';
 import { createRetailPages } from './pages/retail.js';
 
 // ---------- стан ----------
@@ -50,6 +51,7 @@ const SECTIONS = [
     { id: 'b2bclients', label: 'Замовлення клієнтів' },
     { id: 'b2bpartners', label: 'Партнери' },
     { id: 'b2bcatalog', label: 'Каталог і ціни' },
+    { id: 'b2bprices', label: 'Журнал цін' },
     { id: 'b2bstats', label: 'Аналітика' },
     { id: 'b2bstatement', label: 'Взаєморозрахунки' },
     { id: 'b2btrash', label: 'Кошик' },
@@ -58,6 +60,7 @@ const SECTIONS = [
   { id: 'partner', label: 'Кабінет партнера', perm: 'b2b.partner', home: 'phome', tabs: [
     { id: 'phome', label: 'Головна' },
     { id: 'pcatalog', label: 'Каталог' },
+    { id: 'pprices', label: 'Зміни цін' },
     { id: 'porders', label: 'Закупівлі' },
     { id: 'pstatement', label: 'Взаєморозрахунки' },
     { id: 'pclients', label: 'Замовлення клієнтів' },
@@ -283,6 +286,7 @@ const { viewRahunky, viewRahunkyList } = createRahunkyPages(ctx);
 const { viewUsers } = createUsersPages(ctx);
 const { viewErrors } = createErrorsPages(ctx);
 const B2BSTATS = createB2bStats();
+const PRICELOG = createPriceLogPages();
 const RETAIL = createRetailPages(ctx);
 const { viewPartners, viewCatalog, viewOrders: viewB2bOrders, viewClients: viewB2bClients, viewTrash: viewB2bTrash } = createB2bPages(ctx);
 const HOME = createHomePages(ctx);
@@ -321,6 +325,8 @@ const routes = {
   b2bstats: (pid) => B2BSTATS.view({ url: '/api/b2b/stats', admin: true, title: 'Аналітика B2B', partner: pid }),
   b2bclients: viewB2bClients,
   b2btrash: viewB2bTrash,
+  b2bprices: () => PRICELOG.viewAdmin(),
+  pprices: () => PRICELOG.viewPartner(),
   ptrash: viewPartnerTrash,
   pentities: viewEntities,
   b2bcatalog: viewCatalog,
