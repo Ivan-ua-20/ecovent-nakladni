@@ -40,6 +40,12 @@ npm start          # http://localhost:8787
 
 Для Windows-користувачів: архів папки `dist/` → `start.bat` (потрібен Node.js 22.13+).
 
+## Автозлиття pull request
+
+CI (`.github/workflows/ci.yml`) може сам зливати PR у `main`, щойно всі тести пройшли, — і Cloudflare одразу викладає зміни.
+Вмикається змінною репозиторію `AUTO_MERGE = true` (Settings → Secrets and variables → Actions → Variables), вимикається — `false`
+або видаленням змінної. Окремий PR можна залишити на ручну перевірку міткою `no-automerge`.
+
 ## Структура
 
 Код поділено на незалежні блоки: кожен модуль має свої маршрути, свої таблиці й тести,
