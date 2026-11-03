@@ -815,30 +815,39 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return c.json({ ok: true });
   });
 
-  // Ручна зміна статусу: «Оплачено» (якщо Opendatabot не побачив оплату), «Завершено», «Скасовано», повернути «Очікує оплату».
+  // Ручна зміна статусу: «Оплачено» (якщо Opendatabot не побачив оплату — або оплати й не буде: гарантійна заміна тощо;
+  // лише з коментарем, рахунок не обов'язковий), «Завершено», «Скасовано», повернути «Очікує оплату».
   app.post('/api/b2b/orders/:id/status', async (c) => {
     need(c, 'b2b.admin');
     const o = await orderOf(c.req.param('id'));
     if (o.kind !== 'supply') throw fail(400, 'Статус замовлення клієнта змінюється на його сторінці.');
-    const { status } = await c.req.json();
+    const { status, note: rawNote } = await c.req.json();
     if (!['paid', 'done', 'cancelled', 'pay_wait'].includes(status)) throw fail(400, 'Невідомий статус.');
     if (o.status === 'open') throw fail(400, 'Це відкрита закупівля: вона складається із замовлень клієнтів. Спершу партнер формує на неї рахунок.');
-    if (status === 'pay_wait' && !o.invoice_no) throw fail(400, 'Спершу внесіть номер рахунку.');
-    if (status === 'paid' && !o.invoice_no) throw fail(400, 'Спершу внесіть номер рахунку.');
+    if (o.status === 'draft') throw fail(400, 'Це чернетка — спершу її відправляють.');
+    if (status === 'paid' && ['cancelled', 'confirm'].includes(o.status)) throw fail(400, o.status === 'cancelled' ? 'Закупівлю скасовано.' : 'Закупівля ще чекає підтвердження партнера.');
+    if (status === 'pay_wait' && !o.invoice_no && !['paid', 'partial'].includes(o.status)) throw fail(400, 'Спершу внесіть номер рахунку.');
+    const note = String(rawNote ?? '').trim().slice(0, 500);
     const u = c.get('user');
     const now = nowIso();
-    if (status === 'paid') {
-      await db.run(`UPDATE b2b_orders SET status = 'paid', paid_amount = total, paid_at = ?, paid_by = ?, updated_at = ? WHERE id = ?`, [now, userName(u), now, o.id]);
-      await log(o.id, u, 'позначено «Оплачено» вручну');
-      await tgPartner(o.partner_id, `✅ <b>Оплату отримано</b>: закупівля ${orderNo(o.id)}${o.invoice_no ? `, рахунок № ${h(o.invoice_no)}` : ''} — ${uah(o.total)}`);
+    if (status === 'paid' && o.status === 'done') { // повернути «Оплачено» із «Завершено» — оплата та сама
+      await db.run(`UPDATE b2b_orders SET status = 'paid', updated_at = ? WHERE id = ?`, [now, o.id]);
+      await log(o.id, u, 'статус: «Оплачено» (повернуто із «Завершено»)');
+    } else if (status === 'paid') {
+      if (note.length < 3) throw fail(400, 'Вкажіть коментар: чому оплату підтверджено вручну (напр., «гарантійна заміна — товар повернуто»).');
+      await db.run(`UPDATE b2b_orders SET status = 'paid', paid_amount = total, paid_at = ?, paid_by = ?, paid_note = ?, updated_at = ? WHERE id = ?`, [now, userName(u), note, now, o.id]);
+      await log(o.id, u, `позначено «Оплачено» вручну: ${note}`);
+      const msg = `✅ <b>Оплату підтверджено</b>: закупівля ${orderNo(o.id)}${o.invoice_no ? `, рахунок № ${h(o.invoice_no)}` : ''} — ${uah(o.total)}\n💬 ${h(note)}`;
+      await tgPartner(o.partner_id, msg); // оплата — лише особисто, не в групу
       await hooks.finPaid?.(o.id).catch(() => 0); // запит накладної в «Фінансові питання»
       await hooks.crmPaid?.(o.id, new URL(c.req.url).origin).catch(() => 0); // замовлення вже в CRM — підказка адмінам
     } else if (status === 'pay_wait') {
       // Повернути «Очікує оплату» (або зняти часткову оплату): платежі Opendatabot відв'язуються.
       if (!['paid', 'partial'].includes(o.status)) throw fail(400, 'Закупівля й так очікує оплату.');
       await hooks.payReset?.(o.id);
-      await db.run(`UPDATE b2b_orders SET status = 'pay_wait', paid_amount = 0, paid_at = '', paid_by = '', updated_at = ? WHERE id = ?`, [now, o.id]);
-      await log(o.id, u, o.status === 'partial' ? 'знято часткову оплату — «Очікує оплату»' : 'статус: «Очікує оплату» (оплату знято)');
+      const back = o.invoice_no ? 'pay_wait' : 'invoice_wait'; // оплачено вручну без рахунку — знову «Очікує рахунок»
+      await db.run(`UPDATE b2b_orders SET status = ?, paid_amount = 0, paid_at = '', paid_by = '', paid_note = '', updated_at = ? WHERE id = ?`, [back, now, o.id]);
+      await log(o.id, u, o.status === 'partial' ? 'знято часткову оплату — «Очікує оплату»' : `статус: «${ORDER_STATUS[back]}» (оплату знято)`);
     } else {
       await db.run(`UPDATE b2b_orders SET status = ?, updated_at = ? WHERE id = ?`, [status, now, o.id]);
       await log(o.id, u, `статус: «${ORDER_STATUS[status]}»`);

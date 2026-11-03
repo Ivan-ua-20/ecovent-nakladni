@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 29,
+  version: 30,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -286,6 +286,8 @@ export const schema = {
     // доки не підтверджено — у LP-CRM не передається. crm_old — номер старого замовлення в CRM, якщо його анульовано.
     ['b2b_orders', 'pending', "TEXT DEFAULT ''"],
     ['b2b_orders', 'crm_old', "TEXT DEFAULT ''"],
+    // «Оплачено» вручну — обов'язковий коментар (напр., «гарантійна заміна — товар повернуто»).
+    ['b2b_orders', 'paid_note', "TEXT DEFAULT ''"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ['b2b_tg_docs', 'source', "TEXT DEFAULT 'private'"],
     ['b2b_tg_docs', 'reply_to', 'INTEGER'],

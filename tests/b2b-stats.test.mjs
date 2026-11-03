@@ -54,7 +54,7 @@ const eb = await req('POST', '/api/b2b/p/entities', { name: 'ФОП Бета', c
 // закупівля А: 5×Fan (900), 2×Heater (1600) = 7700; оплачена
 const s1 = await req('POST', '/api/b2b/p/orders', { entity_id: ea.id, items: [{ product_id: 11, qty: 5 }, { product_id: 21, qty: 2 }] }, A);
 await req('PUT', `/api/b2b/orders/${s1.id}`, { invoice_no: 'СФ-1' });
-await req('POST', `/api/b2b/orders/${s1.id}/status`, { status: 'paid' });
+await req('POST', `/api/b2b/orders/${s1.id}/status`, { status: 'paid', note: 'оплата готівкою' });
 // закупівля А №2 — не оплачена, рахунок є: 1×Fan 2 (450)
 const s2 = await req('POST', '/api/b2b/p/orders', { entity_id: ea.id, items: [{ product_id: 12, qty: 1 }] }, A);
 await req('PUT', `/api/b2b/orders/${s2.id}`, { invoice_no: 'СФ-2' });

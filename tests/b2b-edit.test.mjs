@@ -54,13 +54,14 @@ const ent2 = await req('POST', '/api/b2b/p/entities', { name: 'ТОВ Бета',
 const items = async (id) => (await req('GET', `/api/b2b/orders/${id}`)).items.map((i) => [i.product_id, i.qty, i.price]);
 const edit = (id, body) => req('PUT', `/api/b2b/orders/${id}/edit`, body);
 
-// ---------- 1. Чернетка: адмін змінює без сповіщень ----------
+// ---------- 1. Чернетка: адмін змінює — партнеру в бот і в групу (хто й що змінив) ----------
 const d1 = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, items: [{ product_id: 11, qty: 1 }], draft: true }, A);
 tg.length = 0;
 let r = await edit(d1.id, { items: [{ product_id: 11, qty: 1 }, { product_id: 12, qty: 2, price: '4000' }] });
 assert.equal(r.total, 17000);
 assert.deepEqual(await items(d1.id), [[11, 1, 9000], [12, 2, 4000]], 'новий товар з ручною ціною');
-assert.equal(tg.length, 0, 'чернетка — без сповіщень');
+assert.ok(tg.some((m) => String(m.chat_id) === '2' && /Чернетку закупівлі .* змінив/.test(m.text)), 'чернетка — партнеру');
+assert.ok(tg.some((m) => String(m.chat_id) === '-500' && /змінив/.test(m.text)), 'чернетка — у групу');
 const opt = await req('GET', `/api/b2b/orders/${d1.id}/edit-options`);
 assert.deepEqual(opt.catalog.map((p) => [p.product_id, p.price]), [[11, 9000], [12, 4500], [13, 1800]]);
 assert.equal(opt.invoiced, false);
@@ -73,7 +74,7 @@ assert.deepEqual([r.changed, r.total, r.reinvoice], [true, 13500, false]);
 let o = (await req('GET', `/api/b2b/orders/${s1.id}`)).order;
 assert.deepEqual([o.status, o.comment], ['invoice_wait', 'правка']);
 assert.match(o.entity, /ТОВ Бета/);
-assert.ok(tg.some((m) => String(m.chat_id) === '2' && /змінив менеджер/.test(m.text) && /Fan 3|Товар 13/.test(m.text)), 'партнеру — що змінено');
+assert.ok(tg.some((m) => String(m.chat_id) === '2' && /змінив /.test(m.text) && /Fan 3|Товар 13/.test(m.text)), 'партнеру — що змінено');
 assert.ok(tg.some((m) => String(m.chat_id) === '-900'), 'фінгрупа — оновлений запит');
 let trash = await req('GET', '/api/b2b/trash');
 assert.deepEqual(trash.map((t) => [t.kind, t.order_id, t.deleted_by, t.can_restore]), [['item', s1.id, 'owner', false]]);
@@ -84,7 +85,7 @@ assert.match(await errOf(() => edit(s1.id, { items: [{ product_id: 11, qty: 0 }]
 await req('PUT', `/api/b2b/orders/${s1.id}`, { invoice_no: 'СФ-1', invoice_date: '2026-10-20' });
 await upload(s1.id, 'invoice', 'old.pdf');
 await db.run(`UPDATE b2b_files SET created_at = ? WHERE order_id = ?`, [new Date(Date.now() - 60000).toISOString(), s1.id]);
-await req('POST', `/api/b2b/orders/${s1.id}/status`, { status: 'paid' }); // оплачено 13 500
+await req('POST', `/api/b2b/orders/${s1.id}/status`, { status: 'paid', note: 'оплата готівкою' }); // оплачено 13 500
 assert.equal((await req('GET', `/api/b2b/orders/${s1.id}/edit-options`)).invoiced, true);
 tg.length = 0;
 r = await edit(s1.id, { items: [{ product_id: 11, qty: 2 }, { product_id: 12, qty: 1 }] }); // 22 500
@@ -145,7 +146,22 @@ cd = await req('GET', `/api/b2b/orders/${c1.id}`);
 assert.equal(cd.order.open_supply, true);
 const openId = cd.order.supply_id;
 assert.equal((await req('GET', `/api/b2b/orders/${openId}`)).order.total, 4500, 'відкрита перерахована');
-assert.match(await errOf(() => edit(openId, { items: [{ product_id: 12, qty: 2 }] })), /Відкрита закупівля складається/);
+assert.match(await errOf(() => edit(openId, { items: [{ product_id: 12, qty: 2 }] })), /лише ціни й РРЦ/);
+// відкрита: нова РРЦ без ціни — ціна з тією ж знижкою (10%), і в замовленнях клієнтів теж; партнеру й у групу — хто змінив
+tg.length = 0;
+r = await edit(openId, { items: [{ product_id: 12, qty: 1, rrp: '6000' }] });
+assert.equal(r.total, 5400);
+assert.deepEqual((await req('GET', `/api/b2b/orders/${openId}`)).items.map((i) => [i.product_id, i.qty, i.price, i.rrp]), [[12, 1, 5400, 6000]]);
+cd = await req('GET', `/api/b2b/orders/${c1.id}`);
+assert.deepEqual([cd.order.total, cd.items[0].price, cd.items[0].rrp], [5400, 5400, 6000], 'замовлення клієнта — нові ціни');
+assert.ok(cd.history.some((x) => /ціни змінено в закупівлі/.test(x.text || x.action || JSON.stringify(x))), 'в історії замовлення клієнта');
+let oh = (await req('GET', `/api/b2b/orders/${openId}`)).history;
+assert.ok(oh.some((x) => /РРЦ .*5.?000.* → .*6.?000/.test(JSON.stringify(x))), 'в історії закупівлі — РРЦ було → стало');
+assert.ok(tg.some((m) => String(m.chat_id) === '2' && /Відкриту закупівлю .* змінив/.test(m.text) && /РРЦ/.test(m.text)), 'партнеру');
+assert.ok(tg.some((m) => String(m.chat_id) === '-500' && /РРЦ/.test(m.text)), 'у групу');
+// ціну вручну — РРЦ не чіпає ціну
+r = await edit(openId, { items: [{ product_id: 12, qty: 1, rrp: '5000', price: '4500' }] });
+assert.equal(r.total, 4500);
 await req('POST', `/api/b2b/p/clients/${c1.id}/confirm`, {}, A);
 await req('PUT', `/api/b2b/clients/${c1.id}`, { crm_id: '777' }); // передано в CRM
 // змінено замовлення, що вже в CRM: старе анульовано, знову «Нове», партнеру й у групу — що було і що буде

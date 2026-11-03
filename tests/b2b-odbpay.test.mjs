@@ -138,7 +138,7 @@ o = await order(s1);
 assert.deepEqual([o.status, o.paid_amount, o.paid_by], ['pay_wait', 0, '']);
 assert.equal((await req('GET', `/api/b2b/orders/${s1}/payments`)).linked.length, 0);
 // Opendatabot помилився, але закупівля оплачена — «Оплачено (вручну)», нові платежі вже не чіпають її
-await req('POST', `/api/b2b/orders/${s1}/status`, { status: 'paid' });
+await req('POST', `/api/b2b/orders/${s1}/status`, { status: 'paid', note: 'оплата готівкою' });
 await hook({ amount: 100, purpose: 'СФ-101' });
 o = await order(s1);
 assert.deepEqual([o.status, o.paid_amount], ['paid', 18000]);
@@ -153,7 +153,7 @@ const chk = await req('POST', `/api/b2b/orders/${s1}/check-pay`);
 await req('POST', `/api/b2b/orders/${s1}/payments`, { tx_id: txD });
 o = await order(s1);
 assert.deepEqual([o.status, o.paid_amount, o.paid_by], ['partial', 9000, 'Opendatabot']);
-await req('POST', `/api/b2b/orders/${s1}/status`, { status: 'paid' }); // залишок отримано іншим способом
+await req('POST', `/api/b2b/orders/${s1}/status`, { status: 'paid', note: 'оплата готівкою' }); // залишок отримано іншим способом
 
 // ---------- 4а. Оплата за інший рахунок (інший № у призначенні) — не зараховується і не пропонується ----------
 const s5 = await supply([{ product_id: 12, qty: 1 }], '110'); // 4500

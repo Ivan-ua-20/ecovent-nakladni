@@ -7407,24 +7407,33 @@ ${link(c, `porders/${o.id}`)}`);
     need(c, "b2b.admin");
     const o = await orderOf(c.req.param("id"));
     if (o.kind !== "supply") throw fail(400, "\u0421\u0442\u0430\u0442\u0443\u0441 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u0437\u043C\u0456\u043D\u044E\u0454\u0442\u044C\u0441\u044F \u043D\u0430 \u0439\u043E\u0433\u043E \u0441\u0442\u043E\u0440\u0456\u043D\u0446\u0456.");
-    const { status } = await c.req.json();
+    const { status, note: rawNote } = await c.req.json();
     if (!["paid", "done", "cancelled", "pay_wait"].includes(status)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u0441\u0442\u0430\u0442\u0443\u0441.");
     if (o.status === "open") throw fail(400, "\u0426\u0435 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F: \u0432\u043E\u043D\u0430 \u0441\u043A\u043B\u0430\u0434\u0430\u0454\u0442\u044C\u0441\u044F \u0456\u0437 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432. \u0421\u043F\u0435\u0440\u0448\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0444\u043E\u0440\u043C\u0443\u0454 \u043D\u0430 \u043D\u0435\u0457 \u0440\u0430\u0445\u0443\u043D\u043E\u043A.");
-    if (status === "pay_wait" && !o.invoice_no) throw fail(400, "\u0421\u043F\u0435\u0440\u0448\u0443 \u0432\u043D\u0435\u0441\u0456\u0442\u044C \u043D\u043E\u043C\u0435\u0440 \u0440\u0430\u0445\u0443\u043D\u043A\u0443.");
-    if (status === "paid" && !o.invoice_no) throw fail(400, "\u0421\u043F\u0435\u0440\u0448\u0443 \u0432\u043D\u0435\u0441\u0456\u0442\u044C \u043D\u043E\u043C\u0435\u0440 \u0440\u0430\u0445\u0443\u043D\u043A\u0443.");
+    if (o.status === "draft") throw fail(400, "\u0426\u0435 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0430 \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0457\u0457 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u044F\u044E\u0442\u044C.");
+    if (status === "paid" && ["cancelled", "confirm"].includes(o.status)) throw fail(400, o.status === "cancelled" ? "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E." : "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F \u0449\u0435 \u0447\u0435\u043A\u0430\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430.");
+    if (status === "pay_wait" && !o.invoice_no && !["paid", "partial"].includes(o.status)) throw fail(400, "\u0421\u043F\u0435\u0440\u0448\u0443 \u0432\u043D\u0435\u0441\u0456\u0442\u044C \u043D\u043E\u043C\u0435\u0440 \u0440\u0430\u0445\u0443\u043D\u043A\u0443.");
+    const note = String(rawNote ?? "").trim().slice(0, 500);
     const u = c.get("user");
     const now = nowIso();
-    if (status === "paid") {
-      await db.run(`UPDATE b2b_orders SET status = 'paid', paid_amount = total, paid_at = ?, paid_by = ?, updated_at = ? WHERE id = ?`, [now, userName2(u), now, o.id]);
-      await log(o.id, u, "\u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443");
-      await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}${o.invoice_no ? `, \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h3(o.invoice_no)}` : ""} \u2014 ${uah3(o.total)}`);
+    if (status === "paid" && o.status === "done") {
+      await db.run(`UPDATE b2b_orders SET status = 'paid', updated_at = ? WHERE id = ?`, [now, o.id]);
+      await log(o.id, u, "\u0441\u0442\u0430\u0442\u0443\u0441: \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB (\u043F\u043E\u0432\u0435\u0440\u043D\u0443\u0442\u043E \u0456\u0437 \xAB\u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u043E\xBB)");
+    } else if (status === "paid") {
+      if (note.length < 3) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440: \u0447\u043E\u043C\u0443 \u043E\u043F\u043B\u0430\u0442\u0443 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E \u0432\u0440\u0443\u0447\u043D\u0443 (\u043D\u0430\u043F\u0440., \xAB\u0433\u0430\u0440\u0430\u043D\u0442\u0456\u0439\u043D\u0430 \u0437\u0430\u043C\u0456\u043D\u0430 \u2014 \u0442\u043E\u0432\u0430\u0440 \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u0442\u043E\xBB).");
+      await db.run(`UPDATE b2b_orders SET status = 'paid', paid_amount = total, paid_at = ?, paid_by = ?, paid_note = ?, updated_at = ? WHERE id = ?`, [now, userName2(u), note, now, o.id]);
+      await log(o.id, u, `\u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443: ${note}`);
+      const msg = `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}${o.invoice_no ? `, \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h3(o.invoice_no)}` : ""} \u2014 ${uah3(o.total)}
+\u{1F4AC} ${h3(note)}`;
+      await tgPartner(o.partner_id, msg);
       await hooks.finPaid?.(o.id).catch(() => 0);
       await hooks.crmPaid?.(o.id, new URL(c.req.url).origin).catch(() => 0);
     } else if (status === "pay_wait") {
       if (!["paid", "partial"].includes(o.status)) throw fail(400, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F \u0439 \u0442\u0430\u043A \u043E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443.");
       await hooks.payReset?.(o.id);
-      await db.run(`UPDATE b2b_orders SET status = 'pay_wait', paid_amount = 0, paid_at = '', paid_by = '', updated_at = ? WHERE id = ?`, [now, o.id]);
-      await log(o.id, u, o.status === "partial" ? "\u0437\u043D\u044F\u0442\u043E \u0447\u0430\u0441\u0442\u043A\u043E\u0432\u0443 \u043E\u043F\u043B\u0430\u0442\u0443 \u2014 \xAB\u041E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443\xBB" : "\u0441\u0442\u0430\u0442\u0443\u0441: \xAB\u041E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443\xBB (\u043E\u043F\u043B\u0430\u0442\u0443 \u0437\u043D\u044F\u0442\u043E)");
+      const back = o.invoice_no ? "pay_wait" : "invoice_wait";
+      await db.run(`UPDATE b2b_orders SET status = ?, paid_amount = 0, paid_at = '', paid_by = '', paid_note = '', updated_at = ? WHERE id = ?`, [back, now, o.id]);
+      await log(o.id, u, o.status === "partial" ? "\u0437\u043D\u044F\u0442\u043E \u0447\u0430\u0441\u0442\u043A\u043E\u0432\u0443 \u043E\u043F\u043B\u0430\u0442\u0443 \u2014 \xAB\u041E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443\xBB" : `\u0441\u0442\u0430\u0442\u0443\u0441: \xAB${ORDER_STATUS[back]}\xBB (\u043E\u043F\u043B\u0430\u0442\u0443 \u0437\u043D\u044F\u0442\u043E)`);
     } else {
       await db.run(`UPDATE b2b_orders SET status = ?, updated_at = ? WHERE id = ?`, [status, now, o.id]);
       await log(o.id, u, `\u0441\u0442\u0430\u0442\u0443\u0441: \xAB${ORDER_STATUS[status]}\xBB`);
@@ -8571,13 +8580,16 @@ ${link(c, `pclients/${o.id}`)}`);
     need(c, "b2b.admin");
     const o = await clientOrder(c);
     if (o.supply_id) throw fail(400, `\u041E\u043F\u043B\u0430\u0442\u0430 \u2014 \u0437\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0435\u044E ${orderNo(o.supply_id)}${(await supplyOf(o.supply_id))?.status === "open" ? " (\u0441\u043F\u0435\u0440\u0448\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0444\u043E\u0440\u043C\u0443\u0454 \u043D\u0430 \u043D\u0435\u0457 \u0440\u0430\u0445\u0443\u043D\u043E\u043A)" : ""}.`);
-    const { paid } = await c.req.json();
+    const { paid, note: rawNote } = await c.req.json();
+    const note = String(rawNote ?? "").trim().slice(0, 500);
+    if (paid && note.length < 3) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440: \u0447\u043E\u043C\u0443 \u043E\u043F\u043B\u0430\u0442\u0443 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E \u0432\u0440\u0443\u0447\u043D\u0443.");
     const u = c.get("user");
     const now = nowIso();
-    if (paid) await db.run(`UPDATE b2b_orders SET paid_amount = total, paid_at = ?, paid_by = ?, updated_at = ? WHERE id = ?`, [now, userName6(u), now, o.id]);
-    else await db.run(`UPDATE b2b_orders SET paid_amount = 0, paid_at = '', paid_by = '', updated_at = ? WHERE id = ?`, [now, o.id]);
-    await log(o.id, u, paid ? "\u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443" : "\u0437\u043D\u044F\u0442\u043E \u043F\u043E\u0437\u043D\u0430\u0447\u043A\u0443 \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB");
-    if (paid) await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h7(o.client_name)}) \u2014 ${uah4(o.total)}`);
+    if (paid) await db.run(`UPDATE b2b_orders SET paid_amount = total, paid_at = ?, paid_by = ?, paid_note = ?, updated_at = ? WHERE id = ?`, [now, userName6(u), note, now, o.id]);
+    else await db.run(`UPDATE b2b_orders SET paid_amount = 0, paid_at = '', paid_by = '', paid_note = '', updated_at = ? WHERE id = ?`, [now, o.id]);
+    await log(o.id, u, paid ? `\u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443: ${note}` : "\u0437\u043D\u044F\u0442\u043E \u043F\u043E\u0437\u043D\u0430\u0447\u043A\u0443 \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB");
+    if (paid) await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E</b>: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h7(o.client_name)}) \u2014 ${uah4(o.total)}
+\u{1F4AC} ${h7(note)}`);
     return c.json({ ok: true });
   });
   app.post("/api/b2b/clients/:id/cancel", async (c) => {
@@ -9980,7 +9992,6 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
     const u = c.get("user");
     if (o.kind !== "supply") throw fail(400, "\u0426\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u2014 \u0437\u043C\u0456\u043D\u044E\u0439\u0442\u0435 \u0439\u043E\u0433\u043E \u043D\u0430 \u0441\u0442\u043E\u0440\u0456\u043D\u0446\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
     if (o.status === "cancelled") throw fail(400, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.");
-    if (o.status === "open") throw fail(400, "\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F \u0441\u043A\u043B\u0430\u0434\u0430\u0454\u0442\u044C\u0441\u044F \u0456\u0437 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u2014 \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u0430\u0431\u043E \u0432\u0438\u0434\u0430\u043B\u0456\u0442\u044C \u0457\u0445, \u0456 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F \u043F\u0435\u0440\u0435\u0440\u0430\u0445\u0443\u0454\u0442\u044C\u0441\u044F \u0441\u0430\u043C\u0430.");
     const cur = await db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
     const curMap = new Map(cur.map((i) => [i.product_id, i]));
     const want = /* @__PURE__ */ new Map();
@@ -9989,10 +10000,15 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
       const qty = Number(it.qty);
       if (!id) continue;
       if (!Number.isInteger(qty) || qty < 0 || qty > 1e5) throw fail(400, "\u041A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C \u2014 \u0446\u0456\u043B\u0435 \u0447\u0438\u0441\u043B\u043E \u0432\u0456\u0434 0.");
-      const raw2 = it.price === void 0 || it.price === null ? "" : String(it.price).replace(/\s/g, "").replace(",", ".");
-      const price = raw2 === "" ? null : round2(Number(raw2));
-      if (price !== null && !(price >= 0 && price < 1e8)) throw fail(400, "\u0426\u0456\u043D\u0430 \u2014 \u0447\u0438\u0441\u043B\u043E \u0432\u0456\u0434 0.");
-      if (qty > 0) want.set(id, { qty: (want.get(id)?.qty || 0) + qty, price: price ?? want.get(id)?.price ?? null });
+      const money3 = (v, what2) => {
+        const raw2 = v === void 0 || v === null ? "" : String(v).replace(/\s/g, "").replace(",", ".");
+        const x = raw2 === "" ? null : round2(Number(raw2));
+        if (x !== null && !(x >= 0 && x < 1e8)) throw fail(400, `${what2} \u2014 \u0447\u0438\u0441\u043B\u043E \u0432\u0456\u0434 0.`);
+        return x;
+      };
+      const price = money3(it.price, "\u0426\u0456\u043D\u0430");
+      const rrp = money3(it.rrp, "\u0420\u0420\u0426");
+      if (qty > 0) want.set(id, { qty: (want.get(id)?.qty || 0) + qty, price: price ?? want.get(id)?.price ?? null, rrp: rrp ?? want.get(id)?.rrp ?? null });
     }
     if (!want.size) throw fail(400, "\u0423 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043C\u0430\u0454 \u043B\u0438\u0448\u0438\u0442\u0438\u0441\u044F \u0445\u043E\u0447\u0430 \u0431 \u043E\u0434\u0438\u043D \u0442\u043E\u0432\u0430\u0440. \u0429\u043E\u0431 \u043F\u0440\u0438\u0431\u0440\u0430\u0442\u0438 \u0432\u0441\u0435 \u2014 \u0432\u0438\u0434\u0430\u043B\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E.");
     if (want.size > 300) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 300 \u043F\u043E\u0437\u0438\u0446\u0456\u0439.");
@@ -10004,11 +10020,19 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
     ))).map((r) => [r.product_id, r])) : /* @__PURE__ */ new Map();
     const items = [...want].map(([id, w]) => {
       const old = curMap.get(id);
-      if (old) return { product_id: id, name: old.name, article: old.article || "", qty: w.qty, price: w.price ?? old.price, rrp: old.rrp };
+      if (old) {
+        const rrp2 = w.rrp ?? old.rrp;
+        const price = w.price ?? (w.rrp != null && round2(w.rrp) !== round2(old.rrp) && old.rrp > 0 ? round2(old.price / old.rrp * w.rrp) : old.price);
+        return { product_id: id, name: old.name, article: old.article || "", qty: w.qty, price, rrp: rrp2 };
+      }
       const r = cat.get(id);
       if (!r) throw fail(400, `\u0422\u043E\u0432\u0430\u0440\u0443 ID ${id} \u043D\u0435\u043C\u0430\u0454 \u0432 \u043A\u0430\u0442\u0430\u043B\u043E\u0437\u0456.`);
-      return { product_id: id, name: r.name, article: r.article || "", qty: w.qty, price: w.price ?? partnerPrice2(r.rrp, r.margin || 0), rrp: r.rrp };
+      const rrp = w.rrp ?? r.rrp;
+      return { product_id: id, name: r.name, article: r.article || "", qty: w.qty, price: w.price ?? partnerPrice2(rrp, r.margin || 0), rrp };
     });
+    if (o.status === "open" && (items.length !== cur.length || items.some((i) => curMap.get(i.product_id)?.qty !== i.qty))) {
+      throw fail(400, "\u0423 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0456\u0439 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043C\u043E\u0436\u043D\u0430 \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u043B\u0438\u0448\u0435 \u0446\u0456\u043D\u0438 \u0439 \u0420\u0420\u0426: \u0442\u043E\u0432\u0430\u0440\u0438 \u0439 \u043A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C \u0456\u0434\u0443\u0442\u044C \u0456\u0437 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u2014 \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u0457\u0445 \u0442\u0430\u043C.");
+    }
     for (const r of await supplyLeft(o.id)) {
       if (r.used > (want.get(r.product_id)?.qty || 0)) throw fail(400, `\xAB${r.name}\xBB: \u043D\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u0443\u0436\u0435 \u0440\u043E\u0437\u043F\u0438\u0441\u0430\u043D\u043E ${r.used} \u0448\u0442. \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u0430\u0431\u043E \u0432\u0438\u0434\u0430\u043B\u0456\u0442\u044C \u0446\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.`);
     }
@@ -10028,6 +10052,7 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
         continue;
       }
       if (old.qty !== i.qty) changes.push(`${i.name}: ${old.qty} \u2192 ${i.qty} \u0448\u0442`);
+      if (round2(old.rrp) !== round2(i.rrp)) changes.push(`${i.name}: \u0420\u0420\u0426 ${uah4(old.rrp)} \u2192 ${uah4(i.rrp)}`);
       if (round2(old.price) !== round2(i.price)) changes.push(`${i.name}: \u0446\u0456\u043D\u0430 ${uah4(old.price)} \u2192 ${uah4(i.price)}`);
     }
     const removed = cur.filter((i) => !want.has(i.product_id));
@@ -10051,20 +10076,42 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
       ]);
     }
     await db.batch(st);
-    await log(o.id, u, `\u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440: ${changes.join("; ")} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah4(total)}${invoiced ? ` \xB7 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${redo} \u0442\u0440\u0435\u0431\u0430 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u0438\u0442\u0438` : ""}`.slice(0, 1800));
-    if (o.status !== "draft") {
-      const lines = changes.slice(0, 20).map(h7).join("\n");
-      const text = `\u270F\uFE0F <b>\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440</b>
+    const who = userName4(u) || "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440";
+    await log(o.id, u, `\u0437\u043C\u0456\u043D\u0438\u0432 ${who}: ${changes.join("; ")} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah4(total)}${invoiced ? ` \xB7 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${redo} \u0442\u0440\u0435\u0431\u0430 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u0438\u0442\u0438` : ""}`.slice(0, 1800));
+    if (["draft", "open"].includes(o.status)) await priceToClients(o, u, cur, items);
+    if (o.status === "open") await rebuildOpen(o.id);
+    const lines = changes.slice(0, 20).map(h7).join("\n");
+    const what = o.status === "draft" ? "\u0427\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456" : o.status === "open" ? "\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E" : "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E";
+    const text = `\u270F\uFE0F <b>${what} ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0438\u0432 ${h7(who)}</b>
 ${lines}
 <b>\u0420\u0430\u0437\u043E\u043C: ${uah4(total)}</b>${invoiced ? `
 
 \u{1F501} \u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h7(o.invoice_no)} \u0431\u0443\u0434\u0435 \u043F\u0435\u0440\u0435\u0432\u0438\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E \u2014 \u043D\u043E\u0432\u0438\u0439 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430\u0434\u0456\u0439\u0434\u0435 \u0441\u044E\u0434\u0438.${Number(o.paid_amount) > 0 ? ` \u041E\u043F\u043B\u0430\u0442\u0430 ${uah4(o.paid_amount)} \u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0430\u043D\u0430.` : ""}` : ""}`;
-      await tgPartner(o.partner_id, `${text}
+    await tgPartner(o.partner_id, `${text}
 ${link(c, `porders/${o.id}`)}`);
-      if (invoiced) await tgGroup(o.partner_id, text);
-      if (o.status !== "confirm") await hooks.finRequest?.(o.id, invoiced ? "reinvoice" : "changed").catch(() => 0);
-    }
+    await tgGroup(o.partner_id, text);
+    if (!["draft", "open", "confirm"].includes(o.status)) await hooks.finRequest?.(o.id, invoiced ? "reinvoice" : "changed").catch(() => 0);
     return { ok: true, changed: true, total, reinvoice: invoiced };
+  }
+  async function priceToClients(o, u, before, after) {
+    const old = new Map(before.map((i) => [i.product_id, i]));
+    const changed = after.filter((i) => old.has(i.product_id) && (round2(old.get(i.product_id).price) !== round2(i.price) || round2(old.get(i.product_id).rrp) !== round2(i.rrp)));
+    if (!changed.length) return;
+    const ids = (await db.all(`SELECT id FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled'`, [o.id])).map((r) => r.id);
+    if (!ids.length) return;
+    const J = JSON.stringify(ids);
+    const hit = await db.all(
+      `SELECT DISTINCT order_id FROM b2b_order_items WHERE order_id IN (SELECT value FROM json_each(?)) AND product_id IN (SELECT value FROM json_each(?))`,
+      [J, JSON.stringify(changed.map((i) => i.product_id))]
+    );
+    if (!hit.length) return;
+    await db.batch([
+      ...changed.map((i) => [`UPDATE b2b_order_items SET price = ?, rrp = ? WHERE product_id = ? AND order_id IN (SELECT value FROM json_each(?))`, [i.price, i.rrp, i.product_id, J]]),
+      [`UPDATE b2b_orders SET total = (SELECT ROUND(COALESCE(SUM(ROUND(qty * price, 2)), 0), 2) FROM b2b_order_items WHERE order_id = b2b_orders.id), updated_at = ?
+        WHERE id IN (SELECT value FROM json_each(?))`, [nowIso(), JSON.stringify(hit.map((r) => r.order_id))]]
+    ]);
+    const note = changed.map((i) => `${i.name}: \u0446\u0456\u043D\u0430 ${uah4(i.price)}, \u0420\u0420\u0426 ${uah4(i.rrp)}`).join("; ");
+    for (const r of hit) await log(r.order_id, u, `\u0446\u0456\u043D\u0438 \u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(o.id)} (${userName4(u) || "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440"}): ${note}`.slice(0, 1800));
   }
   async function toTrash(o, u, { byPartner = false } = {}) {
     const [items, history] = await Promise.all([
@@ -15241,7 +15288,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 29,
+  version: 30,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -15525,6 +15572,8 @@ var schema11 = {
     // доки не підтверджено — у LP-CRM не передається. crm_old — номер старого замовлення в CRM, якщо його анульовано.
     ["b2b_orders", "pending", "TEXT DEFAULT ''"],
     ["b2b_orders", "crm_old", "TEXT DEFAULT ''"],
+    // «Оплачено» вручну — обов'язковий коментар (напр., «гарантійна заміна — товар повернуто»).
+    ["b2b_orders", "paid_note", "TEXT DEFAULT ''"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ["b2b_tg_docs", "source", "TEXT DEFAULT 'private'"],
     ["b2b_tg_docs", "reply_to", "INTEGER"],

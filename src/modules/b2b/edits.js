@@ -38,7 +38,10 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
   });
 
   // ---------------------------------------------------------------- зміна закупівлі адміном
-  // items: [{ product_id, qty, price? }] — увесь новий склад (0 або відсутній — прибрати); ціну можна змінити вручну.
+  // items: [{ product_id, qty, price?, rrp? }] — увесь новий склад (0 або відсутній — прибрати); ціну й РРЦ можна змінити вручну
+  // (РРЦ без ціни — ціна перераховується з тією ж знижкою, що була в цій закупівлі). Будь-яка закупівля: чернетка, відкрита
+  // (лише ціни й РРЦ — склад відкритої іде із замовлень клієнтів), очікує рахунок, з рахунком (рахунок перевиставляється).
+  // Хто й що змінив — в історію, партнеру в бот і в його Telegram-групу.
   app.put('/api/b2b/orders/:id/edit', async (c) => {
     need(c, 'b2b.admin');
     return c.json(await editSupply(c, await orderOf(c.req.param('id')), await c.req.json()));
@@ -55,7 +58,6 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
     const u = c.get('user');
     if (o.kind !== 'supply') throw fail(400, 'Це замовлення клієнта — змінюйте його на сторінці замовлення.');
     if (o.status === 'cancelled') throw fail(400, 'Закупівлю скасовано.');
-    if (o.status === 'open') throw fail(400, 'Відкрита закупівля складається із замовлень клієнтів — змініть або видаліть їх, і закупівля перерахується сама.');
     const cur = await db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
     const curMap = new Map(cur.map((i) => [i.product_id, i]));
     const want = new Map();
@@ -64,10 +66,15 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
       const qty = Number(it.qty);
       if (!id) continue;
       if (!Number.isInteger(qty) || qty < 0 || qty > 100000) throw fail(400, 'Кількість — ціле число від 0.');
-      const raw = it.price === undefined || it.price === null ? '' : String(it.price).replace(/\s/g, '').replace(',', '.');
-      const price = raw === '' ? null : round2(Number(raw));
-      if (price !== null && !(price >= 0 && price < 1e8)) throw fail(400, 'Ціна — число від 0.');
-      if (qty > 0) want.set(id, { qty: (want.get(id)?.qty || 0) + qty, price: price ?? want.get(id)?.price ?? null });
+      const money = (v, what) => {
+        const raw = v === undefined || v === null ? '' : String(v).replace(/\s/g, '').replace(',', '.');
+        const x = raw === '' ? null : round2(Number(raw));
+        if (x !== null && !(x >= 0 && x < 1e8)) throw fail(400, `${what} — число від 0.`);
+        return x;
+      };
+      const price = money(it.price, 'Ціна');
+      const rrp = money(it.rrp, 'РРЦ');
+      if (qty > 0) want.set(id, { qty: (want.get(id)?.qty || 0) + qty, price: price ?? want.get(id)?.price ?? null, rrp: rrp ?? want.get(id)?.rrp ?? null });
     }
     if (!want.size) throw fail(400, 'У закупівлі має лишитися хоча б один товар. Щоб прибрати все — видаліть закупівлю.');
     if (want.size > 300) throw fail(400, 'Не більше 300 позицій.');
@@ -78,11 +85,21 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
     ))).map((r) => [r.product_id, r])) : new Map();
     const items = [...want].map(([id, w]) => {
       const old = curMap.get(id);
-      if (old) return { product_id: id, name: old.name, article: old.article || '', qty: w.qty, price: w.price ?? old.price, rrp: old.rrp };
+      if (old) {
+        const rrp = w.rrp ?? old.rrp;
+        // нова РРЦ без нової ціни — ціна з тією ж знижкою від РРЦ, що була в закупівлі
+        const price = w.price ?? (w.rrp != null && round2(w.rrp) !== round2(old.rrp) && old.rrp > 0 ? round2((old.price / old.rrp) * w.rrp) : old.price);
+        return { product_id: id, name: old.name, article: old.article || '', qty: w.qty, price, rrp };
+      }
       const r = cat.get(id);
       if (!r) throw fail(400, `Товару ID ${id} немає в каталозі.`);
-      return { product_id: id, name: r.name, article: r.article || '', qty: w.qty, price: w.price ?? partnerPrice(r.rrp, r.margin || 0), rrp: r.rrp };
+      const rrp = w.rrp ?? r.rrp;
+      return { product_id: id, name: r.name, article: r.article || '', qty: w.qty, price: w.price ?? partnerPrice(rrp, r.margin || 0), rrp };
     });
+    // Відкрита закупівля = сума замовлень клієнтів: тут змінюються лише ціни й РРЦ (склад — через замовлення клієнтів).
+    if (o.status === 'open' && (items.length !== cur.length || items.some((i) => curMap.get(i.product_id)?.qty !== i.qty))) {
+      throw fail(400, 'У відкритій закупівлі можна змінити лише ціни й РРЦ: товари й кількість ідуть із замовлень клієнтів — змініть їх там.');
+    }
     // Не менше, ніж уже розписано на замовлення клієнтів.
     for (const r of await supplyLeft(o.id)) {
       if (r.used > (want.get(r.product_id)?.qty || 0)) throw fail(400, `«${r.name}»: на замовлення клієнтів уже розписано ${r.used} шт. — спершу змініть або видаліть ці замовлення.`);
@@ -101,6 +118,7 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
       const old = curMap.get(i.product_id);
       if (!old) { changes.push(`+ ${i.name} × ${i.qty} по ${uah(i.price)}`); continue; }
       if (old.qty !== i.qty) changes.push(`${i.name}: ${old.qty} → ${i.qty} шт`);
+      if (round2(old.rrp) !== round2(i.rrp)) changes.push(`${i.name}: РРЦ ${uah(old.rrp)} → ${uah(i.rrp)}`);
       if (round2(old.price) !== round2(i.price)) changes.push(`${i.name}: ціна ${uah(old.price)} → ${uah(i.price)}`);
     }
     const removed = cur.filter((i) => !want.has(i.product_id));
@@ -123,17 +141,41 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
         [o.id, o.partner_id, `${i.name} × ${i.qty} — із закупівлі ${orderNo(o.id)}`, round2(i.price * i.qty), JSON.stringify(i), userName(u), now]]);
     }
     await db.batch(st);
-    await log(o.id, u, `змінив менеджер: ${changes.join('; ')} — разом ${uah(total)}${invoiced ? ` · рахунок № ${redo} треба переробити` : ''}`.slice(0, 1800));
+    const who = userName(u) || 'менеджер';
+    await log(o.id, u, `змінив ${who}: ${changes.join('; ')} — разом ${uah(total)}${invoiced ? ` · рахунок № ${redo} треба переробити` : ''}`.slice(0, 1800));
+    // Чернетка й відкрита закупівля: замовлення клієнтів у них мають ті самі ціни — оновлюємо й їх.
+    if (['draft', 'open'].includes(o.status)) await priceToClients(o, u, cur, items);
+    if (o.status === 'open') await rebuildOpen(o.id);
 
-    if (o.status !== 'draft') {
-      const lines = changes.slice(0, 20).map(h).join('\n');
-      const text = `✏️ <b>Закупівлю ${orderNo(o.id)} змінив менеджер</b>\n${lines}\n<b>Разом: ${uah(total)}</b>`
-        + `${invoiced ? `\n\n🔁 Рахунок № ${h(o.invoice_no)} буде перевиставлено — новий рахунок надійде сюди.${Number(o.paid_amount) > 0 ? ` Оплата ${uah(o.paid_amount)} зарахована.` : ''}` : ''}`;
-      await tgPartner(o.partner_id, `${text}\n${link(c, `porders/${o.id}`)}`);
-      if (invoiced) await tgGroup(o.partner_id, text);
-      if (o.status !== 'confirm') await hooks.finRequest?.(o.id, invoiced ? 'reinvoice' : 'changed').catch(() => 0); // ще не підтверджено — рахунок не просимо
-    }
+    // Хто й що змінив — партнеру в бот і в його групу (і для чернетки, і для відкритої).
+    const lines = changes.slice(0, 20).map(h).join('\n');
+    const what = o.status === 'draft' ? 'Чернетку закупівлі' : o.status === 'open' ? 'Відкриту закупівлю' : 'Закупівлю';
+    const text = `✏️ <b>${what} ${orderNo(o.id)} змінив ${h(who)}</b>\n${lines}\n<b>Разом: ${uah(total)}</b>`
+      + `${invoiced ? `\n\n🔁 Рахунок № ${h(o.invoice_no)} буде перевиставлено — новий рахунок надійде сюди.${Number(o.paid_amount) > 0 ? ` Оплата ${uah(o.paid_amount)} зарахована.` : ''}` : ''}`;
+    await tgPartner(o.partner_id, `${text}\n${link(c, `porders/${o.id}`)}`);
+    await tgGroup(o.partner_id, text);
+    if (!['draft', 'open', 'confirm'].includes(o.status)) await hooks.finRequest?.(o.id, invoiced ? 'reinvoice' : 'changed').catch(() => 0); // ще не оформлено — рахунок не просимо
     return { ok: true, changed: true, total, reinvoice: invoiced };
+  }
+
+  // Нові ціни/РРЦ товарів чернетки чи відкритої закупівлі — у її замовлення клієнтів (суми перераховуються).
+  async function priceToClients(o, u, before, after) {
+    const old = new Map(before.map((i) => [i.product_id, i]));
+    const changed = after.filter((i) => old.has(i.product_id) && (round2(old.get(i.product_id).price) !== round2(i.price) || round2(old.get(i.product_id).rrp) !== round2(i.rrp)));
+    if (!changed.length) return;
+    const ids = (await db.all(`SELECT id FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled'`, [o.id])).map((r) => r.id);
+    if (!ids.length) return;
+    const J = JSON.stringify(ids);
+    const hit = await db.all(`SELECT DISTINCT order_id FROM b2b_order_items WHERE order_id IN (SELECT value FROM json_each(?)) AND product_id IN (SELECT value FROM json_each(?))`,
+      [J, JSON.stringify(changed.map((i) => i.product_id))]);
+    if (!hit.length) return;
+    await db.batch([
+      ...changed.map((i) => [`UPDATE b2b_order_items SET price = ?, rrp = ? WHERE product_id = ? AND order_id IN (SELECT value FROM json_each(?))`, [i.price, i.rrp, i.product_id, J]]),
+      [`UPDATE b2b_orders SET total = (SELECT ROUND(COALESCE(SUM(ROUND(qty * price, 2)), 0), 2) FROM b2b_order_items WHERE order_id = b2b_orders.id), updated_at = ?
+        WHERE id IN (SELECT value FROM json_each(?))`, [nowIso(), JSON.stringify(hit.map((r) => r.order_id))]],
+    ]);
+    const note = changed.map((i) => `${i.name}: ціна ${uah(i.price)}, РРЦ ${uah(i.rrp)}`).join('; ');
+    for (const r of hit) await log(r.order_id, u, `ціни змінено в закупівлі ${orderNo(o.id)} (${userName(u) || 'менеджер'}): ${note}`.slice(0, 1800));
   }
 
   // ---------------------------------------------------------------- кошик

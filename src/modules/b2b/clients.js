@@ -973,13 +973,15 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     need(c, 'b2b.admin');
     const o = await clientOrder(c);
     if (o.supply_id) throw fail(400, `Оплата — за закупівлею ${orderNo(o.supply_id)}${(await supplyOf(o.supply_id))?.status === 'open' ? ' (спершу партнер формує на неї рахунок)' : ''}.`);
-    const { paid } = await c.req.json();
+    const { paid, note: rawNote } = await c.req.json();
+    const note = String(rawNote ?? '').trim().slice(0, 500);
+    if (paid && note.length < 3) throw fail(400, 'Вкажіть коментар: чому оплату підтверджено вручну.');
     const u = c.get('user');
     const now = nowIso();
-    if (paid) await db.run(`UPDATE b2b_orders SET paid_amount = total, paid_at = ?, paid_by = ?, updated_at = ? WHERE id = ?`, [now, userName(u), now, o.id]);
-    else await db.run(`UPDATE b2b_orders SET paid_amount = 0, paid_at = '', paid_by = '', updated_at = ? WHERE id = ?`, [now, o.id]);
-    await log(o.id, u, paid ? 'позначено «Оплачено» вручну' : 'знято позначку «Оплачено»');
-    if (paid) await tgPartner(o.partner_id, `✅ <b>Оплату отримано</b>: замовлення ${orderNo(o.id)} (${h(o.client_name)}) — ${uah(o.total)}`);
+    if (paid) await db.run(`UPDATE b2b_orders SET paid_amount = total, paid_at = ?, paid_by = ?, paid_note = ?, updated_at = ? WHERE id = ?`, [now, userName(u), note, now, o.id]);
+    else await db.run(`UPDATE b2b_orders SET paid_amount = 0, paid_at = '', paid_by = '', paid_note = '', updated_at = ? WHERE id = ?`, [now, o.id]);
+    await log(o.id, u, paid ? `позначено «Оплачено» вручну: ${note}` : 'знято позначку «Оплачено»');
+    if (paid) await tgPartner(o.partner_id, `✅ <b>Оплату підтверджено</b>: замовлення ${orderNo(o.id)} (${h(o.client_name)}) — ${uah(o.total)}\n💬 ${h(note)}`); // лише особисто
     return c.json({ ok: true });
   });
 

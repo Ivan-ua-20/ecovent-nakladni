@@ -105,10 +105,29 @@ export function wireFilterBar(f, reload) {
 }
 export const filterQs = (f) => new URLSearchParams(Object.entries(f).filter(([k, v]) => v && !k.startsWith('_'))).toString();
 
+// Обов'язковий коментар (напр., до «Оплачено» вручну): Promise<string|null> — null, якщо закрили.
+export function askNote(title, text, { verb = 'Зберегти', placeholder = '' } = {}) {
+  return new Promise((resolve) => {
+    let done = false;
+    const m = modal(title, `<div class="form-stack"><p style="margin:0">${text}</p>
+        <label class="f"><span>Коментар (обов'язково)</span><textarea id="anTxt" rows="3" maxlength="500" placeholder="${esc(placeholder)}"></textarea></label></div>`, {
+      footer: `<button class="btn" data-close>Скасувати</button><button class="btn primary" id="anOk">${esc(verb)}</button>`,
+      focus: '#anTxt',
+    });
+    $('#anOk', m.el).onclick = () => {
+      const v = $('#anTxt', m.el).value.trim();
+      if (v.length < 3) { toast('Напишіть коментар — хоча б кілька слів', true); $('#anTxt', m.el).focus(); return; }
+      done = true; m.close(); resolve(v);
+    };
+    new MutationObserver((_, obs) => { if (!document.contains(m.el)) { obs.disconnect(); if (!done) resolve(null); } }).observe(document.body, { childList: true });
+  });
+}
+export const PAID_NOTE_HINT = 'Напр.: гарантійна заміна — товар повернуто, відправка з нашого складу; взаємозалік; оплата готівкою.';
+
 // ---------- галочки і масові дії ----------
 export const selCell = (id) => `<td style="width:34px" data-nosel><input type="checkbox" data-sel="${id}" aria-label="Обрати"></td>`;
 export const selHead = () => '<th style="width:34px"><input type="checkbox" id="selAll" aria-label="Обрати всі"></th>';
-// actions: [{ key, label, danger?, confirm?: (n) => текст, run: (id) => Promise }]
+// actions: [{ key, label, danger?, confirm?: (n) => текст, ask?: (n) => { title, text } — спершу спитати коментар, run: (id, note) => Promise }]
 export function wireBulk(actions, { onDone, confirmDanger }) {
   const bar = $('#bulkBar');
   const sel = () => $$('[data-sel]').filter((x) => x.checked).map((x) => Number(x.dataset.sel));
@@ -129,12 +148,14 @@ export function wireBulk(actions, { onDone, confirmDanger }) {
     const a = actions.find((x) => x.key === key);
     const ids = sel();
     if (a.confirm && !(await confirmDanger(a.confirm(ids.length), '', a.label))) return;
+    let note;
+    if (a.ask) { const q = a.ask(ids.length); note = await askNote(q.title, q.text, { verb: a.label, placeholder: q.placeholder || '' }); if (note === null) return; }
     const fails = [];
     let ok = 0;
     bar.querySelectorAll('button').forEach((b) => { b.disabled = true; });
     for (const [n, id] of ids.entries()) {
       bar.querySelector('b').textContent = `${a.label}: ${n + 1} з ${ids.length}…`;
-      try { await a.run(id); ok++; } catch (e) { fails.push(`B2B-${id}: ${e.message}`); }
+      try { await a.run(id, note); ok++; } catch (e) { fails.push(`B2B-${id}: ${e.message}`); }
     }
     toast(`${a.label}: виконано ${ok} з ${ids.length}`, fails.length > 0);
     if (fails.length) modal('Не вдалося для частини замовлень', `<div class="form-stack small">${fails.map((x) => `<div>${esc(x)}</div>`).join('')}</div>`, { footer: '<button class="btn primary" data-close>Зрозуміло</button>' });
