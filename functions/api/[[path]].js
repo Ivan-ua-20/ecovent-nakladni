@@ -8184,7 +8184,7 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     if (o.kind !== "client") throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     const since = new Date(Date.now() - 365 * 864e5).toISOString();
     const rows = await db.all(
-      `SELECT s.id, s.status, i.product_id, i.name, i.article, i.price, i.qty,
+      `SELECT s.id, s.status, i.product_id, i.name, i.article, i.price, i.rrp, i.qty,
          COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci JOIN b2b_orders co ON co.id = ci.order_id
            WHERE co.supply_id = s.id AND co.kind = 'client' AND co.status != 'cancelled' AND co.id != ? AND ci.product_id = i.product_id), 0) AS used
        FROM b2b_orders s JOIN b2b_order_items i ON i.order_id = s.id
@@ -8195,7 +8195,7 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     const map = /* @__PURE__ */ new Map();
     for (const r of rows) {
       if (!map.has(r.id)) map.set(r.id, { id: r.id, number: orderNo(r.id), status_name: ORDER_STATUS[r.status] || r.status, items: [] });
-      map.get(r.id).items.push({ product_id: r.product_id, name: r.name, article: r.article, price: r.price, left: r.qty - r.used });
+      map.get(r.id).items.push({ product_id: r.product_id, name: r.name, article: r.article, price: r.price, rrp: r.rrp, left: r.qty - r.used });
     }
     const supplies = [...map.values()].filter((s) => s.id === o.supply_id || s.items.some((i) => i.left > 0));
     return c.json({ supplies, catalog: await hooks.partnerCatalog(o.partner_id) });
@@ -8227,6 +8227,7 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
       if (!x) ch.push(`+ ${i.name} \xD7 ${i.qty}`);
       else {
         if (x.qty !== i.qty) ch.push(`${i.name}: ${x.qty} \u2192 ${i.qty} \u0448\u0442`);
+        if (Math.round((x.rrp || 0) * 100) !== Math.round((i.rrp || 0) * 100)) ch.push(`${i.name}: \u0420\u0420\u0426 ${uah4(x.rrp)} \u2192 ${uah4(i.rrp)}`);
         if (Math.round(x.price * 100) !== Math.round(i.price * 100)) ch.push(`${i.name}: \u0446\u0456\u043D\u0430 ${uah4(x.price)} \u2192 ${uah4(i.price)}`);
       }
     }
@@ -8270,6 +8271,7 @@ ${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah4(i.price)}`).join(
       }
     }
     const before = o.pending ? JSON.parse(o.pending).before : await snapOf(o);
+    const nowItems = await orderItems(o.id);
     const cur = await supplyOf(o.supply_id);
     const curDraft = cur?.status === "draft" ? cur.id : null;
     const it = await buildItems(p, b, o.id, { openId: cur?.status === "open" ? cur.id : null, total: o.total, draftId: curDraft }, { skipLimits: true });
@@ -8291,7 +8293,13 @@ ${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah4(i.price)}`).join(
     await moveDraftItems(curDraft, oldItems, it.draftId, it.items);
     if (it.openId) await rebuildOpen(it.openId);
     if (cur?.status === "open" && cur.id !== it.openId) await rebuildOpen(cur.id);
-    const want = pricesIn((Array.isArray(b.items) ? b.items : []).map((x) => ({ product_id: x.product_id, price: x.price })));
+    const was = new Map(nowItems.map((i) => [i.product_id, i]));
+    const want = pricesIn((Array.isArray(b.items) ? b.items : []).map((x) => {
+      const w = was.get(parseInt(x.product_id, 10));
+      const rrp = moneyIn(x.rrp, "\u0420\u0420\u0426");
+      const price = x.price ?? (rrp != null && w?.rrp > 0 ? r22(w.price / w.rrp * rrp) : void 0);
+      return { product_id: x.product_id, price, rrp };
+    }));
     if (want.size) await setClientPrices(c, await orderOf(o.id), want, { quiet: true });
     o = await orderOf(o.id);
     const after = await snapOf(o);
