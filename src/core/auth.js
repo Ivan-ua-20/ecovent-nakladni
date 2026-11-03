@@ -23,15 +23,58 @@ export const ROLES = {
 //  b2b.partner — кабінет партнера (лише свої дані; решта сайту недоступна)
 //  b2b.order  — партнер може оформлювати й змінювати (керівник і менеджер партнера; «перегляд» — ні)
 //  b2b.team   — партнер керує своєю командою (лише керівник партнера)
+//  b2b.view   — B2B лише перегляд (без змін)
+//  retail.view / retail.edit — «Рітейл»: перегляд / робота із замовленнями (підтвердити, ТТН, LP-CRM)
+//  market.view / market.edit — «Маркетплейси»: перегляд / робота (нагадування про відгуки, чат, оновити)
+const SECTION_ALL = ['b2b.admin', 'b2b.view', 'retail.view', 'retail.edit', 'market.view', 'market.edit'];
 const PERMS = {
-  owner: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'people', 'analytics', 'an.view', 'b2b.admin'],
-  admin: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'people', 'analytics', 'an.view', 'b2b.admin'],
+  owner: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'people', 'analytics', 'an.view', ...SECTION_ALL],
+  admin: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'people', 'analytics', 'an.view', ...SECTION_ALL],
   // Як адміністратор, але без керування людьми (аналітику вмикає/вимикає лише власник).
-  admin_lite: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'analytics', 'an.view', 'b2b.admin'],
+  admin_lite: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'analytics', 'an.view', ...SECTION_ALL],
   manager: ['docs.view', 'docs.edit', 'refs.edit', 'an.view'],
   viewer: ['docs.view'],
   partner: ['b2b.partner'],
 };
+// Доступ до розділів для менеджера й перегляду (users.access, JSON; порожньо — як у ролі).
+//  b2b: none | view | full;  retail, market: none | view | work;  shops: null (усі магазини маркетплейсів, і нові) або ['rozetka:1', …];
+//  tg: розділи, сповіщення яких іде цьому користувачу в Telegram (як адмінам): ['b2b', 'retail'].
+// Роль «Перегляд» не отримує більше за «перегляд».
+export const SECTION_LEVELS = { b2b: ['none', 'view', 'full'], retail: ['none', 'view', 'work'], market: ['none', 'view', 'work'] };
+export const ACCESS_ROLES = ['manager', 'viewer'];
+const ROLE_ACCESS = {
+  manager: { b2b: 'none', retail: 'work', market: 'work', shops: null, tg: [] },
+  viewer: { b2b: 'none', retail: 'view', market: 'view', shops: null, tg: [] },
+};
+export function accessOf(u) {
+  const def = ROLE_ACCESS[u?.role];
+  if (!def) return null; // власник, адміністратори, партнер — повний доступ або свій кабінет
+  let a = {};
+  try { a = JSON.parse(u.access || '{}') || {}; } catch { a = {}; }
+  const out = { ...def };
+  for (const [k, lv] of Object.entries(SECTION_LEVELS)) if (lv.includes(a[k])) out[k] = a[k];
+  if (Array.isArray(a.shops)) out.shops = [...new Set(a.shops.map(String).filter((x) => /^[a-z]+:\d+$/.test(x)))];
+  if (Array.isArray(a.tg)) out.tg = a.tg.filter((x) => ['b2b', 'retail'].includes(x));
+  if (u.role === 'viewer') for (const k of Object.keys(SECTION_LEVELS)) if (out[k] !== 'none') out[k] = 'view';
+  out.tg = out.tg.filter((x) => out[x] && out[x] !== 'none');
+  return out;
+}
+// Збережене значення доступу: лише відомі ключі (для users.access).
+export function cleanAccess(b) {
+  if (!b || typeof b !== 'object') return null;
+  const a = {};
+  for (const [k, lv] of Object.entries(SECTION_LEVELS)) a[k] = lv.includes(b[k]) ? b[k] : 'none';
+  a.shops = Array.isArray(b.shops) ? [...new Set(b.shops.map(String).filter((x) => /^[a-z]+:\d+$/.test(x)))].slice(0, 100) : null;
+  a.tg = Array.isArray(b.tg) ? b.tg.filter((x) => ['b2b', 'retail'].includes(x)) : [];
+  return a;
+}
+const sectionPerms = (a) => [
+  ...(a.b2b === 'full' ? ['b2b.admin', 'b2b.view'] : a.b2b === 'view' ? ['b2b.view'] : []),
+  ...(a.retail !== 'none' ? ['retail.view'] : []), ...(a.retail === 'work' ? ['retail.edit'] : []),
+  ...(a.market !== 'none' ? ['market.view'] : []), ...(a.market === 'work' ? ['market.edit'] : []),
+];
+// Магазин маркетплейсу (mp — rozetka/prom/epicentr, id — акаунт) доступний користувачу?
+export const shopAllowed = (u, mp, id) => { const a = accessOf(u); return !a || !a.shops || a.shops.includes(`${mp}:${id}`); };
 const AN_PERMS = ['analytics', 'an.view'];
 
 export const permsOf = (role) => PERMS[role] || [];
@@ -46,7 +89,8 @@ export function permsOfUser(u) {
     const r = partnerRole(u);
     return ['b2b.partner', ...(r !== 'viewer' ? ['b2b.order'] : []), ...(r === 'head' ? ['b2b.team'] : [])];
   }
-  const base = permsOf(u.role);
+  const acc = accessOf(u);
+  const base = acc ? [...permsOf(u.role), ...sectionPerms(acc)] : permsOf(u.role);
   if (u.role === 'owner' || u.role === 'partner' || u.an_access == null || u.an_access === '') return base;
   if (Number(u.an_access) === 0) return base.filter((p) => !AN_PERMS.includes(p));
   return base.includes('an.view') ? base : [...base, 'an.view'];
@@ -94,7 +138,7 @@ export async function verifyPassword(password, stored) {
 export const publicUser = (u) => (u ? {
   id: u.id, login: u.login, name: u.name || u.login, role: u.role, role_name: ROLES[u.role] || u.role,
   active: u.active, created_at: u.created_at, perms: permsOfUser(u), crm_logins: crmLogins(u.crm_logins),
-  analytics: hasAnalytics(u), partner_id: u.partner_id || null,
+  analytics: hasAnalytics(u), partner_id: u.partner_id || null, access: accessOf(u), access_custom: Boolean(u.access),
   ...(u.role === 'partner' ? { partner_role: partnerRole(u), partner_role_name: PARTNER_ROLES[partnerRole(u)] } : {}),
 } : null);
 

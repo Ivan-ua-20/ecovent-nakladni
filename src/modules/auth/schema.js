@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'auth',
-  version: 3,
+  version: 4,
   tables: [
   `CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +30,9 @@ export const schema = {
     // Перемикач аналітики (керує власник): NULL — як у ролі, 0 — вимкнено, 1 — увімкнено.
     ['users', 'an_access', "INTEGER"],
     // Користувач-партнер (роль partner) — до якої компанії-партнера належить.
-    ['users', 'partner_id', "INTEGER"]
+    ['users', 'partner_id', "INTEGER"],
+    // Доступ до розділів (менеджер, перегляд): JSON — див. accessOf у core/auth.js; порожньо — як у ролі.
+    ['users', 'access', "TEXT DEFAULT ''"]
   ],
   // Індекс на колонку, додану ALTER TABLE, — після неї.
   async seed(db) {

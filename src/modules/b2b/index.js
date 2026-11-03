@@ -540,7 +540,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     const p = await myPartner(c);
     need(c, 'b2b.team');
     const r = await addTeamUser(c, p, await c.req.json(), `partner:${actorName(c)}`);
-    await services.notify?.sendText({ admins: true }, `👥 Партнер «${p.name}» додав користувача <b>${r.login}</b> (${PARTNER_ROLES[r.role]}) — додав ${actorName(c)}.`).catch(() => 0);
+    await services.notify?.sendText({ admins: true, section: 'b2b' }, `👥 Партнер «${p.name}» додав користувача <b>${r.login}</b> (${PARTNER_ROLES[r.role]}) — додав ${actorName(c)}.`).catch(() => 0);
     return c.json({ id: r.id });
   });
   app.put('/api/b2b/p/team/:uid', async (c) => {

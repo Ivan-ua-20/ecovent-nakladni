@@ -174,7 +174,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     if (!a || !services.notify?.sendText) return;
     let ids = [];
     try { ids = JSON.parse(a.notify_users || '[]').map(Number).filter(Boolean); } catch { /* */ }
-    const to = ids.length ? { userIds: ids } : { admins: true };
+    const to = ids.length ? { userIds: ids, section: 'retail' } : { admins: true, section: 'retail' };
     const names = await prodNames(ev.inv.concat(ev.ttn));
     const line = (r) => `• <b>${esc(r.order_num)}</b> — ${esc(r.customer)}${names(r) ? ` · ${esc(names(r))}` : ''}`;
     const more = (l) => (l.length > 30 ? `\n…і ще ${l.length - 30}` : '');
@@ -251,7 +251,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     try { c?.executionCtx?.waitUntil(p); } catch { /* не Cloudflare */ }
   });
   app.post('/api/rzs/sync', async (c) => {
-    need(c, 'docs.view');
+    need(c, 'retail.view');
     const b = await c.req.json().catch(() => ({}));
     const accs = await db.all(`SELECT * FROM rzs_accounts WHERE active = 1 ORDER BY id`);
     if (!accs.length) return c.json({ ok: false, accounts: 0 });
@@ -316,7 +316,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     return new Map((await db.all(`SELECT * FROM rzs_products WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((p) => [p.code, p]));
   };
   app.get('/api/rzs/orders', async (c) => {
-    need(c, 'docs.view');
+    need(c, 'retail.view');
     const st = c.req.query('status') || '';
     const q = String(c.req.query('q') || '').trim().toLowerCase();
     const since = new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
@@ -353,7 +353,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     return r;
   };
   app.get('/api/rzs/orders/:id', async (c) => {
-    need(c, 'docs.view');
+    need(c, 'retail.view');
     const r = await orderRow(c.req.param('id'));
     return c.json(publicOrder(r, await prodMap([r])));
   });
@@ -361,7 +361,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
   // ================================================================ дії над замовленням
   // Підтвердити повністю (кількість = замовлена); серійні номери — якщо Розетка їх вимагає.
   app.post('/api/rzs/orders/:id/confirm', async (c) => {
-    need(c, 'docs.edit');
+    need(c, 'retail.edit');
     const r = await orderRow(c.req.param('id'));
     const a = await accOf(r.account_id);
     const b = await c.req.json().catch(() => ({}));
@@ -395,7 +395,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     return { seats, missing };
   }
   app.post('/api/rzs/orders/:id/ttn', async (c) => {
-    need(c, 'docs.edit');
+    need(c, 'retail.edit');
     const r = await orderRow(c.req.param('id'));
     const a = await accOf(r.account_id);
     const b = await c.req.json().catch(() => ({}));
@@ -422,7 +422,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
 
   // PDF маркувань групою (до 100) — по кабінетах.
   app.post('/api/rzs/markings', async (c) => {
-    need(c, 'docs.view');
+    need(c, 'retail.view');
     const b = await c.req.json().catch(() => ({}));
     const ids = [...new Set((Array.isArray(b.ids) ? b.ids : []).map(String))].slice(0, 100);
     const rows = await db.all(`SELECT id, account_id, ttn FROM rzs_orders WHERE id IN (SELECT value FROM json_each(?)) AND ttn != ''`, [JSON.stringify(ids)]);
@@ -442,7 +442,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
       REMOTE_ADDR: c.req.header('cf-connecting-ip') || '127.0.0.1', HTTP_USER_AGENT: 'Ecovent Retail', REQUEST_SCHEME: 'https', HTTPS: 'on' }));
   }
   app.post('/api/rzs/orders/:id/crm', async (c) => {
-    need(c, 'docs.edit');
+    need(c, 'retail.edit');
     const r = await orderRow(c.req.param('id'));
     if (r.crm_id || r.crm_code) throw fail(400, `Уже в LP-CRM${r.crm_id ? `: № ${r.crm_id}` : ''}.`);
     // Етапи по черзі: у LP-CRM — лише з ТТН (вона йде в поле адреси доставки, менеджер переносить у поле ТТН).
@@ -576,7 +576,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     return known.length;
   }
   app.post('/api/rzs/crm-status', async (c) => {
-    need(c, 'docs.view');
+    need(c, 'retail.view');
     return c.json({ checked: await refreshCrmStatus({ force: true }) });
   });
   async function fillCrmIds(rows) {
@@ -592,7 +592,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     return st.length;
   }
   app.post('/api/rzs/crm-find', async (c) => {
-    need(c, 'docs.edit');
+    need(c, 'retail.edit');
     const b = await c.req.json().catch(() => ({}));
     const ids = Array.isArray(b.ids) ? [...new Set(b.ids.map(String))].slice(0, 300) : null;
     const since = new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
@@ -602,7 +602,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
   });
   // Ручна прив'язка: № замовлення LP-CRM (як у картці) або його код; порожньо — відв'язати.
   app.put('/api/rzs/orders/:id/crm-link', async (c) => {
-    need(c, 'docs.edit');
+    need(c, 'retail.edit');
     const r = await orderRow(c.req.param('id'));
     const val = String((await c.req.json().catch(() => ({}))).crm ?? '').replace(/\s/g, '');
     if (!val) {
@@ -628,7 +628,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
 
   // ================================================================ товари
   app.get('/api/rzs/products', async (c) => {
-    need(c, 'docs.view');
+    need(c, 'retail.view');
     const rows = await db.all(`SELECT * FROM rzs_products ORDER BY (product_id IS NULL) DESC, (purchase_price IS NULL) DESC, name, code LIMIT 2000`);
     return c.json(rows.map((p) => ({ ...p, seats: p.seats ? JSON.parse(p.seats) : [] })));
   });

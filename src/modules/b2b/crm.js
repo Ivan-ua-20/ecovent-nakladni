@@ -7,7 +7,7 @@ const daysBetween = (a, b) => Math.round((Date.parse(`${b}T12:00:00Z`) - Date.pa
 const OVERRIDE_DAYS = 7; // знято з автопаузи вручну — стільки днів автопауза цього партнера не чіпає
 
 export function mountB2bCrm(app, { db, services, onCleanup }) {
-  const tgAdmins = (text) => services.notify?.sendText({ admins: true }, text).catch(() => 0);
+  const tgAdmins = (text) => services.notify?.sendText({ admins: true, section: 'b2b' }, text).catch(() => 0);
   const tgPartner = (partnerId, text) => services.notify?.sendText({ partnerId }, text).catch(() => 0);
   const partnerOf = async (id) => {
     const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ? AND COALESCE(deleted_at, '') = ''`, [id]);

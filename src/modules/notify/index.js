@@ -1,5 +1,5 @@
 // Telegram-бот для сповіщень про оплати: власник вставляє токен бота, кожен користувач підключає себе кнопкою.
-import { randomToken } from '../../core/auth.js';
+import { randomToken, accessOf } from '../../core/auth.js';
 import { fail, need, nowIso, loadSettings, putSetting as putSettingDb } from '../../core/common.js';
 
 // Назва акаунта Telegram: ім'я та @username.
@@ -197,11 +197,13 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
   }
 
   // Довільне повідомлення: адміністраторам (власник і адміни з підключеним Telegram) або вказаним користувачам.
-  async function sendText({ admins = false, userIds = [], partnerId = null, chatIds = [] }, text) {
+  // section ('b2b', 'retail') — ще й менеджерам, яким у «Користувачах» увімкнено сповіщення цього розділу.
+  async function sendText({ admins = false, section = '', userIds = [], partnerId = null, chatIds = [] }, text) {
     const s = await settings();
     if (!s.tg_token) return 0;
     const chats = new Set(chatIds.filter(Boolean).map(String));
     if (admins) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin', 'admin_lite')`)) chats.add(r.tg_chat_id);
+    if (section) for (const r of await db.all(`SELECT * FROM users WHERE active = 1 AND tg_chat_id != '' AND access != '' AND role IN ('manager', 'viewer')`)) if (accessOf(r)?.tg.includes(section)) chats.add(r.tg_chat_id);
     if (userIds.length) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND id IN (SELECT value FROM json_each(?))`, [JSON.stringify(userIds)])) chats.add(r.tg_chat_id);
     if (partnerId) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'partner' AND partner_id = ?`, [partnerId])) chats.add(r.tg_chat_id);
     let sent = 0;

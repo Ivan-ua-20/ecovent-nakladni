@@ -1,7 +1,7 @@
 // Модуль «Вхід і користувачі»: сесії, вхід/вихід, перший власник, користувачі й ролі, зміна пароля.
 // Також реєструє перевірку входу для всіх інших /api-маршрутів — тому монтується першим.
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
-import { ROLES, can, hashPassword, verifyPassword, randomToken, publicUser, crmLogins } from '../../core/auth.js';
+import { ROLES, can, hashPassword, verifyPassword, randomToken, publicUser, crmLogins, accessOf, cleanAccess, ACCESS_ROLES } from '../../core/auth.js';
 import { fail, need, nowIso } from '../../core/common.js';
 
 export function mountAuth(app, { db, runCleanup, onCleanup }) {
@@ -98,6 +98,19 @@ export function mountAuth(app, { db, runCleanup, onCleanup }) {
     return c.json({ ok: true });
   });
 
+  // Журнал: хто змінив доступ до розділів і як (було → стало).
+  const LV = { none: 'немає', view: 'перегляд', work: 'робота', full: 'повний' };
+  const SEC = { b2b: 'B2B', retail: 'Рітейл', market: 'Маркетплейси' };
+  const accParts = (a) => (a ? [...Object.keys(SEC).map((k) => [SEC[k], LV[a[k]] || a[k]]),
+    ['магазини', a.shops ? (a.shops.length ? a.shops.join(', ') : 'жодного') : 'усі'], ['Telegram', a.tg?.length ? a.tg.map((x) => SEC[x]).join(', ') : '—']] : []);
+  async function auditAccess(me, target, before, after) {
+    const b = new Map(accParts(before));
+    // лише те, що змінилося: «B2B: немає → перегляд; магазини: усі → rozetka:1»
+    const txt = after ? accParts(after).filter(([k, v]) => b.get(k) !== v).map(([k, v]) => `${k}: ${b.has(k) ? `${b.get(k)} → ` : ''}${v}`).join('; ') : 'як у ролі';
+    await db.run(`INSERT INTO audit_log (at, user_id, user_name, kind, ref_id, action, changes) VALUES (?, ?, ?, 'user', ?, ?, '[]')`,
+      [nowIso(), me.id, me.name || me.login, String(target.id), `доступ ${target.login}: ${txt || 'без змін'}`.slice(0, 1000)]);
+  }
+
   // ---------- Користувачі (власник і адміністратори) ----------
   const ASSIGNABLE = ['admin', 'admin_lite', 'manager', 'viewer'];
   app.get('/api/users', async (c) => {
@@ -115,9 +128,11 @@ export function mountAuth(app, { db, runCleanup, onCleanup }) {
     if (!ASSIGNABLE.includes(b.role)) throw fail(400, 'Невідома роль.');
     if (String(b.password || '').length < 6) throw fail(400, 'Пароль — не менше 6 символів.');
     if (await db.get(`SELECT id FROM users WHERE login = ?`, [login])) throw fail(400, 'Такий логін уже є.');
-    const r = await db.run(`INSERT INTO users (login, name, password_hash, role, active, created_at, crm_logins) VALUES (?, ?, ?, ?, 1, ?, ?)`, [
-      login, String(b.name || '').trim(), await hashPassword(b.password), b.role, nowIso(), crmLogins(b.crm_logins).join(','),
+    const acc = ACCESS_ROLES.includes(b.role) && b.access ? cleanAccess(b.access) : null;
+    const r = await db.run(`INSERT INTO users (login, name, password_hash, role, active, created_at, crm_logins, access) VALUES (?, ?, ?, ?, 1, ?, ?, ?)`, [
+      login, String(b.name || '').trim(), await hashPassword(b.password), b.role, nowIso(), crmLogins(b.crm_logins).join(','), acc ? JSON.stringify(acc) : '',
     ]);
+    if (acc) await auditAccess(c.get('user'), { id: r.lastId, login, role: b.role }, null, acc);
     return c.json({ id: r.lastId });
   });
 
@@ -142,6 +157,15 @@ export function mountAuth(app, { db, runCleanup, onCleanup }) {
     const vals = [];
     if (b.name !== undefined) { sets.push('name = ?'); vals.push(String(b.name).trim()); }
     if (b.crm_logins !== undefined) { sets.push('crm_logins = ?'); vals.push(crmLogins(b.crm_logins).join(',')); }
+    // Доступ до розділів (B2B, Рітейл, Маркетплейси, магазини, сповіщення); null — як у ролі.
+    if (b.access !== undefined && target.role !== 'owner') {
+      const acc = b.access === null ? null : cleanAccess(b.access);
+      const next = acc ? JSON.stringify(acc) : '';
+      if (next !== (target.access || '')) {
+        sets.push('access = ?'); vals.push(next);
+        await auditAccess(me, target, accessOf(target), acc ? accessOf({ ...target, role: b.role || target.role, access: next }) : null);
+      }
+    }
     if (b.role !== undefined && target.role !== 'owner') {
       if (!ASSIGNABLE.includes(b.role)) throw fail(400, 'Невідома роль.');
       sets.push('role = ?'); vals.push(b.role);

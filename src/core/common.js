@@ -7,7 +7,11 @@ export const nowIso = () => new Date().toISOString();
 // Помилка з HTTP-статусом (обробник у app.js віддає її клієнту як { error }).
 export const fail = (status, message) => Object.assign(new Error(message), { status });
 export const need = (c, perm) => {
-  if (!can(c.get('user'), perm)) throw fail(403, 'Недостатньо прав для цієї дії.');
+  const u = c.get('user');
+  if (can(u, perm)) return;
+  // B2B «лише перегляд»: усі B2B-сторінки відкриваються (GET), а зміни — ні.
+  if (perm === 'b2b.admin' && c.req.method === 'GET' && can(u, 'b2b.view')) return;
+  throw fail(403, 'Недостатньо прав для цієї дії.');
 };
 export const userName = (c) => c.get('user')?.name || c.get('user')?.login || '';
 
