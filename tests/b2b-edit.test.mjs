@@ -218,4 +218,38 @@ const ts = (await req('GET', '/api/b2b/trash')).find((t) => t.order_id === s2.id
 await req('POST', `/api/b2b/trash/${ts.id}/restore`);
 assert.deepEqual(await items(s2.id), [[13, 1, 1800]]);
 
+// ---------- 6. Ціни прямо в замовленні клієнта ----------
+// у відкритій закупівлі: ціна — лише цього замовлення; відкрита перераховується; партнеру — хто й що змінив
+tg.length = 0;
+r = await req('PUT', `/api/b2b/clients/${c1.id}/prices`, { items: [{ product_id: 12, price: '4000' }] });
+assert.deepEqual([r.changed, r.total, r.draft], [true, 4000, '']);
+cd = await req('GET', `/api/b2b/orders/${c1.id}`);
+assert.equal((await req('GET', `/api/b2b/orders/${cd.order.supply_id}`)).order.total, 4000, 'відкрита перерахована');
+assert.ok(cd.history.some((x) => /ціни змінив .*ціна 4.?500,00 грн → 4.?000,00 грн/.test(x.action)), 'історія');
+assert.ok(tg.some((m) => String(m.chat_id) === '2' && /Ціни в замовленні клієнта .* змінив/.test(m.text)), 'партнеру');
+// лише РРЦ — ціна з тією ж знижкою (4000 / 5000 × 6000)
+r = await req('PUT', `/api/b2b/clients/${c1.id}/prices`, { items: [{ product_id: 12, rrp: '6000' }] });
+assert.equal(r.total, 4800);
+assert.equal((await req('PUT', `/api/b2b/clients/${c1.id}/prices`, { items: [{ product_id: 12, price: '4800' }] })).changed, false);
+assert.ok(await errOf(() => req('PUT', `/api/b2b/clients/${c1.id}/prices`, { items: [{ product_id: 12, price: '-1' }] }, A)), 'партнер — ні');
+// «Змінити»: поточна ціна зберігається, к-сть змінюється; ціну можна задати вручну — в описі змін для партнера
+r = await cEdit({ supply_id: null, items: [{ product_id: 12, qty: 2, price: 4800 }] });
+assert.equal(r.total, 9600, 'поточна ціна не скинулась на каталожну');
+r = await cEdit({ supply_id: null, items: [{ product_id: 12, qty: 2, price: '3900' }, { product_id: 13, qty: 1 }] });
+assert.equal(r.total, 9600);
+cd = await req('GET', `/api/b2b/orders/${c1.id}`);
+assert.deepEqual(cd.items.map((i) => [i.product_id, i.qty, i.price]), [[12, 2, 3900], [13, 1, 1800]]);
+assert.ok(cd.order.pending.changes.some((x) => /ціна/.test(x)), 'зміна ціни — у підтвердженні партнера');
+// у чернетці: ціна змінюється в усій чернетці (і в інших її замовленнях клієнтів)
+const d9 = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, items: [{ product_id: 11, qty: 1 }], draft: true }, A);
+const k1 = await req('POST', '/api/b2b/p/clients', { client_name: 'Клієнт Ч1', client_phone: '0501112233', items: [{ product_id: 13, qty: 1 }], into: d9.id }, A);
+const k2 = await req('POST', '/api/b2b/p/clients', { client_name: 'Клієнт Ч2', client_phone: '0501112234', items: [{ product_id: 13, qty: 2 }], into: d9.id }, A);
+assert.equal((await req('GET', `/api/b2b/orders/${k1.id}`)).order.supply_id, d9.id);
+tg.length = 0;
+r = await req('PUT', `/api/b2b/clients/${k1.id}/prices`, { items: [{ product_id: 13, price: '1500' }] });
+assert.equal(r.draft, `B2B-${d9.id}`);
+assert.deepEqual((await items(d9.id)).find((i) => i[0] === 13), [13, 3, 1500], 'чернетка');
+assert.equal((await req('GET', `/api/b2b/orders/${k2.id}`)).order.total, 3000, 'інше замовлення цієї чернетки');
+assert.ok(tg.some((m) => String(m.chat_id) === '-500' && /Чернетку закупівлі .* змінив/.test(m.text)), 'у групу — як зміна чернетки');
+
 console.log('b2b-edit: ok');

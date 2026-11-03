@@ -46,6 +46,13 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
     need(c, 'b2b.admin');
     return c.json(await editSupply(c, await orderOf(c.req.param('id')), await c.req.json()));
   });
+  // Нові ціни/РРЦ товарів закупівлі (з замовлення клієнта в чернетці: одна ціна товару на всю чернетку).
+  // changes: Map(product_id → { price?, rrp? }).
+  hooks.supplyPrices = async (c, supplyId, changes) => {
+    const o = await orderOf(supplyId);
+    const cur = await db.all(`SELECT product_id, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
+    return editSupply(c, o, { items: cur.map((i) => ({ product_id: i.product_id, qty: i.qty, price: changes.get(i.product_id)?.price ?? i.price, rrp: changes.get(i.product_id)?.rrp ?? i.rrp })) });
+  };
   // Додати товари в закупівлю (з правки замовлення клієнта: товару немає в закупівлі або бракує залишку).
   hooks.supplyAdd = async (c, supplyId, add) => {
     const o = await orderOf(supplyId);

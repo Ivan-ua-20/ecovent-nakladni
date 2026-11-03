@@ -7855,6 +7855,71 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     ]);
   }
   const neg = (items) => items.map((i) => ({ ...i, qty: -i.qty }));
+  const r22 = (x) => Math.round(Number(x) * 100) / 100;
+  const moneyIn = (v, what) => {
+    const raw2 = v === void 0 || v === null ? "" : String(v).replace(/\s/g, "").replace(",", ".");
+    if (raw2 === "") return null;
+    const x = r22(raw2);
+    if (!(x >= 0 && x < 1e8)) throw fail(400, `${what} \u2014 \u0447\u0438\u0441\u043B\u043E \u0432\u0456\u0434 0.`);
+    return x;
+  };
+  async function setClientPrices(c, o, changes, { quiet = false } = {}) {
+    const items = await orderItems(o.id);
+    const list = [];
+    const ch = /* @__PURE__ */ new Map();
+    for (const i of items) {
+      const w = changes.get(i.product_id);
+      if (!w) continue;
+      let price = w.price ?? i.price;
+      const rrp = w.rrp ?? i.rrp;
+      if (w.price == null && w.rrp != null && r22(w.rrp) !== r22(i.rrp) && i.rrp > 0) price = r22(i.price / i.rrp * w.rrp);
+      if (r22(rrp) !== r22(i.rrp)) list.push(`${i.name}: \u0420\u0420\u0426 ${uah4(i.rrp)} \u2192 ${uah4(rrp)}`);
+      if (r22(price) !== r22(i.price)) list.push(`${i.name}: \u0446\u0456\u043D\u0430 ${uah4(i.price)} \u2192 ${uah4(price)}`);
+      if (r22(price) !== r22(i.price) || r22(rrp) !== r22(i.rrp)) ch.set(i.product_id, { price, rrp });
+    }
+    if (!ch.size) return [];
+    const s = await supplyOf(o.supply_id);
+    if (s?.status === "draft") {
+      await hooks.supplyPrices(c, s.id, ch);
+      return list;
+    }
+    await db.batch([
+      ...[...ch].map(([id, x]) => [`UPDATE b2b_order_items SET price = ?, rrp = ? WHERE order_id = ? AND product_id = ?`, [x.price, x.rrp, o.id, id]]),
+      [`UPDATE b2b_orders SET total = (SELECT ROUND(COALESCE(SUM(ROUND(qty * price, 2)), 0), 2) FROM b2b_order_items WHERE order_id = b2b_orders.id), updated_at = ? WHERE id = ?`, [nowIso(), o.id]]
+    ]);
+    if (s?.status === "open") await rebuildOpen(s.id);
+    if (!quiet) {
+      const who = userName6(c.get("user")) || "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440";
+      const total = (await db.get(`SELECT total FROM b2b_orders WHERE id = ?`, [o.id])).total;
+      await log(o.id, c.get("user"), `\u0446\u0456\u043D\u0438 \u0437\u043C\u0456\u043D\u0438\u0432 ${who}: ${list.join("; ")} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah4(total)}`.slice(0, 1800));
+      await tgPartner(o.partner_id, `\u270F\uFE0F <b>\u0426\u0456\u043D\u0438 \u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0438\u0432 ${h7(who)}</b> (${h7(o.client_name)})
+${list.slice(0, 20).map(h7).join("\n")}
+<b>\u0420\u0430\u0437\u043E\u043C: ${uah4(total)}</b>
+${link(c, `pclients/${o.id}`)}`);
+    }
+    return list;
+  }
+  const pricesIn = (arr) => {
+    const m = /* @__PURE__ */ new Map();
+    for (const it of Array.isArray(arr) ? arr : []) {
+      const id = parseInt(it.product_id, 10);
+      if (!id) continue;
+      const price = moneyIn(it.price, "\u0426\u0456\u043D\u0430");
+      const rrp = moneyIn(it.rrp, "\u0420\u0420\u0426");
+      if (price != null || rrp != null) m.set(id, { price, rrp });
+    }
+    return m;
+  };
+  app.put("/api/b2b/clients/:id/prices", async (c) => {
+    need(c, "b2b.admin");
+    const o = await orderOf(c.req.param("id"));
+    if (o.kind !== "client") throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    if (o.status === "cancelled") throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.");
+    const s = await supplyOf(o.supply_id);
+    const list = await setClientPrices(c, o, pricesIn((await c.req.json()).items));
+    const n = await orderOf(o.id);
+    return c.json({ ok: true, changed: list.length > 0, total: n.total, draft: s?.status === "draft" ? orderNo(s.id) : "", crm: o.crm_id || o.crm_ext || "" });
+  });
   const orderItems = (id) => db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [id]);
   async function moveDraftItems(fromDraft, oldItems, toDraft, newItems) {
     if (fromDraft && fromDraft === toDraft) {
@@ -8160,7 +8225,10 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     for (const i of b.items) {
       const x = am.get(i.product_id);
       if (!x) ch.push(`+ ${i.name} \xD7 ${i.qty}`);
-      else if (x.qty !== i.qty) ch.push(`${i.name}: ${x.qty} \u2192 ${i.qty} \u0448\u0442`);
+      else {
+        if (x.qty !== i.qty) ch.push(`${i.name}: ${x.qty} \u2192 ${i.qty} \u0448\u0442`);
+        if (Math.round(x.price * 100) !== Math.round(i.price * 100)) ch.push(`${i.name}: \u0446\u0456\u043D\u0430 ${uah4(x.price)} \u2192 ${uah4(i.price)}`);
+      }
     }
     for (const x of a.items) if (!b.items.some((i) => i.product_id === x.product_id)) ch.push(`\u2212 ${x.name} \xD7 ${x.qty}`);
     return ch;
@@ -8223,6 +8291,8 @@ ${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah4(i.price)}`).join(
     await moveDraftItems(curDraft, oldItems, it.draftId, it.items);
     if (it.openId) await rebuildOpen(it.openId);
     if (cur?.status === "open" && cur.id !== it.openId) await rebuildOpen(cur.id);
+    const want = pricesIn((Array.isArray(b.items) ? b.items : []).map((x) => ({ product_id: x.product_id, price: x.price })));
+    if (want.size) await setClientPrices(c, await orderOf(o.id), want, { quiet: true });
     o = await orderOf(o.id);
     const after = await snapOf(o);
     const changes = diffOf(before, after);
@@ -8232,7 +8302,7 @@ ${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah4(i.price)}`).join(
       `UPDATE b2b_orders SET pending = ? WHERE id = ?`,
       [changes.length || crmOld ? JSON.stringify({ before, changes, by, at: now, crm_old: crmOld }) : "", o.id]
     );
-    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440: ${changes.join("; ") || "\u0431\u0435\u0437 \u0437\u043C\u0456\u043D"} \u2014 ${uah4(it.total)}${wasCrm ? ` \xB7 \u0441\u0442\u0430\u0440\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 CRM \u2116 ${oldCrm} \u0430\u043D\u0443\u043B\u044C\u043E\u0432\u0430\u043D\u043E` : ""}${changes.length ? " \xB7 \u0447\u0435\u043A\u0430\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430" : ""}`.slice(0, 1800));
+    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440: ${changes.join("; ") || "\u0431\u0435\u0437 \u0437\u043C\u0456\u043D"} \u2014 ${uah4(o.total)}${wasCrm ? ` \xB7 \u0441\u0442\u0430\u0440\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 CRM \u2116 ${oldCrm} \u0430\u043D\u0443\u043B\u044C\u043E\u0432\u0430\u043D\u043E` : ""}${changes.length ? " \xB7 \u0447\u0435\u043A\u0430\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430" : ""}`.slice(0, 1800));
     if (changes.length || wasCrm) {
       const url = link(c, `pclients/${o.id}`);
       if (wasCrm) {
@@ -8256,7 +8326,7 @@ ${changes.slice(0, 15).map(h7).join("\n")}
 ${url}`);
       }
     }
-    return c.json({ ok: true, total: it.total, pending: changes.length > 0, crmOld: wasCrm ? oldCrm : "", supply: supplyNote });
+    return c.json({ ok: true, total: o.total, pending: changes.length > 0, crmOld: wasCrm ? oldCrm : "", supply: supplyNote });
   });
   async function pendingOrder(c) {
     const p = await myPartner(c);
@@ -9981,6 +10051,11 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
     need(c, "b2b.admin");
     return c.json(await editSupply(c, await orderOf(c.req.param("id")), await c.req.json()));
   });
+  hooks.supplyPrices = async (c, supplyId, changes) => {
+    const o = await orderOf(supplyId);
+    const cur = await db.all(`SELECT product_id, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
+    return editSupply(c, o, { items: cur.map((i) => ({ product_id: i.product_id, qty: i.qty, price: changes.get(i.product_id)?.price ?? i.price, rrp: changes.get(i.product_id)?.rrp ?? i.rrp })) });
+  };
   hooks.supplyAdd = async (c, supplyId, add) => {
     const o = await orderOf(supplyId);
     const cur = await db.all(`SELECT product_id, qty FROM b2b_order_items WHERE order_id = ?`, [o.id]);

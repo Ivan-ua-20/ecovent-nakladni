@@ -294,6 +294,71 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     ]);
   }
   const neg = (items) => items.map((i) => ({ ...i, qty: -i.qty }));
+  const r2 = (x) => Math.round(Number(x) * 100) / 100;
+  const moneyIn = (v, what) => {
+    const raw = v === undefined || v === null ? '' : String(v).replace(/\s/g, '').replace(',', '.');
+    if (raw === '') return null;
+    const x = r2(raw);
+    if (!(x >= 0 && x < 1e8)) throw fail(400, `${what} — число від 0.`);
+    return x;
+  };
+  // Ціни/РРЦ товарів замовлення клієнта (наш адмін). Замовлення в чернетці — ціна змінюється в чернетці
+  // (одна ціна товару на всю чернетку й усі її замовлення клієнтів); у відкритій — перераховується відкрита.
+  // changes: Map(product_id → { price?, rrp? }). Повертає описи змін.
+  async function setClientPrices(c, o, changes, { quiet = false } = {}) {
+    const items = await orderItems(o.id);
+    const list = [];
+    const ch = new Map();
+    for (const i of items) {
+      const w = changes.get(i.product_id);
+      if (!w) continue;
+      let price = w.price ?? i.price;
+      const rrp = w.rrp ?? i.rrp;
+      // нова РРЦ без ціни — ціна з тією ж знижкою від РРЦ
+      if (w.price == null && w.rrp != null && r2(w.rrp) !== r2(i.rrp) && i.rrp > 0) price = r2((i.price / i.rrp) * w.rrp);
+      if (r2(rrp) !== r2(i.rrp)) list.push(`${i.name}: РРЦ ${uah(i.rrp)} → ${uah(rrp)}`);
+      if (r2(price) !== r2(i.price)) list.push(`${i.name}: ціна ${uah(i.price)} → ${uah(price)}`);
+      if (r2(price) !== r2(i.price) || r2(rrp) !== r2(i.rrp)) ch.set(i.product_id, { price, rrp });
+    }
+    if (!ch.size) return [];
+    const s = await supplyOf(o.supply_id);
+    if (s?.status === 'draft') { await hooks.supplyPrices(c, s.id, ch); return list; } // історія й сповіщення — від чернетки
+    await db.batch([
+      ...[...ch].map(([id, x]) => [`UPDATE b2b_order_items SET price = ?, rrp = ? WHERE order_id = ? AND product_id = ?`, [x.price, x.rrp, o.id, id]]),
+      [`UPDATE b2b_orders SET total = (SELECT ROUND(COALESCE(SUM(ROUND(qty * price, 2)), 0), 2) FROM b2b_order_items WHERE order_id = b2b_orders.id), updated_at = ? WHERE id = ?`, [nowIso(), o.id]],
+    ]);
+    if (s?.status === 'open') await rebuildOpen(s.id);
+    if (!quiet) {
+      const who = userName(c.get('user')) || 'менеджер';
+      const total = (await db.get(`SELECT total FROM b2b_orders WHERE id = ?`, [o.id])).total;
+      await log(o.id, c.get('user'), `ціни змінив ${who}: ${list.join('; ')} — разом ${uah(total)}`.slice(0, 1800));
+      await tgPartner(o.partner_id, `✏️ <b>Ціни в замовленні клієнта ${orderNo(o.id)} змінив ${h(who)}</b> (${h(o.client_name)})\n${list.slice(0, 20).map(h).join('\n')}\n<b>Разом: ${uah(total)}</b>\n${link(c, `pclients/${o.id}`)}`);
+    }
+    return list;
+  }
+  const pricesIn = (arr) => {
+    const m = new Map();
+    for (const it of Array.isArray(arr) ? arr : []) {
+      const id = parseInt(it.product_id, 10);
+      if (!id) continue;
+      const price = moneyIn(it.price, 'Ціна');
+      const rrp = moneyIn(it.rrp, 'РРЦ');
+      if (price != null || rrp != null) m.set(id, { price, rrp });
+    }
+    return m;
+  };
+  // Змінити ціни прямо в картці замовлення клієнта.
+  app.put('/api/b2b/clients/:id/prices', async (c) => {
+    need(c, 'b2b.admin');
+    const o = await orderOf(c.req.param('id'));
+    if (o.kind !== 'client') throw fail(404, 'Замовлення не знайдено.');
+    if (o.status === 'cancelled') throw fail(400, 'Замовлення скасовано.');
+    const s = await supplyOf(o.supply_id);
+    const list = await setClientPrices(c, o, pricesIn((await c.req.json()).items));
+    const n = await orderOf(o.id);
+    return c.json({ ok: true, changed: list.length > 0, total: n.total, draft: s?.status === 'draft' ? orderNo(s.id) : '', crm: o.crm_id || o.crm_ext || '' });
+  });
+
   const orderItems = (id) => db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [id]);
   // Перенести замовлення клієнта між «джерелами»: з чернетки (товари прибираються) — у чернетку (товари додаються).
   async function moveDraftItems(fromDraft, oldItems, toDraft, newItems) {
@@ -576,7 +641,14 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     if ((a.comment || '') !== (b.comment || '')) ch.push(`коментар: ${b.comment || '—'}`);
     if (a.supply_id !== b.supply_id) ch.push(`закупівля: ${a.supply_id ? orderNo(a.supply_id) : '—'} → ${b.supply_id ? orderNo(b.supply_id) : '—'}`);
     const am = new Map(a.items.map((i) => [i.product_id, i]));
-    for (const i of b.items) { const x = am.get(i.product_id); if (!x) ch.push(`+ ${i.name} × ${i.qty}`); else if (x.qty !== i.qty) ch.push(`${i.name}: ${x.qty} → ${i.qty} шт`); }
+    for (const i of b.items) {
+      const x = am.get(i.product_id);
+      if (!x) ch.push(`+ ${i.name} × ${i.qty}`);
+      else {
+        if (x.qty !== i.qty) ch.push(`${i.name}: ${x.qty} → ${i.qty} шт`);
+        if (Math.round(x.price * 100) !== Math.round(i.price * 100)) ch.push(`${i.name}: ціна ${uah(x.price)} → ${uah(i.price)}`);
+      }
+    }
     for (const x of a.items) if (!b.items.some((i) => i.product_id === x.product_id)) ch.push(`− ${x.name} × ${x.qty}`);
     return ch;
   }
@@ -630,6 +702,9 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     await moveDraftItems(curDraft, oldItems, it.draftId, it.items);
     if (it.openId) await rebuildOpen(it.openId);
     if (cur?.status === 'open' && cur.id !== it.openId) await rebuildOpen(cur.id);
+    // Ціни, задані вручну у формі (інакше — з закупівлі/каталогу/чернетки).
+    const want = pricesIn((Array.isArray(b.items) ? b.items : []).map((x) => ({ product_id: x.product_id, price: x.price })));
+    if (want.size) await setClientPrices(c, await orderOf(o.id), want, { quiet: true });
     o = await orderOf(o.id);
     const after = await snapOf(o);
     const changes = diffOf(before, after);
@@ -637,7 +712,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     const by = userName(c.get('user'));
     await db.run(`UPDATE b2b_orders SET pending = ? WHERE id = ?`,
       [changes.length || crmOld ? JSON.stringify({ before, changes, by, at: now, crm_old: crmOld }) : '', o.id]);
-    await log(o.id, c.get('user'), `змінив менеджер: ${changes.join('; ') || 'без змін'} — ${uah(it.total)}${wasCrm ? ` · старе замовлення в CRM № ${oldCrm} анульовано` : ''}${changes.length ? ' · чекає підтвердження партнера' : ''}`.slice(0, 1800));
+    await log(o.id, c.get('user'), `змінив менеджер: ${changes.join('; ') || 'без змін'} — ${uah(o.total)}${wasCrm ? ` · старе замовлення в CRM № ${oldCrm} анульовано` : ''}${changes.length ? ' · чекає підтвердження партнера' : ''}`.slice(0, 1800));
     if (changes.length || wasCrm) {
       const url = link(c, `pclients/${o.id}`);
       if (wasCrm) {
@@ -652,7 +727,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
         await tgPartner(o.partner_id, `✏️ <b>Замовлення клієнта ${orderNo(o.id)} змінив менеджер</b> (${h(f.client_name)})\n${changes.slice(0, 15).map(h).join('\n')}\n\nПідтвердіть або відхиліть зміни в кабінеті.\n${url}`);
       }
     }
-    return c.json({ ok: true, total: it.total, pending: changes.length > 0, crmOld: wasCrm ? oldCrm : '', supply: supplyNote });
+    return c.json({ ok: true, total: o.total, pending: changes.length > 0, crmOld: wasCrm ? oldCrm : '', supply: supplyNote });
   });
 
   // Партнер: підтвердити зміни менеджера або відхилити (повернути як було).
