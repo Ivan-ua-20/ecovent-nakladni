@@ -98,4 +98,25 @@ d = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, draft: true, ite
 assert.equal((await db.get(`SELECT price FROM b2b_order_items WHERE order_id = ?`, [d.id])).price, 7990);
 const hist = await db.all(`SELECT action FROM audit_log WHERE kind = 'b2b' AND action LIKE 'відстрочка підвищення цін%'`);
 assert.ok(hist.length >= 3, 'зміни відстрочки — в історії партнера');
-console.log('OK — B2B: розсилка змін цін (без хибних «нових брендів») і відстрочка підвищення цін');
+
+// ---------- 4. Журнал змін цін ----------
+let lg = await req('GET', '/api/b2b/price-log');
+assert.deepEqual(lg.rows.map((r) => [r.product_id, r.old_rrp, r.new_rrp]), [[12, 9400, 8000], [12, 9000, 9400], [11, 9000, 9400]], 'новіші — першими');
+assert.ok(lg.rows.every((r) => r.old_price === undefined), 'без партнера — лише РРЦ');
+assert.equal(lg.rows[0].pct, -14.89);
+await req('PUT', `/api/b2b/partners/${mta.id}/margins`, [{ brand_id: 901, margin: 20 }]); // знижка змінилась уже після змін цін
+lg = await req('GET', `/api/b2b/price-log?partner=${mta.id}`);
+const r11 = lg.rows.find((r) => r.product_id === 11);
+assert.deepEqual([r11.old_price, r11.new_price], [7650, 7990], 'ціна партнера — за знижкою на момент зміни (15%)');
+assert.deepEqual(lg.rows.filter((r) => r.kind === 'margin').map((r) => [r.old_margin, r.new_margin]), [[15, 20], [null, 15]], 'зміни знижки партнера');
+// партнер бачить свій журнал
+const pl = await req('GET', '/api/b2b/p/price-log', null, M);
+assert.equal(pl.rows.filter((r) => r.kind === 'rrp').length, 3);
+assert.deepEqual(pl.brands.map((b) => b.name), ['Evoair']);
+assert.equal((await req('GET', '/api/b2b/p/price-log?q=11', null, M)).rows.filter((r) => r.kind === 'rrp').length, 1, 'пошук за товаром');
+assert.equal((await req('GET', `/api/b2b/p/price-log?from=${new Date(Date.now() + 2 * 86400e3).toISOString().slice(0, 10)}`, null, M)).rows.length, 0, 'період');
+await req('POST', `/api/b2b/partners/${nw.id}/users`, { login: 'nw', password: 'pass1234' });
+await req('PUT', `/api/b2b/partners/${nw.id}/margins`, []);
+assert.equal((await req('GET', '/api/b2b/p/price-log', null, await login('nw', 'pass1234'))).rows.filter((r) => r.kind === 'rrp').length, 0, 'без брендів — без чужих товарів');
+assert.equal(await status(() => req('GET', '/api/b2b/price-log', null, M)), 403, 'загальний журнал — лише адміни');
+console.log('OK — B2B: розсилка змін цін (без хибних «нових брендів») і відстрочка підвищення цін, журнал змін цін');

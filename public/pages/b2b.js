@@ -13,7 +13,7 @@ export function createB2bPages(ctx = {}) {
   const people = () => !ctx.can || ctx.can('people');
   // ---------------------------------------------------------------- партнери
   // Список партнерів: фільтри, пошук, галочки і групові дії (зміни цін, оголошення, пауза, ліміти, маржа, Excel, видалення).
-  const pFilter = { st: '', q: '' };
+  const pFilter = { st: '', q: '', id: '' };
   const P_ST = { '': 'Усі', mine: 'Мої', active: 'Активні', paused: 'На паузі', debt: 'З боргом', overdue: 'Прострочено', postpay: 'З відстрочкою', sleep: 'Без замовлень 30+ дн.', off: 'Вимкнені' };
   // Скільки днів тому партнер востаннє замовляв (закупівля чи замовлення клієнта); null — ще не замовляв.
   const sinceOrder = (p) => (p.last_order_at ? Math.floor((Date.now() - Date.parse(p.last_order_at)) / 86400000) : null);
@@ -27,6 +27,7 @@ export function createB2bPages(ctx = {}) {
     if (st === 'overdue' && !p.debt_overdue) return false;
     if (st === 'postpay' && !p.postpay_days) return false;
     if (st === 'off' && p.active) return false;
+    if (pFilter.id && String(p.id) !== String(pFilter.id)) return false;
     const q = pFilter.q.trim().toLowerCase();
     return !q || [p.name, p.phone, p.email, p.note].some((x) => String(x || '').toLowerCase().includes(q));
   };
@@ -48,7 +49,10 @@ export function createB2bPages(ctx = {}) {
         const n = cnt(k);
         return k && !n ? '' : `<button class="chip ${pFilter.st === k ? 'on' : ''}" data-pst="${k}">${esc(v)} <span class="muted">${n}</span></button>`;
       }).join('')}</div>
-      <div class="btn-row" style="margin-bottom:10px"><input id="pQ" placeholder="Пошук: назва, телефон, email, примітка" value="${esc(pFilter.q)}" style="max-width:340px"></div>
+      <div class="btn-row" style="margin-bottom:10px;flex-wrap:wrap">
+        <select id="pSel" aria-label="Партнер" style="max-width:260px"><option value="">Усі партнери</option>${[...all].sort((a, b) => a.name.localeCompare(b.name, 'uk')).map((p) => `<option value="${p.id}" ${String(pFilter.id) === String(p.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+        <input id="pQ" placeholder="Пошук: назва, телефон, email, примітка" value="${esc(pFilter.q)}" style="max-width:340px">
+        ${pFilter.id ? `<a class="btn sm" href="#/b2bpartners/${esc(pFilter.id)}">Відкрити картку</a>` : ''}</div>
       <div id="pBulk" class="btn-row card" hidden style="position:sticky;top:8px;z-index:5;margin-bottom:10px;padding:8px 12px;flex-wrap:wrap;align-items:center"></div>` : ''}
       ${rows.length ? `<table class="list"><thead><tr><th style="width:34px"><input type="checkbox" id="pSelAll" aria-label="Обрати всіх"></th><th>Партнер</th><th class="hide-m">Контакти</th><th class="r">Борг</th><th class="r hide-m">Користувачі</th><th class="r hide-m">Бренди</th><th>Стан</th></tr></thead><tbody>
         ${rows.map((p) => `<tr class="click" data-p="${p.id}">
@@ -93,6 +97,7 @@ export function createB2bPages(ctx = {}) {
       };
     };
     $$('[data-pst]').forEach((b) => (b.onclick = () => { pFilter.st = b.dataset.pst; viewPartners(); }));
+    if ($('#pSel')) $('#pSel').onchange = (e) => { pFilter.id = e.target.value; viewPartners(); };
     let qt;
     $('#pQ') && ($('#pQ').oninput = (e) => { clearTimeout(qt); qt = setTimeout(async () => { pFilter.q = e.target.value; await viewPartners(); const el = $('#pQ'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 300); });
     wirePartnerBulk(rows);

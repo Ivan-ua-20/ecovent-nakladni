@@ -4535,7 +4535,7 @@ var TTN_KEYS = ["ttn", "ttn_number", "np_ttn", "declaration", "tracking_number"]
 function ttnOf(raw2) {
   for (const k of TTN_KEYS) {
     const v = String(raw2?.[k] ?? "").replace(/\s/g, "").toUpperCase();
-    if (/^[0-9A-Z]{8,20}$/.test(v) && !/^0+$/.test(v)) return v;
+    if (/^[0-9A-Z][0-9A-Z-]{6,22}[0-9A-Z]$/.test(v) && (v.match(/\d/g) || []).length >= 6 && !/^0+$/.test(v)) return v;
   }
   return "";
 }
@@ -4782,6 +4782,10 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       if (j?.status === "ok") for (const code of asList(j.data).map(String).filter(Boolean)) listed.set(code, x);
     }
     const codes = [...listed.keys()];
+    if (!(await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_v2'`))?.value) {
+      await db.run(`DELETE FROM an_ttn_recent WHERE ttn = ''`);
+      await putSetting2("an_ttn_v2", "1");
+    }
     let fetched = 0;
     let found = 0;
     if (codes.length) {
@@ -8768,7 +8772,7 @@ var MAX_CHUNK = 3800;
 var MAX_CHUNKS = 6;
 var NEW_BRAND_DAYS = 7;
 var dt = (iso) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-function mountB2bPrices(app, { db, services, partnerPrice: partnerPrice2 }) {
+function mountB2bPrices(app, { db, services, partnerPrice: partnerPrice2, myPartner }) {
   async function brandNames() {
     const rows = await db.all(`SELECT id, name FROM an_brands`).catch(() => []);
     return new Map([...rows.map((r) => [r.id, r.name]), [0, "\u0406\u043D\u0448\u0456"]]);
@@ -8913,6 +8917,90 @@ ${l}`;
       results.push({ id: p.id, name: p.name, sent: sent > 0, where: p.tg_group ? "group" : "users", products: ch.products.length });
     }
     return c.json({ results });
+  });
+  const isDay3 = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ""));
+  const dayStartIso = (day) => (/* @__PURE__ */ new Date(`${day}T00:00:00+02:00`)).toISOString();
+  async function priceLog(q, partner = null) {
+    const to = isDay3(q.to) ? q.to : (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    const from = isDay3(q.from) ? q.from : new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);
+    const lo = new Date(Date.parse(dayStartIso(from)) - 36e5).toISOString();
+    const hi = new Date(Date.parse(dayStartIso(to)) + 25 * 36e5).toISOString();
+    const names = await brandNames();
+    const brand = q.brand !== void 0 && q.brand !== "" && Number.isFinite(Number(q.brand)) ? Number(q.brand) : null;
+    const search = String(q.q || "").trim().toLowerCase();
+    let margins = null;
+    let mlog = [];
+    if (partner) {
+      margins = new Map((await db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [partner.id])).map((m) => [m.brand_id, m.margin]));
+      mlog = await db.all(`SELECT at, brand_id, old_margin, new_margin FROM b2b_margin_log WHERE partner_id = ? ORDER BY id`, [partner.id]);
+    }
+    const marginAt = (brandId, at) => {
+      let before = null;
+      let after = null;
+      for (const r of mlog) {
+        if (r.brand_id !== brandId) continue;
+        if (r.at <= at) before = r;
+        else if (!after) after = r;
+      }
+      if (before) return before.new_margin;
+      if (after) return after.old_margin;
+      return margins.has(brandId) ? margins.get(brandId) : null;
+    };
+    const where = ["l.at >= ?", "l.at < ?"];
+    const params = [lo, hi];
+    if (partner) {
+      where.push(`c.brand_id IN (SELECT value FROM json_each(?))`);
+      params.push(JSON.stringify([...margins.keys()]));
+    }
+    if (brand !== null) {
+      where.push("c.brand_id = ?");
+      params.push(brand);
+    }
+    if (search) {
+      where.push(`(LOWER(c.name) LIKE ? OR LOWER(c.article) LIKE ? OR CAST(c.product_id AS TEXT) = ?)`);
+      params.push(`%${search}%`, `%${search}%`, search);
+    }
+    const rows = await db.all(`SELECT l.id, l.at, l.product_id, l.old_rrp, l.new_rrp, c.name, c.article, c.brand_id, c.hidden
+      FROM b2b_price_log l JOIN b2b_catalog c ON c.product_id = l.product_id WHERE ${where.join(" AND ")} ${partner ? "AND c.hidden = 0" : ""}
+      ORDER BY l.at DESC, l.id DESC LIMIT 1001`, params);
+    const out = rows.slice(0, 1e3).map((r) => {
+      const x = {
+        kind: "rrp",
+        at: r.at,
+        product_id: r.product_id,
+        name: r.name,
+        article: r.article || "",
+        brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456",
+        brand_id: r.brand_id,
+        old_rrp: r.old_rrp,
+        new_rrp: r.new_rrp,
+        pct: r.old_rrp ? round2((r.new_rrp - r.old_rrp) / r.old_rrp * 100) : null
+      };
+      if (partner) {
+        const m = marginAt(r.brand_id, r.at);
+        if (m != null) {
+          x.old_price = partnerPrice2(r.old_rrp, m);
+          x.new_price = partnerPrice2(r.new_rrp, m);
+        }
+      }
+      return x;
+    });
+    const disc = partner ? mlog.filter((r) => r.at >= lo && r.at < hi && (brand === null || r.brand_id === brand) && (!search || low3(names.get(r.brand_id)).includes(search))).map((r) => ({ kind: "margin", at: r.at, brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456", brand_id: r.brand_id, old_margin: r.old_margin, new_margin: r.new_margin })) : [];
+    const all = [...out, ...disc].sort((a, b) => a.at < b.at ? 1 : a.at > b.at ? -1 : 0);
+    const brandsList = partner ? [...margins.keys()].map((id) => ({ id, name: names.get(id) || "\u0406\u043D\u0448\u0456" })) : (await db.all(`SELECT DISTINCT brand_id FROM b2b_catalog WHERE hidden = 0`)).map((r) => ({ id: r.brand_id, name: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456" }));
+    return { from, to, rows: all, more: rows.length > 1e3, brands: brandsList.sort((a, b) => a.name.localeCompare(b.name, "uk")) };
+  }
+  const low3 = (v) => String(v || "").toLowerCase();
+  app.get("/api/b2b/price-log", async (c) => {
+    need(c, "b2b.admin");
+    const pid = parseInt(c.req.query("partner"), 10) || 0;
+    const partner = pid ? await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [pid]) : null;
+    if (pid && !partner) throw fail(404, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return c.json(await priceLog(c.req.query(), partner));
+  });
+  app.get("/api/b2b/p/price-log", async (c) => {
+    const p = await myPartner(c);
+    return c.json(await priceLog(c.req.query(), p));
   });
   app.get("/api/b2b/price-grace", async (c) => {
     need(c, "b2b.admin");
@@ -11030,7 +11118,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   const crm = mountB2bCrm(app, { db, services, onCleanup });
   const newProducts = mountB2bNewProducts(app, { db, services, partnerPrice, brandNames });
   const attention = async (user) => [...await home.attention(), ...await crm.attention(user), ...await newProducts.attention()];
-  mountB2bPrices(app, { db, services, partnerPrice });
+  mountB2bPrices(app, { db, services, partnerPrice, myPartner });
   app.post("/api/b2b/partners/:id/tg-group", async (c) => {
     need(c, "b2b.admin");
     const p = await getPartner(c.req.param("id"));

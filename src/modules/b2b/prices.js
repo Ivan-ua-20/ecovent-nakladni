@@ -16,7 +16,7 @@ const MAX_CHUNKS = 6;
 const NEW_BRAND_DAYS = 7;
 const dt = (iso) => new Date(iso).toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 
-export function mountB2bPrices(app, { db, services, partnerPrice }) {
+export function mountB2bPrices(app, { db, services, partnerPrice, myPartner }) {
   async function brandNames() {
     const rows = await db.all(`SELECT id, name FROM an_brands`).catch(() => []);
     return new Map([...rows.map((r) => [r.id, r.name]), [0, 'Інші']]);
@@ -153,6 +153,75 @@ export function mountB2bPrices(app, { db, services, partnerPrice }) {
       results.push({ id: p.id, name: p.name, sent: sent > 0, where: p.tg_group ? 'group' : 'users', products: ch.products.length });
     }
     return c.json({ results });
+  });
+
+  // ---------------------------------------------------------------- журнал змін цін
+  // Зміни РРЦ товарів (з оновлень LP-CRM) і — для партнера — його ціна до й після (за знижкою на бренд на той момент)
+  // та зміни його знижок на бренди. Адмін: усі товари або обраний партнер; партнер: лише свої бренди.
+  const isDay = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+  const dayStartIso = (day) => new Date(`${day}T00:00:00+02:00`).toISOString(); // межа доби за Києвом (з запасом на літній час — нижче)
+  async function priceLog(q, partner = null) {
+    const to = isDay(q.to) ? q.to : new Date().toISOString().slice(0, 10);
+    const from = isDay(q.from) ? q.from : new Date(Date.now() - 90 * 86400e3).toISOString().slice(0, 10);
+    const lo = new Date(Date.parse(dayStartIso(from)) - 3600e3).toISOString();
+    const hi = new Date(Date.parse(dayStartIso(to)) + 25 * 3600e3).toISOString();
+    const names = await brandNames();
+    const brand = q.brand !== undefined && q.brand !== '' && Number.isFinite(Number(q.brand)) ? Number(q.brand) : null;
+    const search = String(q.q || '').trim().toLowerCase();
+    let margins = null;
+    let mlog = [];
+    if (partner) {
+      margins = new Map((await db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [partner.id])).map((m) => [m.brand_id, m.margin]));
+      mlog = await db.all(`SELECT at, brand_id, old_margin, new_margin FROM b2b_margin_log WHERE partner_id = ? ORDER BY id`, [partner.id]);
+    }
+    // знижка партнера на бренд на момент at: остання зміна до at — її «стало»; інакше перша після — її «було»; інакше поточна
+    const marginAt = (brandId, at) => {
+      let before = null; let after = null;
+      for (const r of mlog) {
+        if (r.brand_id !== brandId) continue;
+        if (r.at <= at) before = r; else if (!after) after = r;
+      }
+      if (before) return before.new_margin;
+      if (after) return after.old_margin;
+      return margins.has(brandId) ? margins.get(brandId) : null;
+    };
+    const where = ['l.at >= ?', 'l.at < ?'];
+    const params = [lo, hi];
+    if (partner) { where.push(`c.brand_id IN (SELECT value FROM json_each(?))`); params.push(JSON.stringify([...margins.keys()])); }
+    if (brand !== null) { where.push('c.brand_id = ?'); params.push(brand); }
+    if (search) { where.push(`(LOWER(c.name) LIKE ? OR LOWER(c.article) LIKE ? OR CAST(c.product_id AS TEXT) = ?)`); params.push(`%${search}%`, `%${search}%`, search); }
+    const rows = await db.all(`SELECT l.id, l.at, l.product_id, l.old_rrp, l.new_rrp, c.name, c.article, c.brand_id, c.hidden
+      FROM b2b_price_log l JOIN b2b_catalog c ON c.product_id = l.product_id WHERE ${where.join(' AND ')} ${partner ? 'AND c.hidden = 0' : ''}
+      ORDER BY l.at DESC, l.id DESC LIMIT 1001`, params);
+    const out = rows.slice(0, 1000).map((r) => {
+      const x = { kind: 'rrp', at: r.at, product_id: r.product_id, name: r.name, article: r.article || '', brand: names.get(r.brand_id) || 'Інші', brand_id: r.brand_id,
+        old_rrp: r.old_rrp, new_rrp: r.new_rrp, pct: r.old_rrp ? round2(((r.new_rrp - r.old_rrp) / r.old_rrp) * 100) : null };
+      if (partner) {
+        const m = marginAt(r.brand_id, r.at);
+        if (m != null) { x.old_price = partnerPrice(r.old_rrp, m); x.new_price = partnerPrice(r.new_rrp, m); }
+      }
+      return x;
+    });
+    // зміни знижки партнера на бренди за період
+    const disc = partner ? mlog.filter((r) => r.at >= lo && r.at < hi && (brand === null || r.brand_id === brand) && (!search || low(names.get(r.brand_id)).includes(search)))
+      .map((r) => ({ kind: 'margin', at: r.at, brand: names.get(r.brand_id) || 'Інші', brand_id: r.brand_id, old_margin: r.old_margin, new_margin: r.new_margin })) : [];
+    const all = [...out, ...disc].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+    const brandsList = partner
+      ? [...margins.keys()].map((id) => ({ id, name: names.get(id) || 'Інші' }))
+      : (await db.all(`SELECT DISTINCT brand_id FROM b2b_catalog WHERE hidden = 0`)).map((r) => ({ id: r.brand_id, name: names.get(r.brand_id) || 'Інші' }));
+    return { from, to, rows: all, more: rows.length > 1000, brands: brandsList.sort((a, b) => a.name.localeCompare(b.name, 'uk')) };
+  }
+  const low = (v) => String(v || '').toLowerCase();
+  app.get('/api/b2b/price-log', async (c) => {
+    need(c, 'b2b.admin');
+    const pid = parseInt(c.req.query('partner'), 10) || 0;
+    const partner = pid ? await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [pid]) : null;
+    if (pid && !partner) throw fail(404, 'Партнера не знайдено.');
+    return c.json(await priceLog(c.req.query(), partner));
+  });
+  app.get('/api/b2b/p/price-log', async (c) => {
+    const p = await myPartner(c);
+    return c.json(await priceLog(c.req.query(), p));
   });
 
   // Загальна відстрочка підвищення цін, годин (для партнерів без власної; 0 — без відстрочки).
