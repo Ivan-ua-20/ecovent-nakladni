@@ -11,6 +11,8 @@ const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
 export function createB2bPages(ctx = {}) {
   // Додавати, змінювати й видаляти людей (користувачів партнерів) і партнерів — лише з правом «people».
   const people = () => !ctx.can || ctx.can('people');
+  // B2B «лише перегляд» (доступ менеджера в «Користувачах»): без полів для змін.
+  const ro = () => Boolean(ctx.can && !ctx.can('b2b.admin'));
   // ---------------------------------------------------------------- партнери
   // Список партнерів: фільтри, пошук, галочки і групові дії (зміни цін, оголошення, пауза, ліміти, маржа, Excel, видалення).
   const pFilter = { st: '', q: '', id: '' };
@@ -852,7 +854,7 @@ export function createB2bPages(ctx = {}) {
       ${o.status === 'draft' ? '<div class="alert warn" style="margin-bottom:12px"><b>Чернетка партнера</b> — команда партнера ще збирає товари. Відправити її (як від партнера) може керівник партнера або ви.</div>' : ''}
       <div class="form-page">
         <div class="form-stack">
-          <div class="card">${closed ? itemsTable(items, { rrp: true }) : priceTable(items, o.status === 'open' ? 'Нові ціни перейдуть і в замовлення клієнтів цієї закупівлі.' : o.status === 'draft' ? 'Ціни в замовленнях клієнтів цієї чернетки теж оновляться.' : o.invoice_no ? `Рахунок № ${esc(o.invoice_no)} доведеться переробити.` : '')}</div>
+          <div class="card">${closed || ro() ? itemsTable(items, { rrp: true }) : priceTable(items, o.status === 'open' ? 'Нові ціни перейдуть і в замовлення клієнтів цієї закупівлі.' : o.status === 'draft' ? 'Ціни в замовленнях клієнтів цієї чернетки теж оновляться.' : o.invoice_no ? `Рахунок № ${esc(o.invoice_no)} доведеться переробити.` : '')}</div>
           ${o.comment ? `<div class="card small"><b>Коментар:</b> ${esc(o.comment)}</div>` : ''}
           ${o.delivery === 'warehouse' && !closed ? `<div class="card form-stack"><h3>🏬 Відправка на склад партнера</h3>
             ${o.crm_id || o.crm_ext ? `<div>Передано в LP-CRM${o.crm_id ? `: № <b>${esc(o.crm_id)}</b>` : ''}${o.crm_sent_at && !String(o.crm_sent_at).startsWith('sending') ? ` · ${esc(fmtDateTime(o.crm_sent_at))}` : ''}</div>`
@@ -925,7 +927,7 @@ export function createB2bPages(ctx = {}) {
       try { await api('DELETE', `/api/b2b/orders/${o.id}`); toast('Закупівлю перенесено в кошик'); location.hash = '#/b2borders'; } catch (er) { toast(er.message, true); }
     };
     $('#oEdit') && ($('#oEdit').onclick = () => editSupply(o, items));
-    if (!closed) wirePriceTable(items, async (rows) => {
+    if (!closed && !ro()) wirePriceTable(items, async (rows) => {
       if (o.invoice_no && ['pay_wait', 'partial', 'paid', 'done'].includes(o.status)
         && !(await confirmDanger(`Змінити ціни в закупівлі з рахунком № ${o.invoice_no}?`, 'Рахунок доведеться переробити: бухгалтер отримає запит у «Фінансові питання», партнер — сповіщення.', 'Зберегти ціни'))) return false;
       const r = await api('PUT', `/api/b2b/orders/${o.id}/edit`, { items: rows.map((x) => ({ product_id: x.product_id, qty: x.qty, price: x.price, rrp: x.rrp })) });
@@ -1192,7 +1194,7 @@ export function createB2bPages(ctx = {}) {
       ${!o.no_supply && o.pay !== 'paid' && !closed ? `<div class="alert warn" style="margin-bottom:12px">Закупівля <a href="#/b2borders/${o.supply_id}">${esc(o.supply_number)}</a> ще не оплачена.</div>` : ''}
       <div class="form-page">
         <div class="form-stack">
-          <div class="card">${closed ? itemsTable(items, { rrp: true }) : priceTable(items, o.draft_supply ? `Замовлення в чернетці закупівлі <a href="#/b2borders/${o.supply_id}">${esc(o.supply_number)}</a>: ціна товару зміниться в усій чернетці (і в інших її замовленнях клієнтів).` : o.crm_id ? `У LP-CRM (№ ${esc(o.crm_id)}) ціни змініть вручну.` : '')}</div>
+          <div class="card">${closed || ro() ? itemsTable(items, { rrp: true }) : priceTable(items, o.draft_supply ? `Замовлення в чернетці закупівлі <a href="#/b2borders/${o.supply_id}">${esc(o.supply_number)}</a>: ціна товару зміниться в усій чернетці (і в інших її замовленнях клієнтів).` : o.crm_id ? `У LP-CRM (№ ${esc(o.crm_id)}) ціни змініть вручну.` : '')}</div>
           ${o.comment ? `<div class="card small"><b>Коментар партнера:</b> ${esc(o.comment)}</div>` : ''}
           <div class="card form-stack ${o.no_supply && !closed ? 'card-bad' : ''}">
             <h3>Клієнт і доставка</h3>
@@ -1271,7 +1273,7 @@ export function createB2bPages(ctx = {}) {
       try { await api('DELETE', `/api/b2b/orders/${o.id}`); toast('Замовлення перенесено в кошик'); location.hash = '#/b2bclients'; } catch (er) { toast(er.message, true); }
     };
     $('#clEdit') && ($('#clEdit').onclick = () => editClient(o, items));
-    if (!closed) wirePriceTable(items, async (rows) => {
+    if (!closed && !ro()) wirePriceTable(items, async (rows) => {
       const r = await api('PUT', `/api/b2b/clients/${o.id}/prices`, { items: rows.map((x) => ({ product_id: x.product_id, price: x.price, rrp: x.rrp })) });
       toast(!r.changed ? 'Змін немає' : r.draft ? `Ціни змінено в чернетці ${r.draft} — для всіх її замовлень` : `Ціни збережено, партнеру надіслано сповіщення${r.crm ? `. У LP-CRM № ${r.crm} змініть вручну` : ''}`);
       viewClient(o.id);

@@ -688,3 +688,9 @@ tr.pg-hidden { display: none !important; }
 .ai-change { margin-top: 8px; padding: 10px 12px; background: #fff; }
 .ai-lines { margin: 4px 0 8px; padding-left: 18px; }
 .ai-lines li { margin: 2px 0; }
+
+/* Режим перегляду розділу (доступ «перегляд» у «Користувачах»): дії сховані, сервер їх і так не прийме. */
+main.ro::before { content: '👁 Режим перегляду — змінювати тут можуть лише ті, кому дано повний доступ.'; display: block; margin-bottom: 12px; padding: 8px 12px; border-radius: 8px; background: var(--info-soft); color: var(--info); font-size: 13px; }
+main.ro .btn.primary, main.ro .btn.danger, main.ro #bulkBar, main.ro [data-sel], main.ro #selAll, main.ro #ipBar,
+main.ro #oEdit, main.ro #clEdit, main.ro label.btn, main.ro [data-fdel], main.ro #clPaid, main.ro [data-set] { display: none !important; }
+main.ro input[data-ip], main.ro input[data-ir] { pointer-events: none; border-color: transparent; background: transparent; }

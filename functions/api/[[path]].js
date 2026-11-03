@@ -1781,14 +1781,59 @@ var ROLES = {
   viewer: "\u041F\u0435\u0440\u0435\u0433\u043B\u044F\u0434",
   partner: "\u041F\u0430\u0440\u0442\u043D\u0435\u0440 (B2B)"
 };
+var SECTION_ALL = ["b2b.admin", "b2b.view", "retail.view", "retail.edit", "market.view", "market.edit"];
 var PERMS = {
-  owner: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "people", "analytics", "an.view", "b2b.admin"],
-  admin: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "people", "analytics", "an.view", "b2b.admin"],
+  owner: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "people", "analytics", "an.view", ...SECTION_ALL],
+  admin: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "people", "analytics", "an.view", ...SECTION_ALL],
   // Як адміністратор, але без керування людьми (аналітику вмикає/вимикає лише власник).
-  admin_lite: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "analytics", "an.view", "b2b.admin"],
+  admin_lite: ["docs.view", "docs.edit", "refs.edit", "requisites", "api", "users", "analytics", "an.view", ...SECTION_ALL],
   manager: ["docs.view", "docs.edit", "refs.edit", "an.view"],
   viewer: ["docs.view"],
   partner: ["b2b.partner"]
+};
+var SECTION_LEVELS = { b2b: ["none", "view", "full"], retail: ["none", "view", "work"], market: ["none", "view", "work"] };
+var ACCESS_ROLES = ["manager", "viewer"];
+var ROLE_ACCESS = {
+  manager: { b2b: "none", retail: "work", market: "work", shops: null, tg: [] },
+  viewer: { b2b: "none", retail: "view", market: "view", shops: null, tg: [] }
+};
+function accessOf(u) {
+  const def = ROLE_ACCESS[u?.role];
+  if (!def) return null;
+  let a = {};
+  try {
+    a = JSON.parse(u.access || "{}") || {};
+  } catch {
+    a = {};
+  }
+  const out = { ...def };
+  for (const [k, lv] of Object.entries(SECTION_LEVELS)) if (lv.includes(a[k])) out[k] = a[k];
+  if (Array.isArray(a.shops)) out.shops = [...new Set(a.shops.map(String).filter((x) => /^[a-z]+:\d+$/.test(x)))];
+  if (Array.isArray(a.tg)) out.tg = a.tg.filter((x) => ["b2b", "retail"].includes(x));
+  if (u.role === "viewer") {
+    for (const k of Object.keys(SECTION_LEVELS)) if (out[k] !== "none") out[k] = "view";
+  }
+  out.tg = out.tg.filter((x) => out[x] && out[x] !== "none");
+  return out;
+}
+function cleanAccess(b) {
+  if (!b || typeof b !== "object") return null;
+  const a = {};
+  for (const [k, lv] of Object.entries(SECTION_LEVELS)) a[k] = lv.includes(b[k]) ? b[k] : "none";
+  a.shops = Array.isArray(b.shops) ? [...new Set(b.shops.map(String).filter((x) => /^[a-z]+:\d+$/.test(x)))].slice(0, 100) : null;
+  a.tg = Array.isArray(b.tg) ? b.tg.filter((x) => ["b2b", "retail"].includes(x)) : [];
+  return a;
+}
+var sectionPerms = (a) => [
+  ...a.b2b === "full" ? ["b2b.admin", "b2b.view"] : a.b2b === "view" ? ["b2b.view"] : [],
+  ...a.retail !== "none" ? ["retail.view"] : [],
+  ...a.retail === "work" ? ["retail.edit"] : [],
+  ...a.market !== "none" ? ["market.view"] : [],
+  ...a.market === "work" ? ["market.edit"] : []
+];
+var shopAllowed = (u, mp, id) => {
+  const a = accessOf(u);
+  return !a || !a.shops || a.shops.includes(`${mp}:${id}`);
 };
 var AN_PERMS = ["analytics", "an.view"];
 var permsOf = (role) => PERMS[role] || [];
@@ -1800,7 +1845,8 @@ function permsOfUser(u) {
     const r = partnerRole(u);
     return ["b2b.partner", ...r !== "viewer" ? ["b2b.order"] : [], ...r === "head" ? ["b2b.team"] : []];
   }
-  const base = permsOf(u.role);
+  const acc = accessOf(u);
+  const base = acc ? [...permsOf(u.role), ...sectionPerms(acc)] : permsOf(u.role);
   if (u.role === "owner" || u.role === "partner" || u.an_access == null || u.an_access === "") return base;
   if (Number(u.an_access) === 0) return base.filter((p) => !AN_PERMS.includes(p));
   return base.includes("an.view") ? base : [...base, "an.view"];
@@ -1849,6 +1895,8 @@ var publicUser = (u) => u ? {
   crm_logins: crmLogins(u.crm_logins),
   analytics: hasAnalytics(u),
   partner_id: u.partner_id || null,
+  access: accessOf(u),
+  access_custom: Boolean(u.access),
   ...u.role === "partner" ? { partner_role: partnerRole(u), partner_role_name: PARTNER_ROLES[partnerRole(u)] } : {}
 } : null;
 var crmLogins = (v) => [...new Set((Array.isArray(v) ? v : String(v || "").split(",")).map((x) => String(x).trim().toLowerCase()).filter(Boolean))].slice(0, 20);
@@ -1865,7 +1913,10 @@ var MASK = "\u2022\u2022\u2022\u2022\u2022\u2022";
 var nowIso = () => (/* @__PURE__ */ new Date()).toISOString();
 var fail = (status, message) => Object.assign(new Error(message), { status });
 var need = (c, perm) => {
-  if (!can(c.get("user"), perm)) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432 \u0434\u043B\u044F \u0446\u0456\u0454\u0457 \u0434\u0456\u0457.");
+  const u = c.get("user");
+  if (can(u, perm)) return;
+  if (perm === "b2b.admin" && c.req.method === "GET" && can(u, "b2b.view")) return;
+  throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432 \u0434\u043B\u044F \u0446\u0456\u0454\u0457 \u0434\u0456\u0457.");
 };
 var userName = (c) => c.get("user")?.name || c.get("user")?.login || "";
 var loadSettings = async (db) => Object.fromEntries((await db.all(`SELECT key, value FROM settings`)).map((r) => [r.key, r.value]));
@@ -2102,6 +2153,21 @@ function mountAuth(app, { db, runCleanup, onCleanup }) {
     await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [await hashPassword(b.password), me.id]);
     return c.json({ ok: true });
   });
+  const LV = { none: "\u043D\u0435\u043C\u0430\u0454", view: "\u043F\u0435\u0440\u0435\u0433\u043B\u044F\u0434", work: "\u0440\u043E\u0431\u043E\u0442\u0430", full: "\u043F\u043E\u0432\u043D\u0438\u0439" };
+  const SEC = { b2b: "B2B", retail: "\u0420\u0456\u0442\u0435\u0439\u043B", market: "\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438" };
+  const accParts = (a) => a ? [
+    ...Object.keys(SEC).map((k) => [SEC[k], LV[a[k]] || a[k]]),
+    ["\u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0438", a.shops ? a.shops.length ? a.shops.join(", ") : "\u0436\u043E\u0434\u043D\u043E\u0433\u043E" : "\u0443\u0441\u0456"],
+    ["Telegram", a.tg?.length ? a.tg.map((x) => SEC[x]).join(", ") : "\u2014"]
+  ] : [];
+  async function auditAccess(me, target, before, after) {
+    const b = new Map(accParts(before));
+    const txt = after ? accParts(after).filter(([k, v]) => b.get(k) !== v).map(([k, v]) => `${k}: ${b.has(k) ? `${b.get(k)} \u2192 ` : ""}${v}`).join("; ") : "\u044F\u043A \u0443 \u0440\u043E\u043B\u0456";
+    await db.run(
+      `INSERT INTO audit_log (at, user_id, user_name, kind, ref_id, action, changes) VALUES (?, ?, ?, 'user', ?, ?, '[]')`,
+      [nowIso(), me.id, me.name || me.login, String(target.id), `\u0434\u043E\u0441\u0442\u0443\u043F ${target.login}: ${txt || "\u0431\u0435\u0437 \u0437\u043C\u0456\u043D"}`.slice(0, 1e3)]
+    );
+  }
   const ASSIGNABLE = ["admin", "admin_lite", "manager", "viewer"];
   app.get("/api/users", async (c) => {
     need(c, "people");
@@ -2116,14 +2182,17 @@ function mountAuth(app, { db, runCleanup, onCleanup }) {
     if (!ASSIGNABLE.includes(b.role)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0430 \u0440\u043E\u043B\u044C.");
     if (String(b.password || "").length < 6) throw fail(400, "\u041F\u0430\u0440\u043E\u043B\u044C \u2014 \u043D\u0435 \u043C\u0435\u043D\u0448\u0435 6 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432.");
     if (await db.get(`SELECT id FROM users WHERE login = ?`, [login])) throw fail(400, "\u0422\u0430\u043A\u0438\u0439 \u043B\u043E\u0433\u0456\u043D \u0443\u0436\u0435 \u0454.");
-    const r = await db.run(`INSERT INTO users (login, name, password_hash, role, active, created_at, crm_logins) VALUES (?, ?, ?, ?, 1, ?, ?)`, [
+    const acc = ACCESS_ROLES.includes(b.role) && b.access ? cleanAccess(b.access) : null;
+    const r = await db.run(`INSERT INTO users (login, name, password_hash, role, active, created_at, crm_logins, access) VALUES (?, ?, ?, ?, 1, ?, ?, ?)`, [
       login,
       String(b.name || "").trim(),
       await hashPassword(b.password),
       b.role,
       nowIso(),
-      crmLogins(b.crm_logins).join(",")
+      crmLogins(b.crm_logins).join(","),
+      acc ? JSON.stringify(acc) : ""
     ]);
+    if (acc) await auditAccess(c.get("user"), { id: r.lastId, login, role: b.role }, null, acc);
     return c.json({ id: r.lastId });
   });
   app.put("/api/users/:id", async (c) => {
@@ -2153,6 +2222,15 @@ function mountAuth(app, { db, runCleanup, onCleanup }) {
     if (b.crm_logins !== void 0) {
       sets.push("crm_logins = ?");
       vals.push(crmLogins(b.crm_logins).join(","));
+    }
+    if (b.access !== void 0 && target.role !== "owner") {
+      const acc = b.access === null ? null : cleanAccess(b.access);
+      const next = acc ? JSON.stringify(acc) : "";
+      if (next !== (target.access || "")) {
+        sets.push("access = ?");
+        vals.push(next);
+        await auditAccess(me, target, accessOf(target), acc ? accessOf({ ...target, role: b.role || target.role, access: next }) : null);
+      }
     }
     if (b.role !== void 0 && target.role !== "owner") {
       if (!ASSIGNABLE.includes(b.role)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0430 \u0440\u043E\u043B\u044C.");
@@ -6064,11 +6142,14 @@ ${h(l.alias || "")}${l.created_by ? `
     }
     return sent;
   }
-  async function sendText({ admins = false, userIds = [], partnerId = null, chatIds = [] }, text) {
+  async function sendText({ admins = false, section = "", userIds = [], partnerId = null, chatIds = [] }, text) {
     const s = await settings();
     if (!s.tg_token) return 0;
     const chats = new Set(chatIds.filter(Boolean).map(String));
     if (admins) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin', 'admin_lite')`)) chats.add(r.tg_chat_id);
+    if (section) {
+      for (const r of await db.all(`SELECT * FROM users WHERE active = 1 AND tg_chat_id != '' AND access != '' AND role IN ('manager', 'viewer')`)) if (accessOf(r)?.tg.includes(section)) chats.add(r.tg_chat_id);
+    }
     if (userIds.length) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND id IN (SELECT value FROM json_each(?))`, [JSON.stringify(userIds)])) chats.add(r.tg_chat_id);
     if (partnerId) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'partner' AND partner_id = ?`, [partnerId])) chats.add(r.tg_chat_id);
     let sent = 0;
@@ -6696,7 +6777,7 @@ function mountB2bOrders(app, { db, services, myPartner, partnerPrice: partnerPri
     `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
     [orderId, nowIso(), userName2(user), action]
   );
-  const tgAdmins = (text) => services.notify?.sendText({ admins: true }, text).catch(() => 0);
+  const tgAdmins = (text) => services.notify?.sendText({ admins: true, section: "b2b" }, text).catch(() => 0);
   const groupOf = async (partnerId) => (await db.get(`SELECT tg_group FROM b2b_partners WHERE id = ?`, [partnerId]))?.tg_group || "";
   const tgPartner = async (partnerId, text) => services.notify?.sendText({ partnerId }, text).catch(() => 0);
   const tgGroup = async (partnerId, text) => {
@@ -10446,7 +10527,7 @@ var addDays3 = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 864e5).
 var daysBetween3 = (a, b) => Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / 864e5);
 var OVERRIDE_DAYS = 7;
 function mountB2bCrm(app, { db, services, onCleanup }) {
-  const tgAdmins = (text) => services.notify?.sendText({ admins: true }, text).catch(() => 0);
+  const tgAdmins = (text) => services.notify?.sendText({ admins: true, section: "b2b" }, text).catch(() => 0);
   const tgPartner = (partnerId, text) => services.notify?.sendText({ partnerId }, text).catch(() => 0);
   const partnerOf = async (id) => {
     const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ? AND COALESCE(deleted_at, '') = ''`, [id]);
@@ -11176,7 +11257,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const p = await myPartner(c);
     need(c, "b2b.team");
     const r = await addTeamUser(c, p, await c.req.json(), `partner:${actorName(c)}`);
-    await services.notify?.sendText({ admins: true }, `\u{1F465} \u041F\u0430\u0440\u0442\u043D\u0435\u0440 \xAB${p.name}\xBB \u0434\u043E\u0434\u0430\u0432 \u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 <b>${r.login}</b> (${PARTNER_ROLES[r.role]}) \u2014 \u0434\u043E\u0434\u0430\u0432 ${actorName(c)}.`).catch(() => 0);
+    await services.notify?.sendText({ admins: true, section: "b2b" }, `\u{1F465} \u041F\u0430\u0440\u0442\u043D\u0435\u0440 \xAB${p.name}\xBB \u0434\u043E\u0434\u0430\u0432 \u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 <b>${r.login}</b> (${PARTNER_ROLES[r.role]}) \u2014 \u0434\u043E\u0434\u0430\u0432 ${actorName(c)}.`).catch(() => 0);
     return c.json({ id: r.id });
   });
   app.put("/api/b2b/p/team/:uid", async (c) => {
@@ -12413,7 +12494,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
       ids = JSON.parse(a.notify_users || "[]").map(Number).filter(Boolean);
     } catch {
     }
-    const to = ids.length ? { userIds: ids } : { admins: true };
+    const to = ids.length ? { userIds: ids, section: "retail" } : { admins: true, section: "retail" };
     const names = await prodNames(ev.inv.concat(ev.ttn));
     const line = (r) => `\u2022 <b>${esc(r.order_num)}</b> \u2014 ${esc(r.customer)}${names(r) ? ` \xB7 ${esc(names(r))}` : ""}`;
     const more = (l) => l.length > 30 ? `
@@ -12491,7 +12572,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     }
   });
   app.post("/api/rzs/sync", async (c) => {
-    need(c, "docs.view");
+    need(c, "retail.view");
     const b = await c.req.json().catch(() => ({}));
     const accs = await db.all(`SELECT * FROM rzs_accounts WHERE active = 1 ORDER BY id`);
     if (!accs.length) return c.json({ ok: false, accounts: 0 });
@@ -12583,7 +12664,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     return new Map((await db.all(`SELECT * FROM rzs_products WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((p) => [p.code, p]));
   };
   app.get("/api/rzs/orders", async (c) => {
-    need(c, "docs.view");
+    need(c, "retail.view");
     const st = c.req.query("status") || "";
     const q = String(c.req.query("q") || "").trim().toLowerCase();
     const since = new Date(Date.now() - 45 * 864e5).toISOString().slice(0, 10);
@@ -12621,12 +12702,12 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     return r;
   };
   app.get("/api/rzs/orders/:id", async (c) => {
-    need(c, "docs.view");
+    need(c, "retail.view");
     const r = await orderRow(c.req.param("id"));
     return c.json(publicOrder(r, await prodMap([r])));
   });
   app.post("/api/rzs/orders/:id/confirm", async (c) => {
-    need(c, "docs.edit");
+    need(c, "retail.edit");
     const r = await orderRow(c.req.param("id"));
     const a = await accOf(r.account_id);
     const b = await c.req.json().catch(() => ({}));
@@ -12662,7 +12743,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     return { seats, missing };
   }
   app.post("/api/rzs/orders/:id/ttn", async (c) => {
-    need(c, "docs.edit");
+    need(c, "retail.edit");
     const r = await orderRow(c.req.param("id"));
     const a = await accOf(r.account_id);
     const b = await c.req.json().catch(() => ({}));
@@ -12687,7 +12768,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     return c.json({ ok: true, ttn: res.ttn, point: res.point, seats: seats.length });
   });
   app.post("/api/rzs/markings", async (c) => {
-    need(c, "docs.view");
+    need(c, "retail.view");
     const b = await c.req.json().catch(() => ({}));
     const ids = [...new Set((Array.isArray(b.ids) ? b.ids : []).map(String))].slice(0, 100);
     const rows = await db.all(`SELECT id, account_id, ttn FROM rzs_orders WHERE id IN (SELECT value FROM json_each(?)) AND ttn != ''`, [JSON.stringify(ids)]);
@@ -12718,7 +12799,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     }));
   }
   app.post("/api/rzs/orders/:id/crm", async (c) => {
-    need(c, "docs.edit");
+    need(c, "retail.edit");
     const r = await orderRow(c.req.param("id"));
     if (r.crm_id || r.crm_code) throw fail(400, `\u0423\u0436\u0435 \u0432 LP-CRM${r.crm_id ? `: \u2116 ${r.crm_id}` : ""}.`);
     if (!r.ttn) throw fail(400, "\u0429\u0435 \u043D\u0435\u043C\u0430\u0454 \u0422\u0422\u041D \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0441\u0442\u0432\u043E\u0440\u0456\u0442\u044C \u0422\u0422\u041D (\u0457\u0457 \u043F\u0435\u0440\u0435\u0434\u0430\u043C\u043E \u0432 \u043F\u043E\u043B\u0435 \u0430\u0434\u0440\u0435\u0441\u0438 \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0438).");
@@ -12859,7 +12940,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     return known.length;
   }
   app.post("/api/rzs/crm-status", async (c) => {
-    need(c, "docs.view");
+    need(c, "retail.view");
     return c.json({ checked: await refreshCrmStatus({ force: true }) });
   });
   async function fillCrmIds(rows) {
@@ -12875,7 +12956,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     return st.length;
   }
   app.post("/api/rzs/crm-find", async (c) => {
-    need(c, "docs.edit");
+    need(c, "retail.edit");
     const b = await c.req.json().catch(() => ({}));
     const ids = Array.isArray(b.ids) ? [...new Set(b.ids.map(String))].slice(0, 300) : null;
     const since = new Date(Date.now() - 45 * 864e5).toISOString().slice(0, 10);
@@ -12883,7 +12964,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     return c.json(await findCrm(rows));
   });
   app.put("/api/rzs/orders/:id/crm-link", async (c) => {
-    need(c, "docs.edit");
+    need(c, "retail.edit");
     const r = await orderRow(c.req.param("id"));
     const val = String((await c.req.json().catch(() => ({}))).crm ?? "").replace(/\s/g, "");
     if (!val) {
@@ -12906,7 +12987,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     return c.json({ ok: true, crm_id: id, code });
   });
   app.get("/api/rzs/products", async (c) => {
-    need(c, "docs.view");
+    need(c, "retail.view");
     const rows = await db.all(`SELECT * FROM rzs_products ORDER BY (product_id IS NULL) DESC, (purchase_price IS NULL) DESC, name, code LIMIT 2000`);
     return c.json(rows.map((p) => ({ ...p, seats: p.seats ? JSON.parse(p.seats) : [] })));
   });
@@ -13704,8 +13785,8 @@ function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, notify = a
 // src/modules/home/index.js
 function mountHome(app, { services }) {
   const SOURCES = [
-    ["b2b", "b2b.admin"],
-    ["retail", "docs.view"],
+    ["b2b", "b2b.view"],
+    ["retail", "retail.view"],
     ["errlog", "users"]
   ];
   app.get("/api/home", async (c) => {
@@ -13716,8 +13797,8 @@ function mountHome(app, { services }) {
   const SEARCH = [
     ["nakladni", "docs.view"],
     ["rahunky", "docs.view"],
-    ["b2b", "b2b.admin"],
-    ["retail", "docs.view"]
+    ["b2b", "b2b.view"],
+    ["retail", "retail.view"]
   ];
   app.get("/api/search", async (c) => {
     const u = c.get("user");
@@ -14325,15 +14406,19 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     await db.run(`INSERT INTO settings (key, value) VALUES ('mp_counts', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify({ at: Date.now(), rows })]);
     return rows;
   }
+  const myShop = (c, mp, id) => {
+    if (!shopAllowed(c.get("user"), mp, id)) throw fail(403, "\u041D\u0435\u043C\u0430\u0454 \u0434\u043E\u0441\u0442\u0443\u043F\u0443 \u0434\u043E \u0446\u044C\u043E\u0433\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0443.");
+  };
   app.get("/api/mp/shops", async (c) => {
-    need(c, "docs.view");
+    need(c, "market.view");
     await rehistOnce();
+    const u = c.get("user");
     const [shops, counts, syncs] = await Promise.all([shopsOf(), cachedCounts(), db.all(`SELECT * FROM mp_sync`)]);
     const cnt = new Map(counts.map((r) => [`${r.mp}:${r.account_id}`, r.n]));
     const sy = new Map(syncs.map((r) => [`${r.mp}:${r.account_id}`, r]));
     return c.json(MARKETS.map((m) => ({
       ...m,
-      shops: (shops[m.key] || []).map((a) => {
+      shops: (shops[m.key] || []).filter((a) => shopAllowed(u, m.key, a.id)).map((a) => {
         const s = sy.get(`${m.key}:${a.id}`);
         return {
           id: a.id,
@@ -14351,15 +14436,22 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     })));
   });
   app.get("/api/mp/orders", async (c) => {
-    need(c, "docs.view");
+    need(c, "market.view");
     const mp = c.req.query("mp");
     if (!MARKETS.some((m) => m.key === mp)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441.");
     const where = ["mp = ?"];
     const params = [mp];
     const acc = Number(c.req.query("account")) || 0;
     if (acc) {
+      myShop(c, mp, acc);
       where.push("account_id = ?");
       params.push(acc);
+    } else {
+      const a = accessOf(c.get("user"));
+      if (a?.shops) {
+        where.push("account_id IN (SELECT value FROM json_each(?))");
+        params.push(JSON.stringify(a.shops.filter((x) => x.startsWith(`${mp}:`)).map((x) => Number(x.split(":")[1]))));
+      }
     }
     const isDay3 = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
     const dFrom = c.req.query("from");
@@ -14435,7 +14527,7 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     });
   });
   app.get("/api/mp/review/settings", async (c) => {
-    need(c, "docs.view");
+    need(c, "market.view");
     return c.json(await rvSettings());
   });
   app.put("/api/mp/review/settings", async (c) => {
@@ -14448,7 +14540,8 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     await putSetting2("mp_review", { days, tpl });
     return c.json({ days, tpl });
   });
-  const rzOrderOf = async (b) => {
+  const rzOrderOf = async (b, c) => {
+    if (c) myShop(c, "rozetka", Number(b.account) || 0);
     const o = await db.get(`SELECT * FROM mp_orders WHERE mp = 'rozetka' AND account_id = ? AND id = ?`, [Number(b.account) || 0, String(b.id || "")]);
     if (!o) throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     return o;
@@ -14460,9 +14553,9 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     return { asked_at: at, asked_by: by, asked_via: via };
   };
   app.post("/api/mp/review/ask", async (c) => {
-    need(c, "docs.view");
+    need(c, "market.edit");
     const b = await c.req.json().catch(() => ({}));
-    const o = await rzOrderOf(b);
+    const o = await rzOrderOf(b, c);
     if (b.undo) {
       await db.run(`UPDATE mp_orders SET asked_at = '', asked_by = '', asked_via = '' WHERE mp = 'rozetka' AND account_id = ? AND id = ?`, [o.account_id, o.id]);
       return c.json({ asked_at: "", asked_by: "", asked_via: "" });
@@ -14471,12 +14564,12 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     return c.json(await markAsked(o, c.get("user"), b.via));
   });
   app.post("/api/mp/review/chat", async (c) => {
-    need(c, "docs.view");
+    need(c, "market.edit");
     const b = await c.req.json().catch(() => ({}));
     const text = String(b.text || "").trim();
     if (!text || text.length > 1e3) throw fail(400, "\u041D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F (\u0434\u043E 1000 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432).");
     if (CHAT_FORBIDDEN.test(text)) throw fail(400, "\u0423 \u0447\u0430\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u043D\u0435 \u043C\u043E\u0436\u043D\u0430 \u043D\u0430\u0434\u0441\u0438\u043B\u0430\u0442\u0438 \u043F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F, \u0442\u0435\u043B\u0435\u0444\u043E\u043D\u0438 \u0439 \u0456\u043D\u0448\u0456 \u043A\u043E\u043D\u0442\u0430\u043A\u0442\u0438 \u2014 \u043F\u0440\u0438\u0431\u0435\u0440\u0456\u0442\u044C \u0457\u0445 \u0437 \u0442\u0435\u043A\u0441\u0442\u0443.");
-    const o = await rzOrderOf(b);
+    const o = await rzOrderOf(b, c);
     const acc = await accOf("rozetka", o.account_id);
     const chat = await rzCall(acc, (t) => rzOrderChat(fetchFn, t, o.id)).catch((e) => {
       if (e.pending) throw e;
@@ -14487,8 +14580,9 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     return c.json(await markAsked(o, c.get("user"), "chat"));
   });
   app.post("/api/mp/sync", async (c) => {
-    need(c, "docs.view");
+    need(c, "market.edit");
     const b = await c.req.json().catch(() => ({}));
+    myShop(c, b.mp, Number(b.account));
     const acc = ((await shopsOf())[b.mp] || []).find((a) => a.id === Number(b.account));
     if (!acc) throw fail(404, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     const r = await syncShop(b.mp, acc);
@@ -14508,8 +14602,9 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     return c.json(await histStart(b.mp, await accOf(b.mp, b.account), { from: b.from, to: b.to }));
   });
   app.post("/api/mp/history/step", async (c) => {
-    need(c, "docs.view");
+    need(c, "market.view");
     const b = await c.req.json().catch(() => ({}));
+    myShop(c, b.mp, Number(b.account));
     return c.json(await histStep(b.mp, await accOf(b.mp, b.account)));
   });
   app.put("/api/mp/shops/:mp/:id", async (c) => {
@@ -14595,7 +14690,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
 // src/modules/auth/schema.js
 var schema2 = {
   name: "auth",
-  version: 3,
+  version: 4,
   tables: [
     `CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -14622,7 +14717,9 @@ var schema2 = {
     // Перемикач аналітики (керує власник): NULL — як у ролі, 0 — вимкнено, 1 — увімкнено.
     ["users", "an_access", "INTEGER"],
     // Користувач-партнер (роль partner) — до якої компанії-партнера належить.
-    ["users", "partner_id", "INTEGER"]
+    ["users", "partner_id", "INTEGER"],
+    // Доступ до розділів (менеджер, перегляд): JSON — див. accessOf у core/auth.js; порожньо — як у ролі.
+    ["users", "access", "TEXT DEFAULT ''"]
   ],
   // Індекс на колонку, додану ALTER TABLE, — після неї.
   async seed(db) {

@@ -72,7 +72,7 @@ export function createRetailPages(ctx) {
     const lastSync = accounts.map((a) => a.synced_at).filter(Boolean).sort().pop();
     const lastHook = accounts.map((a) => a.hook_at).filter(Boolean).sort().pop();
     main.innerHTML = `
-      <div class="head-row"><h2>Розетка — замовлення</h2><div class="btn-row">${can('docs.edit') ? '<button class="btn" id="rzFind" title="Знайти за ТТН замовлення, які вже є в LP-CRM, і прив’язати">🔗 Знайти в LP-CRM</button>' : ''}<button class="btn primary" id="rzSync">Оновити з Розетки</button></div></div>
+      <div class="head-row"><h2>Розетка — замовлення</h2><div class="btn-row">${can('retail.edit') ? '<button class="btn" id="rzFind" title="Знайти за ТТН замовлення, які вже є в LP-CRM, і прив’язати">🔗 Знайти в LP-CRM</button>' : ''}<button class="btn primary" id="rzSync">Оновити з Розетки</button></div></div>
       ${accounts.length ? `<div class="small muted" style="margin-bottom:10px">${lastSync ? `Оновлено: ${esc(fmtDateTime(lastSync))}` : 'Ще не оновлювалось'}${lastHook ? ` · вебхук Розетки: ${esc(fmtDateTime(lastHook))}` : ' · вебхук ще не надходив'}</div>
         ${accounts.filter((a) => a.sync_error).map((a) => `<div class="alert warn small" style="margin-bottom:10px">⚠️ Останнє оновлення з Розетки${accounts.length > 1 ? ` («${esc(a.name)}»)` : ''} не вдалося${a.sync_error_at ? ` (${esc(fmtDateTime(a.sync_error_at))})` : ''}: ${esc(a.sync_error)}. Натисніть «Оновити з Розетки» ще раз.</div>`).join('')}`
         : `<div class="alert warn" style="margin-bottom:12px">Кабінет постачальника Розетки ще не підключено${can('api') ? ' — «Налаштування Розетки»' : ' — зверніться до адміністратора'}.</div>`}
@@ -126,9 +126,9 @@ export function createRetailPages(ctx) {
       const ids = sel();
       bar.hidden = !ids.length;
       bar.innerHTML = ids.length ? `<b>Обрано: ${ids.length}</b>
-        ${can('docs.edit') ? '<button class="btn sm" data-b="confirm">✅ Підтвердити</button><button class="btn sm" data-b="ttn">🚚 Створити ТТН</button>' : ''}
+        ${can('retail.edit') ? '<button class="btn sm" data-b="confirm">✅ Підтвердити</button><button class="btn sm" data-b="ttn">🚚 Створити ТТН</button>' : ''}
         <button class="btn sm" data-b="mark">🏷 Маркування (PDF)</button>
-        ${can('docs.edit') ? '<button class="btn sm" data-b="crm">➕ У LP-CRM</button><button class="btn sm" data-b="find">🔗 Знайти в LP-CRM</button>' : ''}
+        ${can('retail.edit') ? '<button class="btn sm" data-b="crm">➕ У LP-CRM</button><button class="btn sm" data-b="find">🔗 Знайти в LP-CRM</button>' : ''}
         <button class="btn sm" data-b="_clear">Зняти вибір</button>` : '';
       $$('[data-b]', bar).forEach((b) => (b.onclick = () => run(b.dataset.b)));
       const all = $('#rzAll');
@@ -207,7 +207,7 @@ export function createRetailPages(ctx) {
   async function orderModal(id) {
     let o;
     try { o = await api('GET', `/api/rzs/orders/${id}`); } catch (e) { toast(e.message, true); return; }
-    const edit = can('docs.edit');
+    const edit = can('retail.edit');
     const unitSeats = (p) => (p.own_seats?.length ? p.own_seats : p.cargoSeats);
     let seats = o.products.flatMap((p) => Array.from({ length: p.quantity }, () => unitSeats(p).map((s) => ({ ...s })))).flat();
     const m = modal(`Розетка ${o.order_num || ''}`, `<div class="form-stack">

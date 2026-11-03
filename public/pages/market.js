@@ -72,7 +72,7 @@ export function createMarketPages({ can }) {
     };
     main.innerHTML = `
       <div class="head-row"><h2>${esc(m.title)}${acc ? ` · ${esc(acc.name)}` : ''}</h2>
-        <div class="btn-row">${acc && can('api') ? '<button class="btn sm" id="mpRename">Перейменувати</button>' : ''}${acc ? `<button class="btn sm" id="mpSync" ${acc.active ? '' : 'disabled'}>Оновити зараз</button>` : ''}</div></div>
+        <div class="btn-row">${acc && can('api') ? '<button class="btn sm" id="mpRename">Перейменувати</button>' : ''}${acc && can('market.edit') ? `<button class="btn sm" id="mpSync" ${acc.active ? '' : 'disabled'}>Оновити зараз</button>` : ''}</div></div>
       <div class="f-chips" style="margin-bottom:10px">
         <a class="chip ${acc ? '' : 'on'}" href="#/${route}">Усі магазини · ${total}</a>
         ${shops.map((s) => `<a class="chip ${acc?.id === s.id ? 'on' : ''}" href="#/${route}/${s.id}" title="${esc(syncInfo(s))}">${esc(s.name)} · ${s.orders}${s.error ? ' ⚠️' : ''}</a>`).join('')}
@@ -116,9 +116,10 @@ export function createMarketPages({ can }) {
         const tip = (o.reviews || []).map((v) => `★${v.mark || '—'} ${v.goods}${v.name ? ` — ${v.name}` : ''}`).join('\n');
         const part = ri.total > 1 ? `<div class="${ri.doneN < ri.total ? '' : 'muted'}">товарів з відгуком: ${ri.doneN} з ${ri.total}</div>` : '';
         const more = o.ok && (ri.doneN < ri.total || (ri.two && o.review_n < 2));
-        return `<span class="badge ok" title="${esc(tip)}">✓ відгук${o.review_mark ? ` ★${o.review_mark}` : ''}</span>${o.review_n > 1 ? ` <span class="muted">×${o.review_n}</span>` : ''}${part}${twoNote}${more ? `${asked}<button class="btn sm" data-rvask="${esc(o.account_id)}:${esc(o.id)}">Нагадати ще</button>` : ''}`;
+        return `<span class="badge ok" title="${esc(tip)}">✓ відгук${o.review_mark ? ` ★${o.review_mark}` : ''}</span>${o.review_n > 1 ? ` <span class="muted">×${o.review_n}</span>` : ''}${part}${twoNote}${more && can('market.edit') ? `${asked}<button class="btn sm" data-rvask="${esc(o.account_id)}:${esc(o.id)}">Нагадати ще</button>` : ''}`;
       }
       if (!o.ok) return asked || '<span class="muted">—</span>';
+      if (!can('market.edit')) return `${twoNote}${asked}`;
       return `${twoNote}${asked}<button class="btn sm ${o.asked_at ? '' : 'primary'}" data-rvask="${esc(o.account_id)}:${esc(o.id)}">${o.asked_at ? 'Ще раз' : 'Нагадати'}</button>`;
     };
     const rowHtml = (o) => `<tr>

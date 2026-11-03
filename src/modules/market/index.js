@@ -3,6 +3,7 @@
 // Замовлення зберігаються в базі (45 днів): фонова задача раз на кілька хвилин забирає змінені з часу останньої
 // синхронізації — по кілька сторінок за раз; незавершений прохід продовжується з наступної сторінки.
 import { fail, need, nowIso } from '../../core/common.js';
+import { shopAllowed, accessOf } from '../../core/auth.js';
 import { rzOrdersSearch, rzItemComments, rzSuccessStatuses, rzOrderChat, rzSendMessage } from '../../integrations/rozetka.js';
 import { promOrders } from '../../integrations/prom.js';
 import { epcOrdersPage } from '../../integrations/epicentr.js';
@@ -452,15 +453,18 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     return rows;
   }
 
+  // Магазини, доступні користувачу (менеджеру можна дати лише частину — «Користувачі» → доступ).
+  const myShop = (c, mp, id) => { if (!shopAllowed(c.get('user'), mp, id)) throw fail(403, 'Немає доступу до цього магазину.'); };
   app.get('/api/mp/shops', async (c) => {
-    need(c, 'docs.view');
+    need(c, 'market.view');
     await rehistOnce();
+    const u = c.get('user');
     const [shops, counts, syncs] = await Promise.all([shopsOf(), cachedCounts(), db.all(`SELECT * FROM mp_sync`)]);
     const cnt = new Map(counts.map((r) => [`${r.mp}:${r.account_id}`, r.n]));
     const sy = new Map(syncs.map((r) => [`${r.mp}:${r.account_id}`, r]));
     return c.json(MARKETS.map((m) => ({
       ...m,
-      shops: (shops[m.key] || []).map((a) => {
+      shops: (shops[m.key] || []).filter((a) => shopAllowed(u, m.key, a.id)).map((a) => {
         const s = sy.get(`${m.key}:${a.id}`);
         return { id: a.id, name: a.name, active: Boolean(a.active), orders: cnt.get(`${m.key}:${a.id}`) || 0, synced_at: s?.synced_at || '', loading: Boolean(s?.cursor), error: s?.error || '', error_at: s?.error_at || '',
           history: m.key === 'rozetka' ? histState(s) : null,
@@ -470,13 +474,17 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
   });
 
   app.get('/api/mp/orders', async (c) => {
-    need(c, 'docs.view');
+    need(c, 'market.view');
     const mp = c.req.query('mp');
     if (!MARKETS.some((m) => m.key === mp)) throw fail(400, 'Невідомий маркетплейс.');
     const where = ['mp = ?'];
     const params = [mp];
     const acc = Number(c.req.query('account')) || 0;
-    if (acc) { where.push('account_id = ?'); params.push(acc); }
+    if (acc) { myShop(c, mp, acc); where.push('account_id = ?'); params.push(acc); }
+    else {
+      const a = accessOf(c.get('user'));
+      if (a?.shops) { where.push('account_id IN (SELECT value FROM json_each(?))'); params.push(JSON.stringify(a.shops.filter((x) => x.startsWith(`${mp}:`)).map((x) => Number(x.split(':')[1])))); }
+    }
     // період за датою створення (YYYY-MM-DD)
     const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
     const dFrom = c.req.query('from');
@@ -534,7 +542,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
 
   // ---------- відгуки: налаштування, позначка «нагадав», повідомлення в чат Розетки ----------
   app.get('/api/mp/review/settings', async (c) => {
-    need(c, 'docs.view');
+    need(c, 'market.view');
     return c.json(await rvSettings());
   });
   app.put('/api/mp/review/settings', async (c) => {
@@ -547,7 +555,8 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     await putSetting('mp_review', { days, tpl });
     return c.json({ days, tpl });
   });
-  const rzOrderOf = async (b) => {
+  const rzOrderOf = async (b, c) => {
+    if (c) myShop(c, 'rozetka', Number(b.account) || 0);
     const o = await db.get(`SELECT * FROM mp_orders WHERE mp = 'rozetka' AND account_id = ? AND id = ?`, [Number(b.account) || 0, String(b.id || '')]);
     if (!o) throw fail(404, 'Замовлення не знайдено.');
     return o;
@@ -560,9 +569,9 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
   };
   // Менеджер нагадав (Viber, Telegram, дзвінок, скопіював текст, вручну) або скасував позначку (undo).
   app.post('/api/mp/review/ask', async (c) => {
-    need(c, 'docs.view');
+    need(c, 'market.edit');
     const b = await c.req.json().catch(() => ({}));
-    const o = await rzOrderOf(b);
+    const o = await rzOrderOf(b, c);
     if (b.undo) {
       await db.run(`UPDATE mp_orders SET asked_at = '', asked_by = '', asked_via = '' WHERE mp = 'rozetka' AND account_id = ? AND id = ?`, [o.account_id, o.id]);
       return c.json({ asked_at: '', asked_by: '', asked_via: '' });
@@ -572,12 +581,12 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
   });
   // Повідомлення покупцю в чат замовлення на Розетці (без посилань і контактів — інакше модерація заблокує).
   app.post('/api/mp/review/chat', async (c) => {
-    need(c, 'docs.view');
+    need(c, 'market.edit');
     const b = await c.req.json().catch(() => ({}));
     const text = String(b.text || '').trim();
     if (!text || text.length > 1000) throw fail(400, 'Напишіть повідомлення (до 1000 символів).');
     if (CHAT_FORBIDDEN.test(text)) throw fail(400, 'У чаті Розетки не можна надсилати посилання, телефони й інші контакти — приберіть їх з тексту.');
-    const o = await rzOrderOf(b);
+    const o = await rzOrderOf(b, c);
     const acc = await accOf('rozetka', o.account_id);
     const chat = await rzCall(acc, (t) => rzOrderChat(fetchFn, t, o.id)).catch((e) => { if (e.pending) throw e; return null; });
     if (!chat?.id || !chat.userId) throw fail(400, 'Розетка не дала чат цього замовлення — напишіть покупцю у Viber або Telegram.');
@@ -587,8 +596,9 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
 
   // Оновити магазин зараз (кнопка на сторінці).
   app.post('/api/mp/sync', async (c) => {
-    need(c, 'docs.view');
+    need(c, 'market.edit');
     const b = await c.req.json().catch(() => ({}));
+    myShop(c, b.mp, Number(b.account));
     const acc = ((await shopsOf())[b.mp] || []).find((a) => a.id === Number(b.account));
     if (!acc) throw fail(404, 'Магазин не знайдено.');
     const r = await syncShop(b.mp, acc);
@@ -608,8 +618,9 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     return c.json(await histStart(b.mp, await accOf(b.mp, b.account), { from: b.from, to: b.to }));
   });
   app.post('/api/mp/history/step', async (c) => {
-    need(c, 'docs.view');
+    need(c, 'market.view');
     const b = await c.req.json().catch(() => ({}));
+    myShop(c, b.mp, Number(b.account));
     return c.json(await histStep(b.mp, await accOf(b.mp, b.account)));
   });
 

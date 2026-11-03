@@ -46,7 +46,8 @@ const SECTIONS = [
     { id: 'anpay', label: 'Оплати', perm: 'analytics' },
     { id: 'ansettings', label: 'Налаштування аналітики', perm: 'analytics' },
   ] },
-  { id: 'b2b', label: 'B2B партнери', perm: 'b2b.admin', home: 'b2borders', tabs: [
+  // edit — право на зміни; без нього розділ відкривається в режимі перегляду (див. route).
+  { id: 'b2b', label: 'B2B партнери', perm: 'b2b.view', edit: 'b2b.admin', home: 'b2borders', tabs: [
     { id: 'b2borders', label: 'Закупівлі' },
     { id: 'b2bclients', label: 'Замовлення клієнтів' },
     { id: 'b2bpartners', label: 'Партнери' },
@@ -70,12 +71,12 @@ const SECTIONS = [
     { id: 'ptrash', label: 'Кошик' },
     { id: 'phelp', label: 'Інструкція' },
   ] },
-  { id: 'market', label: 'Маркетплейси', perm: 'docs.view', home: 'mprz', tabs: [
+  { id: 'market', label: 'Маркетплейси', perm: 'market.view', home: 'mprz', tabs: [
     { id: 'mprz', label: 'Розетка' },
     { id: 'mpprom', label: 'Prom' },
     { id: 'mpepc', label: 'Епіцентр' },
   ] },
-  { id: 'retail', label: 'Рітейл', perm: 'docs.view', home: 'rzorders', tabs: [
+  { id: 'retail', label: 'Рітейл', perm: 'retail.view', home: 'rzorders', tabs: [
     { id: 'rzorders', label: 'Розетка' },
     { id: 'rzproducts', label: 'Розетка: товари й ціни', perm: 'refs.edit' },
   ] },
@@ -355,6 +356,8 @@ async function route() {
   if (name === 'rahunky' && !can('docs.edit')) { location.hash = '#/rlist'; return; }
   activeRoute = name;
   document.body.classList.toggle('an-mode', sec.id === 'an');
+  // Лише перегляд (напр., B2B для менеджера): кнопки змін сховані, сервер зміни й так не прийме.
+  main.classList.toggle('ro', Boolean(sec.edit && !can(sec.edit)));
   renderNav(name);
   // На телефоні меню гортається вбік — активний пункт має бути видно
   for (const a of $$('.main-tabs a.active, .subnav a.active')) a.scrollIntoView({ block: 'nearest', inline: 'center' });

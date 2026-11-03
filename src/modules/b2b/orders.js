@@ -141,7 +141,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
 
   const log = (orderId, user, action) => db.run(`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
     [orderId, nowIso(), userName(user), action]);
-  const tgAdmins = (text) => services.notify?.sendText({ admins: true }, text).catch(() => 0);
+  const tgAdmins = (text) => services.notify?.sendText({ admins: true, section: 'b2b' }, text).catch(() => 0);
   // Партнеру — лише особисто його користувачам. У Telegram-групу партнера (tgGroup) — тільки головне: нова закупівля,
   // рахунок і накладна (файлами) і «усі замовлення закупівлі взято в роботу складом».
   const groupOf = async (partnerId) => (await db.get(`SELECT tg_group FROM b2b_partners WHERE id = ?`, [partnerId]))?.tg_group || '';

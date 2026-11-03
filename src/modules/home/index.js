@@ -5,8 +5,8 @@ import { can } from '../../core/auth.js';
 export function mountHome(app, { services }) {
   // Розділ → право, з яким його дії видно.
   const SOURCES = [
-    ['b2b', 'b2b.admin'],
-    ['retail', 'docs.view'],
+    ['b2b', 'b2b.view'],
+    ['retail', 'retail.view'],
     ['errlog', 'users'],
   ];
   app.get('/api/home', async (c) => {
@@ -20,8 +20,8 @@ export function mountHome(app, { services }) {
   const SEARCH = [
     ['nakladni', 'docs.view'],
     ['rahunky', 'docs.view'],
-    ['b2b', 'b2b.admin'],
-    ['retail', 'docs.view'],
+    ['b2b', 'b2b.view'],
+    ['retail', 'retail.view'],
   ];
   app.get('/api/search', async (c) => {
     const u = c.get('user');
