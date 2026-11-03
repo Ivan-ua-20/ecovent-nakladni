@@ -31,7 +31,8 @@ export function createB2bPages(ctx = {}) {
     return !q || [p.name, p.phone, p.email, p.note].some((x) => String(x || '').toLowerCase().includes(q));
   };
   const pState = (p) => (!p.active ? '<span class="badge bad">вимкнений</span>' : p.paused ? `<span class="badge warn" title="${esc(p.pause_note || '')}">⏸ пауза</span>` : '<span class="badge ok">активний</span>');
-  const limTxt = (p) => [p.open_limit != null ? `відкр. ${money(p.open_limit)}` : '', p.unpaid_limit != null ? `неопл. ${money(p.unpaid_limit)}` : ''].filter(Boolean).join(' · ');
+  const limTxt = (p) => [p.open_limit != null ? `відкр. ${money(p.open_limit)}` : '', p.unpaid_limit != null ? `неопл. ${money(p.unpaid_limit)}` : '',
+    p.price_grace_hours != null ? `відстрочка цін ${p.price_grace_hours} год` : ''].filter(Boolean).join(' · ');
 
   async function viewPartners(id) {
     if (id) return viewPartner(id);
@@ -39,7 +40,7 @@ export function createB2bPages(ctx = {}) {
     const rows = all.filter(pMatch);
     const cnt = (k) => { const f = pFilter.st; pFilter.st = k; const n = all.filter(pMatch).length; pFilter.st = f; return n; };
     main.innerHTML = `
-      <div class="head-row"><h2>B2B партнери</h2><div class="btn-row"><button class="btn" id="pAuto">Автопауза…</button><button class="btn" id="pAnn">📢 Оголошення партнерам</button><button class="btn primary" id="pNew">+ Новий партнер</button></div></div>
+      <div class="head-row"><h2>B2B партнери</h2><div class="btn-row"><button class="btn" id="pAuto">Автопауза…</button><button class="btn" id="pGrace">Відстрочка цін…</button><button class="btn" id="pAnn">📢 Оголошення партнерам</button><button class="btn primary" id="pNew">+ Новий партнер</button></div></div>
       <div class="alert info help" style="margin-bottom:14px">Партнер бачить лише свій кабінет: каталог увімкнених йому брендів з РРЦ і своєю ціною (РРЦ − маржа).
         За замовчуванням партнер не бачить жодного бренду — увімкніть бренди й задайте маржу в картці партнера. Позначте кількох партнерів галочками — з'являться групові дії.</div>
       ${aging?.total ? `<div class="aging" aria-label="Борг партнерів за віком прострочки">${aging.buckets.map((b) => `<div class="aging-b ${b.key}"><span class="small muted">${esc(b.label)}</span><b>${money(b.sum)} грн</b><span class="small muted">${b.count} закуп.</span></div>`).join('')}</div>` : ''}
@@ -76,6 +77,19 @@ export function createB2bPages(ctx = {}) {
         </form>`, { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="apSave">Зберегти</button>' });
       $('#apSave', m.el).onclick = async () => {
         try { const r = await api('PUT', '/api/b2b/autopause', { days: $('#apDays', m.el).value }); m.close(); toast(r.days ? `Автопауза: понад ${r.days} дн. прострочки` : 'Автопаузу вимкнено'); } catch (e) { toast(e.message, true); }
+      };
+    };
+    // Відстрочка підвищення цін: загальна (для партнерів без власної) і список партнерів зі своєю.
+    $('#pGrace').onclick = async () => {
+      const g = await api('GET', '/api/b2b/price-grace');
+      const m = modal('Відстрочка підвищення цін', `<form id="grF" class="form-stack">
+          <p style="margin:0">Коли ціна товару в LP-CRM зростає, партнер ще стільки годин може замовляти за старою ціною (закупівлі, чернетки й замовлення клієнтів без закупівлі).
+            Зниження ціни діє одразу. У картці партнера можна задати власну відстрочку — вона важливіша за загальну.</p>
+          <label class="f">Загальна відстрочка, годин (0 — без відстрочки)<input id="grH" type="number" min="0" max="720" value="${g.hours}"></label>
+          ${g.partners.length ? `<div class="small muted">Власна відстрочка: ${g.partners.map((x) => `${esc(x.name)} — ${x.price_grace_hours} год`).join('; ')}</div>` : ''}
+        </form>`, { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="grSave">Зберегти</button>' });
+      $('#grSave', m.el).onclick = async () => {
+        try { const r = await api('PUT', '/api/b2b/price-grace', { hours: Number($('#grH', m.el).value) }); m.close(); toast(r.hours ? `Відстрочка підвищення цін: ${r.hours} год` : 'Відстрочку вимкнено'); } catch (e) { toast(e.message, true); }
       };
     };
     $$('[data-pst]').forEach((b) => (b.onclick = () => { pFilter.st = b.dataset.pst; viewPartners(); }));
@@ -151,6 +165,7 @@ export function createB2bPages(ctx = {}) {
         ${fld('unpaid_limit', 'Ліміт неоплачених закупівель, грн', 'типово 100 000')}
         ${fld('postpay_days', 'Відстрочка оплати, днів', '0–180')}
         ${fld('postpay_limit', 'Ліміт відстрочки, грн', 'напр. 50 000')}
+        ${fld('price_grace_hours', 'Відстрочка підвищення цін, годин («типовий» — загальна)', 'напр. 24')}
         <div class="small muted">Змінюються лише поля з «задати» / «${'типовий'}». Кожна зміна записується в історію партнера.</div></div>`,
     { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="lmOk">Застосувати</button>' });
     $$('[data-lm]', m.el).forEach((s) => (s.onchange = () => { const i = $(`[data-lv="${s.dataset.lm}"]`, m.el); i.disabled = s.value !== 'set'; if (!i.disabled) i.focus(); }));
@@ -236,6 +251,8 @@ export function createB2bPages(ctx = {}) {
           <label class="f"><span>Відстрочка оплати, днів (0 — лише передоплата)</span><input name="postpay_days" type="number" min="0" max="180" value="${esc(p?.postpay_days || 0)}"></label>
           <label class="f"><span>Ліміт відстрочки, грн</span><input name="postpay_limit" inputmode="decimal" value="${esc(p?.postpay_limit ?? '')}" placeholder="без окремого ліміту"></label>
         </div>
+        <label class="f"><span>Відстрочка підвищення цін, годин</span><input name="price_grace_hours" type="number" min="0" max="720" value="${esc(p?.price_grace_hours ?? '')}" placeholder="загальна" style="max-width:340px"></label>
+        <div class="small muted">Після підвищення ціни в LP-CRM партнер ще стільки годин замовляє за старою. Порожньо — загальна відстрочка (кнопка «Відстрочка цін…» у списку партнерів); 0 — без відстрочки.</div>
         <div class="small muted">Відстрочка: партнер може обрати в закупівлі «оплата з відстрочкою» — товар відвантажується до оплати, строк — N днів від дати рахунку.
           Ліміт — скільки максимум може бути неоплачено за такими закупівлями. З простроченою оплатою нових закупівель з відстрочкою не буде; про строк нагадує бот.</div>
       </form>`, { footer: `<button class="btn" data-close>Скасувати</button><button class="btn primary" id="pSave">${isNew ? 'Створити' : 'Зберегти'}</button>` });
@@ -246,7 +263,7 @@ export function createB2bPages(ctx = {}) {
       try {
         if (isNew) {
           const r = await api('POST', '/api/b2b/partners', d);
-          if (d.open_limit || d.unpaid_limit || Number(d.postpay_days) || d.postpay_limit) await api('PUT', `/api/b2b/partners/${r.id}`, { name: d.name, open_limit: d.open_limit, unpaid_limit: d.unpaid_limit, postpay_days: d.postpay_days, postpay_limit: d.postpay_limit });
+          if (d.open_limit || d.unpaid_limit || Number(d.postpay_days) || d.postpay_limit || d.price_grace_hours !== '') await api('PUT', `/api/b2b/partners/${r.id}`, { name: d.name, open_limit: d.open_limit, unpaid_limit: d.unpaid_limit, postpay_days: d.postpay_days, postpay_limit: d.postpay_limit, price_grace_hours: d.price_grace_hours });
           m.close(); location.hash = `#/b2bpartners/${r.id}`;
         }
         else { await api('PUT', `/api/b2b/partners/${p.id}`, d); m.close(); toast('Збережено'); viewPartner(p.id); }

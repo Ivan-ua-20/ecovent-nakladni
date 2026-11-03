@@ -6,6 +6,10 @@ import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, c
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
+// Відстрочка підвищення ціни: до якого часу діє стара ціна і яка буде далі.
+const graceAt = (iso) => new Date(iso).toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+const graceTxt = (p) => (p.grace_until ? `<div class="small"><span class="badge warn">до ${graceAt(p.grace_until)} — стара ціна</span><div class="muted">далі ${money(p.price_new)} грн</div></div>` : '');
+
 export function createPartnerPages(ctx = {}) {
   // «Лише перегляд» — без кнопок створення й зміни (сервер теж не дасть).
   const canEdit = () => !ctx.can || ctx.can('b2b.order');
@@ -126,7 +130,7 @@ export function createPartnerPages(ctx = {}) {
           <td class="small hide-m">${esc(p.brand)}</td>
           <td class="r small muted">${money(p.rrp)} грн</td>
           <td class="r small hide-m">${pct(p.margin)}<div class="muted">−${money(p.rrp - p.price)}</div></td>
-          <td class="r"><b>${money(p.price)} грн</b>${p.special ? `<div><span class="badge ok">${p.special_until ? `акція до ${p.special_until.slice(5).split('-').reverse().join('.')}` : 'особлива ціна'}</span></div>` : ''}</td>
+          <td class="r"><b>${money(p.price)} грн</b>${p.special ? `<div><span class="badge ok">${p.special_until ? `акція до ${p.special_until.slice(5).split('-').reverse().join('.')}` : 'особлива ціна'}</span></div>` : ''}${graceTxt(p)}</td>
         </tr>`;
       }).join('');
       $('#pcCount').textContent = `Знайдено: ${list.length} з ${products.length}`;
@@ -406,7 +410,7 @@ export function createPartnerPages(ctx = {}) {
       const q = fq.toLowerCase();
       const list = products.filter((p) => (!fb || String(p.brand_id) === fb) && (!q || p.name.toLowerCase().includes(q) || String(p.article || '').toLowerCase().includes(q)));
       $('#ofList').innerHTML = list.length ? `<table class="list"><thead><tr><th>Товар</th><th class="r">Ціна</th><th class="r">К-сть</th></tr></thead><tbody>
-        ${list.map((p) => `<tr><td>${p.ordered ? '<span title="Часто замовляєте">⭐</span> ' : ''}${esc(p.name)}${p.article || p.ordered ? `<div class="small muted">${[p.article, p.ordered ? `замовляли ${p.ordered} раз` : ''].filter(Boolean).map(esc).join(' · ')}</div>` : ''}</td><td class="r"><b>${money(p.price)}</b><div class="small muted">РРЦ ${money(p.rrp)}</div></td>
+        ${list.map((p) => `<tr><td>${p.ordered ? '<span title="Часто замовляєте">⭐</span> ' : ''}${esc(p.name)}${p.article || p.ordered ? `<div class="small muted">${[p.article, p.ordered ? `замовляли ${p.ordered} раз` : ''].filter(Boolean).map(esc).join(' · ')}</div>` : ''}</td><td class="r"><b>${money(p.price)}</b><div class="small muted">РРЦ ${money(p.rrp)}</div>${graceTxt(p)}</td>
           <td class="r"><input type="number" min="0" step="1" inputmode="numeric" data-q="${p.id}" value="${qty.get(p.id) || ''}" style="width:80px;text-align:right" aria-label="Кількість: ${esc(p.name)}"></td></tr>`).join('')}</tbody></table>`
         : '<div class="small muted">Нічого не знайдено.</div>';
       $$('[data-q]').forEach((inp) => (inp.oninput = () => {

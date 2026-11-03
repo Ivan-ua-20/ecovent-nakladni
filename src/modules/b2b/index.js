@@ -9,7 +9,7 @@ import { hashPassword, can, PARTNER_ROLES, partnerRole, randomToken } from '../.
 import { fail, need, nowIso, kyivDay, loadSettings, round2 } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
 import { call } from '../../integrations/lpcrm.js';
-import { mountB2bOrders, PM_JOIN, PM_COLS } from './orders.js';
+import { mountB2bOrders, PM_JOIN, PM_COLS, withGrace, graceHoursOf } from './orders.js';
 import { mountB2bClients } from './clients.js';
 import { mountB2bStats } from './stats.js';
 import { mountB2bPrices } from './prices.js';
@@ -170,6 +170,17 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
         log.push(v ? `відстрочка оплати: ${v} дн.` : 'відстрочку оплати вимкнено');
       }
     }
+    // Відстрочка підвищення цін, годин: порожньо — загальна (з налаштувань B2B), 0 — без відстрочки.
+    if (b.price_grace_hours !== undefined) {
+      const raw = String(b.price_grace_hours ?? '').trim();
+      if (raw && !/^\d+$/.test(raw)) throw fail(400, 'Відстрочка підвищення цін — ціле число годин (порожньо — загальна).');
+      const v = raw === '' ? null : Number(raw);
+      if (v !== null && v > 720) throw fail(400, 'Відстрочка підвищення цін — до 720 годин (30 днів).');
+      if (v !== (p.price_grace_hours ?? null)) {
+        st.push([`UPDATE b2b_partners SET price_grace_hours = ? WHERE id = ?`, [v, p.id]]);
+        log.push(`відстрочка підвищення цін: ${p.price_grace_hours ?? 'загальна'} → ${v ?? 'загальна'}${v != null ? ' год' : ''}`);
+      }
+    }
     for (const [k, label] of [['open_limit', 'відкритої закупівлі'], ['unpaid_limit', 'неоплачених закупівель'], ['postpay_limit', 'відстрочки']]) {
       if (b[k] === undefined) continue;
       const raw = String(b[k] ?? '').replace(/\s/g, '');
@@ -274,7 +285,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
         else if (b.action === 'resume') changed = await applyPause(c, p, { paused: 0 });
         else if (b.action === 'limits') {
           const f = {};
-          for (const k of ['open_limit', 'unpaid_limit', 'postpay_days', 'postpay_limit']) if (b[k] !== undefined && b[k] !== null) f[k] = b[k];
+          for (const k of ['open_limit', 'unpaid_limit', 'postpay_days', 'postpay_limit', 'price_grace_hours']) if (b[k] !== undefined && b[k] !== null) f[k] = b[k];
           changed = await applyLimits(c, p, f);
         } else {
           const { mode, brand, v, enable } = margin;
@@ -552,7 +563,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     const [rows, names, cats] = await Promise.all([
       db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.image, c.brand_id, c.announced_at, ${PM_COLS}, COALESCE(a.cat_manual, a.category_id, 0) AS cat
         FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN} LEFT JOIN an_products a ON a.product_id = c.product_id
-        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [kyivDay(), p.id]),
+        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [kyivDay(), p.id]).then((r) => withGrace(db, p, r)), // ціна з урахуванням відстрочки підвищення
       brandNames(),
       db.all(`SELECT id, name FROM an_categories`).catch(() => []),
     ]);
@@ -575,6 +586,8 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
       products: rows.map((r) => ({
         id: r.product_id, name: r.name, article: r.article, image: r.image, brand_id: r.brand_id, cat: r.cat,
         brand: names.get(r.brand_id) || 'Інші', rrp: r.rrp, price: partnerPrice(r.rrp, r.margin), margin: r.margin, special: Boolean(r.special), special_until: r.special_until || '',
+        // відстрочка підвищення: поки діє стара ціна — нова й коли почне діяти
+        ...(r.rrp_new ? { rrp_new: r.rrp_new, price_new: partnerPrice(r.rrp_new, r.margin), grace_until: r.grace_until } : {}),
         // «Новинка» — 14 днів після того, як адмін надіслав її партнерам (до розсилки партнер про неї не дізнається).
         is_new: /^\d{4}-/.test(r.announced_at || '') && Date.now() - Date.parse(r.announced_at) < 14 * 86400000,
         ordered: freq.get(r.product_id)?.n || 0, ordered_qty: freq.get(r.product_id)?.q || 0,

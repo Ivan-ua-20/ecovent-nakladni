@@ -49,6 +49,28 @@ export const DEBT = `('pay_wait', 'partial')`;
 // Підставляється після JOIN b2b_margins m і b2b_catalog c; перший параметр — сьогоднішня дата (kyivDay()).
 export const PM_JOIN = `LEFT JOIN b2b_product_margins pm ON pm.partner_id = m.partner_id AND pm.product_id = c.product_id AND (pm.until = '' OR pm.until >= ?)`;
 export const PM_COLS = `COALESCE(pm.margin, m.margin) AS margin, pm.margin IS NOT NULL AS special, COALESCE(pm.until, '') AS special_until`;
+// Відстрочка підвищення цін: після того як РРЦ зросла (оновлення з LP-CRM), партнер ще N годин замовляє за старою РРЦ.
+// N — у картці партнера (price_grace_hours), порожньо — загальна (settings.b2b_price_grace_hours), 0 — без відстрочки.
+// Зниження ціни діє одразу. Рядки з product_id і rrp → rrp на час відстрочки — стара; rrp_new і grace_until — що й коли.
+export async function graceHoursOf(db, p) {
+  if (p?.price_grace_hours != null && p.price_grace_hours !== '') return Math.max(0, Number(p.price_grace_hours) || 0);
+  const g = await db.get(`SELECT value FROM settings WHERE key = 'b2b_price_grace_hours'`);
+  return Math.max(0, Number(g?.value) || 0);
+}
+export async function withGrace(db, p, rows) {
+  const hours = rows.length ? await graceHoursOf(db, p) : 0;
+  if (!hours) return rows;
+  const since = new Date(Date.now() - hours * 3600e3).toISOString();
+  const logs = await db.all(`SELECT product_id, old_rrp, at FROM b2b_price_log WHERE at > ? AND product_id IN (SELECT value FROM json_each(?)) ORDER BY id`,
+    [since, JSON.stringify([...new Set(rows.map((r) => r.product_id))])]);
+  const first = new Map(); // найраніша зміна у вікні: її «було» — ціна до підвищення
+  for (const l of logs) if (!first.has(l.product_id)) first.set(l.product_id, l);
+  return rows.map((r) => {
+    const l = first.get(r.product_id);
+    if (!l || !(l.old_rrp > 0) || !(l.old_rrp < r.rrp)) return r;
+    return { ...r, rrp: l.old_rrp, rrp_new: r.rrp, grace_until: new Date(Date.parse(l.at) + hours * 3600e3).toISOString() };
+  });
+}
 // Закупівлі без рахунку, з яких уже могли відвантажити замовлення клієнтів.
 export const SHIP_NOINV = `('open', 'invoice_wait')`;
 const today = () => kyivDayOf(new Date().toISOString());
@@ -236,11 +258,11 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     }
     if (!want.size) throw fail(400, 'Додайте хоча б один товар із кількістю.');
     if (want.size > 300) throw fail(400, 'Не більше 300 позицій в одному замовленні.');
-    const rows = await db.all(
+    const rows = await withGrace(db, p, await db.all(
       `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_catalog c JOIN b2b_margins m ON m.brand_id = c.brand_id AND m.partner_id = ? ${PM_JOIN}
        WHERE c.product_id IN (SELECT value FROM json_each(?)) AND c.hidden = 0 AND c.rrp > 0`,
       [p.id, kyivDay(), JSON.stringify([...want.keys()])],
-    );
+    ));
     if (rows.length !== want.size) throw fail(400, 'Деякі товари більше недоступні — оновіть сторінку каталогу.');
     return rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || '', qty: want.get(r.product_id), price: partnerPrice(r.rrp, r.margin), rrp: r.rrp }));
   }
