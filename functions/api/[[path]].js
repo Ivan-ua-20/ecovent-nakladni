@@ -1890,10 +1890,10 @@ var hash = (s) => {
 };
 function likeVariants(q) {
   const raw2 = String(q || "").trim();
-  const low2 = raw2.toLowerCase();
-  const cap = low2.replace(/(^|[\s'-])(\S)/g, (m, a, b) => a + b.toUpperCase());
-  const first = low2.charAt(0).toUpperCase() + low2.slice(1);
-  return [.../* @__PURE__ */ new Set([raw2, low2, cap, first, raw2.toUpperCase()])].map((v) => `%${v}%`);
+  const low3 = raw2.toLowerCase();
+  const cap = low3.replace(/(^|[\s'-])(\S)/g, (m, a, b) => a + b.toUpperCase());
+  const first = low3.charAt(0).toUpperCase() + low3.slice(1);
+  return [.../* @__PURE__ */ new Set([raw2, low3, cap, first, raw2.toUpperCase()])].map((v) => `%${v}%`);
 }
 
 // node_modules/hono/dist/utils/cookie.js
@@ -3630,6 +3630,781 @@ function mountRahunky(app, { db, services, onCleanup }) {
   return { search };
 }
 
+// src/modules/analytics/ai-changes.js
+var low = (v) => String(v ?? "").trim().toLowerCase();
+var uah = (n) => `${Number(n || 0).toLocaleString("uk-UA", { maximumFractionDigits: 2 })} \u20B4`;
+var SETTINGS_NAMES = {
+  deptPriority: { name: "\u0432\u0456\u0434\u0434\u0456\u043B \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0438\u0437\u043D\u0430\u0447\u0430\u0454", values: { manager: "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440", office: "\u0432\u0456\u0434\u0434\u0456\u043B CRM (\u043E\u0444\u0456\u0441)" } },
+  targetBase: { name: "\u0442\u0430\u0440\u0433\u0435\u0442 \u0440\u0430\u0445\u0443\u0454\u0442\u044C\u0441\u044F \u0432\u0456\u0434", values: { net: "\u043E\u0431\u043E\u0440\u043E\u0442\u0443 \u0431\u0435\u0437 \u0432\u0456\u0434\u043C\u043E\u0432", all: "\u0441\u0443\u043C\u0438 \u0432\u0441\u0456\u0445 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C" } },
+  compare: { name: "\u043F\u043E\u0440\u0456\u0432\u043D\u044F\u043D\u043D\u044F \u0437 \u043C\u0438\u043D\u0443\u043B\u0438\u043C \u043F\u0435\u0440\u0456\u043E\u0434\u043E\u043C", values: { true: "\u0443\u0432\u0456\u043C\u043A\u043D\u0435\u043D\u043E", false: "\u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E" } },
+  months: { name: "\u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0443\u0432\u0430\u0442\u0438 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u0437\u0430 (\u043C\u0456\u0441.)" }
+};
+var CHANGE_TOOLS = [
+  {
+    name: "get_settings",
+    description: "\u041F\u043E\u0442\u043E\u0447\u043D\u0456 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438: \u0432\u0456\u0434\u0434\u0456\u043B\u0438 \u0437 \u0434\u0436\u0435\u0440\u0435\u043B\u0430\u043C\u0438 \u0456 \u0437\u043D\u0430\u0447\u0435\u043D\u043D\u044F\u043C\u0438 \xAB\u041F\u043E\u043B\u0435 1\xBB, \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0438 \u0437 \u0432\u0456\u0434\u0434\u0456\u043B\u0430\u043C\u0438, \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u043D\u0456\u0441\u0442\u044C \u043E\u0444\u0456\u0441\u0456\u0432 (\u0432\u0456\u0434\u0434\u0456\u043B\u0456\u0432 CRM) \u0432\u0456\u0434\u0434\u0456\u043B\u0430\u043C, \u0431\u0440\u0435\u043D\u0434\u0438 \u0437 \u043A\u043B\u044E\u0447\u043E\u0432\u0438\u043C\u0438 \u0441\u043B\u043E\u0432\u0430\u043C\u0438, \u0437\u0430\u0433\u0430\u043B\u044C\u043D\u0456 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F, \u0442\u0430\u0440\u0433\u0435\u0442\u0438 \u043F\u043E\u0442\u043E\u0447\u043D\u043E\u0433\u043E \u043C\u0456\u0441\u044F\u0446\u044F, \u0430 \u0442\u0430\u043A\u043E\u0436 \u0449\u043E \u0449\u0435 \u043D\u0435 \u0440\u043E\u0437\u043F\u043E\u0434\u0456\u043B\u0435\u043D\u043E (\u0437\u043D\u0430\u0447\u0435\u043D\u043D\u044F \xAB\u041F\u043E\u043B\u0435 1\xBB \u0431\u0435\u0437 \u0434\u0436\u0435\u0440\u0435\u043B\u0430, \u043D\u043E\u0432\u0456 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0438, \u043E\u0444\u0456\u0441\u0438 \u0431\u0435\u0437 \u0432\u0456\u0434\u0434\u0456\u043B\u0443 \u2014 \u0437 \u043A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C) \u0456 \u0441\u043A\u0456\u043B\u044C\u043A\u0438 \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0431\u0435\u0437 \u0431\u0440\u0435\u043D\u0434\u0443/\u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457.",
+    input_schema: { type: "object", properties: {} }
+  },
+  {
+    name: "get_products",
+    description: '\u0422\u043E\u0432\u0430\u0440\u0438 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438 \u0434\u043B\u044F \u0440\u0443\u0447\u043D\u043E\u0433\u043E \u0431\u0440\u0435\u043D\u0434\u0443/\u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457: filter = "nobrand" (\u0431\u0435\u0437 \u0431\u0440\u0435\u043D\u0434\u0443), "nocat" (\u0431\u0435\u0437 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457) \u0430\u0431\u043E q \u2014 \u043F\u043E\u0448\u0443\u043A \u0437\u0430 \u043D\u0430\u0437\u0432\u043E\u044E.',
+    input_schema: { type: "object", properties: { filter: { type: "string", enum: ["nobrand", "nocat"] }, q: { type: "string" } } }
+  },
+  {
+    name: "propose_changes",
+    description: '\u0417\u0430\u043F\u0440\u043E\u043F\u043E\u043D\u0443\u0432\u0430\u0442\u0438 \u0437\u043C\u0456\u043D\u0438 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u044C \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438. \u041D\u0406\u0427\u041E\u0413\u041E \u041D\u0415 \u0417\u041C\u0406\u041D\u042E\u0404: \u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447 \u043F\u043E\u0431\u0430\u0447\u0438\u0442\u044C \u0441\u043F\u0438\u0441\u043E\u043A \xAB\u0431\u0443\u043B\u043E \u2192 \u0441\u0442\u0430\u043D\u0435\xBB \u0456 \u0441\u0430\u043C \u043D\u0430\u0442\u0438\u0441\u043D\u0435 \xAB\u0417\u0430\u0441\u0442\u043E\u0441\u0443\u0432\u0430\u0442\u0438\xBB. \u041F\u0435\u0440\u0435\u0434 \u043F\u0440\u043E\u043F\u043E\u0437\u0438\u0446\u0456\u0454\u044E \u043F\u043E\u0434\u0438\u0432\u0438\u0441\u044C get_settings. \u041F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u043D\u0430 \u0432\u0456\u0434\u0434\u0456\u043B, \u0434\u0436\u0435\u0440\u0435\u043B\u043E \u0447\u0438 \u0431\u0440\u0435\u043D\u0434 \u2014 id (\u0447\u0438\u0441\u043B\u043E) \u0430\u0431\u043E \u0442\u043E\u0447\u043D\u0430 \u043D\u0430\u0437\u0432\u0430 (\u0440\u044F\u0434\u043E\u043A), \u0437\u043E\u043A\u0440\u0435\u043C\u0430 \u0449\u043E\u0439\u043D\u043E \u0434\u043E\u0434\u0430\u043D\u043E\u0433\u043E \u0432 \u0446\u0438\u0445 \u0436\u0435 \u0437\u043C\u0456\u043D\u0430\u0445. \u0422\u0438\u043F\u0438 \u0437\u043C\u0456\u043D (\u043F\u043E\u043B\u0435 type): dept_add {name}; dept_rename {dept, name}; dept_delete {dept}; source_add {dept, name}; source_rename {source, name}; source_move {source, dept}; source_delete {source}; values_map {source, values[]} \u2014 \u0437\u043D\u0430\u0447\u0435\u043D\u043D\u044F \xAB\u041F\u043E\u043B\u0435 1\xBB \u0432\u0456\u0434\u043D\u0435\u0441\u0442\u0438 \u0434\u043E \u0434\u0436\u0435\u0440\u0435\u043B\u0430 (\u0437 \u0456\u043D\u0448\u0438\u0445 \u0434\u0436\u0435\u0440\u0435\u043B \u0432\u043E\u043D\u0438 \u043F\u0440\u0438\u0431\u0438\u0440\u0430\u044E\u0442\u044C\u0441\u044F); values_unmap {values[]}; manager_set {login, name?, dept, depts?} \u2014 dept: \u043E\u0441\u043D\u043E\u0432\u043D\u0438\u0439 \u0432\u0456\u0434\u0434\u0456\u043B \u0430\u0431\u043E null, depts: \u0434\u043E\u0434\u0430\u0442\u043A\u043E\u0432\u0456 \u0432\u0456\u0434\u0434\u0456\u043B\u0438; manager_delete {login}; office_set {office, dept} \u2014 \u0432\u0456\u0434\u0434\u0456\u043B CRM (id \u043E\u0444\u0456\u0441\u0443) \u2192 \u0432\u0456\u0434\u0434\u0456\u043B \u0430\u0431\u043E null; brand_set {brand?, name, keywords} \u2014 \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u0431\u0440\u0435\u043D\u0434 (brand = id/\u043D\u0430\u0437\u0432\u0430) \u0430\u0431\u043E \u0441\u0442\u0432\u043E\u0440\u0438\u0442\u0438 \u043D\u043E\u0432\u0438\u0439; keywords \u2014 \u0441\u043B\u043E\u0432\u0430 \u0447\u0435\u0440\u0435\u0437 \u043A\u043E\u043C\u0443; brand_delete {brand}; product_set {id, brand?, cat?} \u2014 \u0440\u0443\u0447\u043D\u0438\u0439 \u0431\u0440\u0435\u043D\u0434/\u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044F \u0442\u043E\u0432\u0430\u0440\u0443 (null \u2014 \u043F\u0440\u0438\u0431\u0440\u0430\u0442\u0438 \u0440\u0443\u0447\u043D\u0435); target_set {month: "YYYY-MM", kind: "dept"|"src", ref, amount} \u2014 \u0442\u0430\u0440\u0433\u0435\u0442 \u0443 \u0433\u0440\u0438\u0432\u043D\u044F\u0445, 0 \u2014 \u043F\u0440\u0438\u0431\u0440\u0430\u0442\u0438; settings_set {deptPriority?: "manager"|"office", targetBase?: "net"|"all", compare?: bool, months?: 1\u201318}; ignore_set {kind: "values"|"users"|"offices", value, on: bool} \u2014 \u0441\u0445\u043E\u0432\u0430\u0442\u0438 \u0437 \xAB\u041F\u043E\u0442\u0440\u0435\u0431\u0443\u0454 \u0443\u0432\u0430\u0433\u0438\xBB.',
+    input_schema: {
+      type: "object",
+      properties: {
+        summary: { type: "string", description: "\u041A\u043E\u0440\u043E\u0442\u043A\u043E, \u0449\u043E \u0456 \u043D\u0430\u0432\u0456\u0449\u043E \u0437\u043C\u0456\u043D\u044E\u0454\u043C\u043E (1\u20132 \u0440\u0435\u0447\u0435\u043D\u043D\u044F)" },
+        ops: { type: "array", items: { type: "object" }, description: "\u0421\u043F\u0438\u0441\u043E\u043A \u0437\u043C\u0456\u043D (\u0434\u0438\u0432. \u043E\u043F\u0438\u0441 \u0456\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430)" }
+      },
+      required: ["summary", "ops"]
+    }
+  }
+];
+function mountAiChanges(app, { db, inner, remap: remap2, rebrand: rebrand2, bump, getSt }) {
+  const who = (u) => String(u?.name || u?.login || "").slice(0, 80);
+  const allowed = (c) => can(c.get("user"), "analytics");
+  async function state(c) {
+    const cfg = await inner(c, "GET", "/api/an/config");
+    return {
+      cfg,
+      depts: cfg.depts.map((d) => ({ id: d.id, name: d.name, sources: d.sources.map((s) => ({ id: s.id, name: s.name, values: [...s.values] })) })),
+      managers: cfg.managers.map((m) => ({ login: m.login, name: m.name || "", dept: m.dept_id || null, depts: String(m.depts || "").split(",").map(Number).filter(Boolean) })),
+      offices: cfg.officeMap.map((o) => ({ office: String(o.office), dept: o.dept_id || null })),
+      brands: cfg.brands.map((b) => ({ id: b.id, name: b.name, keywords: b.keywords || "" }))
+    };
+  }
+  async function plan(c, ops) {
+    if (!Array.isArray(ops) || !ops.length) throw new Error("\u041D\u0435\u043C\u0430\u0454 \u0437\u043C\u0456\u043D.");
+    if (ops.length > 300) throw new Error("\u0417\u0430\u0431\u0430\u0433\u0430\u0442\u043E \u0437\u043C\u0456\u043D \u0437\u0430 \u0440\u0430\u0437 (\u0434\u043E 300).");
+    const s = await state(c);
+    const lines = [];
+    const touched = /* @__PURE__ */ new Set();
+    const findDept = (ref) => {
+      if (ref == null || ref === "") return null;
+      const d = typeof ref === "number" || /^\d+$/.test(String(ref)) ? s.depts.find((x) => x.id === Number(ref)) : s.depts.find((x) => low(x.name) === low(ref));
+      if (!d) throw new Error(`\u0412\u0456\u0434\u0434\u0456\u043B \xAB${ref}\xBB \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.`);
+      return d;
+    };
+    const allSources = () => s.depts.flatMap((d) => d.sources.map((x) => ({ ...x, dept: d, ref: x })));
+    const findSource = (ref) => {
+      const list = allSources();
+      const m = typeof ref === "number" || /^\d+$/.test(String(ref)) ? list.filter((x) => x.id === Number(ref)) : list.filter((x) => low(x.name) === low(ref));
+      if (!m.length) throw new Error(`\u0414\u0436\u0435\u0440\u0435\u043B\u043E \xAB${ref}\xBB \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.`);
+      if (m.length > 1) throw new Error(`\u0414\u0436\u0435\u0440\u0435\u043B \xAB${ref}\xBB \u043A\u0456\u043B\u044C\u043A\u0430 \u2014 \u0432\u043A\u0430\u0436\u0456\u0442\u044C id.`);
+      return { src: m[0].ref, dept: m[0].dept };
+    };
+    const findBrand = (ref) => {
+      const b = typeof ref === "number" || /^\d+$/.test(String(ref)) ? s.brands.find((x) => x.id === Number(ref)) : s.brands.find((x) => low(x.name) === low(ref));
+      if (!b) throw new Error(`\u0411\u0440\u0435\u043D\u0434 \xAB${ref}\xBB \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.`);
+      return b;
+    };
+    const deptName = (d) => d ? d.name : "\u2014 \u0431\u0435\u0437 \u0432\u0456\u0434\u0434\u0456\u043B\u0443 \u2014";
+    const nameStr = (v, max = 80) => {
+      const t = String(v ?? "").trim();
+      if (!t) throw new Error("\u041F\u043E\u0440\u043E\u0436\u043D\u044F \u043D\u0430\u0437\u0432\u0430.");
+      return t.slice(0, max);
+    };
+    const products = /* @__PURE__ */ new Map();
+    const targets = /* @__PURE__ */ new Map();
+    const settings = {};
+    const ignores = [];
+    for (const op of ops) {
+      const t = op?.type;
+      switch (t) {
+        case "dept_add": {
+          const name = nameStr(op.name);
+          if (s.depts.some((d) => low(d.name) === low(name))) throw new Error(`\u0412\u0456\u0434\u0434\u0456\u043B \xAB${name}\xBB \u0443\u0436\u0435 \u0454.`);
+          s.depts.push({ id: null, name, sources: [] });
+          lines.push(`\u2795 \u041D\u043E\u0432\u0438\u0439 \u0432\u0456\u0434\u0434\u0456\u043B \xAB${name}\xBB`);
+          touched.add("structure");
+          break;
+        }
+        case "dept_rename": {
+          const d = findDept(op.dept);
+          const name = nameStr(op.name);
+          lines.push(`\u270F\uFE0F \u0412\u0456\u0434\u0434\u0456\u043B \xAB${d.name}\xBB \u2192 \xAB${name}\xBB`);
+          d.name = name;
+          touched.add("structure");
+          break;
+        }
+        case "dept_delete": {
+          const d = findDept(op.dept);
+          s.depts = s.depts.filter((x) => x !== d);
+          lines.push(`\u{1F5D1} \u0412\u0438\u0434\u0430\u043B\u0438\u0442\u0438 \u0432\u0456\u0434\u0434\u0456\u043B \xAB${d.name}\xBB${d.sources.length ? ` \u0440\u0430\u0437\u043E\u043C \u0456\u0437 \u0434\u0436\u0435\u0440\u0435\u043B\u0430\u043C\u0438: ${d.sources.map((x) => `\xAB${x.name}\xBB`).join(", ")}` : ""} (\u0439\u043E\u0433\u043E \u0442\u0430\u0440\u0433\u0435\u0442\u0438 \u0442\u0435\u0436 \u0437\u043D\u0438\u043A\u043D\u0443\u0442\u044C)`);
+          touched.add("structure");
+          break;
+        }
+        case "source_add": {
+          const d = findDept(op.dept);
+          const name = nameStr(op.name);
+          if (d.sources.some((x) => low(x.name) === low(name))) throw new Error(`\u0414\u0436\u0435\u0440\u0435\u043B\u043E \xAB${name}\xBB \u0443 \u0432\u0456\u0434\u0434\u0456\u043B\u0456 \xAB${d.name}\xBB \u0443\u0436\u0435 \u0454.`);
+          d.sources.push({ id: null, name, values: [] });
+          lines.push(`\u2795 \u041D\u043E\u0432\u0435 \u0434\u0436\u0435\u0440\u0435\u043B\u043E \xAB${name}\xBB \u0443 \u0432\u0456\u0434\u0434\u0456\u043B\u0456 \xAB${d.name}\xBB`);
+          touched.add("structure");
+          break;
+        }
+        case "source_rename": {
+          const { src } = findSource(op.source);
+          const name = nameStr(op.name);
+          lines.push(`\u270F\uFE0F \u0414\u0436\u0435\u0440\u0435\u043B\u043E \xAB${src.name}\xBB \u2192 \xAB${name}\xBB`);
+          src.name = name;
+          touched.add("structure");
+          break;
+        }
+        case "source_move": {
+          const { src, dept } = findSource(op.source);
+          const to = findDept(op.dept);
+          if (to === dept) break;
+          dept.sources = dept.sources.filter((x) => x !== src);
+          to.sources.push(src);
+          lines.push(`\u21AA\uFE0F \u0414\u0436\u0435\u0440\u0435\u043B\u043E \xAB${src.name}\xBB: \u0432\u0456\u0434\u0434\u0456\u043B \xAB${dept.name}\xBB \u2192 \xAB${to.name}\xBB`);
+          touched.add("structure");
+          break;
+        }
+        case "source_delete": {
+          const { src, dept } = findSource(op.source);
+          dept.sources = dept.sources.filter((x) => x !== src);
+          lines.push(`\u{1F5D1} \u0412\u0438\u0434\u0430\u043B\u0438\u0442\u0438 \u0434\u0436\u0435\u0440\u0435\u043B\u043E \xAB${src.name}\xBB (\u0432\u0456\u0434\u0434\u0456\u043B \xAB${dept.name}\xBB)${src.values.length ? `; \u0437\u043D\u0430\u0447\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u0434\u0436\u0435\u0440\u0435\u043B\u0430: ${src.values.slice(0, 10).join(", ")}${src.values.length > 10 ? "\u2026" : ""}` : ""}`);
+          touched.add("structure");
+          break;
+        }
+        case "values_map": {
+          const { src } = findSource(op.source);
+          const vals = [...new Set((Array.isArray(op.values) ? op.values : []).map(low).filter(Boolean))];
+          if (!vals.length) throw new Error("values_map: \u043D\u0435\u043C\u0430\u0454 \u0437\u043D\u0430\u0447\u0435\u043D\u044C.");
+          for (const v of vals) {
+            const from = allSources().find((x) => x.ref.values.includes(v));
+            if (from?.ref === src) continue;
+            if (from) from.ref.values = from.ref.values.filter((x) => x !== v);
+            src.values.push(v);
+            lines.push(`\u{1F517} \xAB\u041F\u043E\u043B\u0435 1\xBB \xAB${v}\xBB: ${from ? `\u0434\u0436\u0435\u0440\u0435\u043B\u043E \xAB${from.ref.name}\xBB` : "\u0431\u0435\u0437 \u0434\u0436\u0435\u0440\u0435\u043B\u0430"} \u2192 \xAB${src.name}\xBB`);
+          }
+          touched.add("structure");
+          break;
+        }
+        case "values_unmap": {
+          for (const v of (Array.isArray(op.values) ? op.values : []).map(low).filter(Boolean)) {
+            const from = allSources().find((x) => x.ref.values.includes(v));
+            if (!from) continue;
+            from.ref.values = from.ref.values.filter((x) => x !== v);
+            lines.push(`\u26D3\uFE0F\u200D\u{1F4A5} \xAB\u041F\u043E\u043B\u0435 1\xBB \xAB${v}\xBB: \u0434\u0436\u0435\u0440\u0435\u043B\u043E \xAB${from.ref.name}\xBB \u2192 \u0431\u0435\u0437 \u0434\u0436\u0435\u0440\u0435\u043B\u0430`);
+          }
+          touched.add("structure");
+          break;
+        }
+        case "manager_set": {
+          const login = low(op.login);
+          if (!login) throw new Error("manager_set: \u043D\u0435\u043C\u0430\u0454 \u043B\u043E\u0433\u0456\u043D\u0430.");
+          const d = op.dept === void 0 ? void 0 : findDept(op.dept);
+          const extra = Array.isArray(op.depts) ? op.depts.map(findDept) : void 0;
+          let m = s.managers.find((x) => x.login === login);
+          const was = m ? deptName(m.deptRef !== void 0 ? m.deptRef : s.depts.find((x) => x.id && x.id === m.dept) || null) : null;
+          if (!m) {
+            m = { login, name: "", dept: null, depts: [] };
+            s.managers.push(m);
+          }
+          if (op.name !== void 0) m.name = String(op.name || "").trim().slice(0, 80);
+          if (d !== void 0) {
+            m.deptRef = d;
+            m.dept = d?.id || null;
+          }
+          if (extra !== void 0) m.extraRefs = extra;
+          lines.push(`\u{1F464} \u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 ${login}${m.name ? ` (${m.name})` : ""}: ${was === null ? "\u043D\u043E\u0432\u0438\u0439" : `\u0432\u0456\u0434\u0434\u0456\u043B \xAB${was}\xBB`} \u2192 ${d !== void 0 ? `\xAB${deptName(d)}\xBB` : "\u0432\u0456\u0434\u0434\u0456\u043B \u0431\u0435\u0437 \u0437\u043C\u0456\u043D"}${extra?.length ? `, \u0434\u043E\u0434\u0430\u0442\u043A\u043E\u0432\u043E: ${extra.map((x) => `\xAB${x.name}\xBB`).join(", ")}` : ""}`);
+          touched.add("managers");
+          break;
+        }
+        case "manager_delete": {
+          const login = low(op.login);
+          if (!s.managers.some((x) => x.login === login)) throw new Error(`\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430 ${login} \u043D\u0435\u043C\u0430\u0454 \u0432 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445.`);
+          s.managers = s.managers.filter((x) => x.login !== login);
+          lines.push(`\u{1F5D1} \u041F\u0440\u0438\u0431\u0440\u0430\u0442\u0438 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430 ${login} \u0437 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u044C`);
+          touched.add("managers");
+          break;
+        }
+        case "office_set": {
+          const office = String(op.office ?? "").trim();
+          if (!office) throw new Error("office_set: \u043D\u0435\u043C\u0430\u0454 \u043E\u0444\u0456\u0441\u0443.");
+          const d = findDept(op.dept);
+          const cur = s.offices.find((x) => x.office === office);
+          const was = cur ? deptName(cur.deptRef || s.depts.find((x) => x.id && x.id === cur.dept) || null) : "\u2014 \u043D\u0435 \u043F\u0440\u0438\u0432\u02BC\u044F\u0437\u0430\u043D\u043E \u2014";
+          const oname = s.cfg.offices.find((x) => String(x.office_id) === office)?.name;
+          s.offices = s.offices.filter((x) => x.office !== office);
+          if (d) s.offices.push({ office, dept: d.id || null, deptRef: d });
+          lines.push(`\u{1F3E2} \u0412\u0456\u0434\u0434\u0456\u043B CRM ${office}${oname ? ` (\xAB${oname}\xBB)` : ""}: \xAB${was}\xBB \u2192 \xAB${deptName(d)}\xBB`);
+          touched.add("offices");
+          break;
+        }
+        case "brand_set": {
+          const name = nameStr(op.name);
+          const kws = String(op.keywords || name).split(",").map(low).filter(Boolean).join(", ");
+          if (op.brand != null && op.brand !== "") {
+            const b = findBrand(op.brand);
+            lines.push(`\u{1F3F7} \u0411\u0440\u0435\u043D\u0434 \xAB${b.name}\xBB${b.name !== name ? ` \u2192 \xAB${name}\xBB` : ""}: \u0441\u043B\u043E\u0432\u0430 \xAB${b.keywords}\xBB \u2192 \xAB${kws}\xBB`);
+            b.name = name;
+            b.keywords = kws;
+          } else {
+            if (s.brands.some((x) => low(x.name) === low(name))) throw new Error(`\u0411\u0440\u0435\u043D\u0434 \xAB${name}\xBB \u0443\u0436\u0435 \u0454 \u2014 \u0432\u043A\u0430\u0436\u0456\u0442\u044C brand, \u0449\u043E\u0431 \u0437\u043C\u0456\u043D\u0438\u0442\u0438.`);
+            s.brands.push({ id: null, name, keywords: kws });
+            lines.push(`\u2795 \u041D\u043E\u0432\u0438\u0439 \u0431\u0440\u0435\u043D\u0434 \xAB${name}\xBB (\u0441\u043B\u043E\u0432\u0430: ${kws})`);
+          }
+          touched.add("brands");
+          break;
+        }
+        case "brand_delete": {
+          const b = findBrand(op.brand);
+          s.brands = s.brands.filter((x) => x !== b);
+          lines.push(`\u{1F5D1} \u0412\u0438\u0434\u0430\u043B\u0438\u0442\u0438 \u0431\u0440\u0435\u043D\u0434 \xAB${b.name}\xBB (\u0439\u043E\u0433\u043E \u0442\u043E\u0432\u0430\u0440\u0438 \u0441\u0442\u0430\u043D\u0443\u0442\u044C \xAB\u0406\u043D\u0448\u0456\xBB, \u044F\u043A\u0449\u043E \u043D\u0435 \u043F\u0456\u0434\u0456\u0439\u0434\u0435 \u0456\u043D\u0448\u0438\u0439 \u0431\u0440\u0435\u043D\u0434)`);
+          touched.add("brands");
+          break;
+        }
+        case "product_set": {
+          const id = parseInt(op.id, 10);
+          if (!id) throw new Error("product_set: \u043D\u0435\u043C\u0430\u0454 id \u0442\u043E\u0432\u0430\u0440\u0443.");
+          const p = products.get(id) || {};
+          if (op.brand !== void 0) p.brand = op.brand === null ? null : findBrand(op.brand);
+          if (op.cat !== void 0) {
+            if (op.cat === null) p.cat = null;
+            else {
+              const cat = s.cfg.categories.find((x) => x.id === Number(op.cat));
+              if (!cat) throw new Error(`\u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044E ${op.cat} \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.`);
+              p.cat = cat;
+            }
+          }
+          products.set(id, p);
+          touched.add("products");
+          break;
+        }
+        case "target_set": {
+          const month = String(op.month || "").slice(0, 7);
+          if (!/^\d{4}-\d{2}$/.test(month)) throw new Error("target_set: \u043C\u0456\u0441\u044F\u0446\u044C \u0443 \u0444\u043E\u0440\u043C\u0430\u0442\u0456 YYYY-MM.");
+          if (!["dept", "src"].includes(op.kind)) throw new Error("target_set: kind \u2014 dept \u0430\u0431\u043E src.");
+          const amount = Math.round((Number(op.amount) || 0) * 100) / 100;
+          if (amount < 0) throw new Error("target_set: \u0441\u0443\u043C\u0430 \u043D\u0435 \u043C\u043E\u0436\u0435 \u0431\u0443\u0442\u0438 \u0432\u0456\u0434\u02BC\u0454\u043C\u043D\u043E\u044E.");
+          const ref = op.kind === "dept" ? findDept(op.ref) : findSource(op.ref).src;
+          if (!ref) throw new Error("target_set: \u043D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E, \u0434\u043B\u044F \u0447\u043E\u0433\u043E \u0442\u0430\u0440\u0433\u0435\u0442.");
+          if (!targets.has(month)) targets.set(month, []);
+          targets.get(month).push({ kind: op.kind, ref, amount });
+          lines.push(`\u{1F3AF} \u0422\u0430\u0440\u0433\u0435\u0442 ${month}, ${op.kind === "dept" ? "\u0432\u0456\u0434\u0434\u0456\u043B" : "\u0434\u0436\u0435\u0440\u0435\u043B\u043E"} \xAB${ref.name}\xBB: ${amount ? uah(amount) : "\u043F\u0440\u0438\u0431\u0440\u0430\u0442\u0438"}`);
+          touched.add("targets");
+          break;
+        }
+        case "settings_set": {
+          const st = await getSt();
+          for (const k of ["deptPriority", "targetBase", "compare", "months"]) {
+            if (op[k] === void 0) continue;
+            let v = op[k];
+            if (k === "deptPriority" && !["manager", "office"].includes(v)) throw new Error("deptPriority \u2014 manager \u0430\u0431\u043E office.");
+            if (k === "targetBase" && !["net", "all"].includes(v)) throw new Error("targetBase \u2014 net \u0430\u0431\u043E all.");
+            if (k === "compare") v = Boolean(v);
+            if (k === "months") v = Math.min(18, Math.max(1, parseInt(v, 10) || 6));
+            settings[k] = v;
+            const n = SETTINGS_NAMES[k];
+            const show = (x) => n.values?.[String(x)] ?? String(x);
+            lines.push(`\u2699\uFE0F ${n.name}: ${show(st[k])} \u2192 ${show(v)}`);
+          }
+          touched.add("settings");
+          break;
+        }
+        case "ignore_set": {
+          if (!["values", "users", "offices"].includes(op.kind)) throw new Error("ignore_set: kind \u2014 values, users \u0430\u0431\u043E offices.");
+          const value = String(op.value ?? "").trim();
+          if (!value) throw new Error("ignore_set: \u043D\u0435\u043C\u0430\u0454 \u0437\u043D\u0430\u0447\u0435\u043D\u043D\u044F.");
+          ignores.push({ kind: op.kind, value, on: op.on !== false });
+          lines.push(`${op.on !== false ? "\u{1F648} \u041D\u0435 \u043F\u043E\u043A\u0430\u0437\u0443\u0432\u0430\u0442\u0438" : "\u{1F441} \u0417\u043D\u043E\u0432\u0443 \u043F\u043E\u043A\u0430\u0437\u0443\u0432\u0430\u0442\u0438"} \u0432 \xAB\u041F\u043E\u0442\u0440\u0435\u0431\u0443\u0454 \u0443\u0432\u0430\u0433\u0438\xBB: ${{ values: "\xAB\u041F\u043E\u043B\u0435 1\xBB", users: "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440", offices: "\u0432\u0456\u0434\u0434\u0456\u043B CRM" }[op.kind]} \xAB${value}\xBB`);
+          touched.add("ignore");
+          break;
+        }
+        default:
+          throw new Error(`\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u0442\u0438\u043F \u0437\u043C\u0456\u043D\u0438 \xAB${t}\xBB.`);
+      }
+    }
+    if (products.size) {
+      const rows = await db.all(`SELECT product_id AS id, name, brand_manual, cat_manual FROM an_products WHERE product_id IN (SELECT value FROM json_each(?))`, [JSON.stringify([...products.keys()])]);
+      for (const [id, p] of products) {
+        const r = rows.find((x) => x.id === id);
+        if (!r) throw new Error(`\u0422\u043E\u0432\u0430\u0440 ${id} \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u0446\u0456.`);
+        p.row = r;
+        const parts = [];
+        if (p.brand !== void 0) parts.push(`\u0431\u0440\u0435\u043D\u0434 \u2192 ${p.brand ? `\xAB${p.brand.name}\xBB` : "\u0430\u0432\u0442\u043E\u043C\u0430\u0442\u0438\u0447\u043D\u043E"}`);
+        if (p.cat !== void 0) parts.push(`\u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044F \u2192 ${p.cat ? `\xAB${p.cat.name}\xBB` : "\u0437 CRM"}`);
+        lines.push(`\u{1F4E6} ${r.name || `\u0422\u043E\u0432\u0430\u0440 ${id}`}: ${parts.join(", ")}`);
+      }
+    }
+    if (!lines.length) throw new Error("\u0426\u0456 \u0437\u043C\u0456\u043D\u0438 \u043D\u0456\u0447\u043E\u0433\u043E \u043D\u0435 \u0437\u043C\u0456\u043D\u044E\u044E\u0442\u044C \u2014 \u0443\u0441\u0435 \u0432\u0436\u0435 \u0442\u0430\u043A.");
+    return { s, lines, touched, products, targets, settings, ignores };
+  }
+  const SNAP_TABLES = ["an_depts", "an_sources", "an_source_map", "an_office_map", "an_managers", "an_brands", "an_targets"];
+  async function snapshot(productIds) {
+    const out = {};
+    for (const t of SNAP_TABLES) out[t] = await db.all(`SELECT * FROM ${t}`);
+    out.products = productIds.length ? await db.all(`SELECT product_id, brand_manual, cat_manual FROM an_products WHERE product_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(productIds)]) : [];
+    out.settings = Object.fromEntries((await db.all(`SELECT key, value FROM settings WHERE key IN ('an_settings', 'an_ignored')`)).map((r) => [r.key, r.value]));
+    return out;
+  }
+  async function restore(snap) {
+    const st = [];
+    for (const t of SNAP_TABLES) {
+      st.push([`DELETE FROM ${t}`, []]);
+      for (const r of snap[t] || []) {
+        const cols = Object.keys(r);
+        st.push([`INSERT INTO ${t} (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`, cols.map((k) => r[k])]);
+      }
+    }
+    for (const p of snap.products || []) st.push([`UPDATE an_products SET brand_manual = ?, cat_manual = ? WHERE product_id = ?`, [p.brand_manual, p.cat_manual, p.product_id]]);
+    for (const k of ["an_settings", "an_ignored"]) {
+      if (snap.settings?.[k] === void 0) st.push([`DELETE FROM settings WHERE key = ?`, [k]]);
+      else st.push([`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, snap.settings[k]]]);
+    }
+    await db.batch(st);
+    await remap2(db, await getSt());
+    await rebrand2(db);
+    await bump();
+  }
+  async function apply(c, ops) {
+    const p = await plan(c, ops);
+    const { s } = p;
+    if (p.touched.has("structure")) {
+      await inner(c, "PUT", "/api/an/structure", { depts: s.depts.map((d) => ({ id: d.id, name: d.name, sources: d.sources.map((x) => ({ id: x.id, name: x.name, values: x.values })) })) });
+    }
+    const fresh = p.touched.has("structure") || p.touched.has("brands") ? await state(c) : s;
+    const alive = (id) => id && fresh.depts.some((x) => x.id === id) ? id : null;
+    const deptId = (d) => d ? alive(d.id) || fresh.depts.find((x) => low(x.name) === low(d.name))?.id || null : null;
+    const srcId = (src) => src.id || fresh.depts.flatMap((d) => d.sources).find((x) => low(x.name) === low(src.name))?.id || null;
+    if (p.touched.has("managers")) {
+      await inner(c, "PUT", "/api/an/managers", s.managers.map((m) => {
+        const main = m.deptRef !== void 0 ? deptId(m.deptRef) : alive(m.dept);
+        const extra = m.extraRefs ? m.extraRefs.map(deptId) : m.depts.map(alive);
+        return { login: m.login, name: m.name, dept_id: main, depts: main ? [main, ...extra.filter((x) => x && x !== main)] : [] };
+      }));
+    }
+    if (p.touched.has("offices")) {
+      await inner(c, "PUT", "/api/an/office-map", s.offices.map((o) => ({ office: o.office, dept_id: o.deptRef ? deptId(o.deptRef) : alive(o.dept) })).filter((o) => o.dept_id));
+    }
+    let brandsNow = s.brands;
+    if (p.touched.has("brands")) {
+      await inner(c, "PUT", "/api/an/brands", s.brands.map((b) => ({ id: b.id, name: b.name, keywords: b.keywords })));
+      brandsNow = (await state(c)).brands;
+    }
+    if (p.products.size) {
+      const brandId = (b) => b ? b.id || brandsNow.find((x) => low(x.name) === low(b.name))?.id || null : null;
+      await inner(c, "PUT", "/api/an/products", [...p.products].map(([id, x]) => ({
+        id,
+        brand_manual: x.brand !== void 0 ? brandId(x.brand) : x.row.brand_manual,
+        cat_manual: x.cat !== void 0 ? x.cat?.id ?? null : x.row.cat_manual
+      })));
+    }
+    for (const [month, list] of p.targets) {
+      const cur = (await inner(c, "GET", `/api/an/targets?month=${month}`)).rows;
+      const rows = new Map(cur.map((r) => [`${r.kind}:${r.ref_id}`, r]));
+      for (const t of list) {
+        const id = t.kind === "dept" ? deptId(t.ref) : srcId(t.ref);
+        if (!id) continue;
+        if (t.amount) rows.set(`${t.kind}:${id}`, { kind: t.kind, ref_id: id, amount: t.amount });
+        else rows.delete(`${t.kind}:${id}`);
+      }
+      await inner(c, "PUT", "/api/an/targets", { month, rows: [...rows.values()], copyMonths: 0 });
+    }
+    if (Object.keys(p.settings).length) await inner(c, "PUT", "/api/an/settings", p.settings);
+    for (const x of p.ignores) await inner(c, "PUT", "/api/an/ignore", x);
+    return p;
+  }
+  async function getSettings(c) {
+    const s = await state(c);
+    const [vals, attn] = await Promise.all([inner(c, "GET", "/api/an/values"), inner(c, "GET", "/api/an/attention")]);
+    const month = kyivDay().slice(0, 7);
+    const tg = await inner(c, "GET", `/api/an/targets?month=${month}`);
+    const mapped = new Set(s.depts.flatMap((d) => d.sources.flatMap((x) => x.values)));
+    return {
+      settings: s.cfg.settings,
+      depts: s.depts.map((d) => ({ id: d.id, name: d.name, sources: d.sources.map((x) => ({ id: x.id, name: x.name, values: x.values })) })),
+      managers: s.managers.map((m) => ({ login: m.login, name: m.name, dept: m.dept, depts: m.depts })),
+      offices: s.cfg.offices.map((o) => ({ office: String(o.office_id), name: o.name, dept: s.offices.find((x) => x.office === String(o.office_id))?.dept || null })),
+      brands: s.brands,
+      categories: s.cfg.categories.slice(0, 300).map((x) => ({ id: x.id, name: x.name })),
+      targetsThisMonth: { month, rows: tg.rows },
+      // значення з замовлень (з кількістю): що куди потрапляє
+      field1Values: (vals.values || []).slice(0, 250).map((v) => ({ value: v.value, orders: v.n, mapped: mapped.has(v.value) })),
+      managerLogins: (vals.users || []).slice(0, 100).map((u) => ({ login: u.v, orders: u.n })),
+      officeOrders: (vals.offices || []).slice(0, 60).map((o) => ({ office: String(o.v), orders: o.n })),
+      attention: {
+        unmappedValues: (attn.values || []).slice(0, 100).map((v) => ({ value: v.value, orders: v.n })),
+        newManagers: (attn.users || []).map((u) => ({ login: u.v, orders: u.n })),
+        officesWithoutDept: (attn.offices || []).map((o) => ({ office: String(o.v), orders: o.n })),
+        products: attn.products,
+        ignored: attn.ignored
+      }
+    };
+  }
+  async function getProducts2(c, input) {
+    const r = await inner(c, "GET", "/api/an/products");
+    let list = r.products || [];
+    if (input.filter === "nobrand") list = list.filter((p) => !p.brand_id && p.brand_manual == null);
+    else if (input.filter === "nocat") list = list.filter((p) => !(p.cat_manual ?? p.category_id) && p.cat_manual == null);
+    if (input.q) {
+      const q = low(input.q);
+      list = list.filter((p) => low(p.name).includes(q) || String(p.id) === q);
+    }
+    return { total: list.length, products: list.slice(0, 100).map((p) => ({ id: p.id, name: p.name, brand_id: p.brand_id, brand_manual: p.brand_manual, category_id: p.category_id, cat_manual: p.cat_manual, sold: p.sold })) };
+  }
+  async function propose(c, input, question) {
+    const p = await plan(c, input.ops);
+    const summary = String(input.summary || "").trim().slice(0, 500);
+    const r = await db.run(
+      `INSERT INTO an_ai_changes (created_at, asked_by, question, summary, ops, preview, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
+      [nowIso(), who(c.get("user")), String(question || "").slice(0, 2e3), summary, JSON.stringify(input.ops), JSON.stringify(p.lines)]
+    );
+    return { id: r.lastId, summary, lines: p.lines };
+  }
+  async function runTool(c, name, input, question, proposals) {
+    if (name === "get_settings") return getSettings(c);
+    if (name === "get_products") return getProducts2(c, input);
+    if (name === "propose_changes") {
+      const pr = await propose(c, input, question);
+      proposals.push(pr);
+      return { proposal: pr.id, status: "\u043E\u0447\u0456\u043A\u0443\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430", lines: pr.lines };
+    }
+    return void 0;
+  }
+  const pub = (r) => ({
+    id: r.id,
+    created_at: r.created_at,
+    asked_by: r.asked_by,
+    question: r.question,
+    summary: r.summary,
+    lines: JSON.parse(r.preview || "[]"),
+    status: r.status,
+    done_by: r.done_by,
+    done_at: r.done_at,
+    error: r.error,
+    reverted_by: r.reverted_by,
+    reverted_at: r.reverted_at
+  });
+  const rowOf = async (id) => {
+    const r = await db.get(`SELECT * FROM an_ai_changes WHERE id = ?`, [parseInt(id, 10) || 0]);
+    if (!r) throw fail(404, "\u0417\u043C\u0456\u043D\u0443 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return r;
+  };
+  app.get("/api/an/ai/changes", async (c) => {
+    const rows = await db.all(`SELECT * FROM an_ai_changes ORDER BY id DESC LIMIT 200`);
+    const lastApplied = rows.find((r) => r.status === "applied")?.id || null;
+    return c.json({ rows: rows.map((r) => ({ ...pub(r), can_revert: r.id === lastApplied })) });
+  });
+  app.post("/api/an/ai/changes/:id/apply", async (c) => {
+    const r = await rowOf(c.req.param("id"));
+    if (r.status !== "pending") throw fail(400, r.status === "applied" ? "\u0426\u0456 \u0437\u043C\u0456\u043D\u0438 \u0432\u0436\u0435 \u0437\u0430\u0441\u0442\u043E\u0441\u043E\u0432\u0430\u043D\u043E." : "\u0426\u0456 \u0437\u043C\u0456\u043D\u0438 \u0432\u0436\u0435 \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0430\u0431\u043E \u0432\u043E\u043D\u0438 \u043D\u0435 \u0432\u0434\u0430\u043B\u0438\u0441\u044C \u2014 \u043F\u043E\u043F\u0440\u043E\u0441\u0456\u0442\u044C \u0428\u0406 \u0437\u0430\u043F\u0440\u043E\u043F\u043E\u043D\u0443\u0432\u0430\u0442\u0438 \u0437\u0430\u043D\u043E\u0432\u043E.");
+    const claim = await db.run(`UPDATE an_ai_changes SET status = 'applying' WHERE id = ? AND status = 'pending'`, [r.id]);
+    if (!claim.changes) throw fail(409, "\u0417\u043C\u0456\u043D\u0438 \u0432\u0436\u0435 \u0437\u0430\u0441\u0442\u043E\u0441\u043E\u0432\u0443\u044E\u0442\u044C\u0441\u044F.");
+    const ops = JSON.parse(r.ops || "[]");
+    const pids = ops.filter((o) => o?.type === "product_set").map((o) => parseInt(o.id, 10)).filter(Boolean);
+    const snap = await snapshot(pids);
+    const u = c.get("user");
+    try {
+      const p = await apply(c, ops);
+      await db.run(
+        `UPDATE an_ai_changes SET status = 'applied', done_by = ?, done_at = ?, snapshot = ?, preview = ?, error = '' WHERE id = ?`,
+        [who(u), nowIso(), JSON.stringify(snap), JSON.stringify(p.lines), r.id]
+      );
+      await logAudit(db, { user: u, kind: "analytics", refId: r.id, action: `\u0437\u0430\u0441\u0442\u043E\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u043C\u0456\u043D\u0438 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438 \u0432\u0456\u0434 \u0428\u0406 (\u0437\u0430\u043F\u0438\u0442: ${r.asked_by || "\u2014"}): ${r.summary}`.slice(0, 500), changes: p.lines.slice(0, 50) }).catch(() => 0);
+      return c.json({ ok: true, change: pub(await rowOf(r.id)) });
+    } catch (e) {
+      await restore(snap).catch(() => 0);
+      if (e.pending) {
+        await db.run(`UPDATE an_ai_changes SET status = 'pending' WHERE id = ?`, [r.id]);
+        throw e;
+      }
+      const msg = String(e.message || e).slice(0, 500);
+      await db.run(`UPDATE an_ai_changes SET status = 'failed', done_by = ?, done_at = ?, error = ? WHERE id = ?`, [who(u), nowIso(), msg, r.id]);
+      throw fail(400, `\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u0437\u0430\u0441\u0442\u043E\u0441\u0443\u0432\u0430\u0442\u0438: ${msg}. \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u043B\u0438\u0448\u0438\u043B\u0438\u0441\u044C \u044F\u043A \u0431\u0443\u043B\u0438.`);
+    }
+  });
+  app.post("/api/an/ai/changes/:id/cancel", async (c) => {
+    const r = await rowOf(c.req.param("id"));
+    if (r.status !== "pending") throw fail(400, "\u0421\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438 \u043C\u043E\u0436\u043D\u0430 \u043B\u0438\u0448\u0435 \u0437\u043C\u0456\u043D\u0438, \u0449\u043E \u0447\u0435\u043A\u0430\u044E\u0442\u044C \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F.");
+    await db.run(`UPDATE an_ai_changes SET status = 'cancelled', done_by = ?, done_at = ? WHERE id = ? AND status = 'pending'`, [who(c.get("user")), nowIso(), r.id]);
+    return c.json({ ok: true, change: pub(await rowOf(r.id)) });
+  });
+  app.post("/api/an/ai/changes/:id/revert", async (c) => {
+    const r = await rowOf(c.req.param("id"));
+    if (r.status !== "applied") throw fail(400, "\u0412\u0456\u0434\u043A\u043E\u0442\u0438\u0442\u0438 \u043C\u043E\u0436\u043D\u0430 \u043B\u0438\u0448\u0435 \u0437\u0430\u0441\u0442\u043E\u0441\u043E\u0432\u0430\u043D\u0456 \u0437\u043C\u0456\u043D\u0438.");
+    const last = await db.get(`SELECT id FROM an_ai_changes WHERE status = 'applied' ORDER BY id DESC LIMIT 1`);
+    if (last?.id !== r.id) throw fail(400, "\u0412\u0456\u0434\u043A\u043E\u0442\u0438\u0442\u0438 \u043C\u043E\u0436\u043D\u0430 \u043B\u0438\u0448\u0435 \u043E\u0441\u0442\u0430\u043D\u043D\u044E \u0437\u0430\u0441\u0442\u043E\u0441\u043E\u0432\u0430\u043D\u0443 \u0437\u043C\u0456\u043D\u0443 \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0432\u0456\u0434\u043A\u043E\u0442\u0456\u0442\u044C \u043F\u0456\u0437\u043D\u0456\u0448\u0456.");
+    await restore(JSON.parse(r.snapshot || "{}"));
+    const u = c.get("user");
+    await db.run(`UPDATE an_ai_changes SET status = 'reverted', reverted_by = ?, reverted_at = ? WHERE id = ?`, [who(u), nowIso(), r.id]);
+    await logAudit(db, { user: u, kind: "analytics", refId: r.id, action: `\u0432\u0456\u0434\u043A\u043E\u0447\u0435\u043D\u043E \u0437\u043C\u0456\u043D\u0438 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438 \u0432\u0456\u0434 \u0428\u0406: ${r.summary}`.slice(0, 500) }).catch(() => 0);
+    return c.json({ ok: true, change: pub(await rowOf(r.id)) });
+  });
+  return { runTool, allowed };
+}
+
+// src/modules/analytics/ai.js
+var AI_URL = "https://api.anthropic.com/v1/messages";
+var AI_MODELS = [
+  { id: "claude-sonnet-5-5", name: "Sonnet 5.5 \u2014 \u0437\u0431\u0430\u043B\u0430\u043D\u0441\u043E\u0432\u0430\u043D\u043E (\u0440\u0435\u043A\u043E\u043C\u0435\u043D\u0434\u043E\u0432\u0430\u043D\u043E)" },
+  { id: "claude-haiku-5-5", name: "Haiku 5.5 \u2014 \u0448\u0432\u0438\u0434\u043A\u043E \u0439 \u0434\u0435\u0448\u0435\u0432\u0448\u0435" },
+  { id: "claude-opus-5-5", name: "Opus 5.5 \u2014 \u043D\u0430\u0439\u0433\u043B\u0438\u0431\u0448\u0456 \u0432\u0438\u0441\u043D\u043E\u0432\u043A\u0438, \u0434\u043E\u0440\u043E\u0436\u0447\u0435" }
+];
+var MAX_ROUNDS = 6;
+var MAX_HISTORY = 10;
+var r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+var TOOLS = [
+  {
+    name: "query_analytics",
+    description: "\u041F\u0456\u0434\u0441\u0443\u043C\u043A\u0438 \u043F\u0440\u043E\u0434\u0430\u0436\u0456\u0432 (\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM) \u0437\u0430 \u043F\u0435\u0440\u0456\u043E\u0434 \u0437 \u0444\u0456\u043B\u044C\u0442\u0440\u0430\u043C\u0438 \u2014 \u0442\u0435 \u0441\u0430\u043C\u0435, \u0449\u043E \u043F\u043E\u043A\u0430\u0437\u0443\u0454 \u0434\u0430\u0448\u0431\u043E\u0440\u0434 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438. \u041F\u043E\u0432\u0435\u0440\u0442\u0430\u0454: KPI (\u0441\u0443\u043C\u0430, \u043E\u0431\u043E\u0440\u043E\u0442 \u0431\u0435\u0437 \u0432\u0456\u0434\u043C\u043E\u0432, \u043A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C, \u0432\u0456\u0434\u043C\u043E\u0432\u0438, \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0456, \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0456), \u0440\u043E\u0437\u0431\u0438\u0432\u043A\u0438 \u0437\u0430 \u0432\u0456\u0434\u0434\u0456\u043B\u0430\u043C\u0438, \u0434\u0436\u0435\u0440\u0435\u043B\u0430\u043C\u0438 (\xAB\u041F\u043E\u043B\u0435 1\xBB), \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430\u043C\u0438, \u0433\u0440\u0443\u043F\u0430\u043C\u0438 \u0441\u0442\u0430\u0442\u0443\u0441\u0456\u0432, \u0441\u043B\u0443\u0436\u0431\u0430\u043C\u0438 \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0438, \u0431\u0440\u0435\u043D\u0434\u0430\u043C\u0438, \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044F\u043C\u0438, \u0442\u043E\u043F \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0456 \u0434\u0430\u043D\u0456 \u043F\u043E \u0434\u043D\u044F\u0445. \u042F\u043A\u0449\u043E \u0437\u0430\u0434\u0430\u0442\u0438 \u043F\u0435\u0440\u0456\u043E\u0434 \u043F\u043E\u0440\u0456\u0432\u043D\u044F\u043D\u043D\u044F, \u043A\u043E\u0436\u0435\u043D \u0440\u044F\u0434\u043E\u043A \u043C\u0430\u0454 \u0449\u0435 \u0439 prev-\u0437\u043D\u0430\u0447\u0435\u043D\u043D\u044F. \u0424\u0456\u043B\u044C\u0442\u0440\u0438 \u2014 id \u0437 \u0434\u043E\u0432\u0456\u0434\u043D\u0438\u043A\u0430 \u0432 \u0441\u0438\u0441\u0442\u0435\u043C\u043D\u0438\u0445 \u0456\u043D\u0441\u0442\u0440\u0443\u043A\u0446\u0456\u044F\u0445 (\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0438 \u2014 \u043B\u043E\u0433\u0456\u043D).",
+    input_schema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "\u041F\u043E\u0447\u0430\u0442\u043E\u043A \u043F\u0435\u0440\u0456\u043E\u0434\u0443, YYYY-MM-DD" },
+        to: { type: "string", description: "\u041A\u0456\u043D\u0435\u0446\u044C \u043F\u0435\u0440\u0456\u043E\u0434\u0443 \u0432\u043A\u043B\u044E\u0447\u043D\u043E, YYYY-MM-DD" },
+        compare_from: { type: "string", description: "\u041F\u043E\u0447\u0430\u0442\u043E\u043A \u043F\u0435\u0440\u0456\u043E\u0434\u0443 \u0434\u043B\u044F \u043F\u043E\u0440\u0456\u0432\u043D\u044F\u043D\u043D\u044F, YYYY-MM-DD (\u043D\u0435\u043E\u0431\u043E\u0432\u02BC\u044F\u0437\u043A\u043E\u0432\u043E)" },
+        compare_to: { type: "string", description: "\u041A\u0456\u043D\u0435\u0446\u044C \u043F\u0435\u0440\u0456\u043E\u0434\u0443 \u0434\u043B\u044F \u043F\u043E\u0440\u0456\u0432\u043D\u044F\u043D\u043D\u044F, YYYY-MM-DD (\u043D\u0435\u043E\u0431\u043E\u0432\u02BC\u044F\u0437\u043A\u043E\u0432\u043E)" },
+        depts: { type: "array", items: { type: "integer" }, description: "id \u0432\u0456\u0434\u0434\u0456\u043B\u0456\u0432" },
+        sources: { type: "array", items: { type: "integer" }, description: "id \u0434\u0436\u0435\u0440\u0435\u043B (\xAB\u041F\u043E\u043B\u0435 1\xBB)" },
+        managers: { type: "array", items: { type: "string" }, description: "\u043B\u043E\u0433\u0456\u043D\u0438 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0456\u0432 LP-CRM" },
+        brands: { type: "array", items: { type: "integer" }, description: "id \u0431\u0440\u0435\u043D\u0434\u0456\u0432" },
+        cats: { type: "array", items: { type: "integer" }, description: "id \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0439" },
+        products: { type: "array", items: { type: "integer" }, description: "id \u0442\u043E\u0432\u0430\u0440\u0456\u0432 LP-CRM (\u0437\u043D\u0430\u0439\u0442\u0438 \u2014 find_products)" }
+      },
+      required: ["from", "to"]
+    }
+  },
+  {
+    name: "find_products",
+    description: "\u041F\u043E\u0448\u0443\u043A \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0437\u0430 \u043D\u0430\u0437\u0432\u043E\u044E \u0430\u0431\u043E ID \u2014 \u043F\u043E\u0432\u0435\u0440\u0442\u0430\u0454 id \u0456 \u043D\u0430\u0437\u0432\u0438 \u0434\u043B\u044F \u0444\u0456\u043B\u044C\u0442\u0440\u0430 products \u0443 query_analytics.",
+    input_schema: { type: "object", properties: { q: { type: "string", description: "\u0427\u0430\u0441\u0442\u0438\u043D\u0430 \u043D\u0430\u0437\u0432\u0438 \u0430\u0431\u043E ID \u0442\u043E\u0432\u0430\u0440\u0443" } }, required: ["q"] }
+  }
+];
+function compactQuery(q) {
+  const hasPrev = Boolean(q.cmp);
+  const row = (r, extra = {}) => ({
+    name: r.name ?? r.login,
+    rev: r2(r.rev),
+    net: r2(r.net),
+    cnt: r.cnt,
+    rcnt: r.rcnt,
+    ...hasPrev ? { prevRev: r2(r.prevRev), prevNet: r2(r.prevNet), prevCnt: r.prevCnt } : {},
+    ...extra
+  });
+  const days = q.daily?.cur || [];
+  let series;
+  if (days.length <= 62) series = days.map((d) => [d.day, d.cnt, r2(d.rev), r2(d.net)]);
+  else {
+    const wk = /* @__PURE__ */ new Map();
+    for (const d of days) {
+      const dt = /* @__PURE__ */ new Date(`${d.day}T12:00:00Z`);
+      dt.setUTCDate(dt.getUTCDate() - (dt.getUTCDay() + 6) % 7);
+      const k = dt.toISOString().slice(0, 10);
+      const w = wk.get(k) || [k, 0, 0, 0];
+      w[1] += d.cnt;
+      w[2] = r2(w[2] + d.rev);
+      w[3] = r2(w[3] + d.net);
+      wk.set(k, w);
+    }
+    series = [...wk.values()];
+  }
+  return {
+    period: q.range,
+    compare: q.cmp || (q.compareEnabled ? null : "\u043F\u043E\u0440\u0456\u0432\u043D\u044F\u043D\u043D\u044F \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u0435 \u0432 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438"),
+    scope: q.own ? `\u043B\u0438\u0448\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430 (${q.own.logins.join(", ") || "\u043B\u043E\u0433\u0456\u043D \u043D\u0435 \u043F\u0440\u0438\u0432\u02BC\u044F\u0437\u0430\u043D\u043E"})` : "\u0443\u0441\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F",
+    kpi: q.kpi?.cur,
+    kpiPrev: q.kpi?.prev,
+    target: q.target?.applicable ? { plan: q.target.plan, fact: q.target.fact, pct: q.target.pct, base: q.target.base } : null,
+    byDept: (q.byDept || []).map((r) => row(r, r.plan ? { plan: r.plan } : {})),
+    bySource: (q.bySource || []).slice(0, 30).map((r) => row(r, r.plan ? { plan: r.plan } : {})),
+    byManager: (q.byManager || []).slice(0, 30).map((r) => row(r, { login: r.login })),
+    byStatusGroup: (q.byStatusGroup || []).map((r) => ({ name: r.name, cnt: r.cnt, rev: r2(r.rev), ...hasPrev ? { prevCnt: r.prevCnt, prevRev: r2(r.prevRev) } : {} })),
+    byDelivery: (q.byDelivery || []).map((r) => ({ name: r.name, cnt: r.cnt, rcnt: r.rcnt, rev: r2(r.rev), ...hasPrev ? { prevCnt: r.prevCnt } : {} })),
+    byBrand: (q.byBrand || []).slice(0, 20).map((r) => row(r, { qty: r.qty })),
+    byCategory: (q.byCategory || []).slice(0, 20).map((r) => row(r, { qty: r.qty })),
+    topProducts: (q.top || []).slice(0, 25).map((r) => ({ id: r.id, name: r.name, brand: r.brand, qty: r.qty, refusedQty: r.rqty, rev: r2(r.rev), ...r.prevQty != null ? { prevQty: r.prevQty } : {} })),
+    series: { columns: ["date", "cnt", "rev", "net"], step: days.length <= 62 ? "day" : "week", rows: series },
+    lastSync: q.lastSync
+  };
+}
+function mountAnalyticsAi(app, { db, fetchFn, kyivDay: kyivDay2, addDays: addDays5, remap: remap2, rebrand: rebrand2, bump, getSt }) {
+  const getVal = async (key) => (await db.get(`SELECT value FROM settings WHERE key = ?`, [key]))?.value || "";
+  const setVal = (key, value) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]);
+  const modelOf = async () => {
+    const m = await getVal("an_ai_model");
+    return AI_MODELS.some((x) => x.id === m) ? m : AI_MODELS[0].id;
+  };
+  async function usage() {
+    try {
+      return JSON.parse(await getVal("an_ai_usage")) || {};
+    } catch {
+      return {};
+    }
+  }
+  async function addUsage(u) {
+    const month = kyivDay2().slice(0, 7);
+    const cur = await usage();
+    const v = cur.month === month ? cur : { month, asks: 0, input: 0, output: 0 };
+    v.asks += u.asks || 0;
+    v.input += u.input || 0;
+    v.output += u.output || 0;
+    await setVal("an_ai_usage", JSON.stringify(v));
+  }
+  app.get("/api/an/ai/settings", async (c) => {
+    const key = await getVal("an_ai_key");
+    return c.json({ key: key ? MASK : "", model: await modelOf(), models: AI_MODELS, usage: await usage() });
+  });
+  app.put("/api/an/ai/settings", async (c) => {
+    const b = await c.req.json().catch(() => ({}));
+    if (b.model !== void 0) {
+      if (!AI_MODELS.some((x) => x.id === b.model)) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0430 \u043C\u043E\u0434\u0435\u043B\u044C.");
+      await setVal("an_ai_model", b.model);
+    }
+    if (b.key !== void 0 && b.key !== MASK) {
+      const key = String(b.key || "").trim();
+      if (key && !/^sk-ant-[\w-]{20,}$/.test(key)) throw fail(400, "\u041A\u043B\u044E\u0447 Anthropic API \u043F\u043E\u0447\u0438\u043D\u0430\u0454\u0442\u044C\u0441\u044F \u0437 \xABsk-ant-\xBB \u2014 \u0441\u043A\u043E\u043F\u0456\u044E\u0439\u0442\u0435 \u0439\u043E\u0433\u043E \u0437 console.anthropic.com \u2192 API Keys.");
+      await setVal("an_ai_key", key);
+    }
+    return c.json({ ok: true, key: await getVal("an_ai_key") ? MASK : "", model: await modelOf() });
+  });
+  app.get("/api/an/ai/status", async (c) => c.json({ enabled: Boolean(await getVal("an_ai_key")) }));
+  async function inner(c, method, path, body) {
+    const r = await app.request(path, {
+      method,
+      headers: { cookie: c.req.header("cookie") || "", "content-type": "application/json" },
+      body: body ? JSON.stringify(body) : void 0
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${r.status}`);
+    return j;
+  }
+  const changes = mountAiChanges(app, { db, inner, remap: remap2, rebrand: rebrand2, bump, getSt });
+  async function runTool(c, name, input) {
+    if (name === "query_analytics") {
+      const ids = (a) => Array.isArray(a) ? a : [];
+      const q = await inner(c, "POST", "/api/an/query", {
+        from: input.from,
+        to: input.to,
+        cmpFrom: input.compare_from,
+        cmpTo: input.compare_to,
+        depts: ids(input.depts),
+        sources: ids(input.sources),
+        managers: ids(input.managers),
+        brands: ids(input.brands),
+        cats: ids(input.cats),
+        products: ids(input.products)
+      });
+      return compactQuery(q);
+    }
+    if (name === "find_products") {
+      const r = await inner(c, "GET", `/api/an/product-search?q=${encodeURIComponent(String(input.q || "").slice(0, 80))}`);
+      return (Array.isArray(r) ? r : []).slice(0, 30).map((p) => ({ id: p.id, name: p.name }));
+    }
+    throw new Error(`\u043D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u0456\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442 ${name}`);
+  }
+  async function callClaude(key, body) {
+    let res;
+    try {
+      res = await fetchFn(AI_URL, {
+        method: "POST",
+        headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify(body)
+      });
+    } catch (e) {
+      if (e.pending) throw e;
+      throw fail(502, "\u0428\u0406 \u043D\u0435 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0430\u0454 \u2014 \u0441\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0449\u0435 \u0440\u0430\u0437 \u0437\u0430 \u0445\u0432\u0438\u043B\u0438\u043D\u0443.");
+    }
+    const j = await res.json().catch(() => null);
+    if (!res.ok) {
+      const msg = j?.error?.message || `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${res.status}`;
+      if (res.status === 401) throw fail(400, "\u0428\u0406: \u043D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u043A\u043B\u044E\u0447 API \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0439\u043E\u0433\u043E \u0432 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438\xBB.");
+      if (res.status === 429) throw fail(429, "\u0428\u0406: \u0437\u0430\u0431\u0430\u0433\u0430\u0442\u043E \u0437\u0430\u043F\u0438\u0442\u0456\u0432 \u0430\u0431\u043E \u0432\u0438\u0447\u0435\u0440\u043F\u0430\u043D\u043E \u043B\u0456\u043C\u0456\u0442 \u2014 \u0441\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0437\u0430 \u0445\u0432\u0438\u043B\u0438\u043D\u0443.");
+      if (res.status === 400 && /credit|balance|billing/i.test(msg)) throw fail(400, "\u0428\u0406: \u043D\u0430 \u0440\u0430\u0445\u0443\u043D\u043A\u0443 Anthropic \u0437\u0430\u043A\u0456\u043D\u0447\u0438\u043B\u0438\u0441\u044C \u043A\u043E\u0448\u0442\u0438 \u2014 \u043F\u043E\u043F\u043E\u0432\u043D\u0456\u0442\u044C \u0431\u0430\u043B\u0430\u043D\u0441 \u0443 console.anthropic.com.");
+      throw fail(502, `\u0428\u0406: ${msg}`.slice(0, 300));
+    }
+    return j;
+  }
+  app.post("/api/an/ai/ask", async (c) => {
+    const key = await getVal("an_ai_key");
+    if (!key) throw fail(400, "\u0428\u0406 \u0449\u0435 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E: \u0432\u043B\u0430\u0441\u043D\u0438\u043A \u0430\u0431\u043E \u0430\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440 \u0432\u0432\u043E\u0434\u0438\u0442\u044C \u043A\u043B\u044E\u0447 Anthropic API \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438\xBB.");
+    const b = await c.req.json().catch(() => ({}));
+    const hist = (Array.isArray(b.messages) ? b.messages : []).filter((m) => ["user", "assistant"].includes(m.role) && String(m.text || "").trim()).slice(-(MAX_HISTORY + 1)).map((m) => ({ role: m.role, content: String(m.text).slice(0, 4e3) }));
+    while (hist.length && hist[0].role !== "user") hist.shift();
+    if (!hist.length || hist[hist.length - 1].role !== "user") throw fail(400, "\u041D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u043F\u0438\u0442\u0430\u043D\u043D\u044F.");
+    const today3 = kyivDay2();
+    const base = await inner(c, "POST", "/api/an/query", { from: addDays5(today3, -6), to: today3 });
+    const o = base.options || {};
+    const list = (a, f) => (a || []).map(f).join("; ");
+    const system = [
+      "\u0422\u0438 \u2014 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A \u043F\u0440\u043E\u0434\u0430\u0436\u0456\u0432 \u043A\u043E\u043C\u043F\u0430\u043D\u0456\u0457 (e-commerce: \u0440\u043E\u0437\u0434\u0440\u0456\u0431, \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438, B2B). \u0412\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0430\u0439 \u0443\u043A\u0440\u0430\u0457\u043D\u0441\u044C\u043A\u043E\u044E, \u043A\u043E\u0440\u043E\u0442\u043A\u043E \u0456 \u043F\u043E \u0441\u0443\u0442\u0456.",
+      `\u0421\u044C\u043E\u0433\u043E\u0434\u043D\u0456 ${today3} (\u041A\u0438\u0457\u0432). \u0414\u0430\u043D\u0456 \u2014 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM, \u043E\u043D\u043E\u0432\u043B\u0435\u043D\u0456 ${base.lastSync || "\u043D\u0435\u0432\u0456\u0434\u043E\u043C\u043E \u043A\u043E\u043B\u0438"}.`,
+      base.own ? `\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447 \u2014 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440: \u0439\u043E\u043C\u0443 \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0456 \u043B\u0438\u0448\u0435 \u0439\u043E\u0433\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F (${base.own.logins.join(", ")}). \u041D\u0435 \u043E\u0431\u0456\u0446\u044F\u0439 \u0434\u0430\u043D\u0438\u0445 \u043F\u043E \u0456\u043D\u0448\u0438\u0445 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430\u0445.` : "\u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0443 \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0456 \u0432\u0441\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.",
+      "\u0426\u0438\u0444\u0440\u0438 \u0431\u0435\u0440\u0438 \u041B\u0418\u0428\u0415 \u0437 \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u0456\u0432 \u0456\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0456\u0432, \u043D\u0456\u0447\u043E\u0433\u043E \u043D\u0435 \u0432\u0438\u0433\u0430\u0434\u0443\u0439 \u0456 \u043D\u0435 \u043E\u043A\u0440\u0443\u0433\u043B\u044E\u0439 \u0434\u043E \u043D\u0435\u043F\u0440\u0430\u0432\u0434\u0438. \u042F\u043A\u0449\u043E \u0434\u0430\u043D\u0438\u0445 \u043D\u0435\u043C\u0430\u0454 \u0430\u0431\u043E \u043F\u0435\u0440\u0456\u043E\u0434 \u0449\u0435 \u043D\u0435 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043E \u2014 \u0442\u0430\u043A \u0456 \u0441\u043A\u0430\u0436\u0438.",
+      "\u041F\u0435\u0440\u0435\u0434 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0434\u044E \u0432\u0438\u043A\u043B\u0438\u043A\u0430\u0439 query_analytics \u0437 \u043F\u043E\u0442\u0440\u0456\u0431\u043D\u0438\u043C \u043F\u0435\u0440\u0456\u043E\u0434\u043E\u043C \u0456 \u0444\u0456\u043B\u044C\u0442\u0440\u0430\u043C\u0438; \u0434\u043B\u044F \u043F\u043E\u0440\u0456\u0432\u043D\u044F\u043D\u043D\u044F \u0437\u0430\u0434\u0430\u0432\u0430\u0439 compare_from/compare_to. \u041C\u043E\u0436\u043D\u0430 \u043A\u0456\u043B\u044C\u043A\u0430 \u0432\u0438\u043A\u043B\u0438\u043A\u0456\u0432 (\u043D\u0430\u043F\u0440\u0438\u043A\u043B\u0430\u0434, \u043E\u043A\u0440\u0435\u043C\u043E \u043F\u043E \u0431\u0440\u0435\u043D\u0434\u0430\u0445 \u0447\u0438 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430\u0445).",
+      "\u0422\u0435\u0440\u043C\u0456\u043D\u0438: rev \u2014 \u0441\u0443\u043C\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C (\u0443\u0441\u0456 \u0441\u0442\u0430\u0442\u0443\u0441\u0438), net \u2014 \u043E\u0431\u043E\u0440\u043E\u0442 \u0431\u0435\u0437 \u0432\u0456\u0434\u043C\u043E\u0432 \u0456 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u044C, cnt \u2014 \u043A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C, rcnt \u2014 \u0432\u0456\u0434\u043C\u043E\u0432\u0438 \u0439 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F, rpct \u2014 % \u0432\u0456\u0434\u043C\u043E\u0432, drev/dcnt \u2014 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0456, srev/scnt \u2014 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0456 (\u0443\u0441\u0456, \u043A\u0440\u0456\u043C \xAB\u041F\u0440\u0438\u0439\u043D\u044F\u0442\u043E\xBB), avg \u2014 \u0441\u0435\u0440\u0435\u0434\u043D\u0456\u0439 \u0447\u0435\u043A. \u0413\u0440\u043E\u0448\u0456 \u2014 \u0443 \u0433\u0440\u0438\u0432\u043D\u044F\u0445 (\u20B4).",
+      "\xAB\u0426\u0435\u0439 \u0442\u0438\u0436\u0434\u0435\u043D\u044C\xBB \u2014 \u0437 \u043F\u043E\u043D\u0435\u0434\u0456\u043B\u043A\u0430 \u043F\u043E \u0441\u044C\u043E\u0433\u043E\u0434\u043D\u0456; \xAB\u043C\u0438\u043D\u0443\u043B\u0438\u0439 \u043C\u0456\u0441\u044F\u0446\u044C\xBB \u2014 \u043F\u043E\u0432\u043D\u0438\u0439 \u043A\u0430\u043B\u0435\u043D\u0434\u0430\u0440\u043D\u0438\u0439 \u043C\u0456\u0441\u044F\u0446\u044C. \u0417\u0430\u0432\u0436\u0434\u0438 \u043D\u0430\u0437\u0432\u0438 \u043F\u0435\u0440\u0456\u043E\u0434, \u0437\u0430 \u044F\u043A\u0438\u0439 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0430\u0454\u0448.",
+      "\u0424\u043E\u0440\u043C\u0430\u0442: \u043F\u0435\u0440\u0448\u0435 \u0440\u0435\u0447\u0435\u043D\u043D\u044F \u2014 \u0433\u043E\u043B\u043E\u0432\u043D\u0430 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u044C \u0437 \u0446\u0438\u0444\u0440\u043E\u044E; \u0434\u0430\u043B\u0456 \u0437\u0430 \u043F\u043E\u0442\u0440\u0435\u0431\u0438 \u043A\u043E\u0440\u043E\u0442\u043A\u0438\u0439 \u0441\u043F\u0438\u0441\u043E\u043A \u0430\u0431\u043E \u043D\u0435\u0432\u0435\u043B\u0438\u043A\u0430 \u0442\u0430\u0431\u043B\u0438\u0446\u044F markdown; \u043D\u0430\u043F\u0440\u0438\u043A\u0456\u043D\u0446\u0456 \u2014 1\u20132 \u0432\u0438\u0441\u043D\u043E\u0432\u043A\u0438 \u0447\u0438 \u0449\u043E \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438. \u0411\u0435\u0437 \u0432\u0441\u0442\u0443\u043F\u0456\u0432.",
+      `\u0412\u0456\u0434\u0434\u0456\u043B\u0438 (id: \u043D\u0430\u0437\u0432\u0430): ${list(o.depts, (x) => `${x.id}: ${x.name}`)}.`,
+      `\u0414\u0436\u0435\u0440\u0435\u043B\u0430 \xAB\u041F\u043E\u043B\u0435 1\xBB (id: \u043D\u0430\u0437\u0432\u0430): ${list(o.sources, (x) => `${x.id}: ${x.name}`)}.`,
+      `\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0438 (\u043B\u043E\u0433\u0456\u043D: \u0456\u043C\u02BC\u044F): ${list(o.managers, (x) => `${x.login}: ${x.name}`)}.`,
+      `\u0411\u0440\u0435\u043D\u0434\u0438 (id: \u043D\u0430\u0437\u0432\u0430): ${list(o.brands, (x) => `${x.id}: ${x.name}`)}.`,
+      `\u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457 (id: \u043D\u0430\u0437\u0432\u0430): ${list(o.cats, (x) => `${x.id}: ${x.name}`)}.`
+    ].join("\n");
+    const admin = changes.allowed(c);
+    const tools = admin ? [...TOOLS, ...CHANGE_TOOLS] : TOOLS;
+    const sys = admin ? `${system}
+${[
+      "\u0422\u0438 \u0442\u0430\u043A\u043E\u0436 \u043C\u043E\u0436\u0435\u0448 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0443\u0432\u0430\u0442\u0438 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0443: get_settings \u2014 \u043F\u043E\u0442\u043E\u0447\u043D\u0456 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u0439 \u043D\u0435\u0440\u043E\u0437\u043F\u043E\u0434\u0456\u043B\u0435\u043D\u0435, get_products \u2014 \u0442\u043E\u0432\u0430\u0440\u0438, propose_changes \u2014 \u0437\u0430\u043F\u0440\u043E\u043F\u043E\u043D\u0443\u0432\u0430\u0442\u0438 \u0437\u043C\u0456\u043D\u0438.",
+      "propose_changes \u041D\u0406\u0427\u041E\u0413\u041E \u043D\u0435 \u0437\u043C\u0456\u043D\u044E\u0454: \u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447 \u043F\u043E\u0431\u0430\u0447\u0438\u0442\u044C \u043A\u0430\u0440\u0442\u043A\u0443 \xAB\u0431\u0443\u043B\u043E \u2192 \u0441\u0442\u0430\u043D\u0435\xBB \u0456 \u0441\u0430\u043C \u043D\u0430\u0442\u0438\u0441\u043D\u0435 \xAB\u0417\u0430\u0441\u0442\u043E\u0441\u0443\u0432\u0430\u0442\u0438\xBB. \u041D\u0456\u043A\u043E\u043B\u0438 \u043D\u0435 \u043F\u0438\u0448\u0438, \u0449\u043E \u0432\u0436\u0435 \u0437\u043C\u0456\u043D\u0438\u0432 \u2014 \u043B\u0438\u0448\u0435 \u0449\u043E \u0437\u0430\u043F\u0440\u043E\u043F\u043E\u043D\u0443\u0432\u0430\u0432 \u0456 \u0449\u043E \u0442\u0440\u0435\u0431\u0430 \u043D\u0430\u0442\u0438\u0441\u043D\u0443\u0442\u0438 \xAB\u0417\u0430\u0441\u0442\u043E\u0441\u0443\u0432\u0430\u0442\u0438\xBB.",
+      "\u041A\u043E\u043B\u0438 \u0449\u043E\u0441\u044C \xAB\u043F\u043E\u043A\u0430\u0437\u0443\u0454\u0442\u044C\u0441\u044F \u043D\u0435\u043F\u0440\u0430\u0432\u0438\u043B\u044C\u043D\u043E\xBB: \u0441\u043F\u0435\u0440\u0448\u0443 \u0437\u02BC\u044F\u0441\u0443\u0439 \u043F\u0440\u0438\u0447\u0438\u043D\u0443 (get_settings: \u044F\u043A\u0456 \u0437\u043D\u0430\u0447\u0435\u043D\u043D\u044F \xAB\u041F\u043E\u043B\u0435 1\xBB, \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0438 \u0439 \u0432\u0456\u0434\u0434\u0456\u043B\u0438 CRM \u043A\u0443\u0434\u0438 \u0432\u0456\u0434\u043D\u0435\u0441\u0435\u043D\u0456 \u0456 \u0441\u043A\u0456\u043B\u044C\u043A\u0438 \u0432 \u043D\u0438\u0445 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C; query_analytics \u0437 \u0444\u0456\u043B\u044C\u0442\u0440\u0430\u043C\u0438), \u043F\u043E\u044F\u0441\u043D\u0438 \u0457\u0457 \u043A\u043E\u0440\u043E\u0442\u043A\u043E, \u043F\u043E\u0442\u0456\u043C \u0437\u0430\u043F\u0440\u043E\u043F\u043E\u043D\u0443\u0439 \u043C\u0456\u043D\u0456\u043C\u0430\u043B\u044C\u043D\u0456 \u0437\u043C\u0456\u043D\u0438.",
+      "\u0412\u0456\u0434\u0434\u0456\u043B \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0438\u0437\u043D\u0430\u0447\u0430\u0454\u0442\u044C\u0441\u044F \u0442\u0430\u043A: \u0441\u043F\u0435\u0440\u0448\u0443 \u0434\u0436\u0435\u0440\u0435\u043B\u043E (\xAB\u041F\u043E\u043B\u0435 1\xBB, \u044F\u043A\u0449\u043E \u0432\u043E\u043D\u043E \u0432\u0456\u0434\u043D\u0435\u0441\u0435\u043D\u0435 \u0434\u043E \u0434\u0436\u0435\u0440\u0435\u043B\u0430), \u0434\u0430\u043B\u0456 \u2014 \u0437\u0430 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u043C deptPriority: \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0430\u0431\u043E \u0432\u0456\u0434\u0434\u0456\u043B CRM (\u043E\u0444\u0456\u0441).",
+      "\u0412\u0438\u0434\u0430\u043B\u0435\u043D\u043D\u044F (\u0432\u0456\u0434\u0434\u0456\u043B\u0443, \u0434\u0436\u0435\u0440\u0435\u043B\u0430, \u0431\u0440\u0435\u043D\u0434\u0443) \u043F\u0440\u043E\u043F\u043E\u043D\u0443\u0439 \u043B\u0438\u0448\u0435 \u043A\u043E\u043B\u0438 \u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447 \u043F\u0440\u044F\u043C\u043E \u043F\u0440\u043E \u0446\u0435 \u043F\u0440\u043E\u0441\u0438\u0442\u044C."
+    ].join("\n")}` : system;
+    const question = hist[hist.length - 1].content;
+    const proposals = [];
+    const model = await modelOf();
+    const messages = [...hist];
+    const used = { asks: 1, input: 0, output: 0 };
+    const steps = [];
+    let answer = "";
+    try {
+      for (let round = 0; round <= MAX_ROUNDS; round++) {
+        const last = round === MAX_ROUNDS;
+        const r = await callClaude(key, { model, max_tokens: 4e3, system: sys, messages, ...last ? {} : { tools } });
+        used.input += r.usage?.input_tokens || 0;
+        used.output += r.usage?.output_tokens || 0;
+        const content = Array.isArray(r.content) ? r.content : [];
+        const calls = content.filter((x) => x.type === "tool_use");
+        if (r.stop_reason !== "tool_use" || !calls.length) {
+          answer = content.filter((x) => x.type === "text").map((x) => x.text).join("\n").trim();
+          break;
+        }
+        messages.push({ role: "assistant", content });
+        const results = [];
+        for (const t of calls) {
+          try {
+            const own = admin ? await changes.runTool(c, t.name, t.input || {}, question, proposals) : void 0;
+            const out = own !== void 0 ? own : await runTool(c, t.name, t.input || {});
+            steps.push({
+              query_analytics: () => `\u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0430 ${t.input.from} \u2013 ${t.input.to}${t.input.compare_from ? ` (\u043F\u043E\u0440\u0456\u0432\u043D\u044F\u043D\u043D\u044F \u0437 ${t.input.compare_from} \u2013 ${t.input.compare_to})` : ""}`,
+              find_products: () => `\u043F\u043E\u0448\u0443\u043A \u0442\u043E\u0432\u0430\u0440\u0443 \xAB${t.input.q}\xBB`,
+              get_settings: () => "\u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438",
+              get_products: () => "\u0442\u043E\u0432\u0430\u0440\u0438",
+              propose_changes: () => "\u043F\u0456\u0434\u0433\u043E\u0442\u043E\u0432\u043B\u0435\u043D\u043E \u0437\u043C\u0456\u043D\u0438"
+            }[t.name]?.() || t.name);
+            results.push({ type: "tool_result", tool_use_id: t.id, content: JSON.stringify(out) });
+          } catch (e) {
+            if (e.pending) throw e;
+            results.push({ type: "tool_result", tool_use_id: t.id, content: `\u041F\u043E\u043C\u0438\u043B\u043A\u0430: ${String(e.message || e).slice(0, 300)}`, is_error: true });
+          }
+        }
+        messages.push({ role: "user", content: results });
+      }
+    } finally {
+      await addUsage(used).catch(() => 0);
+    }
+    if (!answer) answer = "\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u0441\u0444\u043E\u0440\u043C\u0443\u0432\u0430\u0442\u0438 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u044C \u2014 \u0441\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u043F\u0435\u0440\u0435\u0444\u043E\u0440\u043C\u0443\u043B\u044E\u0432\u0430\u0442\u0438 \u043F\u0438\u0442\u0430\u043D\u043D\u044F.";
+    return c.json({ answer, steps, model, proposals, usage: { input: used.input, output: used.output } });
+  });
+}
+
 // src/modules/analytics/index.js
 var toUtc = (day) => Date.UTC(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10));
 var fromUtc = (ms) => new Date(ms).toISOString().slice(0, 10);
@@ -3645,7 +4420,7 @@ function addMonths(day, n) {
   return fromUtc(d.getTime());
 }
 var isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
-var low = (v) => String(v ?? "").trim().toLowerCase();
+var low2 = (v) => String(v ?? "").trim().toLowerCase();
 var DELIV_PER_DAY = 15e3;
 var DELIV_PER_RUN = 3e3;
 var AN_DEFAULTS = {
@@ -3670,11 +4445,11 @@ async function loadMaps(db, st) {
   return {
     prio: st.deptPriority,
     office: new Map(offices.map((r) => [String(r.office), r.dept_id])),
-    mgr: new Map(managers.filter((r) => r.dept_id).map((r) => [low(r.login), r.dept_id])),
-    mgrSet: new Map(managers.filter((r) => r.dept_id && String(r.depts || "").includes(",")).map((r) => [low(r.login), new Set(String(r.depts).split(",").map(Number))])),
+    mgr: new Map(managers.filter((r) => r.dept_id).map((r) => [low2(r.login), r.dept_id])),
+    mgrSet: new Map(managers.filter((r) => r.dept_id && String(r.depts || "").includes(",")).map((r) => [low2(r.login), new Set(String(r.depts).split(",").map(Number))])),
     srcDept: new Map(srcRows.map((r) => [r.id, r.dept_id])),
     src: new Map(sources.map((r) => [r.value, r.source_id])),
-    brands: brands.map((b) => ({ id: b.id, kws: String(b.keywords || "").split(",").map(low).filter(Boolean) }))
+    brands: brands.map((b) => ({ id: b.id, kws: String(b.keywords || "").split(",").map(low2).filter(Boolean) }))
   };
 }
 var mgrDept = (o, m, src) => {
@@ -3690,7 +4465,7 @@ var mgrDept = (o, m, src) => {
 var deptOf = (o, m, src) => src && m.srcDept.get(src) || (m.prio === "office" ? m.office.get(o.office) ?? mgrDept(o, m, src) ?? 0 : mgrDept(o, m, src) ?? m.office.get(o.office) ?? 0);
 var srcOf = (o, m) => o.ch && m.src.get(o.ch) || o.site && m.src.get(o.site) || o.utm && m.src.get(o.utm) || 0;
 function brandOf(name, brands) {
-  const n = low(name);
+  const n = low2(name);
   for (const b of brands) if (b.kws.some((k) => n.includes(k))) return b.id;
   return 0;
 }
@@ -3714,7 +4489,7 @@ async function remap(db, st, { dept = true, src = true } = {}) {
   }
 }
 async function rebrand(db) {
-  const brands = (await db.all(`SELECT id, keywords FROM an_brands ORDER BY sort, id`)).map((b) => ({ id: b.id, kws: String(b.keywords || "").split(",").map(low).filter(Boolean) }));
+  const brands = (await db.all(`SELECT id, keywords FROM an_brands ORDER BY sort, id`)).map((b) => ({ id: b.id, kws: String(b.keywords || "").split(",").map(low2).filter(Boolean) }));
   const prods = await db.all(`SELECT p.product_id, p.name, p.brand_id, p.brand_manual, c.name AS cat
     FROM an_products p LEFT JOIN an_categories c ON c.id = COALESCE(p.cat_manual, p.category_id)`);
   const upd = [];
@@ -3746,10 +4521,10 @@ function normalizeAnOrder(raw2) {
     day,
     status: parseInt(raw2.status, 10) || 0,
     office: String(raw2.office ?? ""),
-    user: low(raw2.user),
-    ch: low(raw2.additional_1),
-    site: low(raw2.site),
-    utm: low(raw2.utm_source),
+    user: low2(raw2.user),
+    ch: low2(raw2.additional_1),
+    site: low2(raw2.site),
+    utm: low2(raw2.utm_source),
     total: round2(total),
     deliv: delivName(raw2),
     ttn: ttnOf(raw2),
@@ -3915,7 +4690,15 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     await putSetting2("an_values", JSON.stringify(cur));
     return cur;
   }
-  const OWN_ALLOWED = /* @__PURE__ */ new Set(["POST /api/an/query", "GET /api/an/sync", "POST /api/an/sync/start", "POST /api/an/sync/step"]);
+  const OWN_ALLOWED = /* @__PURE__ */ new Set([
+    "POST /api/an/query",
+    "GET /api/an/sync",
+    "POST /api/an/sync/start",
+    "POST /api/an/sync/step",
+    "GET /api/an/product-search",
+    "GET /api/an/ai/status",
+    "POST /api/an/ai/ask"
+  ]);
   app.use("/api/an/*", async (c, next) => {
     const user = c.get("user");
     if (!can(user, "analytics")) {
@@ -3935,6 +4718,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     }
     return next();
   });
+  mountAnalyticsAi(app, { db, fetchFn, kyivDay, addDays, remap, rebrand, bump, getSt });
   async function checkTtnDups(orders, { firstRun = false } = {}) {
     const ttns = [...new Set(orders.map((o) => o.ttn).filter(Boolean))];
     if (!ttns.length) return 0;
@@ -4213,7 +4997,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
         si++;
         keepS.add(sid);
         for (const v of s.values || []) {
-          const val = low(v);
+          const val = low2(v);
           if (!val || seenValues.has(val)) continue;
           seenValues.add(val);
           st.push([`INSERT INTO an_source_map (value, source_id) VALUES (?, ?)`, [val, sid]]);
@@ -4255,7 +5039,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const list = await c.req.json();
     const st = [[`DELETE FROM an_managers`, []]];
     for (const r of Array.isArray(list) ? list : []) {
-      const login = low(r.login);
+      const login = low2(r.login);
       if (!login) continue;
       const main = parseInt(r.dept_id, 10) || null;
       const all = main ? [.../* @__PURE__ */ new Set([main, ...(Array.isArray(r.depts) ? r.depts : String(r.depts || "").split(",")).map((x) => parseInt(x, 10)).filter(Boolean)])] : [];
@@ -4274,7 +5058,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     for (const r of Array.isArray(list) ? list : []) {
       const name = String(r.name || "").trim();
       if (!name) continue;
-      const kws = String(r.keywords || name).split(",").map(low).filter(Boolean).join(", ");
+      const kws = String(r.keywords || name).split(",").map(low2).filter(Boolean).join(", ");
       let id = parseInt(r.id, 10) || 0;
       if (id && old.some((x) => x.id === id)) await db.run(`UPDATE an_brands SET name = ?, keywords = ?, sort = ? WHERE id = ?`, [name, kws, i, id]);
       else id = (await db.run(`INSERT INTO an_brands (name, keywords, sort) VALUES (?, ?, ?)`, [name, kws, i])).lastId;
@@ -4668,7 +5452,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const f = {
       depts: ints(b.depts),
       sources: ints(b.sources),
-      managers: (Array.isArray(b.managers) ? b.managers : []).map(low).filter(Boolean).slice(0, 40),
+      managers: (Array.isArray(b.managers) ? b.managers : []).map(low2).filter(Boolean).slice(0, 40),
       brands: ints(b.brands),
       cats: ints(b.cats),
       // Конкретні товари (ID LP-CRM) — «скільки штук продалось за період».
@@ -4749,26 +5533,26 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
         };
         const dm = /* @__PURE__ */ new Map();
         const gm = /* @__PURE__ */ new Map();
-        for (const r2 of rows) {
-          const d = add(dm, r2.day, () => ({ day: r2.day, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
-          const g = add(gm, `${r2.dept}|${r2.src}|${r2.user}|${r2.status}|${r2.deliv}`, () => ({ dept: r2.dept, src: r2.src, user: r2.user, status: r2.status, deliv: r2.deliv, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
+        for (const r3 of rows) {
+          const d = add(dm, r3.day, () => ({ day: r3.day, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
+          const g = add(gm, `${r3.dept}|${r3.src}|${r3.user}|${r3.status}|${r3.deliv}`, () => ({ dept: r3.dept, src: r3.src, user: r3.user, status: r3.status, deliv: r3.deliv, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
           for (const x of [d, g]) {
-            x.rev += r2.rev || 0;
-            x.net += r2.net || 0;
-            x.cnt += r2.cnt || 0;
-            x.rcnt += r2.rcnt || 0;
+            x.rev += r3.rev || 0;
+            x.net += r3.net || 0;
+            x.cnt += r3.cnt || 0;
+            x.rcnt += r3.rcnt || 0;
           }
         }
         const bm = /* @__PURE__ */ new Map();
         const cm = /* @__PURE__ */ new Map();
-        for (const r2 of oi) {
-          for (const [m, k] of [[bm, r2.b], [cm, r2.c]]) {
+        for (const r3 of oi) {
+          for (const [m, k] of [[bm, r3.b], [cm, r3.c]]) {
             const x = add(m, k, () => ({ id: k, rev: 0, net: 0, qty: 0, orders: /* @__PURE__ */ new Set(), rorders: /* @__PURE__ */ new Set() }));
-            x.rev += r2.rev || 0;
-            x.qty += r2.qty || 0;
-            if (!r2.rf) x.net += r2.rev || 0;
-            x.orders.add(r2.oid);
-            if (r2.rf) x.rorders.add(r2.oid);
+            x.rev += r3.rev || 0;
+            x.qty += r3.qty || 0;
+            if (!r3.rf) x.net += r3.rev || 0;
+            x.orders.add(r3.oid);
+            if (r3.rf) x.rorders.add(r3.oid);
           }
         }
         const fin = (m) => [...m.values()].map(({ orders, rorders, ...x }) => ({ ...x, cnt: orders.size, rcnt: rorders.size }));
@@ -5061,7 +5845,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const list = (items || []).filter((p) => p.product_id > 0);
     if (!list.length) return;
     const [brands, cats] = await Promise.all([
-      db.all(`SELECT id, keywords FROM an_brands ORDER BY sort, id`).then((r) => r.map((b) => ({ id: b.id, kws: String(b.keywords || "").split(",").map(low).filter(Boolean) }))),
+      db.all(`SELECT id, keywords FROM an_brands ORDER BY sort, id`).then((r) => r.map((b) => ({ id: b.id, kws: String(b.keywords || "").split(",").map(low2).filter(Boolean) }))),
       db.all(`SELECT id, name FROM an_categories`).then((r) => new Map(r.map((x) => [x.id, x.name])))
     ]);
     await db.batch(list.map((p) => [
@@ -5083,7 +5867,7 @@ var ALLOWED_UPDATES = ["message", "callback_query"];
 var HOOK_V = "2";
 var h = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 var nf = new Intl.NumberFormat("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-var uah = (n) => `${nf.format(Number(n) || 0)} \u20B4`;
+var uah2 = (n) => `${nf.format(Number(n) || 0)} \u20B4`;
 var kyivAt = (ms) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(ms)).replace(" ", "T");
 function mountTg(app, { db, fetchFn, services = {} }) {
   const settings = () => loadSettings(db);
@@ -5247,7 +6031,7 @@ function mountTg(app, { db, fetchFn, services = {} }) {
       );
       for (const l of links) {
         const text = `<b>${LABEL[l.status] || "\u041E\u043F\u043B\u0430\u0442\u0430"}: \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h(l.number)}</b>
-${uah(l.paid_amount)} \u0437 ${uah(l.amount)}${l.client ? ` \xB7 ${h(l.client)}` : ""}
+${uah2(l.paid_amount)} \u0437 ${uah2(l.amount)}${l.client ? ` \xB7 ${h(l.client)}` : ""}
 ${h(l.alias || "")}${l.created_by ? `
 \u0421\u0442\u0432\u043E\u0440\u0438\u0432(\u043B\u0430): ${h(l.created_by)}` : ""}`;
         const chats = /* @__PURE__ */ new Set();
@@ -5261,7 +6045,7 @@ ${h(l.alias || "")}${l.created_by ? `
     const txAdmins = admins.filter((a) => a.tg_all_tx);
     if (recent.length && txAdmins.length) {
       const accs = new Map((await db.all(`SELECT iban, COALESCE(NULLIF(name, ''), NULLIF(alias, ''), iban) AS alias FROM odb_accounts`)).map((a) => [a.iban, a.alias]));
-      const texts = recent.length > 5 ? [`<b>\u{1F4B0} \u041D\u043E\u0432\u0456 \u043D\u0430\u0434\u0445\u043E\u0434\u0436\u0435\u043D\u043D\u044F: ${recent.length}</b> \u043D\u0430 \u0441\u0443\u043C\u0443 ${uah(recent.reduce((t, r) => t + r.amount, 0))}`] : recent.map((r) => `<b>\u{1F4B0} ${uah(r.amount)}</b> \u2192 ${h(accs.get(r.iban) || r.iban)}
+      const texts = recent.length > 5 ? [`<b>\u{1F4B0} \u041D\u043E\u0432\u0456 \u043D\u0430\u0434\u0445\u043E\u0434\u0436\u0435\u043D\u043D\u044F: ${recent.length}</b> \u043D\u0430 \u0441\u0443\u043C\u0443 ${uah2(recent.reduce((t, r) => t + r.amount, 0))}`] : recent.map((r) => `<b>\u{1F4B0} ${uah2(r.amount)}</b> \u2192 ${h(accs.get(r.iban) || r.iban)}
 \u0412\u0456\u0434: ${h(r.payer_name || "\u2014")}
 <i>${h(String(r.purpose || "").slice(0, 200))}</i>`);
       for (const a of txAdmins) for (const t of texts) out.push([a.tg_chat_id, t]);
@@ -5471,13 +6255,13 @@ function listFilter(c, { client = false } = {}) {
       or.push("o.id = ?");
       params.push(Number(num5[1]));
     }
-    const low2 = q.toLocaleLowerCase("uk");
+    const low3 = q.toLocaleLowerCase("uk");
     const variants = [.../* @__PURE__ */ new Set([
       q,
-      low2,
-      low2.toLocaleUpperCase("uk"),
-      low2.charAt(0).toLocaleUpperCase("uk") + low2.slice(1),
-      low2.replace(/(^|[\s«"'-])(\p{L})/gu, (m, a, b) => a + b.toLocaleUpperCase("uk"))
+      low3,
+      low3.toLocaleUpperCase("uk"),
+      low3.charAt(0).toLocaleUpperCase("uk") + low3.slice(1),
+      low3.replace(/(^|[\s«"'-])(\p{L})/gu, (m, a, b) => a + b.toLocaleUpperCase("uk"))
     ])].map((v) => `%${v}%`);
     const anyCase = (col) => {
       or.push(`(${variants.map(() => `${col} LIKE ?`).join(" OR ")})`);
@@ -5849,7 +6633,7 @@ var PART = 600 * 1024;
 var KEEP_FILES_DAYS = 30;
 var h3 = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 var nf2 = new Intl.NumberFormat("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-var uah2 = (n) => `${nf2.format(Number(n) || 0)} \u0433\u0440\u043D`;
+var uah3 = (n) => `${nf2.format(Number(n) || 0)} \u0433\u0440\u043D`;
 var orderNo = (id) => `B2B-${id}`;
 function toB64(bytes) {
   let bin = "";
@@ -5868,8 +6652,8 @@ function mountB2bOrders(app, { db, services, myPartner, partnerPrice: partnerPri
       const late = overdueDays(o);
       const last = String(o.due_notified || "");
       let text = "";
-      if (!late && o.due_date > t && last !== "pre") text = `\u23F0 <b>\u0417\u0430\u0432\u0442\u0440\u0430 \u0441\u0442\u0440\u043E\u043A \u043E\u043F\u043B\u0430\u0442\u0438</b> \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(o.id)}${o.invoice_no ? ` (\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h3(o.invoice_no)})` : ""}: ${uah2(left)}`;
-      else if (late && (!last.startsWith("over:") || addDaysTo(last.slice(5), 7) <= t)) text = `\u{1F534} <b>\u041F\u0440\u043E\u0441\u0442\u0440\u043E\u0447\u0435\u043D\u043E \u043E\u043F\u043B\u0430\u0442\u0443</b> \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(o.id)}${o.invoice_no ? ` (\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h3(o.invoice_no)})` : ""} \u043D\u0430 ${late} \u0434\u043D.: ${uah2(left)}`;
+      if (!late && o.due_date > t && last !== "pre") text = `\u23F0 <b>\u0417\u0430\u0432\u0442\u0440\u0430 \u0441\u0442\u0440\u043E\u043A \u043E\u043F\u043B\u0430\u0442\u0438</b> \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(o.id)}${o.invoice_no ? ` (\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h3(o.invoice_no)})` : ""}: ${uah3(left)}`;
+      else if (late && (!last.startsWith("over:") || addDaysTo(last.slice(5), 7) <= t)) text = `\u{1F534} <b>\u041F\u0440\u043E\u0441\u0442\u0440\u043E\u0447\u0435\u043D\u043E \u043E\u043F\u043B\u0430\u0442\u0443</b> \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(o.id)}${o.invoice_no ? ` (\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h3(o.invoice_no)})` : ""} \u043D\u0430 ${late} \u0434\u043D.: ${uah3(left)}`;
       if (!text) continue;
       await db.run(`UPDATE b2b_orders SET due_notified = ? WHERE id = ?`, [late ? `over:${t}` : "pre", o.id]);
       await tgPartner(o.partner_id, text);
@@ -5895,7 +6679,7 @@ function mountB2bOrders(app, { db, services, myPartner, partnerPrice: partnerPri
     return g ? services.notify?.sendText({ chatIds: [g] }, text).catch(() => 0) : 0;
   };
   const orderText = (title, o, p, items) => {
-    const lines = items.slice(0, 60).map((i) => `${h3(i.name)}${i.article ? ` (${h3(i.article)})` : ""} \u2014 ${i.qty} \u0448\u0442 \u2014 ${uah2(i.price)}`);
+    const lines = items.slice(0, 60).map((i) => `${h3(i.name)}${i.article ? ` (${h3(i.article)})` : ""} \u2014 ${i.qty} \u0448\u0442 \u2014 ${uah3(i.price)}`);
     if (items.length > 60) lines.push(`\u2026\u0456 \u0449\u0435 ${items.length - 60} \u043F\u043E\u0437.`);
     return `${title} <b>${orderNo(o.id)}</b> \u0432\u0456\u0434 \xAB${h3(p.name)}\xBB
 
@@ -5907,7 +6691,7 @@ ${o.pay_terms === "postpay" ? `<b>\u041E\u043F\u043B\u0430\u0442\u0430:</b> \u23
 <b>\u0422\u043E\u0432\u0430\u0440\u0438:</b>
 ${lines.join("\n")}
 
-<b>\u0420\u0430\u0437\u043E\u043C: ${uah2(o.total)}</b> (\u0437 \u041F\u0414\u0412)${o.comment ? `
+<b>\u0420\u0430\u0437\u043E\u043C: ${uah3(o.total)}</b> (\u0437 \u041F\u0414\u0412)${o.comment ? `
 
 <i>\u041A\u043E\u043C\u0435\u043D\u0442\u0430\u0440: ${h3(String(o.comment).slice(0, 300))}</i>` : ""}`;
   };
@@ -6033,7 +6817,7 @@ ${e.email}` : ""}`;
         ...itemRows(d.id, items2),
         [`UPDATE b2b_orders SET total = ?, updated_at = ? WHERE id = ?`, [total2, nowIso(), d.id]]
       ]);
-      await log(d.id, c.get("user"), `\u0434\u043E\u0434\u0430\u043D\u043E \u0434\u043E \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438: ${add.length} \u043F\u043E\u0437. (\u0440\u0430\u0437\u043E\u043C ${uah2(total2)})`);
+      await log(d.id, c.get("user"), `\u0434\u043E\u0434\u0430\u043D\u043E \u0434\u043E \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438: ${add.length} \u043F\u043E\u0437. (\u0440\u0430\u0437\u043E\u043C ${uah3(total2)})`);
       return c.json({ id: d.id, number: orderNo(d.id), total: total2, draft: true });
     }
     const draft = Boolean(b.draft) || !isHead(c);
@@ -6046,12 +6830,12 @@ ${e.email}` : ""}`;
     const payDays = terms === "postpay" ? Number(p.postpay_days) : 0;
     const now = nowIso();
     if (draft) {
-      const r2 = await db.run(
+      const r3 = await db.run(
         `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [p.id, e.id, entityText(e), total, String(b.comment || "").trim().slice(0, 1e3), userName2(c.get("user")), now, now, deliveryOf(b.delivery), terms, payDays]
       );
-      await db.batch([...itemRows(r2.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r2.lastId, now, userName2(c.get("user")), `\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u043D\u0430 ${uah2(total)}`]]]);
-      return c.json({ id: r2.lastId, number: orderNo(r2.lastId), total, draft: true });
+      await db.batch([...itemRows(r3.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r3.lastId, now, userName2(c.get("user")), `\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u043D\u0430 ${uah3(total)}`]]]);
+      return c.json({ id: r3.lastId, number: orderNo(r3.lastId), total, draft: true });
     }
     const r = await db.run(
       `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -6059,7 +6843,7 @@ ${e.email}` : ""}`;
     );
     await db.batch([...itemRows(r.lastId, items), [
       `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-      [r.lastId, now, userName2(c.get("user")), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah2(total)}${deliveryOf(b.delivery) === "pickup" ? " (\u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437)" : ""}`]
+      [r.lastId, now, userName2(c.get("user")), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah3(total)}${deliveryOf(b.delivery) === "pickup" ? " (\u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437)" : ""}`]
     ]]);
     const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), pay_terms: terms, pay_days: payDays }, p, items);
     await tgAdmins(`${full}
@@ -6095,7 +6879,7 @@ ${link(c, `b2borders/${r.lastId}`)}`);
     if (!pi.days) throw fail(403, "\u0412\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0443 \u043E\u043F\u043B\u0430\u0442\u0438 \u0432\u0430\u043C \u0449\u0435 \u043D\u0435 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u043E \u2014 \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.");
     if (pi.overdue.length) throw fail(400, `\u0404 \u043F\u0440\u043E\u0441\u0442\u0440\u043E\u0447\u0435\u043D\u0430 \u043E\u043F\u043B\u0430\u0442\u0430 (${pi.overdue.map((x) => x.number).join(", ")}) \u2014 \u043D\u043E\u0432\u0456 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0437 \u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u043E\u044E \u043F\u0456\u0441\u043B\u044F \u0457\u0457 \u043E\u043F\u043B\u0430\u0442\u0438.`);
     if (pi.limit != null && pi.used + total > pi.limit + 4e-3) {
-      throw fail(400, `\u041B\u0456\u043C\u0456\u0442 \u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0438 \u2014 ${uah2(pi.limit)}: \u0437\u0430\u0440\u0430\u0437 \u0437\u0430 \u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u043E\u044E ${uah2(pi.used)}, \u043D\u043E\u0432\u0430 \u0441\u0443\u043C\u0430 ${uah2(total)}.`);
+      throw fail(400, `\u041B\u0456\u043C\u0456\u0442 \u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0438 \u2014 ${uah3(pi.limit)}: \u0437\u0430\u0440\u0430\u0437 \u0437\u0430 \u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u043E\u044E ${uah3(pi.used)}, \u043D\u043E\u0432\u0430 \u0441\u0443\u043C\u0430 ${uah3(total)}.`);
     }
     return null;
   }
@@ -6104,7 +6888,7 @@ ${link(c, `b2borders/${r.lastId}`)}`);
     const lim = limitsOf(p).unpaid;
     const cur = await unpaidTotal(p.id, exceptId);
     if (cur + addTotal > lim + 4e-3) {
-      throw fail(400, `\u041B\u0456\u043C\u0456\u0442 \u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0438\u0445 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C \u2014 ${uah2(lim)}: \u0437\u0430\u0440\u0430\u0437 \u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E ${uah2(cur)}, \u043D\u043E\u0432\u0430 \u0441\u0443\u043C\u0430 ${uah2(addTotal)}. \u0421\u043F\u0435\u0440\u0448\u0443 \u043E\u043F\u043B\u0430\u0442\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0430\u0431\u043E \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.`);
+      throw fail(400, `\u041B\u0456\u043C\u0456\u0442 \u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0438\u0445 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C \u2014 ${uah3(lim)}: \u0437\u0430\u0440\u0430\u0437 \u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E ${uah3(cur)}, \u043D\u043E\u0432\u0430 \u0441\u0443\u043C\u0430 ${uah3(addTotal)}. \u0421\u043F\u0435\u0440\u0448\u0443 \u043E\u043F\u043B\u0430\u0442\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0430\u0431\u043E \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.`);
     }
   }
   async function debtOf(partnerId) {
@@ -6173,7 +6957,7 @@ ${link(c, `b2borders/${r.lastId}`)}`);
       `UPDATE b2b_orders SET status = 'invoice_wait', entity_id = ?, entity = ?, comment = ?, updated_at = ? WHERE id = ?`,
       [e.id, entityText(e), String(b.comment || "").trim().slice(0, 1e3), now, open.id]
     );
-    await log(open.id, c.get("user"), `\u0441\u0444\u043E\u0440\u043C\u043E\u0432\u0430\u043D\u043E \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E: ${uah2(open.total)}, \u044E\u0440\u043E\u0441\u043E\u0431\u0430 ${e.name}`);
+    await log(open.id, c.get("user"), `\u0441\u0444\u043E\u0440\u043C\u043E\u0432\u0430\u043D\u043E \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E: ${uah3(open.total)}, \u044E\u0440\u043E\u0441\u043E\u0431\u0430 ${e.name}`);
     const items = await db.all(`SELECT product_id, name, article, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [open.id]);
     const full = orderText("\u{1F195} \u0421\u0444\u043E\u0440\u043C\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E (\u0437 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432)", { id: open.id, entity: entityText(e), total: open.total, comment: b.comment }, p, items);
     await tgAdmins(`${full}
@@ -6200,7 +6984,7 @@ ${link(c, `b2borders/${open.id}`)}`);
       [e.id, entityText(e), comment, terms, payDays, nowIso(), open.id]
     );
     if (!claim.changes) throw fail(409, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0432\u0436\u0435 \u0441\u0444\u043E\u0440\u043C\u043E\u0432\u0430\u043D\u043E \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443.");
-    await log(open.id, c.get("user"), `\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0441\u0444\u043E\u0440\u043C\u0443\u0432\u0430\u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0456\u0437 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432: ${uah2(open.total)}, \u044E\u0440\u043E\u0441\u043E\u0431\u0430 ${e.name}${terms === "postpay" ? `, \u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 ${payDays} \u0434\u043D.` : ""}`);
+    await log(open.id, c.get("user"), `\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0441\u0444\u043E\u0440\u043C\u0443\u0432\u0430\u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0456\u0437 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432: ${uah3(open.total)}, \u044E\u0440\u043E\u0441\u043E\u0431\u0430 ${e.name}${terms === "postpay" ? `, \u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 ${payDays} \u0434\u043D.` : ""}`);
     const items = await db.all(`SELECT product_id, name, article, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [open.id]);
     const full = orderText("\u{1F195} \u0421\u0444\u043E\u0440\u043C\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E (\u0437 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432)", { id: open.id, entity: entityText(e), total: open.total, comment, pay_terms: terms, pay_days: payDays }, p, items);
     await tgPartner(p.id, `${full}
@@ -6224,7 +7008,7 @@ ${link(c, `porders/${open.id}`)}`);
       out.ship_to = parseShipTo(o.ship_to);
     }
     if (o.kind === "supply" && ["partial", "pay_wait"].includes(o.status)) out.due = round2(o.total - (o.paid_amount || 0));
-    if (o.kind === "supply" && o.status === "partial") out.status_name = `\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E \xB7 \u0449\u0435 ${uah2(out.due)}`;
+    if (o.kind === "supply" && o.status === "partial") out.status_name = `\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E \xB7 \u0449\u0435 ${uah3(out.due)}`;
     if (o.kind === "supply" && o.closed) {
       out.closed = true;
       out.status_name = `${out.status_name} \xB7 \u0417\u0430\u043A\u0440\u0438\u0442\u043E`;
@@ -6330,7 +7114,7 @@ ${link(c, `porders/${open.id}`)}`);
         [e.id, entityText(e), total, String(b.comment ?? o.comment ?? "").trim().slice(0, 1e3), delivery, terms, payDays, nowIso(), o.id]
       ]
     ]);
-    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E ${isDraft ? "\u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443" : "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F"}: ${items.length} \u043F\u043E\u0437., ${uah2(total)}`);
+    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E ${isDraft ? "\u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443" : "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F"}: ${items.length} \u043F\u043E\u0437., ${uah3(total)}`);
     if (isDraft) return c.json({ ok: true, total });
     const full = orderText("\u270F\uFE0F \u0417\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E", { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment, delivery, pay_terms: terms, pay_days: payDays }, p, items);
     await tgAdmins(`${full}
@@ -6360,7 +7144,7 @@ ${link(c, `b2borders/${o.id}`)}`);
     await checkTerms(p, o.pay_terms === "postpay" ? "postpay" : "prepay", o.total, o.id);
     const claim = await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity = ?, created_at = ?, updated_at = ? WHERE id = ? AND status = 'draft'`, [entityText(e), nowIso(), nowIso(), o.id]);
     if (!claim.changes) throw fail(409, "\u0427\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0432\u0436\u0435 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E.");
-    await log(o.id, c.get("user"), `\u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E: ${uah2(o.total)}`);
+    await log(o.id, c.get("user"), `\u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E: ${uah3(o.total)}`);
     const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery, pay_terms: o.pay_terms, pay_days: o.pay_days }, p, items);
     await tgAdmins(`${full}
 
@@ -6383,7 +7167,7 @@ ${link(c, `b2borders/${o.id}`)}`);
       if (!claim.changes) throw fail(409, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0432\u0436\u0435 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E \u0430\u0431\u043E \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443.");
       const why = String((await c.req.json().catch(() => ({}))).reason || "").trim().slice(0, 300);
       await log(o.id, c.get("user"), `\u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0432\u0456\u0434\u0445\u0438\u043B\u0438\u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E${why ? `: ${why}` : ""}`);
-      await tgAdmins(`\u274C \xAB${h3(p.name)}\xBB <b>\u0432\u0456\u0434\u0445\u0438\u043B\u0438\u0432</b> \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)} \u043D\u0430 ${uah2(o.total)}${why ? `
+      await tgAdmins(`\u274C \xAB${h3(p.name)}\xBB <b>\u0432\u0456\u0434\u0445\u0438\u043B\u0438\u0432</b> \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)} \u043D\u0430 ${uah3(o.total)}${why ? `
 \u041F\u0440\u0438\u0447\u0438\u043D\u0430: ${h3(why)}` : ""}
 ${link(c, `b2borders/${o.id}`)}`);
       return c.json({ ok: true });
@@ -6462,7 +7246,7 @@ ${link(c, `b2borders/${o.id}`)}`);
         r.lastId,
         now,
         userName2(u),
-        `\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0441\u0442\u0432\u043E\u0440\u0438\u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah2(total)} (${terms === "postpay" ? `\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 ${payDays} \u0434\u043D.` : "\u043F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0430"}; ${DELIVERY[delivery]}) \u2014 \u0447\u0435\u043A\u0430\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430`
+        `\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0441\u0442\u0432\u043E\u0440\u0438\u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah3(total)} (${terms === "postpay" ? `\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 ${payDays} \u0434\u043D.` : "\u043F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0430"}; ${DELIVERY[delivery]}) \u2014 \u0447\u0435\u043A\u0430\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430`
       ]],
       ...ship ? [[`UPDATE b2b_partners SET wh_name = ?, wh_phone = ?, wh_address = ? WHERE id = ?`, [ship.name, ship.phone, ship.address, p.id]]] : []
     ]);
@@ -6566,7 +7350,7 @@ ${link(c, `b2borders/${o.id}`)}`);
     if (changes.length) await log(o.id, user, `${changes.join("; ")}${how}`);
     if (next.invoice_no !== o.invoice_no || next.waybill_no !== o.waybill_no) await hooks.finNumbers?.(o.id, how).catch(() => 0);
     if (next.invoice_no && next.invoice_no !== o.invoice_no) {
-      await tgPartner(o.partner_id, `\u{1F9FE} <b>\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h3(next.invoice_no)}</b> \u043D\u0430 ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E"} ${orderNo(o.id)} \u2014 <b>${uah2(o.total)}</b>
+      await tgPartner(o.partner_id, `\u{1F9FE} <b>\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h3(next.invoice_no)}</b> \u043D\u0430 ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E"} ${orderNo(o.id)} \u2014 <b>${uah3(o.total)}</b>
 \u041E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443. \u0424\u0430\u0439\u043B \u0440\u0430\u0445\u0443\u043D\u043A\u0443 \u2014 \u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430.
 ${link(c, `${o.kind === "client" ? "pclients" : "porders"}/${o.id}`)}`);
     }
@@ -6608,7 +7392,7 @@ ${link(c, `porders/${o.id}`)}`);
     if (status === "paid") {
       await db.run(`UPDATE b2b_orders SET status = 'paid', paid_amount = total, paid_at = ?, paid_by = ?, updated_at = ? WHERE id = ?`, [now, userName2(u), now, o.id]);
       await log(o.id, u, "\u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443");
-      await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}${o.invoice_no ? `, \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h3(o.invoice_no)}` : ""} \u2014 ${uah2(o.total)}`);
+      await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}${o.invoice_no ? `, \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h3(o.invoice_no)}` : ""} \u2014 ${uah3(o.total)}`);
       await hooks.finPaid?.(o.id).catch(() => 0);
       await hooks.crmPaid?.(o.id, new URL(c.req.url).origin).catch(() => 0);
     } else if (status === "pay_wait") {
@@ -6638,7 +7422,7 @@ ${link(c, `porders/${o.id}`)}`);
     const g = ["invoice", "waybill"].includes(kind) ? await groupOf(o.partner_id) : "";
     let toGroup = 0;
     if (g) {
-      const caption = `${kind === "invoice" ? "\u{1F9FE} \u0420\u0430\u0445\u0443\u043D\u043E\u043A" : "\u{1F4E6} \u041D\u0430\u043A\u043B\u0430\u0434\u043D\u0430"}${kind === "invoice" && o.invoice_no ? ` \u2116 ${h3(o.invoice_no)}` : ""}${kind === "waybill" && o.waybill_no ? ` \u2116 ${h3(o.waybill_no)}` : ""} \u2014 ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F"} <b>${orderNo(o.id)}</b> \u043D\u0430 ${uah2(o.total)}`;
+      const caption = `${kind === "invoice" ? "\u{1F9FE} \u0420\u0430\u0445\u0443\u043D\u043E\u043A" : "\u{1F4E6} \u041D\u0430\u043A\u043B\u0430\u0434\u043D\u0430"}${kind === "invoice" && o.invoice_no ? ` \u2116 ${h3(o.invoice_no)}` : ""}${kind === "waybill" && o.waybill_no ? ` \u2116 ${h3(o.waybill_no)}` : ""} \u2014 ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F"} <b>${orderNo(o.id)}</b> \u043D\u0430 ${uah3(o.total)}`;
       toGroup = await services.notify?.sendFile?.({ chatIds: [g] }, f, caption).catch(() => 0) || 0;
       if (toGroup) await log(o.id, c.get("user"), `\u0444\u0430\u0439\u043B \xAB${f.name}\xBB \u043D\u0430\u0434\u0456\u0441\u043B\u0430\u043D\u043E \u0432 Telegram-\u0433\u0440\u0443\u043F\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430`);
     }
@@ -6759,7 +7543,7 @@ ${link(c, `porders/${o.id}`)}`);
     if (!f) throw fail(404, "\u0424\u0430\u0439\u043B \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (\u0437\u0431\u0435\u0440\u0456\u0433\u0430\u044E\u0442\u044C\u0441\u044F 30 \u0434\u043D\u0456\u0432).");
     return sendFile(f);
   });
-  return { WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah2, h: h3 };
+  return { WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h3 };
 }
 
 // src/modules/b2b/clients.js
@@ -6773,7 +7557,7 @@ var OPT_ID_RE = /^\d{0,10}$/;
 var TTN_FIELDS = ["", "additional_2", "additional_3", "additional_4", "delivery_adress"];
 var newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Math.random() * 9e4))}`;
 function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, hooks = {} }) {
-  const { labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h7 } = orders;
+  const { labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah4, h: h7 } = orders;
   const userName6 = (u) => u?.name || u?.login || "";
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files,
     (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id AND f.kind = 'label') AS labels
@@ -6980,11 +7764,11 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     const inOpen = open && own.openId === open.id ? own.total : 0;
     const openAfter = (open?.total || 0) - inOpen + total;
     if (openAfter > lim.open + 4e-3) {
-      throw fail(400, `\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F \u043F\u0435\u0440\u0435\u0432\u0438\u0449\u0438\u0442\u044C \u043B\u0456\u043C\u0456\u0442 ${uah3(lim.open)} (\u0437\u0430\u0440\u0430\u0437 ${uah3((open?.total || 0) - inOpen)}, \u0446\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${uah3(total)}). \u0421\u0444\u043E\u0440\u043C\u0443\u0439\u0442\u0435 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E (\u043E\u0431\u0435\u0440\u0456\u0442\u044C \u044E\u0440\u043E\u0441\u043E\u0431\u0443) \u2014 \u043F\u0456\u0441\u043B\u044F \u0446\u044C\u043E\u0433\u043E \u043C\u043E\u0436\u043D\u0430 \u043F\u0440\u043E\u0434\u043E\u0432\u0436\u0443\u0432\u0430\u0442\u0438.`);
+      throw fail(400, `\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F \u043F\u0435\u0440\u0435\u0432\u0438\u0449\u0438\u0442\u044C \u043B\u0456\u043C\u0456\u0442 ${uah4(lim.open)} (\u0437\u0430\u0440\u0430\u0437 ${uah4((open?.total || 0) - inOpen)}, \u0446\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${uah4(total)}). \u0421\u0444\u043E\u0440\u043C\u0443\u0439\u0442\u0435 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E (\u043E\u0431\u0435\u0440\u0456\u0442\u044C \u044E\u0440\u043E\u0441\u043E\u0431\u0443) \u2014 \u043F\u0456\u0441\u043B\u044F \u0446\u044C\u043E\u0433\u043E \u043C\u043E\u0436\u043D\u0430 \u043F\u0440\u043E\u0434\u043E\u0432\u0436\u0443\u0432\u0430\u0442\u0438.`);
     }
     const unpaid = await unpaidTotal(p.id) - inOpen;
     if (unpaid + total > lim.unpaid + 4e-3) {
-      throw fail(400, `\u041B\u0456\u043C\u0456\u0442 \u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0438\u0445 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C \u2014 ${uah3(lim.unpaid)}: \u0437\u0430\u0440\u0430\u0437 \u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E ${uah3(unpaid)}. \u0421\u043F\u0435\u0440\u0448\u0443 \u043E\u043F\u043B\u0430\u0442\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0430\u0431\u043E \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.`);
+      throw fail(400, `\u041B\u0456\u043C\u0456\u0442 \u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0438\u0445 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C \u2014 ${uah4(lim.unpaid)}: \u0437\u0430\u0440\u0430\u0437 \u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E ${uah4(unpaid)}. \u0421\u043F\u0435\u0440\u0448\u0443 \u043E\u043F\u043B\u0430\u0442\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0430\u0431\u043E \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.`);
     }
     return { supplyId: null, toOpen: true, openId: open?.id || null, items, total };
   }
@@ -7065,7 +7849,7 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     if (["paid", "done"].includes(st) || !o.supply_id && o.paid_at) return;
     if (s?.pay_terms === "postpay" && !overdueDays(s)) return;
     const p = await db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [o.partner_id]);
-    await tgAdmins(`\u26A0\uFE0F <b>\u0412\u0456\u0434\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u043E\u043F\u043B\u0430\u0442\u0438</b>: ${orderNo(o.id)} (${h7(o.client_name)}, ${uah3(o.total)}) \xAB${h7(p?.name || "")}\xBB \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 CRM, \u0430 ${!o.supply_id ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0435" : st === "open" ? `\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.supply_id)} \u0449\u0435 \u0431\u0435\u0437 \u0440\u0430\u0445\u0443\u043D\u043A\u0443` : `\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.supply_id)} \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0430 (${ORDER_STATUS[st] || st})`}.
+    await tgAdmins(`\u26A0\uFE0F <b>\u0412\u0456\u0434\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u043E\u043F\u043B\u0430\u0442\u0438</b>: ${orderNo(o.id)} (${h7(o.client_name)}, ${uah4(o.total)}) \xAB${h7(p?.name || "")}\xBB \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 CRM, \u0430 ${!o.supply_id ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0435" : st === "open" ? `\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.supply_id)} \u0449\u0435 \u0431\u0435\u0437 \u0440\u0430\u0445\u0443\u043D\u043A\u0443` : `\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.supply_id)} \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0430 (${ORDER_STATUS[st] || st})`}.
 ${link(c, `b2bclients/${o.id}`)}`);
   }
   function senderOf(c, siteSetting) {
@@ -7126,7 +7910,7 @@ ${link(base, `b2bclients/${o.id}`)}` : ""}`);
     }
   };
   const tgNew = async (c, p, id, f, it, verb = "\u041D\u043E\u0432\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430") => {
-    const lines = it.items.slice(0, 60).map((i) => `${h7(i.name)} \u2014 ${i.qty} \u0448\u0442 \u2014 ${uah3(i.price)}`).join("\n");
+    const lines = it.items.slice(0, 60).map((i) => `${h7(i.name)} \u2014 ${i.qty} \u0448\u0442 \u2014 ${uah4(i.price)}`).join("\n");
     const text = `\u{1F4E6} <b>${verb} ${orderNo(id)}</b> \u0432\u0456\u0434 \xAB${h7(p.name)}\xBB
 
 <b>\u041A\u043B\u0456\u0454\u043D\u0442:</b> ${h7(f.client_name)}, ${h7(f.client_phone)}${f.ttn ? `
@@ -7136,7 +7920,7 @@ ${it.supplyId ? `\u0406\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u
 <b>\u0422\u043E\u0432\u0430\u0440\u0438:</b>
 ${lines}
 
-<b>\u0420\u0430\u0437\u043E\u043C: ${uah3(it.total)}</b>`;
+<b>\u0420\u0430\u0437\u043E\u043C: ${uah4(it.total)}</b>`;
     await tgAdmins(`${text}
 
 ${link(c, `b2bclients/${id}`)}`);
@@ -7253,11 +8037,11 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     );
     await db.batch([...itemRows(r.lastId, it.items), [
       `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-      [r.lastId, now, userName6(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah3(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : it.draftId ? ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u2014 \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}`]
+      [r.lastId, now, userName6(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah4(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : it.draftId ? ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u2014 \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}`]
     ]]);
     if (it.draftId) {
       await draftAdjust(it.draftId, it.items);
-      await log(it.draftId, u, `\u0434\u043E\u0434\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(r.lastId)} (${f.client_name}): ${it.items.length} \u043F\u043E\u0437., ${uah3(it.total)}`);
+      await log(it.draftId, u, `\u0434\u043E\u0434\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(r.lastId)} (${f.client_name}): ${it.items.length} \u043F\u043E\u0437., ${uah4(it.total)}`);
     }
     if (it.openId) await rebuildOpen(it.openId);
     await tgNew(c, p, r.lastId, f, it);
@@ -7291,7 +8075,7 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     await moveDraftItems(curDraft, oldItems, it.draftId, it.items);
     if (it.openId) await rebuildOpen(it.openId);
     if (cur?.status === "open" && cur.id !== it.openId) await rebuildOpen(cur.id);
-    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430: ${it.items.length} \u043F\u043E\u0437., ${uah3(it.total)}${it.draftId ? ` (\u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u0446\u0456 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)})` : ""}`);
+    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430: ${it.items.length} \u043F\u043E\u0437., ${uah4(it.total)}${it.draftId ? ` (\u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u0446\u0456 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)})` : ""}`);
     await tgNew(c, p, o.id, f, it, "\u0417\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430");
     return c.json({ ok: true, total: it.total });
   });
@@ -7348,8 +8132,8 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     return ch;
   }
   const brief = (x) => `${x.client_name}, ${phoneTxt(x.client_phone)}${x.ttn ? `, \u0422\u0422\u041D ${x.ttn}` : ""}
-${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah3(i.price)}`).join("\n")}
-   ${x.supply_id ? `\u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(x.supply_id)}` : "\u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456"} \xB7 \u0440\u0430\u0437\u043E\u043C ${uah3(x.total)}`;
+${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah4(i.price)}`).join("\n")}
+   ${x.supply_id ? `\u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(x.supply_id)}` : "\u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456"} \xB7 \u0440\u0430\u0437\u043E\u043C ${uah4(x.total)}`;
   const phoneTxt = (ph) => String(ph).length === 12 ? `+${ph}` : ph;
   app.put("/api/b2b/clients/:id/edit", async (c) => {
     need(c, "b2b.admin");
@@ -7414,7 +8198,7 @@ ${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah3(i.price)}`).join(
       `UPDATE b2b_orders SET pending = ? WHERE id = ?`,
       [changes.length || crmOld ? JSON.stringify({ before, changes, by, at: now, crm_old: crmOld }) : "", o.id]
     );
-    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440: ${changes.join("; ") || "\u0431\u0435\u0437 \u0437\u043C\u0456\u043D"} \u2014 ${uah3(it.total)}${wasCrm ? ` \xB7 \u0441\u0442\u0430\u0440\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 CRM \u2116 ${oldCrm} \u0430\u043D\u0443\u043B\u044C\u043E\u0432\u0430\u043D\u043E` : ""}${changes.length ? " \xB7 \u0447\u0435\u043A\u0430\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430" : ""}`.slice(0, 1800));
+    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440: ${changes.join("; ") || "\u0431\u0435\u0437 \u0437\u043C\u0456\u043D"} \u2014 ${uah4(it.total)}${wasCrm ? ` \xB7 \u0441\u0442\u0430\u0440\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 CRM \u2116 ${oldCrm} \u0430\u043D\u0443\u043B\u044C\u043E\u0432\u0430\u043D\u043E` : ""}${changes.length ? " \xB7 \u0447\u0435\u043A\u0430\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430" : ""}`.slice(0, 1800));
     if (changes.length || wasCrm) {
       const url = link(c, `pclients/${o.id}`);
       if (wasCrm) {
@@ -7768,7 +8552,7 @@ ${link(c, `pclients/${o.id}`)}`);
     if (paid) await db.run(`UPDATE b2b_orders SET paid_amount = total, paid_at = ?, paid_by = ?, updated_at = ? WHERE id = ?`, [now, userName6(u), now, o.id]);
     else await db.run(`UPDATE b2b_orders SET paid_amount = 0, paid_at = '', paid_by = '', updated_at = ? WHERE id = ?`, [now, o.id]);
     await log(o.id, u, paid ? "\u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443" : "\u0437\u043D\u044F\u0442\u043E \u043F\u043E\u0437\u043D\u0430\u0447\u043A\u0443 \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB");
-    if (paid) await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h7(o.client_name)}) \u2014 ${uah3(o.total)}`);
+    if (paid) await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h7(o.client_name)}) \u2014 ${uah4(o.total)}`);
     return c.json({ ok: true });
   });
   app.post("/api/b2b/clients/:id/cancel", async (c) => {
@@ -8832,7 +9616,7 @@ var foreignInvoice = (purpose, invoiceNo) => {
   return nos.length > 0 && !nos.includes(digitsOf(invoiceNo));
 };
 function mountB2bPay(app, { db, services, orders, hooks }) {
-  const { log, tgAdmins, tgPartner, link, uah: uah3, h: h7 } = orders;
+  const { log, tgAdmins, tgPartner, link, uah: uah4, h: h7 } = orders;
   const candidatesFor = (codes) => db.all(
     `SELECT o.id, o.partner_id, o.total, o.paid_amount, o.invoice_no, o.status, e.code FROM b2b_orders o JOIN b2b_entities e ON e.id = o.entity_id
      WHERE o.kind = 'supply' AND o.status IN ('pay_wait', 'partial') AND e.code IN (SELECT value FROM json_each(?)) ORDER BY o.id`,
@@ -8855,19 +9639,19 @@ function mountB2bPay(app, { db, services, orders, hooks }) {
     const url = (hash2) => base ? `
 ${link(base, hash2)}` : "";
     if (status === "paid") {
-      await log(o.id, user, `\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E: ${uah3(sum)}${user ? "" : " \u2014 Opendatabot"}`);
-      await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}${o.invoice_no ? `, \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h7(o.invoice_no)}` : ""} \u2014 ${uah3(o.total)}${url(`porders/${o.id}`)}`);
-      await tgAdmins(`\u2705 <b>\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E</b>${who}: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 ${uah3(sum)}${url(`b2borders/${o.id}`)}`);
+      await log(o.id, user, `\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E: ${uah4(sum)}${user ? "" : " \u2014 Opendatabot"}`);
+      await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}${o.invoice_no ? `, \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h7(o.invoice_no)}` : ""} \u2014 ${uah4(o.total)}${url(`porders/${o.id}`)}`);
+      await tgAdmins(`\u2705 <b>\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E</b>${who}: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 ${uah4(sum)}${url(`b2borders/${o.id}`)}`);
       if (o.status !== "paid") {
         await hooks.finPaid?.(o.id).catch(() => 0);
         await hooks.crmPaid?.(o.id, typeof base === "string" ? base : base ? new URL(base.req.url).origin : "").catch(() => 0);
       }
     } else if (status === "partial") {
       const left = round2(o.total - sum);
-      await log(o.id, user, `\u0447\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E: ${uah3(sum)} \u0437 ${uah3(o.total)}, \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah3(left)}`);
-      await tgPartner(o.partner_id, `\u{1F4B3} <b>\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E ${uah3(sum)} \u0437 ${uah3(o.total)}.
-<b>\u0429\u0435 \u0434\u043E \u043E\u043F\u043B\u0430\u0442\u0438: ${uah3(left)}</b>${url(`porders/${o.id}`)}`);
-      await tgAdmins(`\u{1F4B3} <b>\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E</b>${who}: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 ${uah3(sum)} \u0437 ${uah3(o.total)}, \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah3(left)}${url(`b2borders/${o.id}`)}`);
+      await log(o.id, user, `\u0447\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E: ${uah4(sum)} \u0437 ${uah4(o.total)}, \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah4(left)}`);
+      await tgPartner(o.partner_id, `\u{1F4B3} <b>\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E ${uah4(sum)} \u0437 ${uah4(o.total)}.
+<b>\u0429\u0435 \u0434\u043E \u043E\u043F\u043B\u0430\u0442\u0438: ${uah4(left)}</b>${url(`porders/${o.id}`)}`);
+      await tgAdmins(`\u{1F4B3} <b>\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E</b>${who}: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 ${uah4(sum)} \u0437 ${uah4(o.total)}, \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah4(left)}${url(`b2borders/${o.id}`)}`);
     } else {
       await log(o.id, user, `\u043E\u043F\u043B\u0430\u0442\u0443 \u0437\u043D\u044F\u0442\u043E: \xAB${status === "pay_wait" ? "\u041E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443" : "\u041E\u0447\u0456\u043A\u0443\u0454 \u0440\u0430\u0445\u0443\u043D\u043E\u043A"}\xBB`);
     }
@@ -8902,8 +9686,8 @@ ${link(base, hash2)}` : "";
         hit.paid_amount = round2(hit.paid_amount + t.amount);
         await recalc(hit.id, base);
       } else {
-        const why = shared2.has(t.payer_code) ? `\u043A\u043E\u0434 \u043F\u043B\u0430\u0442\u043D\u0438\u043A\u0430 ${h7(t.payer_code)} \u0454 \u0432 \u044E\u0440\u043E\u0441\u043E\u0431\u0430\u0445 \u043A\u0456\u043B\u044C\u043A\u043E\u0445 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432` : pool.length > 1 ? `\u043F\u0456\u0434\u0445\u043E\u0434\u0438\u0442\u044C \u043A\u0456\u043B\u044C\u043A\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C: ${pool.map((o) => `${orderNo(o.id)} (\u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah3(due(o))})`).join(", ")}` : `\u0441\u0443\u043C\u0430 \u0431\u0456\u043B\u044C\u0448\u0430 \u0437\u0430 \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah3(due(pool[0]))} \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(pool[0].id)}`;
-        await tgAdmins(`\u{1F4B3} <b>\u041F\u043B\u0430\u0442\u0456\u0436 \u0437\u0430 B2B \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435</b>: ${uah3(t.amount)} \u0432\u0456\u0434 ${h7(t.payer_name || t.payer_code)}
+        const why = shared2.has(t.payer_code) ? `\u043A\u043E\u0434 \u043F\u043B\u0430\u0442\u043D\u0438\u043A\u0430 ${h7(t.payer_code)} \u0454 \u0432 \u044E\u0440\u043E\u0441\u043E\u0431\u0430\u0445 \u043A\u0456\u043B\u044C\u043A\u043E\u0445 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432` : pool.length > 1 ? `\u043F\u0456\u0434\u0445\u043E\u0434\u0438\u0442\u044C \u043A\u0456\u043B\u044C\u043A\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C: ${pool.map((o) => `${orderNo(o.id)} (\u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah4(due(o))})`).join(", ")}` : `\u0441\u0443\u043C\u0430 \u0431\u0456\u043B\u044C\u0448\u0430 \u0437\u0430 \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah4(due(pool[0]))} \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(pool[0].id)}`;
+        await tgAdmins(`\u{1F4B3} <b>\u041F\u043B\u0430\u0442\u0456\u0436 \u0437\u0430 B2B \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435</b>: ${uah4(t.amount)} \u0432\u0456\u0434 ${h7(t.payer_name || t.payer_code)}
 ${why}.
 \u0412\u043A\u0430\u0436\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0432\u0440\u0443\u0447\u043D\u0443 \u043D\u0430 \u0457\u0457 \u0441\u0442\u043E\u0440\u0456\u043D\u0446\u0456 \u0430\u0431\u043E \u0432 \xAB\u041F\u043B\u0430\u0442\u0435\u0436\u0430\u0445\xBB.${base ? `
 ${link(base, `b2borders/${pool[0].id}`)}` : ""}`);
@@ -9017,7 +9801,7 @@ var INVOICED = ["pay_wait", "partial", "paid", "done"];
 var userName4 = (u) => u?.name || u?.login || "";
 var firstLine = (s) => String(s || "").split("\n")[0];
 function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partnerPrice2 }) {
-  const { orderOf, supplyLeft, itemRows, totalOf, log, tgPartner, tgGroup, link, uah: uah3, h: h7, rebuildOpen, getOpen, entityText } = orders;
+  const { orderOf, supplyLeft, itemRows, totalOf, log, tgPartner, tgGroup, link, uah: uah4, h: h7, rebuildOpen, getOpen, entityText } = orders;
   const partnerCatalog = (partnerId) => db.all(
     `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN}
      WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`,
@@ -9093,11 +9877,11 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
     for (const i of items) {
       const old = curMap.get(i.product_id);
       if (!old) {
-        changes.push(`+ ${i.name} \xD7 ${i.qty} \u043F\u043E ${uah3(i.price)}`);
+        changes.push(`+ ${i.name} \xD7 ${i.qty} \u043F\u043E ${uah4(i.price)}`);
         continue;
       }
       if (old.qty !== i.qty) changes.push(`${i.name}: ${old.qty} \u2192 ${i.qty} \u0448\u0442`);
-      if (round2(old.price) !== round2(i.price)) changes.push(`${i.name}: \u0446\u0456\u043D\u0430 ${uah3(old.price)} \u2192 ${uah3(i.price)}`);
+      if (round2(old.price) !== round2(i.price)) changes.push(`${i.name}: \u0446\u0456\u043D\u0430 ${uah4(old.price)} \u2192 ${uah4(i.price)}`);
     }
     const removed = cur.filter((i) => !want.has(i.product_id));
     for (const i of removed) changes.push(`\u2212 ${i.name} \xD7 ${i.qty} (\u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E)`);
@@ -9120,14 +9904,14 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
       ]);
     }
     await db.batch(st);
-    await log(o.id, u, `\u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440: ${changes.join("; ")} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah3(total)}${invoiced ? ` \xB7 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${redo} \u0442\u0440\u0435\u0431\u0430 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u0438\u0442\u0438` : ""}`.slice(0, 1800));
+    await log(o.id, u, `\u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440: ${changes.join("; ")} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah4(total)}${invoiced ? ` \xB7 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${redo} \u0442\u0440\u0435\u0431\u0430 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u0438\u0442\u0438` : ""}`.slice(0, 1800));
     if (o.status !== "draft") {
       const lines = changes.slice(0, 20).map(h7).join("\n");
       const text = `\u270F\uFE0F <b>\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440</b>
 ${lines}
-<b>\u0420\u0430\u0437\u043E\u043C: ${uah3(total)}</b>${invoiced ? `
+<b>\u0420\u0430\u0437\u043E\u043C: ${uah4(total)}</b>${invoiced ? `
 
-\u{1F501} \u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h7(o.invoice_no)} \u0431\u0443\u0434\u0435 \u043F\u0435\u0440\u0435\u0432\u0438\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E \u2014 \u043D\u043E\u0432\u0438\u0439 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430\u0434\u0456\u0439\u0434\u0435 \u0441\u044E\u0434\u0438.${Number(o.paid_amount) > 0 ? ` \u041E\u043F\u043B\u0430\u0442\u0430 ${uah3(o.paid_amount)} \u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0430\u043D\u0430.` : ""}` : ""}`;
+\u{1F501} \u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h7(o.invoice_no)} \u0431\u0443\u0434\u0435 \u043F\u0435\u0440\u0435\u0432\u0438\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E \u2014 \u043D\u043E\u0432\u0438\u0439 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430\u0434\u0456\u0439\u0434\u0435 \u0441\u044E\u0434\u0438.${Number(o.paid_amount) > 0 ? ` \u041E\u043F\u043B\u0430\u0442\u0430 ${uah4(o.paid_amount)} \u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0430\u043D\u0430.` : ""}` : ""}`;
       await tgPartner(o.partner_id, `${text}
 ${link(c, `porders/${o.id}`)}`);
       if (invoiced) await tgGroup(o.partner_id, text);
@@ -9172,7 +9956,7 @@ ${link(c, `porders/${o.id}`)}`);
     if (o.status !== "draft") {
       await tgPartner(o.partner_id, `\u{1F5D1} ${o.kind === "client" ? `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${h7(o.client_name)})` : `\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)}`} \u0432\u0438\u0434\u0430\u043B\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u2014 \u0439\u043E\u0433\u043E \u0432\u0438\u0434\u043D\u043E \u0432 \xAB\u041A\u043E\u0448\u0438\u043A\u0443\xBB.`);
     }
-    await logAudit(db, { user: c.get("user"), kind: "b2b", refId: o.partner_id, action: `\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u0432 \u043A\u043E\u0448\u0438\u043A ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E"} ${orderNo(o.id)} \u043D\u0430 ${uah3(o.total)}${o.crm_id ? ` (\u0443 LP-CRM \u2116 ${o.crm_id} \u2014 \u043D\u0435 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E)` : ""}` }).catch(() => 0);
+    await logAudit(db, { user: c.get("user"), kind: "b2b", refId: o.partner_id, action: `\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u0432 \u043A\u043E\u0448\u0438\u043A ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E"} ${orderNo(o.id)} \u043D\u0430 ${uah4(o.total)}${o.crm_id ? ` (\u0443 LP-CRM \u2116 ${o.crm_id} \u2014 \u043D\u0435 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E)` : ""}` }).catch(() => 0);
     return c.json({ ok: true, inCrm: o.crm_id || "" });
   });
   const trashRow = (r, forPartner = false) => ({
@@ -9651,14 +10435,14 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const ship = new Map((await db.all(`SELECT s.partner_id, SUM(co.total) AS sum, COUNT(co.id) AS n FROM b2b_orders s
       JOIN b2b_orders co ON co.supply_id = s.id AND co.kind = 'client' AND co.status = 'crm'
       WHERE s.kind = 'supply' AND s.status IN ('open', 'invoice_wait') GROUP BY s.partner_id`)).map((r) => [r.partner_id, r]));
-    const r2 = (n) => Math.round((n || 0) * 100) / 100;
+    const r22 = (n) => Math.round((n || 0) * 100) / 100;
     return c.json(rows.map((r) => ({
       ...r,
-      debt: r2((debt.get(r.id)?.due || 0) + (ship.get(r.id)?.sum || 0)),
-      debt_invoiced: r2(debt.get(r.id)?.due),
-      debt_shipped: r2(ship.get(r.id)?.sum),
+      debt: r22((debt.get(r.id)?.due || 0) + (ship.get(r.id)?.sum || 0)),
+      debt_invoiced: r22(debt.get(r.id)?.due),
+      debt_shipped: r22(ship.get(r.id)?.sum),
       debt_shipped_cnt: ship.get(r.id)?.n || 0,
-      debt_overdue: r2(debt.get(r.id)?.overdue),
+      debt_overdue: r22(debt.get(r.id)?.overdue),
       debt_cnt: debt.get(r.id)?.n || 0
     })));
   });
@@ -11376,7 +12160,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     let more = false;
     try {
       for (let page = 1; page <= SYNC_PAGES; page++) {
-        if (page > 1) await new Promise((r2) => setTimeout(r2, PAGE_PAUSE_MS));
+        if (page > 1) await new Promise((r3) => setTimeout(r3, PAGE_PAUSE_MS));
         const r = await rzsOrdersPage(fetchFn, a.token, { dateFrom, page });
         saved += await saveOrders2(r.orders, a.id);
         changed += saveOrders2.changed || 0;
@@ -14161,7 +14945,7 @@ async function upgradeV10(db) {
 }
 var schema8 = {
   name: "analytics",
-  version: 6,
+  version: 7,
   tables: [
     // ---------- Аналітика ----------
     // Замовлення: id = короткий номер LP-CRM (зростає з часом), code = довгий код для API.
@@ -14203,7 +14987,25 @@ var schema8 = {
     // Швидка перевірка ТТН нових замовлень (кожні 10 хв): ТТН замовлень за останні дні — окремо від аналітики.
     `CREATE TABLE IF NOT EXISTS an_ttn_recent (code TEXT PRIMARY KEY, ttn TEXT NOT NULL DEFAULT '', day TEXT NOT NULL, user TEXT DEFAULT '', status INTEGER NOT NULL DEFAULT 0)`,
     `CREATE INDEX IF NOT EXISTS an_ttn_recent_ttn ON an_ttn_recent(ttn)`,
-    `CREATE INDEX IF NOT EXISTS an_ttn_recent_day ON an_ttn_recent(day)`
+    `CREATE INDEX IF NOT EXISTS an_ttn_recent_day ON an_ttn_recent(day)`,
+    // Журнал змін налаштувань аналітики через ШІ: хто попросив (і що саме написав), що ШІ запропонував, хто застосував
+    // чи скасував, знімок налаштувань до зміни (для відкату). status: pending | applied | cancelled | failed | reverted.
+    `CREATE TABLE IF NOT EXISTS an_ai_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    asked_by TEXT DEFAULT '',
+    question TEXT DEFAULT '',
+    summary TEXT DEFAULT '',
+    ops TEXT NOT NULL DEFAULT '[]',
+    preview TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'pending',
+    done_by TEXT DEFAULT '',
+    done_at TEXT DEFAULT '',
+    error TEXT DEFAULT '',
+    snapshot TEXT DEFAULT '',
+    reverted_by TEXT DEFAULT '',
+    reverted_at TEXT DEFAULT ''
+  )`
   ],
   columns: [
     ["an_managers", "depts", "TEXT DEFAULT ''"],
