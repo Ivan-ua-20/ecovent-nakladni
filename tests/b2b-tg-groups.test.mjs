@@ -100,7 +100,7 @@ assert.match(docs[0].caption, /Рахунок № СФ-7 — закупівля 
 await mk().request(`/api/b2b/orders/${o.id}/files?kind=other`, { method: 'POST', headers: { Cookie: H.Cookie, 'X-File-Name': 'x.txt' }, body: new Uint8Array(5) });
 assert.equal(docs.length, 1);
 msgs.length = 0;
-await req('POST', `/api/b2b/orders/${o.id}/status`, { status: 'paid' });
+await req('POST', `/api/b2b/orders/${o.id}/status`, { status: 'paid', note: 'оплата готівкою' });
 assert.ok(!msgs.some((m) => m.chat_id === '-100777'), 'оплата — не в групу (лише особисто)');
 
 // ---------- 4. Видалення замовлень ----------

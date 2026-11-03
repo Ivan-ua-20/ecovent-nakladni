@@ -114,12 +114,12 @@ assert.equal((await req('GET', `/api/b2b/p/orders/${o1.id}`, null, A)).files[0].
 
 // ---------- 5. Оплата вручну, завершення ----------
 tg.length = 0;
-await req('POST', `/api/b2b/orders/${o1.id}/status`, { status: 'paid' });
+await req('POST', `/api/b2b/orders/${o1.id}/status`, { status: 'paid', note: 'оплата готівкою' });
 d = await req('GET', `/api/b2b/orders/${o1.id}`);
 assert.equal(d.order.status, 'paid');
 assert.equal(d.order.paid_amount, 800);
 assert.equal(d.order.paid_by, 'Бухгалтер');
-assert.ok(tg.some((m) => m.chat_id === '200' && /Оплату отримано/.test(m.text)));
+assert.ok(tg.some((m) => m.chat_id === '200' && /Оплату підтверджено/.test(m.text) && /оплата готівкою/.test(m.text)));
 await req('POST', `/api/b2b/orders/${o1.id}/status`, { status: 'done' });
 assert.ok(d.history.length >= 4, 'історія замовлення');
 
@@ -127,7 +127,24 @@ assert.ok(d.history.length >= 4, 'історія замовлення');
 const o2 = await req('POST', '/api/b2b/p/orders', { entity_id: ea.id, items: [{ product_id: 12, qty: 1 }] }, A);
 await req('POST', `/api/b2b/p/orders/${o2.id}/cancel`, {}, A);
 assert.equal((await req('GET', `/api/b2b/p/orders/${o2.id}`, null, A)).order.status, 'cancelled');
-assert.equal(await status(() => req('POST', `/api/b2b/orders/${o2.id}/status`, { status: 'paid' })), 400, 'без рахунку — не «Оплачено»');
+assert.equal(await status(() => req('POST', `/api/b2b/orders/${o2.id}/status`, { status: 'paid', note: 'оплата готівкою' })), 400, 'скасовану — не «Оплачено»');
+
+// «Оплачено» вручну — лише з коментарем; без рахунку можна (гарантійна заміна: товар повернуто, відправка з нашого складу)
+const o3 = await req('POST', '/api/b2b/p/orders', { entity_id: ea.id, items: [{ product_id: 12, qty: 1 }] }, A);
+assert.equal(await status(() => req('POST', `/api/b2b/orders/${o3.id}/status`, { status: 'paid' })), 400, 'без коментаря — ні');
+assert.equal(await status(() => req('POST', `/api/b2b/orders/${o3.id}/status`, { status: 'paid', note: '  ' })), 400);
+tg.length = 0;
+await req('POST', `/api/b2b/orders/${o3.id}/status`, { status: 'paid', note: 'Гарантія: товар повернуто' });
+const d3 = await req('GET', `/api/b2b/orders/${o3.id}`);
+assert.deepEqual([d3.order.status, d3.order.paid_note, d3.order.invoice_no || ''], ['paid', 'Гарантія: товар повернуто', '']);
+assert.ok(d3.history.some((x) => /Гарантія: товар повернуто/.test(JSON.stringify(x))), 'коментар — в історії');
+assert.ok(tg.some((m) => m.chat_id === '200' && /Гарантія: товар повернуто/.test(m.text)), 'партнеру — з коментарем');
+assert.equal((await req('GET', `/api/b2b/p/orders/${o3.id}`, null, A)).order.paid_note, 'Гарантія: товар повернуто', 'партнер бачить коментар');
+await req('POST', `/api/b2b/orders/${o3.id}/status`, { status: 'done' });
+await req('POST', `/api/b2b/orders/${o3.id}/status`, { status: 'paid' }); // повернути із «Завершено» — без коментаря
+await req('POST', `/api/b2b/orders/${o3.id}/status`, { status: 'pay_wait' });
+const o3b = (await req('GET', `/api/b2b/orders/${o3.id}`)).order;
+assert.deepEqual(['status', 'paid_note'].map((k) => o3b[k]), ['invoice_wait', ''], 'зняли оплату без рахунку — знову «Очікує рахунок», коментар очищено');
 
 // юрособа з замовленнями — лише приховується
 await req('DELETE', `/api/b2b/p/entities/${ea.id}`, null, A);

@@ -123,7 +123,7 @@ await req('PUT', `/api/b2b/clients/${c2.id}`, { crm_id: '778' });
 assert.ok(tg.some((m) => /Відвантаження без оплати/.test(m.text)), 'прострочена — знову попереджає');
 
 // ---------- 7. Оплачено — борг зникає, відстрочка знову доступна ----------
-await req('POST', `/api/b2b/orders/${s1.id}/status`, { status: 'paid' });
+await req('POST', `/api/b2b/orders/${s1.id}/status`, { status: 'paid', note: 'оплата готівкою' });
 pd = await req('GET', `/api/b2b/partners/${pa.id}`);
 assert.equal(pd.debt.total, 4500);
 assert.equal(pd.postpay.overdue.length, 0);

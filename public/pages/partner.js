@@ -315,6 +315,7 @@ export function createPartnerPages(ctx = {}) {
             ${o.invoice_no ? `<div><b>Рахунок № ${esc(o.invoice_no)}</b>${o.invoice_date ? ` від ${esc(fmtDay(o.invoice_date))}` : ''}</div>` : '<div class="muted small">Рахунок ще готується — сповістимо в Telegram.</div>'}
             ${o.waybill_no ? `<div>Накладна № ${esc(o.waybill_no)}</div>` : ''}
             ${o.status === 'paid' || o.status === 'done' ? `<div class="badge ok">Оплачено ${esc(fmtDateTime(o.paid_at))}</div>` : ''}
+            ${o.paid_note ? `<div class="small">💬 ${esc(o.paid_note)}</div>` : ''}
             ${files.length ? `<div class="form-stack">${files.map((f) => `<a class="btn sm" href="/api/b2b/p/files/${f.id}" target="_blank" rel="noopener">📎 ${esc(f.kind_name)}: ${esc(f.name)} <span class="muted">${fileSize(f.size)}</span></a>`).join('')}</div>
               <div class="small muted">Файли зберігаються 30 днів — завантажте їх собі.</div>` : ''}
           </div>

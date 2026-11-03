@@ -163,17 +163,17 @@ assert.equal(crm.filter((x) => x.method === 'getOrdersByID').length, 1, 'одн�
 await req('PUT', `/api/b2b/orders/${c2.id}`, { invoice_no: 'СФ-9', waybill_no: 'РН-9' });
 assert.equal((await req('GET', `/api/b2b/orders/${c2.id}`)).order.status, 'crm', 'рахунок не змінює статус замовлення клієнта');
 // без закупівлі → відкрита закупівля: оплата — лише після того, як партнер сформує на неї рахунок
-assert.match(await errOf(() => req('POST', `/api/b2b/clients/${c2.id}/paid`, { paid: true })), /спершу партнер формує/);
+assert.match(await errOf(() => req('POST', `/api/b2b/clients/${c2.id}/paid`, { paid: true, note: 'оплата готівкою' })), /спершу партнер формує/);
 const openId = (await req('GET', `/api/b2b/p/clients/${c2.id}`, null, A)).order.supply_id;
 assert.equal((await req('GET', `/api/b2b/p/clients/${c2.id}`, null, A)).order.pay_name, 'В процесі оплати');
 await req('POST', '/api/b2b/p/open/form', { entity_id: ea.id }, A);
 await req('PUT', `/api/b2b/orders/${openId}`, { invoice_no: 'СФ-9' });
-await req('POST', `/api/b2b/orders/${openId}/status`, { status: 'paid' });
+await req('POST', `/api/b2b/orders/${openId}/status`, { status: 'paid', note: 'оплата готівкою' });
 assert.equal((await req('GET', `/api/b2b/p/clients/${c2.id}`, null, A)).order.pay, 'paid');
-assert.equal(await status(() => req('POST', `/api/b2b/clients/${c1.id}/paid`, { paid: true })), 400, 'оплата — за закупівлею');
-assert.equal(await status(() => req('POST', `/api/b2b/orders/${c1.id}/status`, { status: 'paid' })), 400);
+assert.equal(await status(() => req('POST', `/api/b2b/clients/${c1.id}/paid`, { paid: true, note: 'оплата готівкою' })), 400, 'оплата — за закупівлею');
+assert.equal(await status(() => req('POST', `/api/b2b/orders/${c1.id}/status`, { status: 'paid', note: 'оплата готівкою' })), 400);
 await req('PUT', `/api/b2b/orders/${sup.id}`, { invoice_no: 'СФ-1' });
-await req('POST', `/api/b2b/orders/${sup.id}/status`, { status: 'paid' });
+await req('POST', `/api/b2b/orders/${sup.id}/status`, { status: 'paid', note: 'оплата готівкою' });
 assert.equal((await req('GET', `/api/b2b/p/clients/${c1.id}`, null, A)).order.pay, 'paid', 'закупівлю оплачено → і замовлення');
 
 // ---------- 6. Передача в LP-CRM (коли буде дозвіл) ----------
@@ -248,7 +248,7 @@ assert.equal((await req('GET', `/api/b2b/orders/${c3.id}`)).order.crm_id, '77001
 // оплата прийшла вже після передачі в CRM → адмінам номер у CRM і готовий коментар
 tg.length = 0;
 await req('PUT', `/api/b2b/orders/${sup2.id}`, { invoice_no: 'СФ-77', invoice_date: '2026-10-25' });
-await req('POST', `/api/b2b/orders/${sup2.id}/status`, { status: 'paid' });
+await req('POST', `/api/b2b/orders/${sup2.id}/status`, { status: 'paid', note: 'оплата готівкою' });
 const late = tg.find((m) => /Оплату отримано<\/b>, а замовлення вже в LP-CRM/.test(m.text));
 assert.ok(late && String(late.chat_id) === '100', 'адмінам особисто');
 assert.match(late.text, new RegExp(`B2B-${c3.id}.*CRM № <b>77001.*✅ ОПЛАЧЕНО: закупівля B2B-${sup2.id}, рахунок № СФ-77 від 25.10.2026`, 's'));

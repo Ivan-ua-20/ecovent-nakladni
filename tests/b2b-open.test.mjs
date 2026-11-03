@@ -77,7 +77,7 @@ assert.equal(d.order.status, 'open');
 await req('PUT', `/api/b2b/p/clients/${c2.id}`, { client_name: 'Клієнт 2', client_phone: '0501112233', items: [{ product_id: 11, qty: 2 }] }, A);
 assert.equal((await req('GET', `/api/b2b/p/limits`, null, A)).open.total, 27000);
 // адмін не змінює статус відкритої закупівлі вручну
-assert.ok(await errOf(() => req('POST', `/api/b2b/orders/${open1}/status`, { status: 'paid' })));
+assert.ok(await errOf(() => req('POST', `/api/b2b/orders/${open1}/status`, { status: 'paid', note: 'оплата готівкою' })));
 
 // ---------- 3. Ліміт усіх неоплачених закупівель ----------
 await pA({ unpaid_limit: 40000 });
@@ -85,7 +85,7 @@ assert.match(await errOf(() => req('POST', '/api/b2b/p/orders', { entity_id: ent
 const s1 = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, items: [{ product_id: 12, qty: 2 }] }, A); // 9000 → 36 000
 assert.equal((await req('GET', '/api/b2b/p/limits', null, A)).unpaid.total, 36000);
 await req('PUT', `/api/b2b/orders/${s1.id}`, { invoice_no: 'СФ-1' });
-await req('POST', `/api/b2b/orders/${s1.id}/status`, { status: 'paid' });
+await req('POST', `/api/b2b/orders/${s1.id}/status`, { status: 'paid', note: 'оплата готівкою' });
 assert.equal((await req('GET', '/api/b2b/p/limits', null, A)).unpaid.total, 27000, 'оплачена не рахується');
 await pA({ open_limit: '', unpaid_limit: '' });
 assert.deepEqual([(await req('GET', '/api/b2b/p/limits', null, A)).open.limit, (await req('GET', '/api/b2b/p/limits', null, A)).unpaid.limit], [20000, 100000], 'порожньо — типові');

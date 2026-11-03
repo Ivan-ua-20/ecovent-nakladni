@@ -101,7 +101,7 @@ assert.match((await req('GET', `/api/b2b/orders/${s1.id}`)).history.map((x) => x
 
 // ---------- 4. Оплачено → запит накладної відповіддю на рахунок → накладна ----------
 calls.length = 0;
-await req('POST', `/api/b2b/orders/${s1.id}/status`, { status: 'paid' });
+await req('POST', `/api/b2b/orders/${s1.id}/status`, { status: 'paid', note: 'оплата готівкою' });
 const payMsg = sent((b) => /оплачено/.test(b.text) && /видаткова накладна/.test(b.text))[0];
 assert.ok(payMsg && payMsg.reply_to_message_id === invMsg, 'запит накладної — відповіддю на рахунок');
 const payId = (await db.get(`SELECT fin_pay_msg FROM b2b_orders WHERE id = ?`, [s1.id])).fin_pay_msg;
