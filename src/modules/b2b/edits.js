@@ -5,7 +5,7 @@
 // видаляють і відновлюють лише адміни, партнер бачить свій кошик (хто й коли видалив).
 import { fail, need, nowIso, round2, kyivDay } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
-import { orderNo, PM_JOIN, PM_COLS } from './orders.js';
+import { orderNo, PM_JOIN, PM_COLS, withGrace } from './orders.js';
 
 const INVOICED = ['pay_wait', 'partial', 'paid', 'done'];
 const userName = (u) => u?.name || u?.login || '';
@@ -15,10 +15,15 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
   const { orderOf, supplyLeft, itemRows, totalOf, log, tgPartner, tgGroup, link, uah, h, rebuildOpen, getOpen, entityText } = orders;
 
   // Товари, видимі партнеру (увімкнені бренди), — для «Додати товар».
-  const partnerCatalog = (partnerId) => db.all(
-    `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN}
-     WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [kyivDay(), partnerId],
-  ).then((rows) => rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || '', rrp: r.rrp, price: partnerPrice(r.rrp, r.margin) })));
+  // Ціни — з відстрочкою підвищення партнера (як у його каталозі).
+  const partnerCatalog = async (partnerId) => {
+    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [partnerId]);
+    const rows = await withGrace(db, p, await db.all(
+      `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN}
+       WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [kyivDay(), partnerId],
+    ));
+    return rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || '', rrp: r.rrp, price: partnerPrice(r.rrp, r.margin) }));
+  };
   hooks.partnerCatalog = partnerCatalog;
 
   app.get('/api/b2b/orders/:id/edit-options', async (c) => {
@@ -67,10 +72,10 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
     if (!want.size) throw fail(400, 'У закупівлі має лишитися хоча б один товар. Щоб прибрати все — видаліть закупівлю.');
     if (want.size > 300) throw fail(400, 'Не більше 300 позицій.');
     const newIds = [...want.keys()].filter((id) => !curMap.has(id));
-    const cat = newIds.length ? new Map((await db.all(
+    const cat = newIds.length ? new Map((await withGrace(db, await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [o.partner_id]), await db.all(
       `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_catalog c LEFT JOIN b2b_margins m ON m.brand_id = c.brand_id AND m.partner_id = ? ${PM_JOIN}
        WHERE c.product_id IN (SELECT value FROM json_each(?))`, [o.partner_id, kyivDay(), JSON.stringify(newIds)],
-    )).map((r) => [r.product_id, r])) : new Map();
+    ))).map((r) => [r.product_id, r])) : new Map();
     const items = [...want].map(([id, w]) => {
       const old = curMap.get(id);
       if (old) return { product_id: id, name: old.name, article: old.article || '', qty: w.qty, price: w.price ?? old.price, rrp: old.rrp };

@@ -4194,9 +4194,9 @@ function compactQuery(q) {
   else {
     const wk = /* @__PURE__ */ new Map();
     for (const d of days) {
-      const dt = /* @__PURE__ */ new Date(`${d.day}T12:00:00Z`);
-      dt.setUTCDate(dt.getUTCDate() - (dt.getUTCDay() + 6) % 7);
-      const k = dt.toISOString().slice(0, 10);
+      const dt2 = /* @__PURE__ */ new Date(`${d.day}T12:00:00Z`);
+      dt2.setUTCDate(dt2.getUTCDate() - (dt2.getUTCDay() + 6) % 7);
+      const k = dt2.toISOString().slice(0, 10);
       const w = wk.get(k) || [k, 0, 0, 0];
       w[1] += d.cnt;
       w[2] = r2(w[2] + d.rev);
@@ -6602,6 +6602,27 @@ var UNPAID = `('open', 'invoice_wait', 'pay_wait', 'partial')`;
 var DEBT = `('pay_wait', 'partial')`;
 var PM_JOIN = `LEFT JOIN b2b_product_margins pm ON pm.partner_id = m.partner_id AND pm.product_id = c.product_id AND (pm.until = '' OR pm.until >= ?)`;
 var PM_COLS = `COALESCE(pm.margin, m.margin) AS margin, pm.margin IS NOT NULL AS special, COALESCE(pm.until, '') AS special_until`;
+async function graceHoursOf(db, p) {
+  if (p?.price_grace_hours != null && p.price_grace_hours !== "") return Math.max(0, Number(p.price_grace_hours) || 0);
+  const g = await db.get(`SELECT value FROM settings WHERE key = 'b2b_price_grace_hours'`);
+  return Math.max(0, Number(g?.value) || 0);
+}
+async function withGrace(db, p, rows) {
+  const hours = rows.length ? await graceHoursOf(db, p) : 0;
+  if (!hours) return rows;
+  const since = new Date(Date.now() - hours * 36e5).toISOString();
+  const logs = await db.all(
+    `SELECT product_id, old_rrp, at FROM b2b_price_log WHERE at > ? AND product_id IN (SELECT value FROM json_each(?)) ORDER BY id`,
+    [since, JSON.stringify([...new Set(rows.map((r) => r.product_id))])]
+  );
+  const first = /* @__PURE__ */ new Map();
+  for (const l of logs) if (!first.has(l.product_id)) first.set(l.product_id, l);
+  return rows.map((r) => {
+    const l = first.get(r.product_id);
+    if (!l || !(l.old_rrp > 0) || !(l.old_rrp < r.rrp)) return r;
+    return { ...r, rrp: l.old_rrp, rrp_new: r.rrp, grace_until: new Date(Date.parse(l.at) + hours * 36e5).toISOString() };
+  });
+}
 var SHIP_NOINV = `('open', 'invoice_wait')`;
 var today = () => kyivDayOf((/* @__PURE__ */ new Date()).toISOString());
 var addDaysTo = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
@@ -6784,11 +6805,11 @@ ${e.email}` : ""}`;
     }
     if (!want.size) throw fail(400, "\u0414\u043E\u0434\u0430\u0439\u0442\u0435 \u0445\u043E\u0447\u0430 \u0431 \u043E\u0434\u0438\u043D \u0442\u043E\u0432\u0430\u0440 \u0456\u0437 \u043A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044E.");
     if (want.size > 300) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 300 \u043F\u043E\u0437\u0438\u0446\u0456\u0439 \u0432 \u043E\u0434\u043D\u043E\u043C\u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.");
-    const rows = await db.all(
+    const rows = await withGrace(db, p, await db.all(
       `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_catalog c JOIN b2b_margins m ON m.brand_id = c.brand_id AND m.partner_id = ? ${PM_JOIN}
        WHERE c.product_id IN (SELECT value FROM json_each(?)) AND c.hidden = 0 AND c.rrp > 0`,
       [p.id, kyivDay(), JSON.stringify([...want.keys()])]
-    );
+    ));
     if (rows.length !== want.size) throw fail(400, "\u0414\u0435\u044F\u043A\u0456 \u0442\u043E\u0432\u0430\u0440\u0438 \u0431\u0456\u043B\u044C\u0448\u0435 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0456 \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443 \u043A\u0430\u0442\u0430\u043B\u043E\u0433\u0443.");
     return rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || "", qty: want.get(r.product_id), price: partnerPrice2(r.rrp, r.margin), rrp: r.rrp }));
   }
@@ -7867,22 +7888,22 @@ ${link(c, `b2bclients/${o.id}`)}`);
       HTTPS: "on"
     }));
   }
-  const dt = (iso) => iso ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+  const dt2 = (iso) => iso ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
   const ukDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d || "") ? d.split("-").reverse().join(".") : "";
   const num5 = (n) => new Intl.NumberFormat("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n).replace(/\s/g, " ");
   async function payText(o, partnerName) {
-    if (!o.supply_id) return { paid: !!o.paid_at, text: o.paid_at ? `\u2705 \u041E\u041F\u041B\u0410\u0427\u0415\u041D\u041E (\u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456, \u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E ${dt(o.paid_at)})` : "\u23F3 \u0411\u0415\u0417 \u0417\u0410\u041A\u0423\u041F\u0406\u0412\u041B\u0406 \u2014 \u041E\u0427\u0406\u041A\u0423\u0404\u041C\u041E \u041E\u041F\u041B\u0410\u0422\u0423" };
+    if (!o.supply_id) return { paid: !!o.paid_at, text: o.paid_at ? `\u2705 \u041E\u041F\u041B\u0410\u0427\u0415\u041D\u041E (\u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456, \u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E ${dt2(o.paid_at)})` : "\u23F3 \u0411\u0415\u0417 \u0417\u0410\u041A\u0423\u041F\u0406\u0412\u041B\u0406 \u2014 \u041E\u0427\u0406\u041A\u0423\u0404\u041C\u041E \u041E\u041F\u041B\u0410\u0422\u0423" };
     const s = await db.get(`SELECT * FROM b2b_orders WHERE id = ?`, [o.supply_id]);
     if (!s) return { paid: false, text: "" };
     if (s.status === "open") return { paid: false, text: `\u23F3 \u0411\u0415\u0417 \u0417\u0410\u041A\u0423\u041F\u0406\u0412\u041B\u0406 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(s.id)}, \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u0449\u0435 \u043D\u0435 \u0441\u0444\u043E\u0440\u043C\u043E\u0432\u0430\u043D\u043E) \u2014 \u041E\u0427\u0406\u041A\u0423\u0404\u041C\u041E \u041E\u041F\u041B\u0410\u0422\u0423` };
     const ent = String(s.entity || "").split("\n")[0];
     const inv = s.invoice_no ? `\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${s.invoice_no}${s.invoice_date ? ` \u0432\u0456\u0434 ${ukDate(s.invoice_date)}` : ""} \u043D\u0430 ${num5(s.total)} \u0433\u0440\u043D` : `\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u0449\u0435 \u043D\u0435 \u0432\u0438\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E (${num5(s.total)} \u0433\u0440\u043D)`;
     const pays = await db.all(`SELECT amount, date, payer_name, payer_code, account FROM b2b_payments WHERE order_id = ? ORDER BY date`, [s.id]).catch(() => []);
-    const lines = pays.map((t) => `\u041E\u043F\u043B\u0430\u0442\u0430 ${dt(t.date)} \u2014 ${num5(t.amount)} \u0433\u0440\u043D \u0432\u0456\u0434 ${t.payer_name || "\u2014"}${t.payer_code ? ` (${t.payer_code})` : ""}${t.account ? ` \u043D\u0430 ${t.account}` : ""}`);
+    const lines = pays.map((t) => `\u041E\u043F\u043B\u0430\u0442\u0430 ${dt2(t.date)} \u2014 ${num5(t.amount)} \u0433\u0440\u043D \u0432\u0456\u0434 ${t.payer_name || "\u2014"}${t.payer_code ? ` (${t.payer_code})` : ""}${t.account ? ` \u043D\u0430 ${t.account}` : ""}`);
     if (["paid", "done"].includes(s.status)) {
       return { paid: true, text: [
         `\u2705 \u041E\u041F\u041B\u0410\u0427\u0415\u041D\u041E: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(s.id)}, ${inv}, \u043F\u043B\u0430\u0442\u043D\u0438\u043A ${ent}`,
-        ...lines.length ? lines : [`\u041F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443${s.paid_by && s.paid_by !== "Opendatabot" ? ` (${s.paid_by})` : ""}${s.paid_at ? ` ${dt(s.paid_at)}` : ""}`]
+        ...lines.length ? lines : [`\u041F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443${s.paid_by && s.paid_by !== "Opendatabot" ? ` (${s.paid_by})` : ""}${s.paid_at ? ` ${dt2(s.paid_at)}` : ""}`]
       ].join("\n") };
     }
     if (s.status === "partial") {
@@ -8745,6 +8766,8 @@ var pct = (v) => `${String(round2(v)).replace(".", ",")}%`;
 var arrow = (a, b) => b > a ? "\u25B2" : b < a ? "\u25BC" : "";
 var MAX_CHUNK = 3800;
 var MAX_CHUNKS = 6;
+var NEW_BRAND_DAYS = 7;
+var dt = (iso) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 function mountB2bPrices(app, { db, services, partnerPrice: partnerPrice2 }) {
   async function brandNames() {
     const rows = await db.all(`SELECT id, name FROM an_brands`).catch(() => []);
@@ -8758,13 +8781,18 @@ function mountB2bPrices(app, { db, services, partnerPrice: partnerPrice2 }) {
     ]);
     const cur = new Map(margins.map((m) => [m.brand_id, m.margin]));
     const firstOld = /* @__PURE__ */ new Map();
-    for (const r of mlog) if (!firstOld.has(r.brand_id)) firstOld.set(r.brand_id, r.old_margin);
+    const firstAt = /* @__PURE__ */ new Map();
+    for (const r of mlog) if (!firstOld.has(r.brand_id)) {
+      firstOld.set(r.brand_id, r.old_margin);
+      firstAt.set(r.brand_id, r.at);
+    }
     const opened = [];
     const closed = [];
     const marginChanged = [];
     for (const [brand, old] of firstOld) {
       const now = cur.has(brand) ? cur.get(brand) : null;
-      if (old == null && now != null) opened.push({ brand, name: names.get(brand) || "\u0406\u043D\u0448\u0456", margin: now });
+      const longAgo = !p.prices_sent_at && Date.now() - Date.parse(firstAt.get(brand) || "") > NEW_BRAND_DAYS * 864e5;
+      if (old == null && now != null && !longAgo) opened.push({ brand, name: names.get(brand) || "\u0406\u043D\u0448\u0456", margin: now });
       else if (old != null && now == null) closed.push({ brand, name: names.get(brand) || "\u0406\u043D\u0448\u0456" });
       else if (old != null && now != null && round2(old) !== round2(now)) marginChanged.push({ brand, name: names.get(brand) || "\u0406\u043D\u0448\u0456", old, now });
     }
@@ -8772,7 +8800,7 @@ function mountB2bPrices(app, { db, services, partnerPrice: partnerPrice2 }) {
       const mc = marginChanged.find((x) => x.brand === brand);
       return mc ? mc.old : cur.get(brand);
     };
-    const brands = [...cur.keys()].filter((b) => !opened.some((o) => o.brand === b));
+    const brands = [...cur.keys()];
     if (!brands.length) return { since, opened, closed, marginChanged, products: [] };
     const plog = await db.all(
       `SELECT l.product_id, l.old_rrp FROM b2b_price_log l JOIN b2b_catalog c ON c.product_id = l.product_id
@@ -8781,7 +8809,7 @@ function mountB2bPrices(app, { db, services, partnerPrice: partnerPrice2 }) {
     );
     const oldRrp = /* @__PURE__ */ new Map();
     for (const r of plog) if (!oldRrp.has(r.product_id)) oldRrp.set(r.product_id, r.old_rrp);
-    const mcBrands = marginChanged.map((x) => x.brand);
+    const mcBrands = marginChanged.map((x) => x.brand).filter((b) => !opened.some((o) => o.brand === b));
     const rows = oldRrp.size || mcBrands.length ? await db.all(
       `SELECT product_id, name, article, rrp, brand_id FROM b2b_catalog WHERE hidden = 0 AND rrp > 0
          AND (product_id IN (SELECT value FROM json_each(?)) OR brand_id IN (SELECT value FROM json_each(?)))
@@ -8796,7 +8824,18 @@ function mountB2bPrices(app, { db, services, partnerPrice: partnerPrice2 }) {
       if (round2(o) === round2(r.rrp) && oldPrice === newPrice) continue;
       products.push({ id: r.product_id, name: r.name, article: r.article, brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456", oldRrp: o, newRrp: r.rrp, oldPrice, newPrice });
     }
-    return { since, opened, closed, marginChanged, products };
+    const grace = await graceHoursOf(db, p);
+    if (grace && products.some((x) => x.newPrice > x.oldPrice)) {
+      const lastAt2 = new Map((await db.all(
+        `SELECT product_id, MAX(at) AS at FROM b2b_price_log WHERE at > ? AND product_id IN (SELECT value FROM json_each(?)) GROUP BY product_id`,
+        [since, JSON.stringify(products.map((x) => x.id))]
+      )).map((r) => [r.product_id, r.at]));
+      for (const x of products) {
+        const at = lastAt2.get(x.id);
+        if (x.newPrice > x.oldPrice && at && Date.parse(at) + grace * 36e5 > Date.now()) x.graceUntil = new Date(Date.parse(at) + grace * 36e5).toISOString();
+      }
+    }
+    return { since, opened, closed, marginChanged, products, grace };
   }
   const empty = (ch) => !ch.products.length && !ch.opened.length && !ch.closed.length && !ch.marginChanged.length;
   function messages(p, ch) {
@@ -8808,7 +8847,9 @@ ${ch.marginChanged.map((x) => `${h4(x.name)}: ${pct(x.old)} \u2192 <b>${pct(x.no
 ${ch.opened.map((x) => `${h4(x.name)} \u2014 \u0437\u043D\u0438\u0436\u043A\u0430 ${pct(x.margin)} \u0432\u0456\u0434 \u0420\u0420\u0426 (\u0442\u043E\u0432\u0430\u0440\u0438 \u2014 \u0443 \u043A\u0430\u0442\u0430\u043B\u043E\u0437\u0456)`).join("\n")}`);
     if (ch.closed.length) blocks.push(`<b>\u0411\u0456\u043B\u044C\u0448\u0435 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0456:</b> ${ch.closed.map((x) => h4(x.name)).join(", ")}`);
     const lines = ch.products.map((x) => `${h4(x.name)}${x.article ? ` (${h4(x.article)})` : ""}
-   \u0420\u0420\u0426 ${m2(x.oldRrp)} \u2192 <b>${m2(x.newRrp)}</b> ${arrow(x.oldRrp, x.newRrp)} \xB7 \u0432\u0430\u0448\u0430 \u0446\u0456\u043D\u0430 ${m2(x.oldPrice)} \u2192 <b>${m2(x.newPrice)}</b> \u0433\u0440\u043D ${arrow(x.oldPrice, x.newPrice)}`);
+   \u0420\u0420\u0426 ${m2(x.oldRrp)} \u2192 <b>${m2(x.newRrp)}</b> ${arrow(x.oldRrp, x.newRrp)} \xB7 \u0432\u0430\u0448\u0430 \u0446\u0456\u043D\u0430 ${m2(x.oldPrice)} \u2192 <b>${m2(x.newPrice)}</b> \u0433\u0440\u043D ${arrow(x.oldPrice, x.newPrice)}${x.graceUntil ? `
+   \u23F3 \u0437\u0430 \u0441\u0442\u0430\u0440\u043E\u044E \u0446\u0456\u043D\u043E\u044E \u2014 \u0434\u043E ${dt(x.graceUntil)}` : ""}`);
+    if (ch.products.some((x) => x.graceUntil)) blocks.push(`\u23F3 \u041F\u0456\u0434\u0432\u0438\u0449\u0435\u043D\u0456 \u0446\u0456\u043D\u0438 \u043F\u043E\u0447\u0438\u043D\u0430\u044E\u0442\u044C \u0434\u0456\u044F\u0442\u0438 \u0447\u0435\u0440\u0435\u0437 ${ch.grace} \u0433\u043E\u0434 \u043F\u0456\u0441\u043B\u044F \u0437\u043C\u0456\u043D\u0438 \u2014 \u0434\u043E \u0442\u043E\u0433\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043F\u0440\u0438\u0439\u043C\u0430\u044E\u0442\u044C\u0441\u044F \u0437\u0430 \u0441\u0442\u0430\u0440\u0438\u043C\u0438 \u0446\u0456\u043D\u0430\u043C\u0438.`);
     const out = [];
     let cur = [head, ...blocks].join("\n\n");
     if (lines.length) cur += `
@@ -8872,6 +8913,20 @@ ${l}`;
       results.push({ id: p.id, name: p.name, sent: sent > 0, where: p.tg_group ? "group" : "users", products: ch.products.length });
     }
     return c.json({ results });
+  });
+  app.get("/api/b2b/price-grace", async (c) => {
+    need(c, "b2b.admin");
+    const g = await db.get(`SELECT value FROM settings WHERE key = 'b2b_price_grace_hours'`);
+    const own = await db.all(`SELECT id, name, price_grace_hours FROM b2b_partners WHERE price_grace_hours IS NOT NULL AND COALESCE(deleted_at, '') = '' ORDER BY name`);
+    return c.json({ hours: Number(g?.value) || 0, partners: own });
+  });
+  app.put("/api/b2b/price-grace", async (c) => {
+    need(c, "b2b.admin");
+    const b = await c.req.json().catch(() => ({}));
+    const hours = Number(b.hours);
+    if (!Number.isInteger(hours) || hours < 0 || hours > 720) throw fail(400, "\u0412\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 \u2014 \u0446\u0456\u043B\u0435 \u0447\u0438\u0441\u043B\u043E \u0433\u043E\u0434\u0438\u043D \u0432\u0456\u0434 0 \u0434\u043E 720.");
+    await db.run(`INSERT INTO settings (key, value) VALUES ('b2b_price_grace_hours', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(hours)]);
+    return c.json({ hours });
   });
   const ANN_MAX = 3500;
   const annText = (raw2) => `\u{1F4E2} ${h4(String(raw2 || "").trim()).slice(0, ANN_MAX)}`;
@@ -9072,12 +9127,12 @@ function mountB2bTgDocs(app, { db, services, orders, hooks }) {
     for (const d of docItems) {
       let hit = left.find((i) => !i.used && Math.abs(i.price - d.price) < 0.01 && i.qty === d.qty);
       if (!hit) {
-        const dt = modelTokens(d.name);
+        const dt2 = modelTokens(d.name);
         let best = null;
         let bestN = 0;
         for (const i of left) {
           if (i.used) continue;
-          const n = [...dt].filter((t) => i.tokens.has(t)).length;
+          const n = [...dt2].filter((t) => i.tokens.has(t)).length;
           if (n > bestN) {
             best = i;
             bestN = n;
@@ -9802,11 +9857,15 @@ var userName4 = (u) => u?.name || u?.login || "";
 var firstLine = (s) => String(s || "").split("\n")[0];
 function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partnerPrice2 }) {
   const { orderOf, supplyLeft, itemRows, totalOf, log, tgPartner, tgGroup, link, uah: uah4, h: h7, rebuildOpen, getOpen, entityText } = orders;
-  const partnerCatalog = (partnerId) => db.all(
-    `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN}
-     WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`,
-    [kyivDay(), partnerId]
-  ).then((rows) => rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || "", rrp: r.rrp, price: partnerPrice2(r.rrp, r.margin) })));
+  const partnerCatalog = async (partnerId) => {
+    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [partnerId]);
+    const rows = await withGrace(db, p, await db.all(
+      `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN}
+       WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`,
+      [kyivDay(), partnerId]
+    ));
+    return rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || "", rrp: r.rrp, price: partnerPrice2(r.rrp, r.margin) }));
+  };
   hooks.partnerCatalog = partnerCatalog;
   app.get("/api/b2b/orders/:id/edit-options", async (c) => {
     need(c, "b2b.admin");
@@ -9850,11 +9909,11 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
     if (!want.size) throw fail(400, "\u0423 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043C\u0430\u0454 \u043B\u0438\u0448\u0438\u0442\u0438\u0441\u044F \u0445\u043E\u0447\u0430 \u0431 \u043E\u0434\u0438\u043D \u0442\u043E\u0432\u0430\u0440. \u0429\u043E\u0431 \u043F\u0440\u0438\u0431\u0440\u0430\u0442\u0438 \u0432\u0441\u0435 \u2014 \u0432\u0438\u0434\u0430\u043B\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E.");
     if (want.size > 300) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 300 \u043F\u043E\u0437\u0438\u0446\u0456\u0439.");
     const newIds = [...want.keys()].filter((id) => !curMap.has(id));
-    const cat = newIds.length ? new Map((await db.all(
+    const cat = newIds.length ? new Map((await withGrace(db, await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [o.partner_id]), await db.all(
       `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_catalog c LEFT JOIN b2b_margins m ON m.brand_id = c.brand_id AND m.partner_id = ? ${PM_JOIN}
        WHERE c.product_id IN (SELECT value FROM json_each(?))`,
       [o.partner_id, kyivDay(), JSON.stringify(newIds)]
-    )).map((r) => [r.product_id, r])) : /* @__PURE__ */ new Map();
+    ))).map((r) => [r.product_id, r])) : /* @__PURE__ */ new Map();
     const items = [...want].map(([id, w]) => {
       const old = curMap.get(id);
       if (old) return { product_id: id, name: old.name, article: old.article || "", qty: w.qty, price: w.price ?? old.price, rrp: old.rrp };
@@ -10532,6 +10591,16 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
         log.push(v ? `\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 \u043E\u043F\u043B\u0430\u0442\u0438: ${v} \u0434\u043D.` : "\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0443 \u043E\u043F\u043B\u0430\u0442\u0438 \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E");
       }
     }
+    if (b.price_grace_hours !== void 0) {
+      const raw2 = String(b.price_grace_hours ?? "").trim();
+      if (raw2 && !/^\d+$/.test(raw2)) throw fail(400, "\u0412\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 \u043F\u0456\u0434\u0432\u0438\u0449\u0435\u043D\u043D\u044F \u0446\u0456\u043D \u2014 \u0446\u0456\u043B\u0435 \u0447\u0438\u0441\u043B\u043E \u0433\u043E\u0434\u0438\u043D (\u043F\u043E\u0440\u043E\u0436\u043D\u044C\u043E \u2014 \u0437\u0430\u0433\u0430\u043B\u044C\u043D\u0430).");
+      const v = raw2 === "" ? null : Number(raw2);
+      if (v !== null && v > 720) throw fail(400, "\u0412\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 \u043F\u0456\u0434\u0432\u0438\u0449\u0435\u043D\u043D\u044F \u0446\u0456\u043D \u2014 \u0434\u043E 720 \u0433\u043E\u0434\u0438\u043D (30 \u0434\u043D\u0456\u0432).");
+      if (v !== (p.price_grace_hours ?? null)) {
+        st.push([`UPDATE b2b_partners SET price_grace_hours = ? WHERE id = ?`, [v, p.id]]);
+        log.push(`\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 \u043F\u0456\u0434\u0432\u0438\u0449\u0435\u043D\u043D\u044F \u0446\u0456\u043D: ${p.price_grace_hours ?? "\u0437\u0430\u0433\u0430\u043B\u044C\u043D\u0430"} \u2192 ${v ?? "\u0437\u0430\u0433\u0430\u043B\u044C\u043D\u0430"}${v != null ? " \u0433\u043E\u0434" : ""}`);
+      }
+    }
     for (const [k, label] of [["open_limit", "\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u043E\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456"], ["unpaid_limit", "\u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0438\u0445 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C"], ["postpay_limit", "\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0438"]]) {
       if (b[k] === void 0) continue;
       const raw2 = String(b[k] ?? "").replace(/\s/g, "");
@@ -10626,7 +10695,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
         else if (b.action === "resume") changed = await applyPause(c, p, { paused: 0 });
         else if (b.action === "limits") {
           const f = {};
-          for (const k of ["open_limit", "unpaid_limit", "postpay_days", "postpay_limit"]) if (b[k] !== void 0 && b[k] !== null) f[k] = b[k];
+          for (const k of ["open_limit", "unpaid_limit", "postpay_days", "postpay_limit", "price_grace_hours"]) if (b[k] !== void 0 && b[k] !== null) f[k] = b[k];
           changed = await applyLimits(c, p, f);
         } else {
           const { mode, brand, v, enable } = margin;
@@ -10909,7 +10978,8 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const [rows, names, cats] = await Promise.all([
       db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.image, c.brand_id, c.announced_at, ${PM_COLS}, COALESCE(a.cat_manual, a.category_id, 0) AS cat
         FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN} LEFT JOIN an_products a ON a.product_id = c.product_id
-        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [kyivDay(), p.id]),
+        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [kyivDay(), p.id]).then((r) => withGrace(db, p, r)),
+      // ціна з урахуванням відстрочки підвищення
       brandNames(),
       db.all(`SELECT id, name FROM an_categories`).catch(() => [])
     ]);
@@ -10939,6 +11009,8 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
         margin: r.margin,
         special: Boolean(r.special),
         special_until: r.special_until || "",
+        // відстрочка підвищення: поки діє стара ціна — нова й коли почне діяти
+        ...r.rrp_new ? { rrp_new: r.rrp_new, price_new: partnerPrice(r.rrp_new, r.margin), grace_until: r.grace_until } : {},
         // «Новинка» — 14 днів після того, як адмін надіслав її партнерам (до розсилки партнер про неї не дізнається).
         is_new: /^\d{4}-/.test(r.announced_at || "") && Date.now() - Date.parse(r.announced_at) < 14 * 864e5,
         ordered: freq.get(r.product_id)?.n || 0,
@@ -15081,7 +15153,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 28,
+  version: 29,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -15372,6 +15444,8 @@ var schema11 = {
     ["b2b_tg_docs", "choices", "TEXT DEFAULT ''"],
     // Ліміти партнера (порожньо — типові): відкрита закупівля і всі неоплачені закупівлі.
     ["b2b_partners", "open_limit", "REAL"],
+    // Відстрочка підвищення цін, годин: після підвищення РРЦ партнер ще N годин замовляє за старою ціною (NULL — загальна з налаштувань).
+    ["b2b_partners", "price_grace_hours", "INTEGER"],
     ["b2b_partners", "unpaid_limit", "REAL"],
     // Закупівля, яку створили ми: відправка всієї закупівлі на склад партнера — отримувач (JSON: name, phone, address);
     // склад партнера за замовчуванням (підставляється в нові такі закупівлі).

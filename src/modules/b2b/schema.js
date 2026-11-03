@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 28,
+  version: 29,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -293,6 +293,8 @@ export const schema = {
     ['b2b_tg_docs', 'choices', "TEXT DEFAULT ''"],
     // Ліміти партнера (порожньо — типові): відкрита закупівля і всі неоплачені закупівлі.
     ['b2b_partners', 'open_limit', 'REAL'],
+    // Відстрочка підвищення цін, годин: після підвищення РРЦ партнер ще N годин замовляє за старою ціною (NULL — загальна з налаштувань).
+    ['b2b_partners', 'price_grace_hours', 'INTEGER'],
     ['b2b_partners', 'unpaid_limit', 'REAL'],
     // Закупівля, яку створили ми: відправка всієї закупівлі на склад партнера — отримувач (JSON: name, phone, address);
     // склад партнера за замовчуванням (підставляється в нові такі закупівлі).
