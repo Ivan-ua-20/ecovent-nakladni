@@ -7703,6 +7703,8 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
       office: s.b2b_crm_office ?? DEFAULT_OFFICE,
       // Типово: доставка «Нова пошта» (ID 1), оплачена закупівля — вид оплати «Оплачено» (ID 1), неоплачена — порожньо.
       delivery: s.b2b_crm_delivery ?? "1",
+      // Закупівля «самовивіз» (партнер забирає зі складу): свій вид доставки в LP-CRM (порожньо — без виду доставки).
+      pickupDelivery: s.b2b_crm_pickup_delivery || "",
       payment: s.b2b_crm_payment || "",
       paymentPaid: s.b2b_crm_payment_paid ?? "1",
       notification: s.b2b_crm_notification || "",
@@ -7721,6 +7723,7 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
       on: k.on,
       office: k.office,
       delivery: k.delivery,
+      pickup_delivery: k.pickupDelivery,
       payment: k.payment,
       payment_paid: k.paymentPaid,
       notification: k.notification,
@@ -7737,7 +7740,7 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     if (office && !ID_RE.test(office)) throw fail(400, "ID \u0432\u0456\u0434\u0434\u0456\u043B\u0443 \u2014 \u0447\u0438\u0441\u043B\u043E \u0437 LP-CRM (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0412\u0456\u0434\u0434\u0456\u043B\u0438).");
     if (b.on && !office) throw fail(400, "\u0421\u043F\u0435\u0440\u0448\u0443 \u0432\u043A\u0430\u0436\u0456\u0442\u044C ID \u0432\u0456\u0434\u0434\u0456\u043B\u0443 B2B.");
     const opt = {};
-    for (const [f, name] of [["delivery", "\u0432\u0438\u0434\u0443 \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0438"], ["payment", "\u0432\u0438\u0434\u0443 \u043E\u043F\u043B\u0430\u0442\u0438"], ["payment_paid", "\u0432\u0438\u0434\u0443 \u043E\u043F\u043B\u0430\u0442\u0438 \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB"], ["notification", "\u043F\u043E\u0437\u043D\u0430\u0447\u043A\u0438"]]) {
+    for (const [f, name] of [["delivery", "\u0432\u0438\u0434\u0443 \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0438"], ["pickup_delivery", "\u0432\u0438\u0434\u0443 \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0438 \xAB\u0421\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437\xBB"], ["payment", "\u0432\u0438\u0434\u0443 \u043E\u043F\u043B\u0430\u0442\u0438"], ["payment_paid", "\u0432\u0438\u0434\u0443 \u043E\u043F\u043B\u0430\u0442\u0438 \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB"], ["notification", "\u043F\u043E\u0437\u043D\u0430\u0447\u043A\u0438"]]) {
       opt[f] = String(b[f] ?? "").trim();
       if (!OPT_ID_RE.test(opt[f])) throw fail(400, `ID ${name} \u2014 \u0447\u0438\u0441\u043B\u043E \u0437 LP-CRM \u0430\u0431\u043E \u043F\u043E\u0440\u043E\u0436\u043D\u044C\u043E.`);
     }
@@ -7751,6 +7754,7 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
       set("b2b_crm_notification", opt.notification),
       set("b2b_crm_ttn_field", ttnField)
     ];
+    if (b.pickup_delivery !== void 0) st.push(set("b2b_crm_pickup_delivery", opt.pickup_delivery));
     if (b.payment_paid !== void 0) st.push(set("b2b_crm_payment_paid", opt.payment_paid));
     if (b.site !== void 0) {
       const site = String(b.site).trim().replace(/^https?:\/\//i, "").replace(/\/.*$/, "").toLowerCase();
@@ -8660,7 +8664,9 @@ ${link(c, `pclients/${o.id}`)}`);
   app.post("/api/b2b/orders/:id/crm", async (c) => {
     need(c, "b2b.admin");
     const s = await orderOf(c.req.param("id"));
-    if (s.kind !== "supply" || s.delivery !== "warehouse") throw fail(400, "\u0423 LP-CRM \u043E\u0434\u043D\u0438\u043C \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F\u043C \u043F\u0435\u0440\u0435\u0434\u0430\u0454\u0442\u044C\u0441\u044F \u043B\u0438\u0448\u0435 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F \xAB\u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430\xBB.");
+    const pickup = s.kind === "supply" && s.delivery === "pickup";
+    if (s.kind !== "supply" || !(s.delivery === "warehouse" || pickup)) throw fail(400, "\u0423 LP-CRM \u043E\u0434\u043D\u0438\u043C \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F\u043C \u043F\u0435\u0440\u0435\u0434\u0430\u0454\u0442\u044C\u0441\u044F \u043B\u0438\u0448\u0435 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F \xAB\u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430\xBB \u0430\u0431\u043E \xAB\u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437\xBB.");
+    if (pickup && !s.invoice_no) throw fail(400, "\u0421\u043F\u0435\u0440\u0448\u0443 \u0432\u043D\u0435\u0441\u0456\u0442\u044C \u043D\u043E\u043C\u0435\u0440 \u0440\u0430\u0445\u0443\u043D\u043A\u0443 \u2014 \u043F\u0456\u0441\u043B\u044F \u0440\u0430\u0445\u0443\u043D\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043C\u043E\u0436\u043D\u0430 \u043F\u0435\u0440\u0435\u0434\u0430\u0442\u0438 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434.");
     if (s.crm_id || s.crm_ext) throw fail(400, `\u0423\u0436\u0435 \u0432 LP-CRM${s.crm_id ? `: \u2116 ${s.crm_id}` : ""}.`);
     if (s.status === "confirm") throw fail(400, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440 \u0449\u0435 \u043D\u0435 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E.");
     if (["cancelled", "draft", "open"].includes(s.status)) throw fail(400, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0430\u0431\u043E \u0432\u043E\u043D\u0430 \u0449\u0435 \u043D\u0435 \u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u0430.");
@@ -8668,7 +8674,14 @@ ${link(c, `pclients/${o.id}`)}`);
     if (!k.on) throw fail(400, "\u041F\u0435\u0440\u0435\u0434\u0430\u0447\u0443 \u0432 LP-CRM \u0449\u0435 \u043D\u0435 \u0432\u0432\u0456\u043C\u043A\u043D\u0435\u043D\u043E (\xAB\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432\xBB \u2192 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F CRM\xBB).");
     if (!k.office) throw fail(400, "\u041D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E ID \u0432\u0456\u0434\u0434\u0456\u043B\u0443 B2B \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 CRM\xBB.");
     if (!k.creds.subdomain || !k.creds.key) throw fail(400, "\u041D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E LP-CRM: \u043F\u0456\u0434\u0434\u043E\u043C\u0435\u043D \u0456 API-\u043A\u043B\u044E\u0447 \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445\xBB.");
-    const ship = orders.parseShipTo(s.ship_to);
+    const pp = await db.get(`SELECT name, phone, wh_phone FROM b2b_partners WHERE id = ?`, [s.partner_id]);
+    let ship = orders.parseShipTo(s.ship_to);
+    if (pickup) {
+      const ent = s.entity_id ? await db.get(`SELECT name, phone FROM b2b_entities WHERE id = ?`, [s.entity_id]) : null;
+      const phone = [pp?.phone, ent?.phone, pp?.wh_phone].map((x) => String(x || "").replace(/\D/g, "")).find((x) => x.length >= 9) || "";
+      if (!phone) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u0442\u0435\u043B\u0435\u0444\u043E\u043D\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u2014 \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u0432 \u043A\u0430\u0440\u0442\u0446\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 (\xAB\u041F\u0430\u0440\u0442\u043D\u0435\u0440\u0438\xBB \u2192 \u043A\u0430\u0440\u0442\u043A\u0430 \u2192 \u0422\u0435\u043B\u0435\u0444\u043E\u043D), \u0442\u043E\u0434\u0456 \u043F\u0435\u0440\u0435\u0434\u0430\u0439\u0442\u0435 \u0432 LP-CRM.");
+      ship = { name: `${pp?.name || ""}${ent?.name ? ` (${ent.name})` : ""}`.trim(), phone, address: "\u0421\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437 \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443" };
+    }
     if (!ship?.name || !ship?.address) throw fail(400, "\u041D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 (\u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0447 \u0456 \u0430\u0434\u0440\u0435\u0441\u0430) \u2014 \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456.");
     const code = newCode();
     const now = nowIso();
@@ -8683,7 +8696,11 @@ ${link(c, `pclients/${o.id}`)}`);
       db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [s.partner_id])
     ]);
     const pay = await payText({ supply_id: s.id }, p?.name || "");
-    const comment = [`${orderNo(s.id)} \xB7 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F B2B \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \xAB${p?.name || ""}\xBB`, pay.text, s.comment || ""].filter(Boolean).join("\n");
+    const comment = [
+      pickup ? `${orderNo(s.id)} \xB7 \u0421\u0410\u041C\u041E\u0412\u0418\u0412\u0406\u0417 \u2014 \u043F\u0430\u0440\u0442\u043D\u0435\u0440 \xAB${p?.name || ""}\xBB \u0437\u0430\u0431\u0438\u0440\u0430\u0454 \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443 \xB7 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${s.invoice_no}` : `${orderNo(s.id)} \xB7 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F B2B \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \xAB${p?.name || ""}\xBB`,
+      pay.text,
+      s.comment || ""
+    ].filter(Boolean).join("\n");
     const undo = () => db.run(`UPDATE b2b_orders SET crm_ext = '', crm_sent_at = '' WHERE id = ?`, [s.id]);
     let res;
     try {
@@ -8693,7 +8710,7 @@ ${link(c, `pclients/${o.id}`)}`);
         bayer_name: ship.name,
         phone: ship.phone.replace(/\D/g, ""),
         comment,
-        delivery: k.delivery,
+        delivery: pickup ? k.pickupDelivery : k.delivery,
         payment: pay.paid ? k.paymentPaid : k.payment,
         notification: k.notification,
         delivery_adress: ship.address,
@@ -8717,9 +8734,15 @@ ${link(c, `pclients/${o.id}`)}`);
       crmId = String(found.find((x) => String(x.order_id) === code)?.id || "");
     }
     await db.run(`UPDATE b2b_orders SET crm_id = ?, crm_sent_at = ?, crm_status = '\u041F\u0435\u0440\u0435\u0434\u0430\u043D\u043E', updated_at = ? WHERE id = ?`, [crmId, nowIso(), nowIso(), s.id]);
-    await log(s.id, c.get("user"), `\u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 LP-CRM \u043D\u0430 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430${crmId ? `: \u2116 ${crmId}` : ` (\u043A\u043E\u0434 ${code})`}`);
-    await tgPartner(s.partner_id, `\u{1F69A} \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(s.id)} \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u043D\u0430 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0432\u0430\u0448 \u0441\u043A\u043B\u0430\u0434${crmId ? ` (\u2116 ${crmId})` : ""}: ${h7(ship.name)}, ${h7(ship.address)}.
+    if (pickup) {
+      await log(s.id, c.get("user"), `\u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 LP-CRM \u2014 \u0441\u043A\u043B\u0430\u0434 \u0433\u043E\u0442\u0443\u0454 \u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437${crmId ? `: \u2116 ${crmId}` : ` (\u043A\u043E\u0434 ${code})`}${pay.paid ? "" : " \xB7 \u0449\u0435 \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E"}`);
+      await tgPartner(s.partner_id, `\u{1F4E6} \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(s.id)} \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u2014 \u0433\u043E\u0442\u0443\u0454\u043C\u043E \u0434\u043E \u0441\u0430\u043C\u043E\u0432\u0438\u0432\u043E\u0437\u0443${crmId ? ` (\u2116 ${crmId})` : ""}. \u0421\u043A\u043B\u0430\u0434 \u0437\u0431\u0438\u0440\u0430\u0454 \u0442\u043E\u0432\u0430\u0440 \u2014 \u043F\u0435\u0440\u0435\u0434 \u043F\u0440\u0438\u0457\u0437\u0434\u043E\u043C \u0443\u0437\u0433\u043E\u0434\u044C\u0442\u0435 \u0447\u0430\u0441 \u0456\u0437 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u043E\u043C.
 ${link(c, `porders/${s.id}`)}`);
+    } else {
+      await log(s.id, c.get("user"), `\u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 LP-CRM \u043D\u0430 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430${crmId ? `: \u2116 ${crmId}` : ` (\u043A\u043E\u0434 ${code})`}`);
+      await tgPartner(s.partner_id, `\u{1F69A} \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(s.id)} \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u043D\u0430 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0432\u0430\u0448 \u0441\u043A\u043B\u0430\u0434${crmId ? ` (\u2116 ${crmId})` : ""}: ${h7(ship.name)}, ${h7(ship.address)}.
+${link(c, `porders/${s.id}`)}`);
+    }
     return c.json({ ok: true, crm_id: crmId, code, paid: pay.paid });
   });
   app.put("/api/b2b/clients/:id", async (c) => {

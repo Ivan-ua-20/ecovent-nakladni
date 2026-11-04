@@ -41,6 +41,8 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
       office: s.b2b_crm_office ?? DEFAULT_OFFICE,
       // Типово: доставка «Нова пошта» (ID 1), оплачена закупівля — вид оплати «Оплачено» (ID 1), неоплачена — порожньо.
       delivery: s.b2b_crm_delivery ?? '1',
+      // Закупівля «самовивіз» (партнер забирає зі складу): свій вид доставки в LP-CRM (порожньо — без виду доставки).
+      pickupDelivery: s.b2b_crm_pickup_delivery || '',
       payment: s.b2b_crm_payment || '',
       paymentPaid: s.b2b_crm_payment_paid ?? '1',
       notification: s.b2b_crm_notification || '',
@@ -56,7 +58,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     need(c, 'b2b.admin');
     const k = await crmConfig();
     return c.json({
-      on: k.on, office: k.office, delivery: k.delivery, payment: k.payment, payment_paid: k.paymentPaid, notification: k.notification, ttn_field: k.ttnField, site: k.site,
+      on: k.on, office: k.office, delivery: k.delivery, pickup_delivery: k.pickupDelivery, payment: k.payment, payment_paid: k.paymentPaid, notification: k.notification, ttn_field: k.ttnField, site: k.site,
       in_key: k.hasInKey ? MASK : '', ready: !!(k.creds.subdomain && k.creds.key),
     });
   });
@@ -67,7 +69,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     if (office && !ID_RE.test(office)) throw fail(400, 'ID відділу — число з LP-CRM (Налаштування → Відділи).');
     if (b.on && !office) throw fail(400, 'Спершу вкажіть ID відділу B2B.');
     const opt = {};
-    for (const [f, name] of [['delivery', 'виду доставки'], ['payment', 'виду оплати'], ['payment_paid', 'виду оплати «Оплачено»'], ['notification', 'позначки']]) {
+    for (const [f, name] of [['delivery', 'виду доставки'], ['pickup_delivery', 'виду доставки «Самовивіз»'], ['payment', 'виду оплати'], ['payment_paid', 'виду оплати «Оплачено»'], ['notification', 'позначки']]) {
       opt[f] = String(b[f] ?? '').trim();
       if (!OPT_ID_RE.test(opt[f])) throw fail(400, `ID ${name} — число з LP-CRM або порожньо.`);
     }
@@ -75,6 +77,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     const set = (key, value) => [`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]];
     const st = [set('b2b_crm_office', office), set('b2b_crm_on', b.on ? '1' : '0'), set('b2b_crm_delivery', opt.delivery),
       set('b2b_crm_payment', opt.payment), set('b2b_crm_notification', opt.notification), set('b2b_crm_ttn_field', ttnField)];
+    if (b.pickup_delivery !== undefined) st.push(set('b2b_crm_pickup_delivery', opt.pickup_delivery));
     if (b.payment_paid !== undefined) st.push(set('b2b_crm_payment_paid', opt.payment_paid)); // не передано — лишається як було (типово «Оплачено», ID 1)
     if (b.site !== undefined) {
       const site = String(b.site).trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
@@ -961,10 +964,13 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
   });
 
   // Закупівля «на склад партнера» → одне замовлення в LP-CRM (вкладка «Нові»): отримувач — склад партнера, ціни партнера.
+  // Закупівля «самовивіз» (після рахунку) → теж одне замовлення: склад готує товар, партнер приїде забрати.
   app.post('/api/b2b/orders/:id/crm', async (c) => {
     need(c, 'b2b.admin');
     const s = await orderOf(c.req.param('id'));
-    if (s.kind !== 'supply' || s.delivery !== 'warehouse') throw fail(400, 'У LP-CRM одним замовленням передається лише закупівля «на склад партнера».');
+    const pickup = s.kind === 'supply' && s.delivery === 'pickup';
+    if (s.kind !== 'supply' || !(s.delivery === 'warehouse' || pickup)) throw fail(400, 'У LP-CRM одним замовленням передається лише закупівля «на склад партнера» або «самовивіз».');
+    if (pickup && !s.invoice_no) throw fail(400, 'Спершу внесіть номер рахунку — після рахунку закупівлю можна передати на склад.');
     if (s.crm_id || s.crm_ext) throw fail(400, `Уже в LP-CRM${s.crm_id ? `: № ${s.crm_id}` : ''}.`);
     if (s.status === 'confirm') throw fail(400, 'Партнер ще не підтвердив закупівлю.');
     if (['cancelled', 'draft', 'open'].includes(s.status)) throw fail(400, 'Закупівлю скасовано або вона ще не оформлена.');
@@ -972,7 +978,15 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     if (!k.on) throw fail(400, 'Передачу в LP-CRM ще не ввімкнено («Замовлення клієнтів» → «Налаштування CRM»).');
     if (!k.office) throw fail(400, 'Не вказано ID відділу B2B у «Налаштуваннях CRM».');
     if (!k.creds.subdomain || !k.creds.key) throw fail(400, 'Не налаштовано LP-CRM: піддомен і API-ключ у «Налаштуваннях».');
-    const ship = orders.parseShipTo(s.ship_to);
+    const pp = await db.get(`SELECT name, phone, wh_phone FROM b2b_partners WHERE id = ?`, [s.partner_id]);
+    let ship = orders.parseShipTo(s.ship_to);
+    if (pickup) {
+      // Отримувач — партнер (юрособа рахунку), телефон — з картки партнера, юрособи або складу.
+      const ent = s.entity_id ? await db.get(`SELECT name, phone FROM b2b_entities WHERE id = ?`, [s.entity_id]) : null;
+      const phone = [pp?.phone, ent?.phone, pp?.wh_phone].map((x) => String(x || '').replace(/\D/g, '')).find((x) => x.length >= 9) || '';
+      if (!phone) throw fail(400, 'Немає телефону партнера — вкажіть його в картці партнера («Партнери» → картка → Телефон), тоді передайте в LP-CRM.');
+      ship = { name: `${pp?.name || ''}${ent?.name ? ` (${ent.name})` : ''}`.trim(), phone, address: 'Самовивіз зі складу' };
+    }
     if (!ship?.name || !ship?.address) throw fail(400, 'Не вказано склад партнера (отримувач і адреса) — змініть спосіб отримання в закупівлі.');
     const code = newCode();
     const now = nowIso();
@@ -987,13 +1001,14 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
       db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [s.partner_id]),
     ]);
     const pay = await payText({ supply_id: s.id }, p?.name || '');
-    const comment = [`${orderNo(s.id)} · закупівля B2B на склад партнера «${p?.name || ''}»`, pay.text, s.comment || ''].filter(Boolean).join('\n');
+    const comment = [pickup ? `${orderNo(s.id)} · САМОВИВІЗ — партнер «${p?.name || ''}» забирає зі складу · рахунок № ${s.invoice_no}` : `${orderNo(s.id)} · закупівля B2B на склад партнера «${p?.name || ''}»`,
+      pay.text, s.comment || ''].filter(Boolean).join('\n');
     const undo = () => db.run(`UPDATE b2b_orders SET crm_ext = '', crm_sent_at = '' WHERE id = ?`, [s.id]);
     let res;
     try {
       res = await addNewOrder(fetchFn, k.addCreds, {
         code, office: k.office, bayer_name: ship.name, phone: ship.phone.replace(/\D/g, ''), comment,
-        delivery: k.delivery, payment: pay.paid ? k.paymentPaid : k.payment, notification: k.notification,
+        delivery: pickup ? k.pickupDelivery : k.delivery, payment: pay.paid ? k.paymentPaid : k.payment, notification: k.notification,
         delivery_adress: ship.address, sender: senderOf(c, k.site), site: k.site || new URL(c.req.url).host,
         products: items.map((i) => ({ product_id: i.product_id, price: i.price, count: i.qty })),
       });
@@ -1013,8 +1028,13 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
       crmId = String(found.find((x) => String(x.order_id) === code)?.id || '');
     }
     await db.run(`UPDATE b2b_orders SET crm_id = ?, crm_sent_at = ?, crm_status = 'Передано', updated_at = ? WHERE id = ?`, [crmId, nowIso(), nowIso(), s.id]);
-    await log(s.id, c.get('user'), `передано в LP-CRM на відправку на склад партнера${crmId ? `: № ${crmId}` : ` (код ${code})`}`);
-    await tgPartner(s.partner_id, `🚚 Закупівлю ${orderNo(s.id)} передано на відправку на ваш склад${crmId ? ` (№ ${crmId})` : ''}: ${h(ship.name)}, ${h(ship.address)}.\n${link(c, `porders/${s.id}`)}`);
+    if (pickup) {
+      await log(s.id, c.get('user'), `передано в LP-CRM — склад готує самовивіз${crmId ? `: № ${crmId}` : ` (код ${code})`}${pay.paid ? '' : ' · ще не оплачено'}`);
+      await tgPartner(s.partner_id, `📦 Закупівлю ${orderNo(s.id)} передано на склад — готуємо до самовивозу${crmId ? ` (№ ${crmId})` : ''}. Склад збирає товар — перед приїздом узгодьте час із менеджером.\n${link(c, `porders/${s.id}`)}`);
+    } else {
+      await log(s.id, c.get('user'), `передано в LP-CRM на відправку на склад партнера${crmId ? `: № ${crmId}` : ` (код ${code})`}`);
+      await tgPartner(s.partner_id, `🚚 Закупівлю ${orderNo(s.id)} передано на відправку на ваш склад${crmId ? ` (№ ${crmId})` : ''}: ${h(ship.name)}, ${h(ship.address)}.\n${link(c, `porders/${s.id}`)}`);
+    }
     return c.json({ ok: true, crm_id: crmId, code, paid: pay.paid });
   });
 

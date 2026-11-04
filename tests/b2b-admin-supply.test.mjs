@@ -108,6 +108,29 @@ assert.ok(decodeURIComponent(add.products.replace(/\+/g, ' ')).includes('s:5:"pr
 assert.match(await errOf(() => req('POST', `/api/b2b/orders/${o.id}/crm`)), /Уже в LP-CRM/);
 assert.equal(await status(() => req('POST', `/api/b2b/orders/${o.id}/delivery`, { delivery: 'np' })), 400, 'після передачі в CRM спосіб отримання не змінюється');
 
+// ---------- 5б. Самовивіз: після рахунку — одне замовлення в LP-CRM, склад готує товар до приїзду партнера ----------
+const pk = await req('POST', '/api/b2b/p/orders', { entity_id: ea.id, delivery: 'pickup', items: [{ product_id: 12, qty: 2 }] }, A);
+assert.match(await errOf(() => req('POST', `/api/b2b/orders/${pk.id}/crm`)), /Спершу внесіть номер рахунку/);
+await req('PUT', `/api/b2b/orders/${pk.id}`, { invoice_no: 'СФ-77', invoice_date: '2026-11-04', waybill_no: '' });
+await db.run(`UPDATE b2b_partners SET phone = '', wh_phone = '' WHERE id = ?`, [pa.id]);
+assert.match(await errOf(() => req('POST', `/api/b2b/orders/${pk.id}/crm`)), /Немає телефону партнера/);
+await db.run(`UPDATE b2b_partners SET phone = '+38 (067) 111-22-33' WHERE id = ?`, [pa.id]);
+await db.run(`INSERT INTO settings (key, value) VALUES ('b2b_crm_pickup_delivery', '5') ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+crm.length = 0;
+tg.length = 0;
+await req('POST', `/api/b2b/orders/${pk.id}/crm`);
+const pAdd = crm.find((x) => x.method === 'addNewOrder').p;
+assert.equal(pAdd.delivery, '5', 'вид доставки «Самовивіз»');
+assert.equal(pAdd.delivery_adress, 'Самовивіз зі складу');
+assert.equal(pAdd.phone, '380671112233');
+assert.ok(pAdd.bayer_name.includes('ФОП А'));
+assert.ok(pAdd.comment.includes('САМОВИВІЗ') && pAdd.comment.includes('СФ-77') && pAdd.comment.includes('ОЧІКУЄМО ОПЛАТУ'), pAdd.comment);
+d = await req('GET', `/api/b2b/orders/${pk.id}`);
+assert.ok(d.order.crm_id || d.order.crm_ext);
+assert.ok(d.history.some((x) => /склад готує самовивіз/.test(x.action)));
+assert.ok(tg.some((m) => /готуємо до самовивозу/.test(m.text)), 'партнеру — що склад готує');
+assert.match(await errOf(() => req('POST', `/api/b2b/orders/${pk.id}/crm`)), /Уже в LP-CRM/);
+
 // ---------- 6. Відхилення партнером ----------
 const o2 = await req('POST', '/api/b2b/orders', { partner_id: pa.id, items: [{ product_id: 12, qty: 3 }], delivery: 'np' });
 assert.equal(await status(() => req('POST', `/api/b2b/orders/${o2.id}/crm`)), 400, 'звичайна закупівля одним замовленням у CRM не йде');
