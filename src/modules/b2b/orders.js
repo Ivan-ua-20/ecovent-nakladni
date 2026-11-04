@@ -140,7 +140,24 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   });
 
   const log = (orderId, user, action) => db.run(`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-    [orderId, nowIso(), userName(user), action]);
+    [orderId, nowIso(), userName(user), String(action).slice(0, 2000)]);
+  // Для історії: що саме — «Назва × 2 по 7 182,50 грн; …» і різниця складу «+ Назва × 1; − Назва × 2; Назва: 1 → 3 шт».
+  const itemsTxt = (items) => items.filter((i) => i.qty > 0).map((i) => `${i.name} × ${i.qty}${i.price != null ? ` по ${uah(i.price)}` : ''}`).join('; ');
+  const itemsDiff = (before, after) => {
+    const was = new Map(before.map((i) => [i.product_id, i]));
+    const now = new Map(after.map((i) => [i.product_id, i]));
+    const out = [];
+    for (const i of after) {
+      const x = was.get(i.product_id);
+      if (!x) out.push(`+ ${i.name} × ${i.qty}${i.price != null ? ` по ${uah(i.price)}` : ''}`);
+      else {
+        if (x.qty !== i.qty) out.push(`${i.name}: ${x.qty} → ${i.qty} шт`);
+        if (i.price != null && x.price != null && Math.round(x.price * 100) !== Math.round(i.price * 100)) out.push(`${i.name}: ціна ${uah(x.price)} → ${uah(i.price)}`);
+      }
+    }
+    for (const x of before) if (!now.has(x.product_id)) out.push(`− ${x.name} × ${x.qty}`);
+    return out.join('; ') || 'склад без змін';
+  };
   const tgAdmins = (text) => services.notify?.sendText({ admins: true, section: 'b2b' }, text).catch(() => 0);
   // Партнеру — лише особисто його користувачам. У Telegram-групу партнера (tgGroup) — тільки головне: нова закупівля,
   // рахунок і накладна (файлами) і «усі замовлення закупівлі взято в роботу складом».
@@ -292,7 +309,8 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       const total = totalOf(items);
       await db.batch([[`DELETE FROM b2b_order_items WHERE order_id = ?`, [d.id]], ...itemRows(d.id, items),
         [`UPDATE b2b_orders SET total = ?, updated_at = ? WHERE id = ?`, [total, nowIso(), d.id]]]);
-      await log(d.id, c.get('user'), `додано до чернетки: ${add.length} поз. (разом ${uah(total)})`);
+      const byId = new Map(items.map((i) => [i.product_id, i]));
+      await log(d.id, c.get('user'), `додано до чернетки: ${itemsTxt(add.map((a) => ({ ...(byId.get(Number(a.product_id)) || { name: `ID ${a.product_id}` }), qty: Math.floor(Number(a.qty)) })))} — разом у чернетці ${uah(total)}`);
       return c.json({ id: d.id, number: orderNo(d.id), total, draft: true });
     }
     const draft = Boolean(b.draft) || !isHead(c); // менеджер партнера — лише чернетка
@@ -309,7 +327,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
         `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery), terms, payDays],
       );
-      await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r.lastId, now, userName(c.get('user')), `створено чернетку на ${uah(total)}`]]]);
+      await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r.lastId, now, userName(c.get('user')), `створено чернетку на ${uah(total)}: ${itemsTxt(items)}`.slice(0, 2000)]]]);
       return c.json({ id: r.lastId, number: orderNo(r.lastId), total, draft: true });
     }
     const r = await db.run(
@@ -317,7 +335,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery), terms, payDays],
     );
     await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-      [r.lastId, now, userName(c.get('user')), `оформлено закупівлю на ${uah(total)}${deliveryOf(b.delivery) === 'pickup' ? ' (самовивіз)' : ''}`]]]);
+      [r.lastId, now, userName(c.get('user')), `оформлено закупівлю на ${uah(total)}${deliveryOf(b.delivery) === 'pickup' ? ' (самовивіз)' : ''}: ${itemsTxt(items)}`.slice(0, 2000)]]]);
     const full = orderText('🆕 Нова закупівля', { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), pay_terms: terms, pay_days: payDays }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${r.lastId}`)}`);
     await tgGroup(p.id, full);
@@ -561,6 +579,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       if (r.used > (want.get(r.product_id) || 0)) throw fail(400, `«${r.name}»: на замовлення клієнтів уже розписано ${r.used} шт. — менше зменшити не можна.`);
     }
     const delivery = b.delivery === undefined ? deliveryOf(o.delivery) : deliveryOf(b.delivery);
+    const wasItems = await db.all(`SELECT product_id, name, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
     if (delivery === 'pickup' && left.some((r) => r.used > 0)) throw fail(400, 'З цієї закупівлі вже є замовлення клієнтів — самовивіз неможливий.');
     if (delivery === 'warehouse' && deliveryOf(o.delivery) !== 'warehouse') throw fail(400, 'Відправку на склад партнера ставить менеджер.');
     await db.batch([
@@ -569,7 +588,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       [`UPDATE b2b_orders SET entity_id = ?, entity = ?, total = ?, comment = ?, delivery = ?, pay_terms = ?, pay_days = ?, updated_at = ? WHERE id = ?`,
         [e.id, entityText(e), total, String(b.comment ?? o.comment ?? '').trim().slice(0, 1000), delivery, terms, payDays, nowIso(), o.id]],
     ]);
-    await log(o.id, c.get('user'), `змінено ${isDraft ? 'чернетку' : 'замовлення'}: ${items.length} поз., ${uah(total)}`);
+    await log(o.id, c.get('user'), `змінено ${isDraft ? 'чернетку' : 'закупівлю'}: ${itemsDiff(wasItems, items)} — разом ${uah(total)}`);
     if (isDraft) return c.json({ ok: true, total });
     const full = orderText('✏️ Змінено закупівлю', { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment, delivery, pay_terms: terms, pay_days: payDays }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${o.id}`)}`);
@@ -597,7 +616,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     await checkTerms(p, o.pay_terms === 'postpay' ? 'postpay' : 'prepay', o.total, o.id);
     const claim = await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity = ?, created_at = ?, updated_at = ? WHERE id = ? AND status = 'draft'`, [entityText(e), nowIso(), nowIso(), o.id]);
     if (!claim.changes) throw fail(409, 'Чернетку вже відправлено.');
-    await log(o.id, c.get('user'), `відправлено закупівлю: ${uah(o.total)}`);
+    await log(o.id, c.get('user'), `відправлено закупівлю на ${uah(o.total)}: ${itemsTxt(items)}`);
     const full = orderText('🆕 Нова закупівля', { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery, pay_terms: o.pay_terms, pay_days: o.pay_days }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${o.id}`)}`);
     await tgGroup(p.id, full);
@@ -689,7 +708,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     );
     await db.batch([...itemRows(r.lastId, items),
       [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r.lastId, now, userName(u),
-        `менеджер створив закупівлю на ${uah(total)} (${terms === 'postpay' ? `відстрочка ${payDays} дн.` : 'передоплата'}; ${DELIVERY[delivery]}) — чекає підтвердження партнера`]],
+        `менеджер створив закупівлю на ${uah(total)} (${terms === 'postpay' ? `відстрочка ${payDays} дн.` : 'передоплата'}; ${DELIVERY[delivery]}) — чекає підтвердження партнера: ${itemsTxt(items)}`.slice(0, 2000)]],
       ...(ship ? [[`UPDATE b2b_partners SET wh_name = ?, wh_phone = ?, wh_address = ? WHERE id = ?`, [ship.name, ship.phone, ship.address, p.id]]] : [])]);
     const o = { id: r.lastId, entity: 'партнер обере при підтвердженні', total, comment: b.comment, delivery, pay_terms: terms, pay_days: payDays, ship_to: ship ? JSON.stringify(ship) : '' };
     const full = orderText('📝 Ми підготували для вас закупівлю', o, p, items);
@@ -1001,5 +1020,5 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
 
   // Видалення замовлень і кошик — у edits.js.
 
-  return { WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
+  return { itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
 }

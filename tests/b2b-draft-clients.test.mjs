@@ -148,4 +148,19 @@ assert.match(await errOf(() => st({})), /лише керівник/, 'менед
 assert.match(await errOf(() => st({ into: 'new' })), /лише керівник/);
 assert.match(await errOf(() => st({ into: dB.id })), /лише керівник/, 'і в чернетку — теж ні');
 assert.match(await errOf(() => req('PUT', `/api/b2b/p/clients/${c10.id}`, { client_name: 'Клієнт 10', client_phone: '0501112233', items: [{ product_id: 11, qty: 1 }] }, S)), /лише керівник/, 'змінити замовлення без закупівлі менеджер теж не може');
+// ---------- історія: хто й що саме додав / змінив ----------
+const hist = async (id) => (await req('GET', `/api/b2b/orders/${id}`)).history.map((x) => x.action);
+const hd = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, draft: true, items: [{ product_id: 12, qty: 2 }] }, A);
+assert.ok((await hist(hd.id)).some((x) => /^створено чернетку на .*: Товар 12 × 2 по 4.?500,00 грн$/.test(x)), 'створено — з товарами');
+await req('POST', '/api/b2b/p/orders', { to_draft: hd.id, items: [{ product_id: 11, qty: 1 }] }, A);
+assert.ok((await hist(hd.id)).some((x) => /^додано до чернетки: Товар 11 × 1 по 9.?000,00 грн — разом у чернетці/.test(x)), 'додано — що саме');
+const hc = await cl('Клієнт Історія', [{ product_id: 12, qty: 1 }], { into: hd.id });
+assert.ok((await hist(hd.id)).some((x) => x.includes(`додано замовлення клієнта B2B-${hc.id} (Клієнт Історія): Товар 12 × 1`)), 'замовлення клієнта в чернетці — товари');
+assert.ok((await hist(hc.id)).some((x) => /оформлено замовлення клієнта .*: Товар 12 × 1/.test(x)));
+await req('PUT', `/api/b2b/p/clients/${hc.id}`, { client_name: 'Клієнт Історія', client_phone: '0501112233', items: [{ product_id: 12, qty: 3 }, { product_id: 11, qty: 1 }] }, A);
+assert.ok((await hist(hc.id)).some((x) => /змінено замовлення клієнта: \+ Товар 11 × 1 по 9.?000,00 грн; Товар 12: 1 → 3 шт/.test(x)), 'зміна — різниця');
+assert.ok((await hist(hd.id)).some((x) => /змінено замовлення клієнта B2B-\d+ \(Клієнт Історія\): \+ Товар 11 × 1 по 9.?000,00 грн; Товар 12: 1 → 3 шт/.test(x)), 'і в історії чернетки');
+await req('PUT', `/api/b2b/p/orders/${hd.id}`, { entity_id: ent.id, items: [{ product_id: 12, qty: 6 }, { product_id: 11, qty: 2 }] }, A);
+assert.ok((await hist(hd.id)).some((x) => /^змінено чернетку: .*Товар 12: 5 → 6 шт/.test(x)), 'зміна чернетки — різниця');
+
 console.log('OK — B2B: замовлення клієнтів без закупівлі йдуть у чернетку закупівлі (вибір, зміна, скасування з підтвердженням, видалення чернетки, відправка)');
