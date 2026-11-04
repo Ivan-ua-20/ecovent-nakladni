@@ -296,7 +296,7 @@ export function createPartnerPages(ctx = {}) {
         <div class="form-stack">
           <div class="card">${itemsTable(items)}</div>
           ${o.comment ? `<div class="card small"><b>Коментар:</b> ${esc(o.comment)}</div>` : ''}
-          ${o.delivery === 'pickup' ? '<div class="alert info">🚗 <b>Самовивіз</b> — усю закупівлю ви забираєте зі складу самі; замовлення клієнтів з неї не оформлюються.</div>' : ''}
+          ${o.delivery === 'pickup' ? `<div class="alert info">🚗 <b>Самовивіз</b> — усю закупівлю ви забираєте зі складу самі; замовлення клієнтів з неї не оформлюються.${o.crm_id || o.crm_ext ? ` <b>Передано на склад — товар готують${o.crm_id ? ` (№ ${esc(o.crm_id)})` : ''}.</b> Перед приїздом узгодьте час із менеджером.` : ''}</div>` : ''}
           ${o.delivery === 'warehouse' ? `<div class="alert info">🏬 <b>Відправка на ваш склад</b> — усю закупівлю відправимо Новою поштою${o.ship_to ? `: ${esc([o.ship_to.name, o.ship_to.phone, o.ship_to.address].filter(Boolean).join(', '))}` : ''}; замовлення клієнтів з неї не оформлюються.${o.crm_id || o.crm_ext ? ' <b>Передано на відправку.</b>' : ''}</div>` : ''}
           ${!['cancelled', 'confirm'].includes(o.status) && !pickup ? `<div class="card form-stack">
             <div class="head-row"><h3>Замовлення клієнтів із цієї закупівлі</h3>${hasLeft && canEdit() ? `<a class="btn sm primary" href="#/pclients/new/${o.id}">+ Замовлення клієнта</a>` : ''}</div>
