@@ -138,7 +138,7 @@ assert.ok(!(await req('GET', '/api/b2b/p/entities', null, A)).some((e) => e.is_d
 
 // ---------- 6. Самовивіз закупівлі ----------
 tg.length = 0;
-const sp = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, delivery: 'pickup', items: [{ product_id: 11, qty: 1 }] }, A);
+const sp = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, delivery: 'pickup', items: [{ product_id: 11, qty: 1 }], pickup_by: { name: 'Іван Водій', phone: '0675554433' } }, A);
 let so = (await req('GET', `/api/b2b/orders/${sp.id}`)).order;
 assert.deepEqual([so.delivery, so.delivery_name], ['pickup', 'Самовивіз — партнер забирає всю закупівлю зі складу']);
 assert.ok(!(await req('GET', '/api/b2b/p/supplies', null, A)).some((x) => x.id === sp.id), 'самовивіз — не джерело для замовлень клієнтів');

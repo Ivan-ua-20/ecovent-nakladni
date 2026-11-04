@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 30,
+  version: 32,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,6 +71,18 @@ export const schema = {
   )`,
   `CREATE INDEX IF NOT EXISTS b2b_entities_p ON b2b_entities (partner_id)`,
   `CREATE INDEX IF NOT EXISTS b2b_entities_code ON b2b_entities (code)`,
+  // Кур'єри партнера — хто забирає самовивіз зі складу (обирається в закупівлі зі списку).
+  `CREATE TABLE IF NOT EXISTS b2b_couriers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL DEFAULT '',
+    note TEXT DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT DEFAULT '',
+    created_at TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_couriers_p ON b2b_couriers (partner_id)`,
   // Замовлення партнерів. kind: supply — закупівля в нас; client — замовлення для клієнта партнера (етап 3).
   `CREATE TABLE IF NOT EXISTS b2b_orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -288,6 +300,9 @@ export const schema = {
     ['b2b_orders', 'crm_old', "TEXT DEFAULT ''"],
     // «Оплачено» вручну — обов'язковий коментар (напр., «гарантійна заміна — товар повернуто»).
     ['b2b_orders', 'paid_note', "TEXT DEFAULT ''"],
+    // Самовивіз: хто забирає зі складу (JSON: name, phone, note) — вносить партнер; останній — підказка для наступних.
+    ['b2b_orders', 'pickup_by', "TEXT DEFAULT ''"],
+    ['b2b_partners', 'pickup_last', "TEXT DEFAULT ''"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ['b2b_tg_docs', 'source', "TEXT DEFAULT 'private'"],
     ['b2b_tg_docs', 'reply_to', 'INTEGER'],
