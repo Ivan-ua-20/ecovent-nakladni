@@ -984,8 +984,11 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
       // Отримувач — партнер (юрособа рахунку), телефон — з картки партнера, юрособи або складу.
       const ent = s.entity_id ? await db.get(`SELECT name, phone FROM b2b_entities WHERE id = ?`, [s.entity_id]) : null;
       const phone = [pp?.phone, ent?.phone, pp?.wh_phone].map((x) => String(x || '').replace(/\D/g, '')).find((x) => x.length >= 9) || '';
-      if (!phone) throw fail(400, 'Немає телефону партнера — вкажіть його в картці партнера («Партнери» → картка → Телефон), тоді передайте в LP-CRM.');
-      ship = { name: `${pp?.name || ''}${ent?.name ? ` (${ent.name})` : ''}`.trim(), phone, address: 'Самовивіз зі складу' };
+      // Хто забирає (вніс партнер) — отримувач у LP-CRM; ще не вказано — партнер і його телефон.
+      const who = orders.parsePickup(s.pickup_by);
+      if (!phone && !who) throw fail(400, 'Немає телефону партнера й не вказано, хто забирає — попросіть партнера вказати це в закупівлі (або впишіть телефон у картці партнера).');
+      ship = who ? { name: who.name, phone: who.phone, address: 'Самовивіз зі складу' }
+        : { name: `${pp?.name || ''}${ent?.name ? ` (${ent.name})` : ''}`.trim(), phone, address: 'Самовивіз зі складу' };
     }
     if (!ship?.name || !ship?.address) throw fail(400, 'Не вказано склад партнера (отримувач і адреса) — змініть спосіб отримання в закупівлі.');
     const code = newCode();
@@ -1001,7 +1004,8 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
       db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [s.partner_id]),
     ]);
     const pay = await payText({ supply_id: s.id }, p?.name || '');
-    const comment = [pickup ? `${orderNo(s.id)} · САМОВИВІЗ — партнер «${p?.name || ''}» забирає зі складу · рахунок № ${s.invoice_no}` : `${orderNo(s.id)} · закупівля B2B на склад партнера «${p?.name || ''}»`,
+    const comment = [pickup ? `${orderNo(s.id)} · САМОВИВІЗ — партнер «${p?.name || ''}» забирає зі складу · рахунок № ${s.invoice_no}\n`
+      + `Забирає: ${orders.parsePickup(s.pickup_by) ? orders.pickupTxt(orders.parsePickup(s.pickup_by)) : 'ще не вказано — уточніть у партнера'}` : `${orderNo(s.id)} · закупівля B2B на склад партнера «${p?.name || ''}»`,
       pay.text, s.comment || ''].filter(Boolean).join('\n');
     const undo = () => db.run(`UPDATE b2b_orders SET crm_ext = '', crm_sent_at = '' WHERE id = ?`, [s.id]);
     let res;

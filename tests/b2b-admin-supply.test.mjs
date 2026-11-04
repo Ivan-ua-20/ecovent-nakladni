@@ -113,7 +113,16 @@ const pk = await req('POST', '/api/b2b/p/orders', { entity_id: ea.id, delivery: 
 assert.match(await errOf(() => req('POST', `/api/b2b/orders/${pk.id}/crm`)), /Спершу внесіть номер рахунку/);
 await req('PUT', `/api/b2b/orders/${pk.id}`, { invoice_no: 'СФ-77', invoice_date: '2026-11-04', waybill_no: '' });
 await db.run(`UPDATE b2b_partners SET phone = '', wh_phone = '' WHERE id = ?`, [pa.id]);
-assert.match(await errOf(() => req('POST', `/api/b2b/orders/${pk.id}/crm`)), /Немає телефону партнера/);
+assert.match(await errOf(() => req('POST', `/api/b2b/orders/${pk.id}/crm`)), /Немає телефону партнера й не вказано, хто забирає/);
+// партнер вказує, хто забирає (ПІБ і телефон обов'язкові) — адмінам сповіщення, в історії
+assert.match(await errOf(() => req('PUT', `/api/b2b/p/orders/${pk.id}/pickup`, { name: 'Іван', phone: '123' }, A)), /телефон/);
+tg.length = 0;
+await req('PUT', `/api/b2b/p/orders/${pk.id}/pickup`, { name: 'Іван Водій', phone: '067 555 44 33', note: 'Caddy АА1234ВВ' }, A);
+assert.ok(tg.some((m) => String(m.chat_id) === '100' && /забирає — <b>Іван Водій, \+380675554433, Caddy АА1234ВВ<\/b>/.test(m.text)), 'адмінам — хто приїде');
+d = await req('GET', `/api/b2b/p/orders/${pk.id}`, null, A);
+assert.deepEqual(d.order.pickup_by, { name: 'Іван Водій', phone: '380675554433', note: 'Caddy АА1234ВВ' });
+assert.ok(d.history.some((x) => /хто забирає зі складу: Іван Водій/.test(x.action)));
+assert.deepEqual((await req('GET', '/api/b2b/p/limits', null, A)).pickup_last.name, 'Іван Водій', 'наступного разу — підказка');
 await db.run(`UPDATE b2b_partners SET phone = '+38 (067) 111-22-33' WHERE id = ?`, [pa.id]);
 await db.run(`INSERT INTO settings (key, value) VALUES ('b2b_crm_pickup_delivery', '5') ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
 crm.length = 0;
@@ -122,14 +131,24 @@ await req('POST', `/api/b2b/orders/${pk.id}/crm`);
 const pAdd = crm.find((x) => x.method === 'addNewOrder').p;
 assert.equal(pAdd.delivery, '5', 'вид доставки «Самовивіз»');
 assert.equal(pAdd.delivery_adress, 'Самовивіз зі складу');
-assert.equal(pAdd.phone, '380671112233');
-assert.ok(pAdd.bayer_name.includes('ФОП А'));
+assert.equal(pAdd.phone, '380675554433', 'телефон того, хто забирає');
+assert.equal(pAdd.bayer_name, 'Іван Водій');
+assert.ok(pAdd.comment.includes('Забирає: Іван Водій, +380675554433, Caddy АА1234ВВ'), pAdd.comment);
 assert.ok(pAdd.comment.includes('САМОВИВІЗ') && pAdd.comment.includes('СФ-77') && pAdd.comment.includes('ОЧІКУЄМО ОПЛАТУ'), pAdd.comment);
 d = await req('GET', `/api/b2b/orders/${pk.id}`);
 assert.ok(d.order.crm_id || d.order.crm_ext);
 assert.ok(d.history.some((x) => /склад готує самовивіз/.test(x.action)));
 assert.ok(tg.some((m) => /готуємо до самовивозу/.test(m.text)), 'партнеру — що склад готує');
 assert.match(await errOf(() => req('POST', `/api/b2b/orders/${pk.id}/crm`)), /Уже в LP-CRM/);
+// змінили, хто забирає, після передачі на склад — адмінам: оновіть у LP-CRM
+tg.length = 0;
+await req('PUT', `/api/b2b/p/orders/${pk.id}/pickup`, { name: 'Петро Кур’єр', phone: '0501234567' }, A);
+assert.ok(tg.some((m) => /змінено, хто забирає/.test(m.text) && /оновіть отримувача/.test(m.text)));
+// одразу при оформленні; не самовивіз — не можна
+const pk2 = await req('POST', '/api/b2b/p/orders', { entity_id: ea.id, delivery: 'pickup', items: [{ product_id: 12, qty: 1 }], pickup_by: { name: 'Олег Менеджер', phone: '0931112233' } }, A);
+assert.equal((await req('GET', `/api/b2b/orders/${pk2.id}`)).order.pickup_by.name, 'Олег Менеджер');
+const np1 = await req('POST', '/api/b2b/p/orders', { entity_id: ea.id, items: [{ product_id: 12, qty: 1 }] }, A);
+assert.match(await errOf(() => req('PUT', `/api/b2b/p/orders/${np1.id}/pickup`, { name: 'Олег', phone: '0931112233' }, A)), /не самовивіз/);
 
 // ---------- 6. Відхилення партнером ----------
 const o2 = await req('POST', '/api/b2b/orders', { partner_id: pa.id, items: [{ product_id: 12, qty: 3 }], delivery: 'np' });

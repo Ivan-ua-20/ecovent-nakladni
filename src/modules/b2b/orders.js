@@ -167,13 +167,26 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const g = await groupOf(partnerId);
     return g ? services.notify?.sendText({ chatIds: [g] }, text).catch(() => 0) : 0;
   };
+  // Самовивіз: хто забирає зі складу — ПІБ, телефон, примітка (авто, номер, коли приїде).
+  const parsePickup = (v) => { try { const x = typeof v === 'string' ? JSON.parse(v || 'null') : v; return x?.name ? x : null; } catch { return null; } };
+  const pickupTxt = (x) => (x ? [x.name, x.phone ? `+${x.phone}`.replace(/^\+\+/, '+') : '', x.note].filter(Boolean).join(', ') : '');
+  function pickupIn(b) {
+    const name = String(b?.name ?? '').trim().replace(/\s+/g, ' ').slice(0, 120);
+    let phone = String(b?.phone ?? '').replace(/\D/g, '');
+    if (phone.length === 10 && phone.startsWith('0')) phone = `38${phone}`;
+    const note = String(b?.note ?? '').trim().slice(0, 300);
+    if (name.length < 3) throw fail(400, 'Хто забирає: вкажіть ПІБ (прізвище та ім’я).');
+    if (phone.length < 10 || phone.length > 13) throw fail(400, 'Хто забирає: вкажіть телефон, напр. 067 123 45 67.');
+    return { name, phone, note };
+  }
+
   // Детально про закупівлю: на кого рахунок і накладна, товари «назва — кількість — ціна партнера».
   const orderText = (title, o, p, items) => {
     const lines = items.slice(0, 60).map((i) => `${h(i.name)}${i.article ? ` (${h(i.article)})` : ''} — ${i.qty} шт — ${uah(i.price)}`);
     if (items.length > 60) lines.push(`…і ще ${items.length - 60} поз.`);
     return `${title} <b>${orderNo(o.id)}</b> від «${h(p.name)}»\n\n`
       + `<b>Рахунок і накладна на:</b>\n${h(o.entity || '—')}\n`
-      + `<b>Доставка:</b> ${o.delivery === 'pickup' ? '🚗 <b>САМОВИВІЗ</b> — партнер забирає всю закупівлю зі складу'
+      + `<b>Доставка:</b> ${o.delivery === 'pickup' ? `🚗 <b>САМОВИВІЗ</b> — партнер забирає всю закупівлю зі складу${parsePickup(o.pickup_by) ? `\n<b>Забирає:</b> ${h(pickupTxt(parsePickup(o.pickup_by)))}` : ''}`
         : o.delivery === 'warehouse' ? `🏬 <b>НА СКЛАД ПАРТНЕРА</b> (Нова пошта)${parseShipTo(o.ship_to) ? `: ${h([parseShipTo(o.ship_to).name, parseShipTo(o.ship_to).phone, parseShipTo(o.ship_to).address].filter(Boolean).join(', '))}` : ''}` : 'відправка клієнтам (Нова пошта)'}\n`
       + `${o.pay_terms === 'postpay' ? `<b>Оплата:</b> ⏳ <b>ВІДСТРОЧКА ${o.pay_days} дн.</b> від дати рахунку\n` : ''}\n`
       + `<b>Товари:</b>\n${lines.join('\n')}\n\n<b>Разом: ${uah(o.total)}</b> (з ПДВ)`
@@ -327,6 +340,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
         `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery), terms, payDays],
       );
+      if (deliveryOf(b.delivery) === 'pickup' && b.pickup_by?.name) await setPickup(c, await orderOf(r.lastId), b.pickup_by);
       await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r.lastId, now, userName(c.get('user')), `створено чернетку на ${uah(total)}: ${itemsTxt(items)}`.slice(0, 2000)]]]);
       return c.json({ id: r.lastId, number: orderNo(r.lastId), total, draft: true });
     }
@@ -334,9 +348,11 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery), terms, payDays],
     );
+    const pk = deliveryOf(b.delivery) === 'pickup' && b.pickup_by?.name ? pickupIn(b.pickup_by) : null;
+    if (pk) await db.batch([[`UPDATE b2b_orders SET pickup_by = ? WHERE id = ?`, [JSON.stringify(pk), r.lastId]], [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(pk), p.id]]]);
     await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-      [r.lastId, now, userName(c.get('user')), `оформлено закупівлю на ${uah(total)}${deliveryOf(b.delivery) === 'pickup' ? ' (самовивіз)' : ''}: ${itemsTxt(items)}`.slice(0, 2000)]]]);
-    const full = orderText('🆕 Нова закупівля', { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), pay_terms: terms, pay_days: payDays }, p, items);
+      [r.lastId, now, userName(c.get('user')), `оформлено закупівлю на ${uah(total)}${deliveryOf(b.delivery) === 'pickup' ? ` (самовивіз${pk ? `, забирає: ${pickupTxt(pk)}` : ''})` : ''}: ${itemsTxt(items)}`.slice(0, 2000)]]]);
+    const full = orderText('🆕 Нова закупівля', { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), pay_terms: terms, pay_days: payDays, pickup_by: pk ? JSON.stringify(pk) : '' }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${r.lastId}`)}`);
     await tgGroup(p.id, full);
     await hooks.finRequest?.(r.lastId).catch(() => 0); // запит рахунку в групу «Фінансові питання»
@@ -436,7 +452,39 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       postpay: await postpayInfo(p),
       debt: await debtOf(p.id),
       paused: p.paused ? { note: p.pause_note || '' } : null,
+      pickup_last: parsePickup(p.pickup_last), // хто забирав минулого разу — підказка у формі самовивозу
     });
+  });
+
+  // Самовивіз: хто забирає зі складу — вносить партнер (або наш менеджер). Уже передано на склад (LP-CRM) —
+  // адмінам нагадування оновити дані в LP-CRM (змінити створене замовлення API не дає).
+  async function setPickup(c, o, b) {
+    if (o.kind !== 'supply' || deliveryOf(o.delivery) !== 'pickup') throw fail(400, 'Це не самовивіз.');
+    if (o.status === 'cancelled') throw fail(400, 'Закупівлю скасовано.');
+    const x = pickupIn(b);
+    const prev = parsePickup(o.pickup_by);
+    if (prev && pickupTxt(prev) === pickupTxt(x)) return { ok: true, pickup_by: x };
+    await db.batch([
+      [`UPDATE b2b_orders SET pickup_by = ?, updated_at = ? WHERE id = ?`, [JSON.stringify(x), nowIso(), o.id]],
+      [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(x), o.partner_id]],
+    ]);
+    await log(o.id, c.get('user'), `хто забирає зі складу: ${pickupTxt(x)}${prev ? ` (було: ${pickupTxt(prev)})` : ''}`);
+    if (!['draft'].includes(o.status)) {
+      const p = await db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [o.partner_id]);
+      const inCrm = o.crm_id || o.crm_ext;
+      await tgAdmins(`🚗 <b>Самовивіз ${orderNo(o.id)}</b> («${h(p?.name || '')}»): ${prev ? 'змінено, хто забирає' : 'забирає'} — <b>${h(pickupTxt(x))}</b>`
+        + `${inCrm ? `\n⚠️ Уже на складі (LP-CRM${o.crm_id ? ` № ${h(o.crm_id)}` : ''}) — оновіть отримувача там вручну.` : ''}\n${link(c, `b2borders/${o.id}`)}`);
+    }
+    return { ok: true, pickup_by: x };
+  }
+  app.put('/api/b2b/p/orders/:id/pickup', async (c) => {
+    const p = await myPartner(c);
+    if (!can(c.get('user'), 'b2b.order')) throw fail(403, 'Недостатньо прав.');
+    return c.json(await setPickup(c, await orderOf(c.req.param('id'), p.id), await c.req.json()));
+  });
+  app.put('/api/b2b/orders/:id/pickup', async (c) => {
+    need(c, 'b2b.admin');
+    return c.json(await setPickup(c, await orderOf(c.req.param('id')), await c.req.json()));
   });
 
   // «Сформувати рахунок»: відкрита закупівля → звичайна («Очікує рахунок») на обрану юрособу.
@@ -490,7 +538,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   }
   const publicOrder = (o) => {
     const out = { ...o, number: orderNo(o.id), status_name: ANY_STATUS[o.status] || o.status };
-    if (o.kind === 'supply') { out.delivery = deliveryOf(o.delivery); out.delivery_name = DELIVERY[out.delivery]; out.ship_to = parseShipTo(o.ship_to); }
+    if (o.kind === 'supply') { out.delivery = deliveryOf(o.delivery); out.delivery_name = DELIVERY[out.delivery]; out.ship_to = parseShipTo(o.ship_to); out.pickup_by = parsePickup(o.pickup_by); }
     if (o.kind === 'supply' && ['partial', 'pay_wait'].includes(o.status)) out.due = round2(o.total - (o.paid_amount || 0));
     if (o.kind === 'supply' && o.status === 'partial') out.status_name = `Частково оплачено · ще ${uah(out.due)}`;
     if (o.kind === 'supply' && o.closed) { out.closed = true; out.status_name = `${out.status_name} · Закрито`; }
@@ -617,7 +665,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const claim = await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity = ?, created_at = ?, updated_at = ? WHERE id = ? AND status = 'draft'`, [entityText(e), nowIso(), nowIso(), o.id]);
     if (!claim.changes) throw fail(409, 'Чернетку вже відправлено.');
     await log(o.id, c.get('user'), `відправлено закупівлю на ${uah(o.total)}: ${itemsTxt(items)}`);
-    const full = orderText('🆕 Нова закупівля', { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery, pay_terms: o.pay_terms, pay_days: o.pay_days }, p, items);
+    const full = orderText('🆕 Нова закупівля', { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery, pay_terms: o.pay_terms, pay_days: o.pay_days, pickup_by: o.pickup_by }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${o.id}`)}`);
     await tgGroup(p.id, full);
     await hooks.finRequest?.(o.id).catch(() => 0);
@@ -1020,5 +1068,5 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
 
   // Видалення замовлень і кошик — у edits.js.
 
-  return { itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
+  return { parsePickup, pickupTxt, itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
 }

@@ -124,6 +124,40 @@ export function askNote(title, text, { verb = 'Зберегти', placeholder = 
 }
 export const PAID_NOTE_HINT = 'Напр.: гарантійна заміна — товар повернуто, відправка з нашого складу; взаємозалік; оплата готівкою.';
 
+// ---------- самовивіз: хто забирає зі складу ----------
+export const pickupPhone = (ph) => { const d = String(ph || '').replace(/\D/g, ''); return d.length === 12 ? `+${d.slice(0, 2)} ${d.slice(2, 5)} ${d.slice(5, 8)} ${d.slice(8, 10)} ${d.slice(10)}` : d; };
+export const pickupLine = (x) => (x ? `<b>${esc(x.name)}</b> · ${esc(pickupPhone(x.phone))}${x.note ? ` · ${esc(x.note)}` : ''}` : '');
+// Поля форми (prefix — щоб на сторінці могло бути кілька форм); v — поточне або «як минулого разу».
+export const pickupFields = (v, prefix = 'pk') => `<div class="grid2">
+    <label class="f"><span>ПІБ (хто забирає)</span><input id="${prefix}Name" value="${esc(v?.name || '')}" placeholder="Прізвище Ім’я" autocomplete="off"></label>
+    <label class="f"><span>Телефон</span><input id="${prefix}Phone" value="${esc(v?.phone ? pickupPhone(v.phone) : '')}" inputmode="tel" placeholder="067 123 45 67" autocomplete="off"></label></div>
+  <label class="f"><span>Примітка (необов’язково): авто, номер, коли приїде, кур’єрська служба</span><input id="${prefix}Note" value="${esc(v?.note || '')}" placeholder="напр. VW Caddy АА1234ВВ, у четвер після 14:00"></label>`;
+export const pickupRead = (root = document, prefix = 'pk') => ({ name: $(`#${prefix}Name`, root)?.value.trim() || '', phone: $(`#${prefix}Phone`, root)?.value.trim() || '', note: $(`#${prefix}Note`, root)?.value.trim() || '' });
+// Картка «Хто забирає» в закупівлі (і в нас, і в партнера): показ + «Змінити» (вікно) або одразу форма, якщо ще не вказано.
+export function pickupCard(o, { editable = true, partner = false } = {}) {
+  const x = o.pickup_by;
+  return `<div class="card form-stack" id="pkCard"><h3>🚗 Хто забирає зі складу</h3>
+    ${x ? `<div>${pickupLine(x)}</div>${editable ? '<div class="btn-row"><button class="btn sm" id="pkEdit">Змінити</button></div>' : ''}`
+      : editable ? `<div class="small ${partner ? '' : 'muted'}">${partner ? 'Вкажіть, хто приїде забирати товар (ваш менеджер, кур’єр, водій) — склад підготує закупівлю на цю людину.' : 'Партнер ще не вказав, хто забирає. Можна вписати самим.'}</div>
+        ${pickupFields(o.pickup_last || null, 'pkF')}<div class="btn-row"><button class="btn primary" id="pkSave">Зберегти</button></div>`
+        : '<div class="small muted">Ще не вказано.</div>'}
+  </div>`;
+}
+export function wirePickupCard(o, url, onDone) {
+  const save = async (v, btn) => {
+    if (btn) btn.disabled = true;
+    try { await api('PUT', url, v); toast('Збережено — склад знатиме, хто приїде'); onDone(); return true; } catch (e) { toast(e.message, true); if (btn) btn.disabled = false; return false; }
+  };
+  const sv = $('#pkSave');
+  if (sv) sv.onclick = () => save(pickupRead(document, 'pkF'), sv);
+  const ed = $('#pkEdit');
+  if (ed) ed.onclick = () => {
+    const m = modal('Хто забирає зі складу', `<div class="form-stack">${pickupFields(o.pickup_by, 'pkM')}${o.crm_id || o.crm_ext ? '<div class="small muted">Закупівля вже на складі — менеджер отримає сповіщення й оновить дані.</div>' : ''}</div>`,
+      { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="pkMSave">Зберегти</button>' });
+    $('#pkMSave', m.el).onclick = async (e) => { if (await save(pickupRead(m.el, 'pkM'), e.currentTarget)) m.close(); };
+  };
+}
+
 // ---------- галочки і масові дії ----------
 export const selCell = (id) => `<td style="width:34px" data-nosel><input type="checkbox" data-sel="${id}" aria-label="Обрати"></td>`;
 export const selHead = () => '<th style="width:34px"><input type="checkbox" id="selAll" aria-label="Обрати всі"></th>';

@@ -6800,6 +6800,24 @@ function mountB2bOrders(app, { db, services, myPartner, partnerPrice: partnerPri
     const g = await groupOf(partnerId);
     return g ? services.notify?.sendText({ chatIds: [g] }, text).catch(() => 0) : 0;
   };
+  const parsePickup = (v) => {
+    try {
+      const x = typeof v === "string" ? JSON.parse(v || "null") : v;
+      return x?.name ? x : null;
+    } catch {
+      return null;
+    }
+  };
+  const pickupTxt = (x) => x ? [x.name, x.phone ? `+${x.phone}`.replace(/^\+\+/, "+") : "", x.note].filter(Boolean).join(", ") : "";
+  function pickupIn(b) {
+    const name = String(b?.name ?? "").trim().replace(/\s+/g, " ").slice(0, 120);
+    let phone = String(b?.phone ?? "").replace(/\D/g, "");
+    if (phone.length === 10 && phone.startsWith("0")) phone = `38${phone}`;
+    const note = String(b?.note ?? "").trim().slice(0, 300);
+    if (name.length < 3) throw fail(400, "\u0425\u0442\u043E \u0437\u0430\u0431\u0438\u0440\u0430\u0454: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u041F\u0406\u0411 (\u043F\u0440\u0456\u0437\u0432\u0438\u0449\u0435 \u0442\u0430 \u0456\u043C\u2019\u044F).");
+    if (phone.length < 10 || phone.length > 13) throw fail(400, "\u0425\u0442\u043E \u0437\u0430\u0431\u0438\u0440\u0430\u0454: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u0442\u0435\u043B\u0435\u0444\u043E\u043D, \u043D\u0430\u043F\u0440. 067 123 45 67.");
+    return { name, phone, note };
+  }
   const orderText = (title, o, p, items) => {
     const lines = items.slice(0, 60).map((i) => `${h3(i.name)}${i.article ? ` (${h3(i.article)})` : ""} \u2014 ${i.qty} \u0448\u0442 \u2014 ${uah3(i.price)}`);
     if (items.length > 60) lines.push(`\u2026\u0456 \u0449\u0435 ${items.length - 60} \u043F\u043E\u0437.`);
@@ -6807,7 +6825,8 @@ function mountB2bOrders(app, { db, services, myPartner, partnerPrice: partnerPri
 
 <b>\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u0456 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0430 \u043D\u0430:</b>
 ${h3(o.entity || "\u2014")}
-<b>\u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430:</b> ${o.delivery === "pickup" ? "\u{1F697} <b>\u0421\u0410\u041C\u041E\u0412\u0418\u0412\u0406\u0417</b> \u2014 \u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0437\u0430\u0431\u0438\u0440\u0430\u0454 \u0432\u0441\u044E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443" : o.delivery === "warehouse" ? `\u{1F3EC} <b>\u041D\u0410 \u0421\u041A\u041B\u0410\u0414 \u041F\u0410\u0420\u0422\u041D\u0415\u0420\u0410</b> (\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430)${parseShipTo(o.ship_to) ? `: ${h3([parseShipTo(o.ship_to).name, parseShipTo(o.ship_to).phone, parseShipTo(o.ship_to).address].filter(Boolean).join(", "))}` : ""}` : "\u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0430 \u043A\u043B\u0456\u0454\u043D\u0442\u0430\u043C (\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430)"}
+<b>\u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430:</b> ${o.delivery === "pickup" ? `\u{1F697} <b>\u0421\u0410\u041C\u041E\u0412\u0418\u0412\u0406\u0417</b> \u2014 \u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0437\u0430\u0431\u0438\u0440\u0430\u0454 \u0432\u0441\u044E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443${parsePickup(o.pickup_by) ? `
+<b>\u0417\u0430\u0431\u0438\u0440\u0430\u0454:</b> ${h3(pickupTxt(parsePickup(o.pickup_by)))}` : ""}` : o.delivery === "warehouse" ? `\u{1F3EC} <b>\u041D\u0410 \u0421\u041A\u041B\u0410\u0414 \u041F\u0410\u0420\u0422\u041D\u0415\u0420\u0410</b> (\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430)${parseShipTo(o.ship_to) ? `: ${h3([parseShipTo(o.ship_to).name, parseShipTo(o.ship_to).phone, parseShipTo(o.ship_to).address].filter(Boolean).join(", "))}` : ""}` : "\u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0430 \u043A\u043B\u0456\u0454\u043D\u0442\u0430\u043C (\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430)"}
 ${o.pay_terms === "postpay" ? `<b>\u041E\u043F\u043B\u0430\u0442\u0430:</b> \u23F3 <b>\u0412\u0406\u0414\u0421\u0422\u0420\u041E\u0427\u041A\u0410 ${o.pay_days} \u0434\u043D.</b> \u0432\u0456\u0434 \u0434\u0430\u0442\u0438 \u0440\u0430\u0445\u0443\u043D\u043A\u0443
 ` : ""}
 <b>\u0422\u043E\u0432\u0430\u0440\u0438:</b>
@@ -6957,6 +6976,7 @@ ${e.email}` : ""}`;
         `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [p.id, e.id, entityText(e), total, String(b.comment || "").trim().slice(0, 1e3), userName2(c.get("user")), now, now, deliveryOf(b.delivery), terms, payDays]
       );
+      if (deliveryOf(b.delivery) === "pickup" && b.pickup_by?.name) await setPickup(c, await orderOf(r3.lastId), b.pickup_by);
       await db.batch([...itemRows(r3.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r3.lastId, now, userName2(c.get("user")), `\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u043D\u0430 ${uah3(total)}: ${itemsTxt(items)}`.slice(0, 2e3)]]]);
       return c.json({ id: r3.lastId, number: orderNo(r3.lastId), total, draft: true });
     }
@@ -6964,11 +6984,13 @@ ${e.email}` : ""}`;
       `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [p.id, e.id, entityText(e), total, String(b.comment || "").trim().slice(0, 1e3), userName2(c.get("user")), now, now, deliveryOf(b.delivery), terms, payDays]
     );
+    const pk = deliveryOf(b.delivery) === "pickup" && b.pickup_by?.name ? pickupIn(b.pickup_by) : null;
+    if (pk) await db.batch([[`UPDATE b2b_orders SET pickup_by = ? WHERE id = ?`, [JSON.stringify(pk), r.lastId]], [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(pk), p.id]]]);
     await db.batch([...itemRows(r.lastId, items), [
       `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-      [r.lastId, now, userName2(c.get("user")), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah3(total)}${deliveryOf(b.delivery) === "pickup" ? " (\u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437)" : ""}: ${itemsTxt(items)}`.slice(0, 2e3)]
+      [r.lastId, now, userName2(c.get("user")), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah3(total)}${deliveryOf(b.delivery) === "pickup" ? ` (\u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437${pk ? `, \u0437\u0430\u0431\u0438\u0440\u0430\u0454: ${pickupTxt(pk)}` : ""})` : ""}: ${itemsTxt(items)}`.slice(0, 2e3)]
     ]]);
-    const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), pay_terms: terms, pay_days: payDays }, p, items);
+    const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), pay_terms: terms, pay_days: payDays, pickup_by: pk ? JSON.stringify(pk) : "" }, p, items);
     await tgAdmins(`${full}
 
 ${link(c, `b2borders/${r.lastId}`)}`);
@@ -7066,8 +7088,39 @@ ${link(c, `b2borders/${r.lastId}`)}`);
       unpaid: { total: await unpaidTotal(p.id), limit: lim.unpaid },
       postpay: await postpayInfo(p),
       debt: await debtOf(p.id),
-      paused: p.paused ? { note: p.pause_note || "" } : null
+      paused: p.paused ? { note: p.pause_note || "" } : null,
+      pickup_last: parsePickup(p.pickup_last)
+      // хто забирав минулого разу — підказка у формі самовивозу
     });
+  });
+  async function setPickup(c, o, b) {
+    if (o.kind !== "supply" || deliveryOf(o.delivery) !== "pickup") throw fail(400, "\u0426\u0435 \u043D\u0435 \u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437.");
+    if (o.status === "cancelled") throw fail(400, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.");
+    const x = pickupIn(b);
+    const prev = parsePickup(o.pickup_by);
+    if (prev && pickupTxt(prev) === pickupTxt(x)) return { ok: true, pickup_by: x };
+    await db.batch([
+      [`UPDATE b2b_orders SET pickup_by = ?, updated_at = ? WHERE id = ?`, [JSON.stringify(x), nowIso(), o.id]],
+      [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(x), o.partner_id]]
+    ]);
+    await log(o.id, c.get("user"), `\u0445\u0442\u043E \u0437\u0430\u0431\u0438\u0440\u0430\u0454 \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443: ${pickupTxt(x)}${prev ? ` (\u0431\u0443\u043B\u043E: ${pickupTxt(prev)})` : ""}`);
+    if (!["draft"].includes(o.status)) {
+      const p = await db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [o.partner_id]);
+      const inCrm = o.crm_id || o.crm_ext;
+      await tgAdmins(`\u{1F697} <b>\u0421\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437 ${orderNo(o.id)}</b> (\xAB${h3(p?.name || "")}\xBB): ${prev ? "\u0437\u043C\u0456\u043D\u0435\u043D\u043E, \u0445\u0442\u043E \u0437\u0430\u0431\u0438\u0440\u0430\u0454" : "\u0437\u0430\u0431\u0438\u0440\u0430\u0454"} \u2014 <b>${h3(pickupTxt(x))}</b>${inCrm ? `
+\u26A0\uFE0F \u0423\u0436\u0435 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434\u0456 (LP-CRM${o.crm_id ? ` \u2116 ${h3(o.crm_id)}` : ""}) \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0447\u0430 \u0442\u0430\u043C \u0432\u0440\u0443\u0447\u043D\u0443.` : ""}
+${link(c, `b2borders/${o.id}`)}`);
+    }
+    return { ok: true, pickup_by: x };
+  }
+  app.put("/api/b2b/p/orders/:id/pickup", async (c) => {
+    const p = await myPartner(c);
+    if (!can(c.get("user"), "b2b.order")) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432.");
+    return c.json(await setPickup(c, await orderOf(c.req.param("id"), p.id), await c.req.json()));
+  });
+  app.put("/api/b2b/orders/:id/pickup", async (c) => {
+    need(c, "b2b.admin");
+    return c.json(await setPickup(c, await orderOf(c.req.param("id")), await c.req.json()));
   });
   app.post("/api/b2b/p/open/form", async (c) => {
     const p = await myPartner(c);
@@ -7129,6 +7182,7 @@ ${link(c, `porders/${open.id}`)}`);
       out.delivery = deliveryOf(o.delivery);
       out.delivery_name = DELIVERY[out.delivery];
       out.ship_to = parseShipTo(o.ship_to);
+      out.pickup_by = parsePickup(o.pickup_by);
     }
     if (o.kind === "supply" && ["partial", "pay_wait"].includes(o.status)) out.due = round2(o.total - (o.paid_amount || 0));
     if (o.kind === "supply" && o.status === "partial") out.status_name = `\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E \xB7 \u0449\u0435 ${uah3(out.due)}`;
@@ -7269,7 +7323,7 @@ ${link(c, `b2borders/${o.id}`)}`);
     const claim = await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity = ?, created_at = ?, updated_at = ? WHERE id = ? AND status = 'draft'`, [entityText(e), nowIso(), nowIso(), o.id]);
     if (!claim.changes) throw fail(409, "\u0427\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0432\u0436\u0435 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E.");
     await log(o.id, c.get("user"), `\u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah3(o.total)}: ${itemsTxt(items)}`);
-    const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery, pay_terms: o.pay_terms, pay_days: o.pay_days }, p, items);
+    const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery, pay_terms: o.pay_terms, pay_days: o.pay_days, pickup_by: o.pickup_by }, p, items);
     await tgAdmins(`${full}
 
 ${link(c, `b2borders/${o.id}`)}`);
@@ -7676,7 +7730,7 @@ ${link(c, `porders/${o.id}`)}`);
     if (!f) throw fail(404, "\u0424\u0430\u0439\u043B \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (\u0437\u0431\u0435\u0440\u0456\u0433\u0430\u044E\u0442\u044C\u0441\u044F 30 \u0434\u043D\u0456\u0432).");
     return sendFile(f);
   });
-  return { itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h3 };
+  return { parsePickup, pickupTxt, itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h3 };
 }
 
 // src/modules/b2b/clients.js
@@ -8679,8 +8733,9 @@ ${link(c, `pclients/${o.id}`)}`);
     if (pickup) {
       const ent = s.entity_id ? await db.get(`SELECT name, phone FROM b2b_entities WHERE id = ?`, [s.entity_id]) : null;
       const phone = [pp?.phone, ent?.phone, pp?.wh_phone].map((x) => String(x || "").replace(/\D/g, "")).find((x) => x.length >= 9) || "";
-      if (!phone) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u0442\u0435\u043B\u0435\u0444\u043E\u043D\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u2014 \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u0432 \u043A\u0430\u0440\u0442\u0446\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 (\xAB\u041F\u0430\u0440\u0442\u043D\u0435\u0440\u0438\xBB \u2192 \u043A\u0430\u0440\u0442\u043A\u0430 \u2192 \u0422\u0435\u043B\u0435\u0444\u043E\u043D), \u0442\u043E\u0434\u0456 \u043F\u0435\u0440\u0435\u0434\u0430\u0439\u0442\u0435 \u0432 LP-CRM.");
-      ship = { name: `${pp?.name || ""}${ent?.name ? ` (${ent.name})` : ""}`.trim(), phone, address: "\u0421\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437 \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443" };
+      const who = orders.parsePickup(s.pickup_by);
+      if (!phone && !who) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u0442\u0435\u043B\u0435\u0444\u043E\u043D\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0439 \u043D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E, \u0445\u0442\u043E \u0437\u0430\u0431\u0438\u0440\u0430\u0454 \u2014 \u043F\u043E\u043F\u0440\u043E\u0441\u0456\u0442\u044C \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0432\u043A\u0430\u0437\u0430\u0442\u0438 \u0446\u0435 \u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0430\u0431\u043E \u0432\u043F\u0438\u0448\u0456\u0442\u044C \u0442\u0435\u043B\u0435\u0444\u043E\u043D \u0443 \u043A\u0430\u0440\u0442\u0446\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430).");
+      ship = who ? { name: who.name, phone: who.phone, address: "\u0421\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437 \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443" } : { name: `${pp?.name || ""}${ent?.name ? ` (${ent.name})` : ""}`.trim(), phone, address: "\u0421\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437 \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443" };
     }
     if (!ship?.name || !ship?.address) throw fail(400, "\u041D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 (\u043E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0447 \u0456 \u0430\u0434\u0440\u0435\u0441\u0430) \u2014 \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456.");
     const code = newCode();
@@ -8697,7 +8752,8 @@ ${link(c, `pclients/${o.id}`)}`);
     ]);
     const pay = await payText({ supply_id: s.id }, p?.name || "");
     const comment = [
-      pickup ? `${orderNo(s.id)} \xB7 \u0421\u0410\u041C\u041E\u0412\u0418\u0412\u0406\u0417 \u2014 \u043F\u0430\u0440\u0442\u043D\u0435\u0440 \xAB${p?.name || ""}\xBB \u0437\u0430\u0431\u0438\u0440\u0430\u0454 \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443 \xB7 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${s.invoice_no}` : `${orderNo(s.id)} \xB7 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F B2B \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \xAB${p?.name || ""}\xBB`,
+      pickup ? `${orderNo(s.id)} \xB7 \u0421\u0410\u041C\u041E\u0412\u0418\u0412\u0406\u0417 \u2014 \u043F\u0430\u0440\u0442\u043D\u0435\u0440 \xAB${p?.name || ""}\xBB \u0437\u0430\u0431\u0438\u0440\u0430\u0454 \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443 \xB7 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${s.invoice_no}
+\u0417\u0430\u0431\u0438\u0440\u0430\u0454: ${orders.parsePickup(s.pickup_by) ? orders.pickupTxt(orders.parsePickup(s.pickup_by)) : "\u0449\u0435 \u043D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E \u2014 \u0443\u0442\u043E\u0447\u043D\u0456\u0442\u044C \u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430"}` : `${orderNo(s.id)} \xB7 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F B2B \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \xAB${p?.name || ""}\xBB`,
       pay.text,
       s.comment || ""
     ].filter(Boolean).join("\n");
@@ -15516,7 +15572,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 30,
+  version: 31,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -15802,6 +15858,9 @@ var schema11 = {
     ["b2b_orders", "crm_old", "TEXT DEFAULT ''"],
     // «Оплачено» вручну — обов'язковий коментар (напр., «гарантійна заміна — товар повернуто»).
     ["b2b_orders", "paid_note", "TEXT DEFAULT ''"],
+    // Самовивіз: хто забирає зі складу (JSON: name, phone, note) — вносить партнер; останній — підказка для наступних.
+    ["b2b_orders", "pickup_by", "TEXT DEFAULT ''"],
+    ["b2b_partners", "pickup_last", "TEXT DEFAULT ''"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ["b2b_tg_docs", "source", "TEXT DEFAULT 'private'"],
     ["b2b_tg_docs", "reply_to", "INTEGER"],
