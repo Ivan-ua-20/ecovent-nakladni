@@ -2,7 +2,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
@@ -276,6 +276,7 @@ export function createPartnerPages(ctx = {}) {
     const ents = toConfirm && head ? await api('GET', '/api/b2b/p/entities').catch(() => []) : [];
     const hasLeft = !pickup && !['cancelled', 'open', 'confirm'].includes(o.status) && left.some((r) => r.left > 0);
     const ob = o.status === 'open' ? await openBanner() : { html: '', wire: () => {} };
+    const pkLast = o.delivery === 'pickup' && !o.pickup_by ? (await api('GET', '/api/b2b/p/limits').catch(() => null))?.pickup_last || null : null;
     main.innerHTML = `
       ${ob.html}
       <div class="head-row"><h2>Закупівля ${esc(o.number)} ${statusBadge(o)}</h2>
@@ -296,7 +297,8 @@ export function createPartnerPages(ctx = {}) {
         <div class="form-stack">
           <div class="card">${itemsTable(items)}</div>
           ${o.comment ? `<div class="card small"><b>Коментар:</b> ${esc(o.comment)}</div>` : ''}
-          ${o.delivery === 'pickup' ? `<div class="alert info">🚗 <b>Самовивіз</b> — усю закупівлю ви забираєте зі складу самі; замовлення клієнтів з неї не оформлюються.${o.crm_id || o.crm_ext ? ` <b>Передано на склад — товар готують${o.crm_id ? ` (№ ${esc(o.crm_id)})` : ''}.</b> Перед приїздом узгодьте час із менеджером.` : ''}</div>` : ''}
+          ${o.delivery === 'pickup' ? `<div class="alert info">🚗 <b>Самовивіз</b> — усю закупівлю ви забираєте зі складу самі; замовлення клієнтів з неї не оформлюються.${o.crm_id || o.crm_ext ? ` <b>Передано на склад — товар готують${o.crm_id ? ` (№ ${esc(o.crm_id)})` : ''}.</b> Перед приїздом узгодьте час із менеджером.` : ''}</div>
+            ${pickupCard({ ...o, pickup_last: o.pickup_by ? null : pkLast }, { editable: o.status !== 'cancelled' && canEdit(), partner: true })}` : ''}
           ${o.delivery === 'warehouse' ? `<div class="alert info">🏬 <b>Відправка на ваш склад</b> — усю закупівлю відправимо Новою поштою${o.ship_to ? `: ${esc([o.ship_to.name, o.ship_to.phone, o.ship_to.address].filter(Boolean).join(', '))}` : ''}; замовлення клієнтів з неї не оформлюються.${o.crm_id || o.crm_ext ? ' <b>Передано на відправку.</b>' : ''}</div>` : ''}
           ${!['cancelled', 'confirm'].includes(o.status) && !pickup ? `<div class="card form-stack">
             <div class="head-row"><h3>Замовлення клієнтів із цієї закупівлі</h3>${hasLeft && canEdit() ? `<a class="btn sm primary" href="#/pclients/new/${o.id}">+ Замовлення клієнта</a>` : ''}</div>
@@ -323,6 +325,7 @@ export function createPartnerPages(ctx = {}) {
         </div>
       </div>`;
     ob.wire(() => viewOrder(o.id));
+    if (o.delivery === 'pickup') wirePickupCard(o, `/api/b2b/p/orders/${o.id}/pickup`, () => viewOrder(o.id));
     $('#oCancel') && ($('#oCancel').onclick = async () => {
       if (isDraft) {
         if (!(await confirmDanger(`Видалити чернетку ${o.number}?`, 'Товари з неї буде видалено; нам вона не надходила.', 'Видалити чернетку'))) return;
@@ -385,6 +388,7 @@ export function createPartnerPages(ctx = {}) {
             <div class="f"><span>Як отримуєте товар</span>
               <label class="check"><input type="radio" name="ofDel" value="np" ${cur?.order.delivery === 'pickup' ? '' : 'checked'}> Відправка клієнтам Новою поштою (оформлюю замовлення на клієнтів)</label>
               <label class="check"><input type="radio" name="ofDel" value="pickup" ${cur?.order.delivery === 'pickup' ? 'checked' : ''}> Самовивіз — забираю всю закупівлю зі складу</label></div>
+            <div id="ofPick" class="form-stack" hidden><div class="small"><b>Хто забирає</b> <span class="muted">— можна вказати й пізніше в закупівлі</span></div>${pickupFields(cur?.order.pickup_by || plim?.pickup_last, 'ofPk')}</div>
             ${pp.days ? `<div class="f"><span>Оплата</span>
               <label class="check"><input type="radio" name="ofPay" value="prepay" ${cur?.order.pay_terms === 'postpay' ? '' : 'checked'}> Передоплата</label>
               <label class="check"><input type="radio" name="ofPay" value="postpay" ${cur?.order.pay_terms === 'postpay' ? 'checked' : ''} ${pp.overdue?.length ? 'disabled' : ''}> Відстрочка ${pp.days} дн. від дати рахунку${pp.limit != null ? ` (доступно ${uah(Math.max(0, pp.limit - pp.used))})` : ''}</label>
@@ -422,14 +426,26 @@ export function createPartnerPages(ctx = {}) {
     };
     $$('[data-fb]').forEach((b) => (b.onclick = () => { fb = b.dataset.fb; $$('[data-fb]').forEach((x) => x.classList.toggle('on', x === b)); draw(); }));
     $('#ofQ').oninput = (e) => { fq = e.target.value.trim(); draw(); };
+    const pickSync = () => { $('#ofPick').hidden = $('input[name="ofDel"]:checked')?.value !== 'pickup'; };
+    $$('input[name="ofDel"]').forEach((r) => (r.onchange = pickSync));
+    pickSync();
     const submit = async (draft) => {
       const items = [...qty].filter(([, q]) => q > 0).map(([product_id, q]) => ({ product_id, qty: q }));
       if (!items.length) { toast('Вкажіть кількість хоча б одного товару', true); return; }
       const body = { entity_id: Number($('#ofEnt').value), items, comment: $('#ofComment').value, delivery: $('input[name="ofDel"]:checked')?.value || 'np', pay_terms: $('input[name="ofPay"]:checked')?.value || 'prepay' };
       const toDraft = draft && $('#ofDraft')?.value ? Number($('#ofDraft').value) : 0;
+      const pk = body.delivery === 'pickup' ? pickupRead(document, 'ofPk') : null;
+      if (pk?.name || pk?.phone) {
+        if (pk.name.length < 3 || pk.phone.replace(/\D/g, '').length < 10) { toast('Хто забирає: вкажіть ПІБ і телефон (або залиште обидва поля порожніми)', true); return; }
+        body.pickup_by = pk;
+      }
       $$('#ofSave, #ofDraftSave').forEach((b) => { b.disabled = true; });
       try {
-        if (id) { await api('PUT', `/api/b2b/p/orders/${id}`, body); toast('Зміни збережено'); location.hash = `#/porders/${id}`; }
+        if (id) {
+          await api('PUT', `/api/b2b/p/orders/${id}`, body);
+          if (body.pickup_by) await api('PUT', `/api/b2b/p/orders/${id}/pickup`, body.pickup_by);
+          toast('Зміни збережено'); location.hash = `#/porders/${id}`;
+        }
         else {
           const r = await api('POST', '/api/b2b/p/orders', { ...body, draft, to_draft: toDraft || undefined });
           toast(r.draft ? (toDraft ? `Товари додано до чернетки ${r.number}` : `Чернетку ${r.number} збережено`) : `Закупівлю ${r.number} оформлено`);

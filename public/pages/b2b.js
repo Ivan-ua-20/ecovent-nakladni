@@ -4,7 +4,7 @@ import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
 import { viewAdminSupplyForm } from './b2b-supply.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard } from './b2b-shared.js';
 
 const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
 
@@ -864,8 +864,11 @@ export function createB2bPages(ctx = {}) {
           ${o.delivery === 'pickup' && !closed ? `<div class="card form-stack"><h3>🚗 Самовивіз зі складу</h3>
             ${o.crm_id || o.crm_ext ? `<div>Передано на склад (LP-CRM)${o.crm_id ? `: № <b>${esc(o.crm_id)}</b>` : ''}${o.crm_sent_at && !String(o.crm_sent_at).startsWith('sending') ? ` · ${esc(fmtDateTime(o.crm_sent_at))}` : ''}</div><div class="small muted">Склад готує товар — партнер приїде забрати.</div>`
               : !o.invoice_no ? '<div class="small muted">Після рахунку закупівлю можна передати в LP-CRM, щоб склад підготував товар до приїзду партнера.</div>'
-                : `<div class="small">Уся закупівля піде одним замовленням у LP-CRM («Нові») — склад підготує товар, партнер приїде забрати. Отримувач — партнер, ціни — партнера, у коментарі — «САМОВИВІЗ», рахунок і стан оплати.</div><div class="btn-row"><button class="btn primary" id="oCrm">📦 Передати на склад (LP-CRM)</button></div>`}
-          </div>` : ''}
+                : `<div class="small">Уся закупівля піде одним замовленням у LP-CRM («Нові») — склад підготує товар, партнер приїде забрати. Отримувач — хто забирає (або партнер, якщо ще не вказано), ціни — партнера, у коментарі — «САМОВИВІЗ», рахунок, хто забирає і стан оплати.</div>
+                  ${o.pickup_by ? '' : '<div class="alert warn small">Партнер ще не вказав, хто забирає, — можна передати й так (у коментарі буде «уточніть у партнера») або вписати нижче.</div>'}
+                  <div class="btn-row"><button class="btn primary" id="oCrm">📦 Передати на склад (LP-CRM)</button></div>`}
+          </div>
+          ${pickupCard(o, { editable: !ro() })}` : ''}
           <div class="card form-stack">
             <h3>Платник (юрособа партнера)</h3>
             <div class="small" style="white-space:pre-line" id="oEnt">${esc(o.entity || (o.status === 'confirm' ? 'Партнер обере юрособу при підтвердженні.' : '—'))}</div>
@@ -994,10 +997,11 @@ export function createB2bPages(ctx = {}) {
       return setDelivery('warehouse', ship);
     };
     if ($('#oShipEd')) $('#oShipEd').onclick = async () => { const ship = await shipForm(o.ship_to); if (ship) setDelivery('warehouse', ship); };
+    if (o.delivery === 'pickup' && !closed) wirePickupCard(o, `/api/b2b/orders/${o.id}/pickup`, () => viewOrder(o.id));
     if ($('#oCrm')) $('#oCrm').onclick = async (e) => {
       const unpaid = !['paid', 'done'].includes(o.status) && o.pay_terms !== 'postpay';
       const pk = o.delivery === 'pickup';
-      if (!(await confirmDanger(pk ? `Передати ${o.number} на склад (LP-CRM)?` : `Додати ${o.number} у LP-CRM на відправку?`, `Одне замовлення в «Нові» на ${esc(uah(o.total))}: ${pk ? `самовивіз — ${esc(partner?.name || 'партнер')} забирає зі складу` : esc([o.ship_to?.name, o.ship_to?.address].filter(Boolean).join(', '))}.${unpaid ? ' <b>Закупівля ще не оплачена.</b>' : ''}`, pk ? 'Передати на склад' : 'Додати в LP-CRM'))) return;
+      if (!(await confirmDanger(pk ? `Передати ${o.number} на склад (LP-CRM)?` : `Додати ${o.number} у LP-CRM на відправку?`, `Одне замовлення в «Нові» на ${esc(uah(o.total))}: ${pk ? `самовивіз — ${esc(partner?.name || 'партнер')} забирає зі складу${o.pickup_by ? ` (${esc(o.pickup_by.name)}, ${esc(o.pickup_by.phone)})` : ''}` : esc([o.ship_to?.name, o.ship_to?.address].filter(Boolean).join(', '))}.${unpaid ? ' <b>Закупівля ще не оплачена.</b>' : ''}`, pk ? 'Передати на склад' : 'Додати в LP-CRM'))) return;
       const b = e.target.closest("button");
       b.disabled = true;
       try { const r = await api('POST', `/api/b2b/orders/${o.id}/crm`); toast(r.crm_id ? `Додано в LP-CRM: № ${r.crm_id}` : 'Додано в LP-CRM'); viewOrder(o.id); }
