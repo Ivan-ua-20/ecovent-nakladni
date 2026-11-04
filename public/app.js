@@ -66,6 +66,7 @@ const SECTIONS = [
     { id: 'pstatement', label: 'Взаєморозрахунки' },
     { id: 'pclients', label: 'Замовлення клієнтів' },
     { id: 'pentities', label: 'Мої юрособи' },
+    { id: 'pcouriers', label: 'Кур’єри' },
     { id: 'pstats', label: 'Аналітика' },
     { id: 'psettings', label: 'Налаштування' },
     { id: 'ptrash', label: 'Кошик' },
@@ -291,7 +292,7 @@ const PRICELOG = createPriceLogPages();
 const RETAIL = createRetailPages(ctx);
 const { viewPartners, viewCatalog, viewOrders: viewB2bOrders, viewClients: viewB2bClients, viewTrash: viewB2bTrash } = createB2bPages(ctx);
 const HOME = createHomePages(ctx);
-const { viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients, viewTeam: viewPartnerTeam, viewSettings: viewPartnerSettings, viewTrash: viewPartnerTrash } = createPartnerPages(ctx);
+const { viewCouriers, viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients, viewTeam: viewPartnerTeam, viewSettings: viewPartnerSettings, viewTrash: viewPartnerTrash } = createPartnerPages(ctx);
 setUnauthorized(() => showAuth());
 
 const routes = {
@@ -330,6 +331,7 @@ const routes = {
   pprices: () => PRICELOG.viewPartner(),
   ptrash: viewPartnerTrash,
   pentities: viewEntities,
+  pcouriers: viewCouriers,
   b2bcatalog: viewCatalog,
   pcatalog: viewPartnerCatalog,
   home: () => HOME.viewHome(),

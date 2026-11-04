@@ -6818,6 +6818,32 @@ function mountB2bOrders(app, { db, services, myPartner, partnerPrice: partnerPri
     if (phone.length < 10 || phone.length > 13) throw fail(400, "\u0425\u0442\u043E \u0437\u0430\u0431\u0438\u0440\u0430\u0454: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u0442\u0435\u043B\u0435\u0444\u043E\u043D, \u043D\u0430\u043F\u0440. 067 123 45 67.");
     return { name, phone, note };
   }
+  async function resolvePickup(partnerId, b, user, { required = true } = {}) {
+    const cid = parseInt(b?.courier_id, 10);
+    if (cid) {
+      const k = await db.get(`SELECT * FROM b2b_couriers WHERE id = ? AND partner_id = ? AND active = 1`, [cid, partnerId]);
+      if (!k) throw fail(400, "\u0426\u044C\u043E\u0433\u043E \u043A\u0443\u0440\u2019\u0454\u0440\u0430 \u0432\u0436\u0435 \u043D\u0435\u043C\u0430\u0454 \u0432 \u0441\u043F\u0438\u0441\u043A\u0443 \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0456\u043D\u0448\u043E\u0433\u043E \u0430\u0431\u043E \u0432\u043F\u0438\u0448\u0456\u0442\u044C \u0432\u0440\u0443\u0447\u043D\u0443.");
+      const note = String(b?.note ?? "").trim().slice(0, 300) || k.note || "";
+      return { name: k.name, phone: k.phone, note, courier_id: k.id };
+    }
+    if (!String(b?.name || "").trim() && !String(b?.phone || "").trim()) {
+      if (required) throw fail(400, "\u0421\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437: \u0432\u043A\u0430\u0436\u0456\u0442\u044C, \u0445\u0442\u043E \u0437\u0430\u0431\u0438\u0440\u0430\u0454 \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443 \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u043A\u0443\u0440\u2019\u0454\u0440\u0430 \u0437\u0456 \u0441\u043F\u0438\u0441\u043A\u0443 \u0430\u0431\u043E \u0432\u043F\u0438\u0448\u0456\u0442\u044C \u041F\u0406\u0411 \u0456 \u0442\u0435\u043B\u0435\u0444\u043E\u043D.");
+      return null;
+    }
+    const x = pickupIn(b);
+    if (b.save) {
+      const have = await db.get(`SELECT id FROM b2b_couriers WHERE partner_id = ? AND phone = ? AND active = 1`, [partnerId, x.phone]);
+      if (have) x.courier_id = have.id;
+      else {
+        const n = (await db.get(`SELECT COUNT(*) AS n FROM b2b_couriers WHERE partner_id = ? AND active = 1`, [partnerId])).n;
+        if (n < 50) x.courier_id = (await db.run(
+          `INSERT INTO b2b_couriers (partner_id, name, phone, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+          [partnerId, x.name, x.phone, "", userName2(user), nowIso()]
+        )).lastId;
+      }
+    }
+    return x;
+  }
   const orderText = (title, o, p, items) => {
     const lines = items.slice(0, 60).map((i) => `${h3(i.name)}${i.article ? ` (${h3(i.article)})` : ""} \u2014 ${i.qty} \u0448\u0442 \u2014 ${uah3(i.price)}`);
     if (items.length > 60) lines.push(`\u2026\u0456 \u0449\u0435 ${items.length - 60} \u043F\u043E\u0437.`);
@@ -6971,21 +6997,26 @@ ${e.email}` : ""}`;
     if (!draft) await checkTerms(p, terms, total);
     const payDays = terms === "postpay" ? Number(p.postpay_days) : 0;
     const now = nowIso();
+    const pk = deliveryOf(b.delivery) === "pickup" ? await resolvePickup(p.id, b.pickup_by, c.get("user")) : null;
+    const pkRows = (id) => pk ? [[`UPDATE b2b_orders SET pickup_by = ? WHERE id = ?`, [JSON.stringify(pk), id]], [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(pk), p.id]]] : [];
     if (draft) {
       const r3 = await db.run(
         `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [p.id, e.id, entityText(e), total, String(b.comment || "").trim().slice(0, 1e3), userName2(c.get("user")), now, now, deliveryOf(b.delivery), terms, payDays]
       );
-      if (deliveryOf(b.delivery) === "pickup" && b.pickup_by?.name) await setPickup(c, await orderOf(r3.lastId), b.pickup_by);
-      await db.batch([...itemRows(r3.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r3.lastId, now, userName2(c.get("user")), `\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u043D\u0430 ${uah3(total)}: ${itemsTxt(items)}`.slice(0, 2e3)]]]);
+      await db.batch([...itemRows(r3.lastId, items), ...pkRows(r3.lastId), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [
+        r3.lastId,
+        now,
+        userName2(c.get("user")),
+        `\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u043D\u0430 ${uah3(total)}${pk ? ` (\u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437, \u0437\u0430\u0431\u0438\u0440\u0430\u0454: ${pickupTxt(pk)})` : ""}: ${itemsTxt(items)}`.slice(0, 2e3)
+      ]]]);
       return c.json({ id: r3.lastId, number: orderNo(r3.lastId), total, draft: true });
     }
     const r = await db.run(
       `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [p.id, e.id, entityText(e), total, String(b.comment || "").trim().slice(0, 1e3), userName2(c.get("user")), now, now, deliveryOf(b.delivery), terms, payDays]
     );
-    const pk = deliveryOf(b.delivery) === "pickup" && b.pickup_by?.name ? pickupIn(b.pickup_by) : null;
-    if (pk) await db.batch([[`UPDATE b2b_orders SET pickup_by = ? WHERE id = ?`, [JSON.stringify(pk), r.lastId]], [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(pk), p.id]]]);
+    if (pk) await db.batch(pkRows(r.lastId));
     await db.batch([...itemRows(r.lastId, items), [
       `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
       [r.lastId, now, userName2(c.get("user")), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah3(total)}${deliveryOf(b.delivery) === "pickup" ? ` (\u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437${pk ? `, \u0437\u0430\u0431\u0438\u0440\u0430\u0454: ${pickupTxt(pk)}` : ""})` : ""}: ${itemsTxt(items)}`.slice(0, 2e3)]
@@ -7096,7 +7127,10 @@ ${link(c, `b2borders/${r.lastId}`)}`);
   async function setPickup(c, o, b) {
     if (o.kind !== "supply" || deliveryOf(o.delivery) !== "pickup") throw fail(400, "\u0426\u0435 \u043D\u0435 \u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437.");
     if (o.status === "cancelled") throw fail(400, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.");
-    const x = pickupIn(b);
+    const x = await resolvePickup(o.partner_id, b, c.get("user"));
+    return storePickup(c, o, x);
+  }
+  async function storePickup(c, o, x) {
     const prev = parsePickup(o.pickup_by);
     if (prev && pickupTxt(prev) === pickupTxt(x)) return { ok: true, pickup_by: x };
     await db.batch([
@@ -7113,6 +7147,41 @@ ${link(c, `b2borders/${o.id}`)}`);
     }
     return { ok: true, pickup_by: x };
   }
+  const courierIn = (b) => {
+    const x = pickupIn(b);
+    return { name: x.name, phone: x.phone, note: x.note };
+  };
+  app.get("/api/b2b/p/couriers", async (c) => {
+    const p = await myPartner(c);
+    return c.json(await db.all(`SELECT id, name, phone, note, created_by, created_at FROM b2b_couriers WHERE partner_id = ? AND active = 1 ORDER BY name`, [p.id]));
+  });
+  app.get("/api/b2b/partners/:id/couriers", async (c) => {
+    need(c, "b2b.admin");
+    return c.json(await db.all(`SELECT id, name, phone, note FROM b2b_couriers WHERE partner_id = ? AND active = 1 ORDER BY name`, [c.req.param("id")]));
+  });
+  app.post("/api/b2b/p/couriers", async (c) => {
+    const p = await myPartner(c);
+    if (!can(c.get("user"), "b2b.order")) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432.");
+    const x = courierIn(await c.req.json());
+    if (await db.get(`SELECT id FROM b2b_couriers WHERE partner_id = ? AND phone = ? AND active = 1`, [p.id, x.phone])) throw fail(400, "\u041A\u0443\u0440\u2019\u0454\u0440 \u0456\u0437 \u0446\u0438\u043C \u0442\u0435\u043B\u0435\u0444\u043E\u043D\u043E\u043C \u0443\u0436\u0435 \u0454 \u0432 \u0441\u043F\u0438\u0441\u043A\u0443.");
+    if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_couriers WHERE partner_id = ? AND active = 1`, [p.id])).n >= 50) throw fail(400, "\u0423 \u0441\u043F\u0438\u0441\u043A\u0443 \u0432\u0436\u0435 50 \u043A\u0443\u0440\u2019\u0454\u0440\u0456\u0432 \u2014 \u043F\u0440\u0438\u0431\u0435\u0440\u0456\u0442\u044C \u0442\u0438\u0445, \u0445\u0442\u043E \u0431\u0456\u043B\u044C\u0448\u0435 \u043D\u0435 \u0437\u0430\u0431\u0438\u0440\u0430\u0454.");
+    const r = await db.run(`INSERT INTO b2b_couriers (partner_id, name, phone, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`, [p.id, x.name, x.phone, x.note, userName2(c.get("user")), nowIso()]);
+    return c.json({ id: r.lastId });
+  });
+  app.put("/api/b2b/p/couriers/:id", async (c) => {
+    const p = await myPartner(c);
+    if (!can(c.get("user"), "b2b.order")) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432.");
+    const x = courierIn(await c.req.json());
+    const r = await db.run(`UPDATE b2b_couriers SET name = ?, phone = ?, note = ? WHERE id = ? AND partner_id = ? AND active = 1`, [x.name, x.phone, x.note, c.req.param("id"), p.id]);
+    if (!r.changes) throw fail(404, "\u041A\u0443\u0440\u2019\u0454\u0440\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return c.json({ ok: true });
+  });
+  app.delete("/api/b2b/p/couriers/:id", async (c) => {
+    const p = await myPartner(c);
+    if (!can(c.get("user"), "b2b.order")) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432.");
+    await db.run(`UPDATE b2b_couriers SET active = 0 WHERE id = ? AND partner_id = ?`, [c.req.param("id"), p.id]);
+    return c.json({ ok: true });
+  });
   app.put("/api/b2b/p/orders/:id/pickup", async (c) => {
     const p = await myPartner(c);
     if (!can(c.get("user"), "b2b.order")) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432.");
@@ -7284,6 +7353,7 @@ ${link(c, `porders/${open.id}`)}`);
     const wasItems = await db.all(`SELECT product_id, name, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
     if (delivery === "pickup" && left.some((r) => r.used > 0)) throw fail(400, "\u0417 \u0446\u0456\u0454\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0432\u0436\u0435 \u0454 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u2014 \u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437 \u043D\u0435\u043C\u043E\u0436\u043B\u0438\u0432\u0438\u0439.");
     if (delivery === "warehouse" && deliveryOf(o.delivery) !== "warehouse") throw fail(400, "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0441\u0442\u0430\u0432\u0438\u0442\u044C \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440.");
+    const pk = delivery === "pickup" ? await resolvePickup(p.id, b.pickup_by, c.get("user"), { required: !parsePickup(o.pickup_by) }) : null;
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, items),
@@ -7293,6 +7363,7 @@ ${link(c, `porders/${open.id}`)}`);
       ]
     ]);
     await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E ${isDraft ? "\u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E"}: ${itemsDiff(wasItems, items)} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah3(total)}`);
+    if (pk) await storePickup(c, { ...o, delivery }, pk);
     if (isDraft) return c.json({ ok: true, total });
     const full = orderText("\u270F\uFE0F \u0417\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E", { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment, delivery, pay_terms: terms, pay_days: payDays }, p, items);
     await tgAdmins(`${full}
@@ -7316,6 +7387,7 @@ ${link(c, `b2borders/${o.id}`)}`);
     if (o.kind !== "supply" || o.status !== "draft") throw fail(400, "\u0426\u0435 \u043D\u0435 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0430 \u2014 \u0457\u0457 \u0432\u0436\u0435 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E.");
     const items = await db.all(`SELECT product_id, name, article, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
     if (!items.length) throw fail(400, "\u0427\u0435\u0440\u043D\u0435\u0442\u043A\u0430 \u043F\u043E\u0440\u043E\u0436\u043D\u044F \u2014 \u0434\u043E\u0434\u0430\u0439\u0442\u0435 \u0442\u043E\u0432\u0430\u0440\u0438.");
+    if (deliveryOf(o.delivery) === "pickup" && !parsePickup(o.pickup_by)) throw fail(400, "\u0421\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437: \u0441\u043F\u0435\u0440\u0448\u0443 \u0432\u043A\u0430\u0436\u0456\u0442\u044C, \u0445\u0442\u043E \u0437\u0430\u0431\u0438\u0440\u0430\u0454 \u0437\u0456 \u0441\u043A\u043B\u0430\u0434\u0443 (\xAB\u0417\u043C\u0456\u043D\u0438\u0442\u0438\xBB \u0430\u0431\u043E \u043A\u0430\u0440\u0442\u043A\u0430 \xAB\u0425\u0442\u043E \u0437\u0430\u0431\u0438\u0440\u0430\u0454\xBB).");
     const e = await myEntity(p, o.entity_id).catch(() => {
       throw fail(400, "\u042E\u0440\u043E\u0441\u043E\u0431\u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0456\u043D\u0448\u0443 (\xAB\u0417\u043C\u0456\u043D\u0438\u0442\u0438\xBB).");
     });
@@ -15572,7 +15644,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 31,
+  version: 32,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -15640,6 +15712,18 @@ var schema11 = {
   )`,
     `CREATE INDEX IF NOT EXISTS b2b_entities_p ON b2b_entities (partner_id)`,
     `CREATE INDEX IF NOT EXISTS b2b_entities_code ON b2b_entities (code)`,
+    // Кур'єри партнера — хто забирає самовивіз зі складу (обирається в закупівлі зі списку).
+    `CREATE TABLE IF NOT EXISTS b2b_couriers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL DEFAULT '',
+    note TEXT DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT DEFAULT '',
+    created_at TEXT
+  )`,
+    `CREATE INDEX IF NOT EXISTS b2b_couriers_p ON b2b_couriers (partner_id)`,
     // Замовлення партнерів. kind: supply — закупівля в нас; client — замовлення для клієнта партнера (етап 3).
     `CREATE TABLE IF NOT EXISTS b2b_orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

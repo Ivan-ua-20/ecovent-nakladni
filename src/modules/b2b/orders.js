@@ -180,6 +180,33 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return { name, phone, note };
   }
 
+  // Хто забирає: обраний кур'єр зі списку партнера ({ courier_id, note? }) або вписаний вручну ({ name, phone, note, save? } —
+  // save: додати в «Кур'єри»). required — без цього самовивіз не оформити.
+  async function resolvePickup(partnerId, b, user, { required = true } = {}) {
+    const cid = parseInt(b?.courier_id, 10);
+    if (cid) {
+      const k = await db.get(`SELECT * FROM b2b_couriers WHERE id = ? AND partner_id = ? AND active = 1`, [cid, partnerId]);
+      if (!k) throw fail(400, 'Цього кур’єра вже немає в списку — оберіть іншого або впишіть вручну.');
+      const note = String(b?.note ?? '').trim().slice(0, 300) || k.note || '';
+      return { name: k.name, phone: k.phone, note, courier_id: k.id };
+    }
+    if (!String(b?.name || '').trim() && !String(b?.phone || '').trim()) {
+      if (required) throw fail(400, 'Самовивіз: вкажіть, хто забирає зі складу — оберіть кур’єра зі списку або впишіть ПІБ і телефон.');
+      return null;
+    }
+    const x = pickupIn(b);
+    if (b.save) {
+      const have = await db.get(`SELECT id FROM b2b_couriers WHERE partner_id = ? AND phone = ? AND active = 1`, [partnerId, x.phone]);
+      if (have) x.courier_id = have.id;
+      else {
+        const n = (await db.get(`SELECT COUNT(*) AS n FROM b2b_couriers WHERE partner_id = ? AND active = 1`, [partnerId])).n;
+        if (n < 50) x.courier_id = (await db.run(`INSERT INTO b2b_couriers (partner_id, name, phone, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+          [partnerId, x.name, x.phone, '', userName(user), nowIso()])).lastId;
+      }
+    }
+    return x;
+  }
+
   // Детально про закупівлю: на кого рахунок і накладна, товари «назва — кількість — ціна партнера».
   const orderText = (title, o, p, items) => {
     const lines = items.slice(0, 60).map((i) => `${h(i.name)}${i.article ? ` (${h(i.article)})` : ''} — ${i.qty} шт — ${uah(i.price)}`);
@@ -335,21 +362,23 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (!draft) await checkTerms(p, terms, total);
     const payDays = terms === 'postpay' ? Number(p.postpay_days) : 0;
     const now = nowIso();
+    // Самовивіз — одразу хто забирає (кур'єр зі списку або вручну).
+    const pk = deliveryOf(b.delivery) === 'pickup' ? await resolvePickup(p.id, b.pickup_by, c.get('user')) : null;
+    const pkRows = (id) => (pk ? [[`UPDATE b2b_orders SET pickup_by = ? WHERE id = ?`, [JSON.stringify(pk), id]], [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(pk), p.id]]] : []);
     if (draft) {
       const r = await db.run(
         `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery), terms, payDays],
       );
-      if (deliveryOf(b.delivery) === 'pickup' && b.pickup_by?.name) await setPickup(c, await orderOf(r.lastId), b.pickup_by);
-      await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r.lastId, now, userName(c.get('user')), `створено чернетку на ${uah(total)}: ${itemsTxt(items)}`.slice(0, 2000)]]]);
+      await db.batch([...itemRows(r.lastId, items), ...pkRows(r.lastId), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r.lastId, now, userName(c.get('user')),
+        `створено чернетку на ${uah(total)}${pk ? ` (самовивіз, забирає: ${pickupTxt(pk)})` : ''}: ${itemsTxt(items)}`.slice(0, 2000)]]]);
       return c.json({ id: r.lastId, number: orderNo(r.lastId), total, draft: true });
     }
     const r = await db.run(
       `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery), terms, payDays],
     );
-    const pk = deliveryOf(b.delivery) === 'pickup' && b.pickup_by?.name ? pickupIn(b.pickup_by) : null;
-    if (pk) await db.batch([[`UPDATE b2b_orders SET pickup_by = ? WHERE id = ?`, [JSON.stringify(pk), r.lastId]], [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(pk), p.id]]]);
+    if (pk) await db.batch(pkRows(r.lastId));
     await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
       [r.lastId, now, userName(c.get('user')), `оформлено закупівлю на ${uah(total)}${deliveryOf(b.delivery) === 'pickup' ? ` (самовивіз${pk ? `, забирає: ${pickupTxt(pk)}` : ''})` : ''}: ${itemsTxt(items)}`.slice(0, 2000)]]]);
     const full = orderText('🆕 Нова закупівля', { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), pay_terms: terms, pay_days: payDays, pickup_by: pk ? JSON.stringify(pk) : '' }, p, items);
@@ -461,7 +490,10 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   async function setPickup(c, o, b) {
     if (o.kind !== 'supply' || deliveryOf(o.delivery) !== 'pickup') throw fail(400, 'Це не самовивіз.');
     if (o.status === 'cancelled') throw fail(400, 'Закупівлю скасовано.');
-    const x = pickupIn(b);
+    const x = await resolvePickup(o.partner_id, b, c.get('user'));
+    return storePickup(c, o, x);
+  }
+  async function storePickup(c, o, x) {
     const prev = parsePickup(o.pickup_by);
     if (prev && pickupTxt(prev) === pickupTxt(x)) return { ok: true, pickup_by: x };
     await db.batch([
@@ -477,6 +509,39 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     }
     return { ok: true, pickup_by: x };
   }
+  // Кур'єри партнера (хто забирає самовивіз): список, додати, змінити, прибрати.
+  const courierIn = (b) => { const x = pickupIn(b); return { name: x.name, phone: x.phone, note: x.note }; };
+  app.get('/api/b2b/p/couriers', async (c) => {
+    const p = await myPartner(c);
+    return c.json(await db.all(`SELECT id, name, phone, note, created_by, created_at FROM b2b_couriers WHERE partner_id = ? AND active = 1 ORDER BY name`, [p.id]));
+  });
+  app.get('/api/b2b/partners/:id/couriers', async (c) => {
+    need(c, 'b2b.admin');
+    return c.json(await db.all(`SELECT id, name, phone, note FROM b2b_couriers WHERE partner_id = ? AND active = 1 ORDER BY name`, [c.req.param('id')]));
+  });
+  app.post('/api/b2b/p/couriers', async (c) => {
+    const p = await myPartner(c);
+    if (!can(c.get('user'), 'b2b.order')) throw fail(403, 'Недостатньо прав.');
+    const x = courierIn(await c.req.json());
+    if (await db.get(`SELECT id FROM b2b_couriers WHERE partner_id = ? AND phone = ? AND active = 1`, [p.id, x.phone])) throw fail(400, 'Кур’єр із цим телефоном уже є в списку.');
+    if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_couriers WHERE partner_id = ? AND active = 1`, [p.id])).n >= 50) throw fail(400, 'У списку вже 50 кур’єрів — приберіть тих, хто більше не забирає.');
+    const r = await db.run(`INSERT INTO b2b_couriers (partner_id, name, phone, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`, [p.id, x.name, x.phone, x.note, userName(c.get('user')), nowIso()]);
+    return c.json({ id: r.lastId });
+  });
+  app.put('/api/b2b/p/couriers/:id', async (c) => {
+    const p = await myPartner(c);
+    if (!can(c.get('user'), 'b2b.order')) throw fail(403, 'Недостатньо прав.');
+    const x = courierIn(await c.req.json());
+    const r = await db.run(`UPDATE b2b_couriers SET name = ?, phone = ?, note = ? WHERE id = ? AND partner_id = ? AND active = 1`, [x.name, x.phone, x.note, c.req.param('id'), p.id]);
+    if (!r.changes) throw fail(404, 'Кур’єра не знайдено.');
+    return c.json({ ok: true });
+  });
+  app.delete('/api/b2b/p/couriers/:id', async (c) => {
+    const p = await myPartner(c);
+    if (!can(c.get('user'), 'b2b.order')) throw fail(403, 'Недостатньо прав.');
+    await db.run(`UPDATE b2b_couriers SET active = 0 WHERE id = ? AND partner_id = ?`, [c.req.param('id'), p.id]);
+    return c.json({ ok: true });
+  });
   app.put('/api/b2b/p/orders/:id/pickup', async (c) => {
     const p = await myPartner(c);
     if (!can(c.get('user'), 'b2b.order')) throw fail(403, 'Недостатньо прав.');
@@ -630,6 +695,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const wasItems = await db.all(`SELECT product_id, name, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
     if (delivery === 'pickup' && left.some((r) => r.used > 0)) throw fail(400, 'З цієї закупівлі вже є замовлення клієнтів — самовивіз неможливий.');
     if (delivery === 'warehouse' && deliveryOf(o.delivery) !== 'warehouse') throw fail(400, 'Відправку на склад партнера ставить менеджер.');
+    const pk = delivery === 'pickup' ? await resolvePickup(p.id, b.pickup_by, c.get('user'), { required: !parsePickup(o.pickup_by) }) : null;
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, items),
@@ -637,6 +703,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
         [e.id, entityText(e), total, String(b.comment ?? o.comment ?? '').trim().slice(0, 1000), delivery, terms, payDays, nowIso(), o.id]],
     ]);
     await log(o.id, c.get('user'), `змінено ${isDraft ? 'чернетку' : 'закупівлю'}: ${itemsDiff(wasItems, items)} — разом ${uah(total)}`);
+    if (pk) await storePickup(c, { ...o, delivery }, pk);
     if (isDraft) return c.json({ ok: true, total });
     const full = orderText('✏️ Змінено закупівлю', { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment, delivery, pay_terms: terms, pay_days: payDays }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${o.id}`)}`);
@@ -660,6 +727,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (o.kind !== 'supply' || o.status !== 'draft') throw fail(400, 'Це не чернетка — її вже відправлено.');
     const items = await db.all(`SELECT product_id, name, article, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
     if (!items.length) throw fail(400, 'Чернетка порожня — додайте товари.');
+    if (deliveryOf(o.delivery) === 'pickup' && !parsePickup(o.pickup_by)) throw fail(400, 'Самовивіз: спершу вкажіть, хто забирає зі складу («Змінити» або картка «Хто забирає»).');
     const e = await myEntity(p, o.entity_id).catch(() => { throw fail(400, 'Юрособу чернетки видалено — оберіть іншу («Змінити»).'); });
     await checkTerms(p, o.pay_terms === 'postpay' ? 'postpay' : 'prepay', o.total, o.id);
     const claim = await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity = ?, created_at = ?, updated_at = ? WHERE id = ? AND status = 'draft'`, [entityText(e), nowIso(), nowIso(), o.id]);

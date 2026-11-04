@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 31,
+  version: 32,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,6 +71,18 @@ export const schema = {
   )`,
   `CREATE INDEX IF NOT EXISTS b2b_entities_p ON b2b_entities (partner_id)`,
   `CREATE INDEX IF NOT EXISTS b2b_entities_code ON b2b_entities (code)`,
+  // Кур'єри партнера — хто забирає самовивіз зі складу (обирається в закупівлі зі списку).
+  `CREATE TABLE IF NOT EXISTS b2b_couriers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL DEFAULT '',
+    note TEXT DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT DEFAULT '',
+    created_at TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_couriers_p ON b2b_couriers (partner_id)`,
   // Замовлення партнерів. kind: supply — закупівля в нас; client — замовлення для клієнта партнера (етап 3).
   `CREATE TABLE IF NOT EXISTS b2b_orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

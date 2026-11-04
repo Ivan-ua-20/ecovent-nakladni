@@ -127,33 +127,55 @@ export const PAID_NOTE_HINT = 'Напр.: гарантійна заміна — 
 // ---------- самовивіз: хто забирає зі складу ----------
 export const pickupPhone = (ph) => { const d = String(ph || '').replace(/\D/g, ''); return d.length === 12 ? `+${d.slice(0, 2)} ${d.slice(2, 5)} ${d.slice(5, 8)} ${d.slice(8, 10)} ${d.slice(10)}` : d; };
 export const pickupLine = (x) => (x ? `<b>${esc(x.name)}</b> · ${esc(pickupPhone(x.phone))}${x.note ? ` · ${esc(x.note)}` : ''}` : '');
-// Поля форми (prefix — щоб на сторінці могло бути кілька форм); v — поточне або «як минулого разу».
-export const pickupFields = (v, prefix = 'pk') => `<div class="grid2">
-    <label class="f"><span>ПІБ (хто забирає)</span><input id="${prefix}Name" value="${esc(v?.name || '')}" placeholder="Прізвище Ім’я" autocomplete="off"></label>
-    <label class="f"><span>Телефон</span><input id="${prefix}Phone" value="${esc(v?.phone ? pickupPhone(v.phone) : '')}" inputmode="tel" placeholder="067 123 45 67" autocomplete="off"></label></div>
-  <label class="f"><span>Примітка (необов’язково): авто, номер, коли приїде, кур’єрська служба</span><input id="${prefix}Note" value="${esc(v?.note || '')}" placeholder="напр. VW Caddy АА1234ВВ, у четвер після 14:00"></label>`;
-export const pickupRead = (root = document, prefix = 'pk') => ({ name: $(`#${prefix}Name`, root)?.value.trim() || '', phone: $(`#${prefix}Phone`, root)?.value.trim() || '', note: $(`#${prefix}Note`, root)?.value.trim() || '' });
+// Вибір, хто забирає: кур'єр зі списку партнера або «інша людина» (вручну, з галочкою «зберегти в Кур'єри»).
+// v — поточне значення (у закупівлі) або підказка; prefix — щоб на сторінці могло бути кілька форм.
+export function pickupFields(v, prefix = 'pk', couriers = []) {
+  const sel = v?.courier_id && couriers.some((k) => k.id === v.courier_id) ? String(v.courier_id) : v?.name ? '' : couriers[0] ? String(couriers[0].id) : '';
+  const manual = sel ? null : v;
+  return `<div class="form-stack" style="gap:8px" id="${prefix}Box">
+    ${couriers.length ? `<label class="f"><span>Хто забирає</span><select id="${prefix}Sel">${couriers.map((k) => `<option value="${k.id}" ${String(k.id) === sel ? 'selected' : ''}>${esc(k.name)} · ${esc(pickupPhone(k.phone))}</option>`).join('')}
+      <option value="" ${sel ? '' : 'selected'}>✍️ Інша людина — вписати</option></select></label>` : ''}
+    <div id="${prefix}Man" class="form-stack" style="gap:8px" ${sel ? 'hidden' : ''}>
+      <div class="grid2">
+        <label class="f"><span>ПІБ (хто забирає)</span><input id="${prefix}Name" value="${esc(manual?.name || '')}" placeholder="Прізвище Ім’я" autocomplete="off"></label>
+        <label class="f"><span>Телефон</span><input id="${prefix}Phone" value="${esc(manual?.phone ? pickupPhone(manual.phone) : '')}" inputmode="tel" placeholder="067 123 45 67" autocomplete="off"></label></div>
+      <label class="check small"><input type="checkbox" id="${prefix}Save" checked> Зберегти в «Кур’єри» — наступного разу просто обрати зі списку</label>
+    </div>
+    <label class="f"><span>Примітка (необов’язково): авто, номер, коли приїде</span><input id="${prefix}Note" value="${esc(v?.note || '')}" placeholder="напр. VW Caddy АА1234ВВ, у четвер після 14:00"></label>
+  </div>`;
+}
+export function wirePickupFields(root = document, prefix = 'pk') {
+  const s = $(`#${prefix}Sel`, root);
+  if (s) s.onchange = () => { $(`#${prefix}Man`, root).hidden = Boolean(s.value); };
+}
+export function pickupRead(root = document, prefix = 'pk') {
+  const sel = $(`#${prefix}Sel`, root)?.value;
+  const note = $(`#${prefix}Note`, root)?.value.trim() || '';
+  if (sel) return { courier_id: Number(sel), note };
+  return { name: $(`#${prefix}Name`, root)?.value.trim() || '', phone: $(`#${prefix}Phone`, root)?.value.trim() || '', note, save: Boolean($(`#${prefix}Save`, root)?.checked) };
+}
 // Картка «Хто забирає» в закупівлі (і в нас, і в партнера): показ + «Змінити» (вікно) або одразу форма, якщо ще не вказано.
-export function pickupCard(o, { editable = true, partner = false } = {}) {
+export function pickupCard(o, { editable = true, partner = false, couriers = [] } = {}) {
   const x = o.pickup_by;
   return `<div class="card form-stack" id="pkCard"><h3>🚗 Хто забирає зі складу</h3>
     ${x ? `<div>${pickupLine(x)}</div>${editable ? '<div class="btn-row"><button class="btn sm" id="pkEdit">Змінити</button></div>' : ''}`
       : editable ? `<div class="small ${partner ? '' : 'muted'}">${partner ? 'Вкажіть, хто приїде забирати товар (ваш менеджер, кур’єр, водій) — склад підготує закупівлю на цю людину.' : 'Партнер ще не вказав, хто забирає. Можна вписати самим.'}</div>
-        ${pickupFields(o.pickup_last || null, 'pkF')}<div class="btn-row"><button class="btn primary" id="pkSave">Зберегти</button></div>`
+        ${pickupFields(o.pickup_last || null, 'pkF', couriers)}<div class="btn-row"><button class="btn primary" id="pkSave">Зберегти</button></div>`
         : '<div class="small muted">Ще не вказано.</div>'}
   </div>`;
 }
-export function wirePickupCard(o, url, onDone) {
+export function wirePickupCard(o, url, onDone, couriers = []) {
   const save = async (v, btn) => {
     if (btn) btn.disabled = true;
     try { await api('PUT', url, v); toast('Збережено — склад знатиме, хто приїде'); onDone(); return true; } catch (e) { toast(e.message, true); if (btn) btn.disabled = false; return false; }
   };
   const sv = $('#pkSave');
-  if (sv) sv.onclick = () => save(pickupRead(document, 'pkF'), sv);
+  if (sv) { wirePickupFields(document, 'pkF'); sv.onclick = () => save(pickupRead(document, 'pkF'), sv); }
   const ed = $('#pkEdit');
   if (ed) ed.onclick = () => {
-    const m = modal('Хто забирає зі складу', `<div class="form-stack">${pickupFields(o.pickup_by, 'pkM')}${o.crm_id || o.crm_ext ? '<div class="small muted">Закупівля вже на складі — менеджер отримає сповіщення й оновить дані.</div>' : ''}</div>`,
+    const m = modal('Хто забирає зі складу', `<div class="form-stack">${pickupFields(o.pickup_by, 'pkM', couriers)}${o.crm_id || o.crm_ext ? '<div class="small muted">Закупівля вже на складі — менеджер отримає сповіщення й оновить дані.</div>' : ''}</div>`,
       { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="pkMSave">Зберегти</button>' });
+    wirePickupFields(m.el, 'pkM');
     $('#pkMSave', m.el).onclick = async (e) => { if (await save(pickupRead(m.el, 'pkM'), e.currentTarget)) m.close(); };
   };
 }

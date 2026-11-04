@@ -53,7 +53,7 @@ const total = async (id) => (await db.get(`SELECT total FROM b2b_orders WHERE id
 // ---------- чернетки: стара, нова, самовивіз (не підходить) ----------
 const dOld = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, draft: true, items: [{ product_id: 12, qty: 1 }] }, A);
 const dNew = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, draft: true, items: [{ product_id: 11, qty: 1 }] }, A);
-const dPick = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, draft: true, delivery: 'pickup', items: [{ product_id: 12, qty: 1 }] }, A);
+const dPick = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, draft: true, delivery: 'pickup', items: [{ product_id: 12, qty: 1 }], pickup_by: { name: 'Іван Водій', phone: '0675554433' } }, A);
 const lim = await req('GET', '/api/b2b/p/limits', null, A);
 assert.deepEqual(lim.drafts.map((d) => d.id), [dNew.id, dOld.id], 'чернетки для замовлень клієнтів — найновіша першою, без самовивозу');
 

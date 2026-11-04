@@ -846,6 +846,7 @@ export function createB2bPages(ctx = {}) {
     if (d.order.kind === 'client') { location.hash = `#/b2bclients/${id}`; return; }
     const { order: o, items, files, history, partner, clients = [] } = d;
     const closed = o.status === 'cancelled';
+    const pkCouriers = o.delivery === 'pickup' && !closed ? await api('GET', `/api/b2b/partners/${o.partner_id}/couriers`).catch(() => []) : [];
     main.innerHTML = `
       <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2borders">← До списку</a>${o.status === 'draft' ? '<button class="btn primary" id="oSendDraft">Відправити закупівлю</button>' : ''}${o.status === 'open' ? '<button class="btn primary" id="oForm">🧾 Сформувати закупівлю</button>' : ''}${closed ? '' : '<button class="btn" id="oEdit">✏️ Змінити</button>'}<button class="btn danger" id="oDel">Видалити</button></div></div>
       ${o.reinvoice ? `<div class="alert warn" style="margin-bottom:12px"><b>Закупівлю змінено після рахунку</b> — потрібно переробити рахунок № ${esc(o.reinvoice)}. Запит надіслано в «Фінансові питання»; новий рахунок замінить старий файл і піде в групу партнера.${o.paid_amount ? ` Уже оплачено: ${uah(o.paid_amount)}.` : ''}</div>` : ''}
@@ -868,7 +869,7 @@ export function createB2bPages(ctx = {}) {
                   ${o.pickup_by ? '' : '<div class="alert warn small">Партнер ще не вказав, хто забирає, — можна передати й так (у коментарі буде «уточніть у партнера») або вписати нижче.</div>'}
                   <div class="btn-row"><button class="btn primary" id="oCrm">📦 Передати на склад (LP-CRM)</button></div>`}
           </div>
-          ${pickupCard(o, { editable: !ro() })}` : ''}
+          ${pickupCard(o, { editable: !ro(), couriers: pkCouriers })}` : ''}
           <div class="card form-stack">
             <h3>Платник (юрособа партнера)</h3>
             <div class="small" style="white-space:pre-line" id="oEnt">${esc(o.entity || (o.status === 'confirm' ? 'Партнер обере юрособу при підтвердженні.' : '—'))}</div>
@@ -997,7 +998,7 @@ export function createB2bPages(ctx = {}) {
       return setDelivery('warehouse', ship);
     };
     if ($('#oShipEd')) $('#oShipEd').onclick = async () => { const ship = await shipForm(o.ship_to); if (ship) setDelivery('warehouse', ship); };
-    if (o.delivery === 'pickup' && !closed) wirePickupCard(o, `/api/b2b/orders/${o.id}/pickup`, () => viewOrder(o.id));
+    if (o.delivery === 'pickup' && !closed) wirePickupCard(o, `/api/b2b/orders/${o.id}/pickup`, () => viewOrder(o.id), pkCouriers);
     if ($('#oCrm')) $('#oCrm').onclick = async (e) => {
       const unpaid = !['paid', 'done'].includes(o.status) && o.pay_terms !== 'postpay';
       const pk = o.delivery === 'pickup';
