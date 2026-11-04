@@ -6775,8 +6775,24 @@ function mountB2bOrders(app, { db, services, myPartner, partnerPrice: partnerPri
   });
   const log = (orderId, user, action) => db.run(
     `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-    [orderId, nowIso(), userName2(user), action]
+    [orderId, nowIso(), userName2(user), String(action).slice(0, 2e3)]
   );
+  const itemsTxt = (items) => items.filter((i) => i.qty > 0).map((i) => `${i.name} \xD7 ${i.qty}${i.price != null ? ` \u043F\u043E ${uah3(i.price)}` : ""}`).join("; ");
+  const itemsDiff = (before, after) => {
+    const was = new Map(before.map((i) => [i.product_id, i]));
+    const now = new Map(after.map((i) => [i.product_id, i]));
+    const out = [];
+    for (const i of after) {
+      const x = was.get(i.product_id);
+      if (!x) out.push(`+ ${i.name} \xD7 ${i.qty}${i.price != null ? ` \u043F\u043E ${uah3(i.price)}` : ""}`);
+      else {
+        if (x.qty !== i.qty) out.push(`${i.name}: ${x.qty} \u2192 ${i.qty} \u0448\u0442`);
+        if (i.price != null && x.price != null && Math.round(x.price * 100) !== Math.round(i.price * 100)) out.push(`${i.name}: \u0446\u0456\u043D\u0430 ${uah3(x.price)} \u2192 ${uah3(i.price)}`);
+      }
+    }
+    for (const x of before) if (!now.has(x.product_id)) out.push(`\u2212 ${x.name} \xD7 ${x.qty}`);
+    return out.join("; ") || "\u0441\u043A\u043B\u0430\u0434 \u0431\u0435\u0437 \u0437\u043C\u0456\u043D";
+  };
   const tgAdmins = (text) => services.notify?.sendText({ admins: true, section: "b2b" }, text).catch(() => 0);
   const groupOf = async (partnerId) => (await db.get(`SELECT tg_group FROM b2b_partners WHERE id = ?`, [partnerId]))?.tg_group || "";
   const tgPartner = async (partnerId, text) => services.notify?.sendText({ partnerId }, text).catch(() => 0);
@@ -6923,7 +6939,8 @@ ${e.email}` : ""}`;
         ...itemRows(d.id, items2),
         [`UPDATE b2b_orders SET total = ?, updated_at = ? WHERE id = ?`, [total2, nowIso(), d.id]]
       ]);
-      await log(d.id, c.get("user"), `\u0434\u043E\u0434\u0430\u043D\u043E \u0434\u043E \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438: ${add.length} \u043F\u043E\u0437. (\u0440\u0430\u0437\u043E\u043C ${uah3(total2)})`);
+      const byId = new Map(items2.map((i) => [i.product_id, i]));
+      await log(d.id, c.get("user"), `\u0434\u043E\u0434\u0430\u043D\u043E \u0434\u043E \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438: ${itemsTxt(add.map((a) => ({ ...byId.get(Number(a.product_id)) || { name: `ID ${a.product_id}` }, qty: Math.floor(Number(a.qty)) })))} \u2014 \u0440\u0430\u0437\u043E\u043C \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u0446\u0456 ${uah3(total2)}`);
       return c.json({ id: d.id, number: orderNo(d.id), total: total2, draft: true });
     }
     const draft = Boolean(b.draft) || !isHead(c);
@@ -6940,7 +6957,7 @@ ${e.email}` : ""}`;
         `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [p.id, e.id, entityText(e), total, String(b.comment || "").trim().slice(0, 1e3), userName2(c.get("user")), now, now, deliveryOf(b.delivery), terms, payDays]
       );
-      await db.batch([...itemRows(r3.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r3.lastId, now, userName2(c.get("user")), `\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u043D\u0430 ${uah3(total)}`]]]);
+      await db.batch([...itemRows(r3.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [r3.lastId, now, userName2(c.get("user")), `\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u043D\u0430 ${uah3(total)}: ${itemsTxt(items)}`.slice(0, 2e3)]]]);
       return c.json({ id: r3.lastId, number: orderNo(r3.lastId), total, draft: true });
     }
     const r = await db.run(
@@ -6949,7 +6966,7 @@ ${e.email}` : ""}`;
     );
     await db.batch([...itemRows(r.lastId, items), [
       `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-      [r.lastId, now, userName2(c.get("user")), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah3(total)}${deliveryOf(b.delivery) === "pickup" ? " (\u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437)" : ""}`]
+      [r.lastId, now, userName2(c.get("user")), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah3(total)}${deliveryOf(b.delivery) === "pickup" ? " (\u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437)" : ""}: ${itemsTxt(items)}`.slice(0, 2e3)]
     ]]);
     const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), pay_terms: terms, pay_days: payDays }, p, items);
     await tgAdmins(`${full}
@@ -7210,6 +7227,7 @@ ${link(c, `porders/${open.id}`)}`);
       if (r.used > (want.get(r.product_id) || 0)) throw fail(400, `\xAB${r.name}\xBB: \u043D\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u0443\u0436\u0435 \u0440\u043E\u0437\u043F\u0438\u0441\u0430\u043D\u043E ${r.used} \u0448\u0442. \u2014 \u043C\u0435\u043D\u0448\u0435 \u0437\u043C\u0435\u043D\u0448\u0438\u0442\u0438 \u043D\u0435 \u043C\u043E\u0436\u043D\u0430.`);
     }
     const delivery = b.delivery === void 0 ? deliveryOf(o.delivery) : deliveryOf(b.delivery);
+    const wasItems = await db.all(`SELECT product_id, name, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
     if (delivery === "pickup" && left.some((r) => r.used > 0)) throw fail(400, "\u0417 \u0446\u0456\u0454\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0432\u0436\u0435 \u0454 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u2014 \u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437 \u043D\u0435\u043C\u043E\u0436\u043B\u0438\u0432\u0438\u0439.");
     if (delivery === "warehouse" && deliveryOf(o.delivery) !== "warehouse") throw fail(400, "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0441\u0442\u0430\u0432\u0438\u0442\u044C \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440.");
     await db.batch([
@@ -7220,7 +7238,7 @@ ${link(c, `porders/${open.id}`)}`);
         [e.id, entityText(e), total, String(b.comment ?? o.comment ?? "").trim().slice(0, 1e3), delivery, terms, payDays, nowIso(), o.id]
       ]
     ]);
-    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E ${isDraft ? "\u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443" : "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F"}: ${items.length} \u043F\u043E\u0437., ${uah3(total)}`);
+    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E ${isDraft ? "\u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E"}: ${itemsDiff(wasItems, items)} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah3(total)}`);
     if (isDraft) return c.json({ ok: true, total });
     const full = orderText("\u270F\uFE0F \u0417\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E", { id: o.id, entity: entityText(e), total, comment: b.comment ?? o.comment, delivery, pay_terms: terms, pay_days: payDays }, p, items);
     await tgAdmins(`${full}
@@ -7250,7 +7268,7 @@ ${link(c, `b2borders/${o.id}`)}`);
     await checkTerms(p, o.pay_terms === "postpay" ? "postpay" : "prepay", o.total, o.id);
     const claim = await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity = ?, created_at = ?, updated_at = ? WHERE id = ? AND status = 'draft'`, [entityText(e), nowIso(), nowIso(), o.id]);
     if (!claim.changes) throw fail(409, "\u0427\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0432\u0436\u0435 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E.");
-    await log(o.id, c.get("user"), `\u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E: ${uah3(o.total)}`);
+    await log(o.id, c.get("user"), `\u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah3(o.total)}: ${itemsTxt(items)}`);
     const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery, pay_terms: o.pay_terms, pay_days: o.pay_days }, p, items);
     await tgAdmins(`${full}
 
@@ -7352,7 +7370,7 @@ ${link(c, `b2borders/${o.id}`)}`);
         r.lastId,
         now,
         userName2(u),
-        `\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0441\u0442\u0432\u043E\u0440\u0438\u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah3(total)} (${terms === "postpay" ? `\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 ${payDays} \u0434\u043D.` : "\u043F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0430"}; ${DELIVERY[delivery]}) \u2014 \u0447\u0435\u043A\u0430\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430`
+        `\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0441\u0442\u0432\u043E\u0440\u0438\u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah3(total)} (${terms === "postpay" ? `\u0432\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 ${payDays} \u0434\u043D.` : "\u043F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0430"}; ${DELIVERY[delivery]}) \u2014 \u0447\u0435\u043A\u0430\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430: ${itemsTxt(items)}`.slice(0, 2e3)
       ]],
       ...ship ? [[`UPDATE b2b_partners SET wh_name = ?, wh_phone = ?, wh_address = ? WHERE id = ?`, [ship.name, ship.phone, ship.address, p.id]]] : []
     ]);
@@ -7658,7 +7676,7 @@ ${link(c, `porders/${o.id}`)}`);
     if (!f) throw fail(404, "\u0424\u0430\u0439\u043B \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (\u0437\u0431\u0435\u0440\u0456\u0433\u0430\u044E\u0442\u044C\u0441\u044F 30 \u0434\u043D\u0456\u0432).");
     return sendFile(f);
   });
-  return { WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h3 };
+  return { itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h3 };
 }
 
 // src/modules/b2b/clients.js
@@ -7672,7 +7690,7 @@ var OPT_ID_RE = /^\d{0,10}$/;
 var TTN_FIELDS = ["", "additional_2", "additional_3", "additional_4", "delivery_adress"];
 var newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Math.random() * 9e4))}`;
 function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, hooks = {} }) {
-  const { labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah4, h: h7 } = orders;
+  const { itemsTxt, itemsDiff, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah4, h: h7 } = orders;
   const userName6 = (u) => u?.name || u?.login || "";
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files,
     (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id AND f.kind = 'label') AS labels
@@ -8217,11 +8235,11 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     );
     await db.batch([...itemRows(r.lastId, it.items), [
       `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-      [r.lastId, now, userName6(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah4(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : it.draftId ? ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u2014 \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}`]
+      [r.lastId, now, userName6(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah4(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : it.draftId ? ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u2014 \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}: ${itemsTxt(it.items)}`.slice(0, 2e3)]
     ]]);
     if (it.draftId) {
       await draftAdjust(it.draftId, it.items);
-      await log(it.draftId, u, `\u0434\u043E\u0434\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(r.lastId)} (${f.client_name}): ${it.items.length} \u043F\u043E\u0437., ${uah4(it.total)}`);
+      await log(it.draftId, u, `\u0434\u043E\u0434\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(r.lastId)} (${f.client_name}): ${itemsTxt(it.items)} \u2014 ${uah4(it.total)}`);
     }
     if (it.openId) await rebuildOpen(it.openId);
     await tgNew(c, p, r.lastId, f, it);
@@ -8243,7 +8261,7 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     const curDraft = cur?.status === "draft" ? cur.id : null;
     const it = await buildItems(p, b, o.id, { openId: cur?.status === "open" ? cur.id : null, total: o.total, draftId: curDraft });
     if (it.toOpen) it.openId = await ensureOpen(p);
-    const oldItems = curDraft || it.draftId ? await orderItems(o.id) : [];
+    const oldItems = await orderItems(o.id);
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, it.items),
@@ -8252,10 +8270,17 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
         [it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, nowIso(), o.id]
       ]
     ]);
-    await moveDraftItems(curDraft, oldItems, it.draftId, it.items);
+    const diff = itemsDiff(oldItems, it.items);
+    if (curDraft && curDraft === it.draftId) {
+      if (diff !== "\u0441\u043A\u043B\u0430\u0434 \u0431\u0435\u0437 \u0437\u043C\u0456\u043D") await log(curDraft, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${f.client_name}): ${diff}`);
+    } else {
+      if (curDraft) await log(curDraft, c.get("user"), `\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${f.client_name}) \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0435\u043D\u043E \u0437\u0432\u0456\u0434\u0441\u0438 \u2014 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E: ${itemsTxt(oldItems)}`);
+      if (it.draftId) await log(it.draftId, c.get("user"), `\u0434\u043E\u0434\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${f.client_name}): ${itemsTxt(it.items)}`);
+    }
+    await moveDraftItems(curDraft, curDraft || it.draftId ? oldItems : [], it.draftId, it.items);
     if (it.openId) await rebuildOpen(it.openId);
     if (cur?.status === "open" && cur.id !== it.openId) await rebuildOpen(cur.id);
-    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430: ${it.items.length} \u043F\u043E\u0437., ${uah4(it.total)}${it.draftId ? ` (\u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u0446\u0456 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)})` : ""}`);
+    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430: ${diff} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah4(it.total)}${it.draftId ? ` (\u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u0446\u0456 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)})` : ""}`);
     await tgNew(c, p, o.id, f, it, "\u0417\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430");
     return c.json({ ok: true, total: it.total });
   });
@@ -8473,7 +8498,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
     if (!claim.changes) throw fail(409, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u0437\u043C\u0456\u043D\u0435\u043D\u043E \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443.");
     if (inDraft) {
       await draftAdjust(s.id, neg(await orderItems(o.id)));
-      await log(s.id, c.get("user"), `\u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${o.client_name}) \u2014 \u0439\u043E\u0433\u043E \u0442\u043E\u0432\u0430\u0440\u0438 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438`);
+      await log(s.id, c.get("user"), `\u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${o.client_name}) \u2014 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438: ${itemsTxt(await orderItems(o.id))}`);
     }
     if (o.supply_id) await rebuildOpen(o.supply_id);
     await log(o.id, c.get("user"), `\u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430${inDraft ? ` (\u0442\u043E\u0432\u0430\u0440\u0438 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438 ${orderNo(s.id)})` : ""}`);
@@ -8759,7 +8784,7 @@ ${link(c, `pclients/${o.id}`)}`);
     await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
     if (s?.status === "draft") {
       await draftAdjust(s.id, neg(await orderItems(o.id)));
-      await log(s.id, c.get("user"), `\u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${o.client_name}) \u2014 \u0439\u043E\u0433\u043E \u0442\u043E\u0432\u0430\u0440\u0438 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438`);
+      await log(s.id, c.get("user"), `\u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${o.client_name}) \u2014 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438: ${itemsTxt(await orderItems(o.id))}`);
     }
     if (o.supply_id) await rebuildOpen(o.supply_id);
     await log(o.id, c.get("user"), `\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430${s?.status === "draft" ? ` (\u0442\u043E\u0432\u0430\u0440\u0438 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438 ${orderNo(s.id)})` : ""}`);

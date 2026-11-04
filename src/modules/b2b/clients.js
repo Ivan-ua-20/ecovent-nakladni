@@ -25,7 +25,7 @@ const TTN_FIELDS = ['', 'additional_2', 'additional_3', 'additional_4', 'deliver
 const newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(10000 + Math.random() * 90000))}`;
 
 export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, hooks = {} }) {
-  const { labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h } = orders;
+  const { itemsTxt, itemsDiff, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h } = orders;
   const userName = (u) => u?.name || u?.login || '';
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files,
     (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id AND f.kind = 'label') AS labels
@@ -565,10 +565,10 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     );
     await db.batch([...itemRows(r.lastId, it.items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
       [r.lastId, now, userName(u), `оформлено замовлення клієнта на ${uah(it.total)}${it.supplyId ? ` із закупівлі ${orderNo(it.supplyId)}`
-        : it.draftId ? ` без закупівлі — у чернетку закупівлі ${orderNo(it.draftId)}` : ` без закупівлі (відкрита закупівля ${orderNo(it.openId)})`}`]]]);
+        : it.draftId ? ` без закупівлі — у чернетку закупівлі ${orderNo(it.draftId)}` : ` без закупівлі (відкрита закупівля ${orderNo(it.openId)})`}: ${itemsTxt(it.items)}`.slice(0, 2000)]]]);
     if (it.draftId) {
       await draftAdjust(it.draftId, it.items);
-      await log(it.draftId, u, `додано замовлення клієнта ${orderNo(r.lastId)} (${f.client_name}): ${it.items.length} поз., ${uah(it.total)}`);
+      await log(it.draftId, u, `додано замовлення клієнта ${orderNo(r.lastId)} (${f.client_name}): ${itemsTxt(it.items)} — ${uah(it.total)}`);
     }
     if (it.openId) await rebuildOpen(it.openId);
     await tgNew(c, p, r.lastId, f, it);
@@ -589,17 +589,23 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     const curDraft = cur?.status === 'draft' ? cur.id : null;
     const it = await buildItems(p, b, o.id, { openId: cur?.status === 'open' ? cur.id : null, total: o.total, draftId: curDraft });
     if (it.toOpen) it.openId = await ensureOpen(p);
-    const oldItems = curDraft || it.draftId ? await orderItems(o.id) : [];
+    const oldItems = await orderItems(o.id);
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, it.items),
       [`UPDATE b2b_orders SET supply_id = ?, client_name = ?, client_phone = ?, ttn = ?, total = ?, comment = ?, updated_at = ? WHERE id = ?`,
         [it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, nowIso(), o.id]],
     ]);
-    await moveDraftItems(curDraft, oldItems, it.draftId, it.items);
+    const diff = itemsDiff(oldItems, it.items);
+    if (curDraft && curDraft === it.draftId) { if (diff !== 'склад без змін') await log(curDraft, c.get('user'), `змінено замовлення клієнта ${orderNo(o.id)} (${f.client_name}): ${diff}`); }
+    else {
+      if (curDraft) await log(curDraft, c.get('user'), `замовлення клієнта ${orderNo(o.id)} (${f.client_name}) перенесено звідси — прибрано: ${itemsTxt(oldItems)}`);
+      if (it.draftId) await log(it.draftId, c.get('user'), `додано замовлення клієнта ${orderNo(o.id)} (${f.client_name}): ${itemsTxt(it.items)}`);
+    }
+    await moveDraftItems(curDraft, curDraft || it.draftId ? oldItems : [], it.draftId, it.items);
     if (it.openId) await rebuildOpen(it.openId);
     if (cur?.status === 'open' && cur.id !== it.openId) await rebuildOpen(cur.id);
-    await log(o.id, c.get('user'), `змінено замовлення клієнта: ${it.items.length} поз., ${uah(it.total)}${it.draftId ? ` (у чернетці закупівлі ${orderNo(it.draftId)})` : ''}`);
+    await log(o.id, c.get('user'), `змінено замовлення клієнта: ${diff} — разом ${uah(it.total)}${it.draftId ? ` (у чернетці закупівлі ${orderNo(it.draftId)})` : ''}`);
     await tgNew(c, p, o.id, f, it, 'Змінено замовлення клієнта');
     return c.json({ ok: true, total: it.total });
   });
@@ -794,7 +800,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     if (!claim.changes) throw fail(409, 'Замовлення вже змінено — оновіть сторінку.');
     if (inDraft) {
       await draftAdjust(s.id, neg(await orderItems(o.id)));
-      await log(s.id, c.get('user'), `скасовано замовлення клієнта ${orderNo(o.id)} (${o.client_name}) — його товари прибрано з чернетки`);
+      await log(s.id, c.get('user'), `скасовано замовлення клієнта ${orderNo(o.id)} (${o.client_name}) — прибрано з чернетки: ${itemsTxt(await orderItems(o.id))}`);
     }
     if (o.supply_id) await rebuildOpen(o.supply_id);
     await log(o.id, c.get('user'), `партнер скасував замовлення клієнта${inDraft ? ` (товари прибрано з чернетки ${orderNo(s.id)})` : ''}`);
@@ -1077,7 +1083,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
     if (s?.status === 'draft') {
       await draftAdjust(s.id, neg(await orderItems(o.id)));
-      await log(s.id, c.get('user'), `скасовано замовлення клієнта ${orderNo(o.id)} (${o.client_name}) — його товари прибрано з чернетки`);
+      await log(s.id, c.get('user'), `скасовано замовлення клієнта ${orderNo(o.id)} (${o.client_name}) — прибрано з чернетки: ${itemsTxt(await orderItems(o.id))}`);
     }
     if (o.supply_id) await rebuildOpen(o.supply_id);
     await log(o.id, c.get('user'), `менеджер скасував замовлення клієнта${s?.status === 'draft' ? ` (товари прибрано з чернетки ${orderNo(s.id)})` : ''}`);
