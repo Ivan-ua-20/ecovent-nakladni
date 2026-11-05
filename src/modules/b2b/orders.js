@@ -92,7 +92,7 @@ export const parseShipTo = (v) => { try { const x = JSON.parse(v || ''); return 
 const deliveryOf = (v) => (DELIVERY[v] ? v : 'np');
 const LIST_STATUSES = { ...ORDER_STATUS, closed: 'Закрито (усе розписано)' };
 const ENTITY_KIND = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
-const FILE_KIND = { invoice: 'Рахунок', waybill: 'Накладна', label: 'Маркування', doc: 'Документ', other: 'Файл' };
+const FILE_KIND = { invoice: 'Рахунок', waybill: 'Накладна', label: 'Маркування', doc: 'Документ', claim: 'Фото/відео браку', other: 'Файл' };
 const MAX_FILE = 5 * 1024 * 1024;
 const PART = 600 * 1024; // байтів у частині (у base64 ≈ 800 КБ — менше за обмеження рядка D1)
 const KEEP_FILES_DAYS = 30;
@@ -1055,7 +1055,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const st = [];
     for (let n = 0; n < parts; n++) st.push([`INSERT INTO b2b_file_parts (file_id, n, data) VALUES (?, ?, ?)`, [r.lastId, n, toB64(bytes.subarray(n * PART, (n + 1) * PART))]]);
     await db.batch(st);
-    await log(o.id, u, `додано файл: ${FILE_KIND[kind]} «${name}»${how}`);
+    if (o.id) await log(o.id, u, `додано файл: ${FILE_KIND[kind]} «${name}»${how}`); // id 0 — файл заявки на обмін (не в замовленні)
     // Після зміни закупівлі новий рахунок (накладна) замінює старі файли того ж виду.
     if (['invoice', 'waybill'].includes(kind) && o.reinvoiced_at) {
       const old = await db.all(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = ? AND created_at < ? AND id != ?`, [o.id, kind, o.reinvoiced_at, r.lastId]);
@@ -1185,5 +1185,5 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
 
   // Видалення замовлень і кошик — у edits.js.
 
-  return { parsePickup, pickupTxt, itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
+  return { parsePickup, pickupTxt, itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, sendFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
 }

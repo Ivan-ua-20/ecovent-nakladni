@@ -6733,7 +6733,7 @@ var parseShipTo = (v) => {
 var deliveryOf = (v) => DELIVERY[v] ? v : "np";
 var LIST_STATUSES = { ...ORDER_STATUS, closed: "\u0417\u0430\u043A\u0440\u0438\u0442\u043E (\u0443\u0441\u0435 \u0440\u043E\u0437\u043F\u0438\u0441\u0430\u043D\u043E)" };
 var ENTITY_KIND = { fop: "\u0424\u041E\u041F", tov: "\u0422\u041E\u0412", other: "\u0406\u043D\u0448\u0430 \u044E\u0440\u043E\u0441\u043E\u0431\u0430" };
-var FILE_KIND = { invoice: "\u0420\u0430\u0445\u0443\u043D\u043E\u043A", waybill: "\u041D\u0430\u043A\u043B\u0430\u0434\u043D\u0430", label: "\u041C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F", doc: "\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442", other: "\u0424\u0430\u0439\u043B" };
+var FILE_KIND = { invoice: "\u0420\u0430\u0445\u0443\u043D\u043E\u043A", waybill: "\u041D\u0430\u043A\u043B\u0430\u0434\u043D\u0430", label: "\u041C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F", doc: "\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442", claim: "\u0424\u043E\u0442\u043E/\u0432\u0456\u0434\u0435\u043E \u0431\u0440\u0430\u043A\u0443", other: "\u0424\u0430\u0439\u043B" };
 var MAX_FILE = 5 * 1024 * 1024;
 var PART = 600 * 1024;
 var KEEP_FILES_DAYS = 30;
@@ -7728,7 +7728,7 @@ ${link(c, `porders/${o.id}`)}`);
     const st = [];
     for (let n = 0; n < parts; n++) st.push([`INSERT INTO b2b_file_parts (file_id, n, data) VALUES (?, ?, ?)`, [r.lastId, n, toB64(bytes.subarray(n * PART, (n + 1) * PART))]]);
     await db.batch(st);
-    await log(o.id, u, `\u0434\u043E\u0434\u0430\u043D\u043E \u0444\u0430\u0439\u043B: ${FILE_KIND[kind]} \xAB${name}\xBB${how}`);
+    if (o.id) await log(o.id, u, `\u0434\u043E\u0434\u0430\u043D\u043E \u0444\u0430\u0439\u043B: ${FILE_KIND[kind]} \xAB${name}\xBB${how}`);
     if (["invoice", "waybill"].includes(kind) && o.reinvoiced_at) {
       const old = await db.all(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = ? AND created_at < ? AND id != ?`, [o.id, kind, o.reinvoiced_at, r.lastId]);
       for (const f of old) await deleteFile(f.id);
@@ -7870,7 +7870,7 @@ ${link(c, `porders/${o.id}`)}`);
     if (!f) throw fail(404, "\u0424\u0430\u0439\u043B \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (\u0437\u0431\u0435\u0440\u0456\u0433\u0430\u044E\u0442\u044C\u0441\u044F 30 \u0434\u043D\u0456\u0432).");
     return sendFile(f);
   });
-  return { parsePickup, pickupTxt, itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h3 };
+  return { parsePickup, pickupTxt, itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, sendFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h3 };
 }
 
 // src/modules/b2b/clients.js
@@ -7883,7 +7883,8 @@ var DEFAULT_OFFICE = "27";
 var OPT_ID_RE = /^\d{0,10}$/;
 var TTN_FIELDS = ["", "additional_2", "additional_3", "additional_4", "delivery_adress"];
 var newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Math.random() * 9e4))}`;
-function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, hooks = {} }) {
+function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, hooks = {}, onCron = () => {
+} }) {
   const { itemsTxt, itemsDiff, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah4, h: h7 } = orders;
   const userName6 = (u) => u?.name || u?.login || "";
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files,
@@ -7963,6 +7964,15 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     await db.batch(st);
     return c.json({ ok: true });
   });
+  const crmTone = (name) => {
+    const n = String(name || "").toLowerCase();
+    if (/возв|поверн|отказ|відмов|відказ|отмен|скасов|не забр|невикуп|невыкуп/.test(n)) return "bad";
+    if (/доставл|выполн|викон|получ|отрим|заверш|оплачен|оплачено|успіш|успеш|забра/.test(n)) return "ok";
+    if (/отправ|відправ|в пути|в дороз|в дорог|на відділ|на отдел|у відділ|в отдел|прибув|прибыл|ожида|очіку/.test(n)) return "info";
+    return "";
+  };
+  const crmStatuses = (partnerId) => db.all(`SELECT crm_status AS name, COUNT(*) AS n FROM b2b_orders WHERE kind = 'client' AND status = 'crm' AND crm_status != ''
+    ${partnerId ? "AND partner_id = ?" : ""} GROUP BY crm_status ORDER BY n DESC LIMIT 40`, partnerId ? [partnerId] : []);
   async function statusNames(creds) {
     const row = await db.get(`SELECT value FROM settings WHERE key = 'statuses_cache'`);
     const cache = row?.value ? JSON.parse(row.value) : null;
@@ -7978,7 +7988,7 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     const r = await db.get(`SELECT code FROM an_orders WHERE id = ?`, [parseInt(id, 10) || 0]).catch(() => null) || await db.get(`SELECT code FROM order_keys WHERE k = ? LIMIT 1`, [String(id)]).catch(() => null);
     return r?.code ? String(r.code) : "";
   }
-  async function refreshCrm({ partnerId = null, ids = null } = {}) {
+  async function refreshCrm({ partnerId = null, ids = null, cron = false } = {}) {
     const border = new Date(Date.now() - CRM_REFRESH_MIN * 6e4).toISOString();
     const since = new Date(Date.now() - CRM_TRACK_DAYS * 864e5).toISOString();
     const where = [`kind = 'client'`, `status = 'crm'`, `(crm_id != '' OR crm_ext != '')`];
@@ -7986,6 +7996,9 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     if (ids) {
       where.push(`id IN (SELECT value FROM json_each(?))`);
       params.push(JSON.stringify(ids));
+    } else if (cron) {
+      where.push("created_at > ?");
+      params.push(since);
     } else {
       where.push("crm_checked_at < ?", "created_at > ?");
       params.push(border, since);
@@ -7994,7 +8007,8 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
       where.push("partner_id = ?");
       params.push(partnerId);
     }
-    const rows = await db.all(`SELECT id, crm_id, crm_ext FROM b2b_orders WHERE ${where.join(" AND ")} ORDER BY crm_checked_at LIMIT 100`, params);
+    const rows = await db.all(`SELECT id, crm_id, crm_ext, crm_status, partner_id, client_name FROM b2b_orders WHERE ${where.join(" AND ")} ORDER BY crm_checked_at LIMIT ${cron ? 500 : 100}`, params);
+    const changed = [];
     const linked = [];
     if (!rows.length) return;
     const { creds } = await crmConfig();
@@ -8003,33 +8017,50 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     for (const r of rows) if (!r.crm_ext && r.crm_id) r.crm_ext = await codeOfId(r.crm_id);
     const known = rows.filter((r) => r.crm_ext);
     const unknown = rows.filter((r) => !r.crm_ext);
-    const st = unknown.map((r) => [
-      `UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ? WHERE id = ?`,
-      ["\u0421\u0442\u0430\u0442\u0443\u0441 \u0437\u2019\u044F\u0432\u0438\u0442\u044C\u0441\u044F \u043F\u0456\u0441\u043B\u044F \u043E\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438", now, r.id]
-    ]);
+    const WAIT = "\u0421\u0442\u0430\u0442\u0443\u0441 \u0437\u2019\u044F\u0432\u0438\u0442\u044C\u0441\u044F \u043F\u0456\u0441\u043B\u044F \u043E\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438";
+    const st = unknown.filter((r) => !cron || r.crm_status !== WAIT).map((r) => [`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ? WHERE id = ?`, [WAIT, now, r.id]]);
     try {
       if (known.length) {
-        const found = await getOrdersBatch(fetchFn, creds, [...new Set(known.map((r) => r.crm_ext))]);
         const names = await statusNames(creds).catch(() => ({}));
+        const codes = [...new Set(known.map((r) => r.crm_ext))];
+        const found = [];
+        for (let i = 0; i < codes.length; i += 100) found.push(...await getOrdersBatch(fetchFn, creds, codes.slice(i, i + 100)));
         const byCode = new Map(found.map((o) => [String(o.order_id ?? ""), o]));
         for (const r of known) {
           const o = byCode.get(r.crm_ext);
           const s = o ? String(o.status ?? o.status_id ?? "") : "";
           const name = o ? String((names[s]?.name ?? names[s]) || s || "\u2014").trim() : "\u041D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 CRM";
           const num6 = o && /^\d+$/.test(String(o.id ?? "")) ? String(o.id) : r.crm_id;
+          const same = name === (r.crm_status || "") && (num6 || "") === (r.crm_id || "");
+          if (cron && same) continue;
           st.push([`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ?, crm_ext = ?, crm_id = ? WHERE id = ?`, [name, now, r.crm_ext, num6 || "", r.id]]);
           if (num6 && !r.crm_id) linked.push([r.id, num6]);
+          if (o && r.crm_status && r.crm_status !== WAIT && name !== r.crm_status) changed.push([r, r.crm_status, name]);
         }
       }
     } catch {
     }
     if (st.length) await db.batch(st);
+    for (const [r, was, now2] of changed) {
+      await log(r.id, null, `\u0441\u0442\u0430\u0442\u0443\u0441 \u0443 LP-CRM: \xAB${was}\xBB \u2192 \xAB${now2}\xBB`).catch(() => 0);
+      const tone = crmTone(now2);
+      if (tone === "ok" || tone === "bad") {
+        await tgPartner(r.partner_id, `${tone === "ok" ? "\u2705" : "\u21A9\uFE0F"} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(r.id)} (${h7(r.client_name || "")})${r.crm_id ? ` \xB7 LP-CRM \u2116 ${h7(r.crm_id)}` : ""}: <b>${h7(now2)}</b>`).catch(() => 0);
+      }
+    }
     for (const [id, num6] of linked) await hooks.crmLinked?.(id, num6).catch(() => 0);
     if (linked.length) {
       const sup = await db.all(`SELECT DISTINCT supply_id FROM b2b_orders WHERE id IN (SELECT value FROM json_each(?)) AND supply_id IS NOT NULL`, [JSON.stringify(linked.map(([id]) => id))]);
       for (const r of sup) await supplyInWork(r.supply_id).catch(() => 0);
     }
   }
+  onCron("b2b-crm-status", "\u0421\u0442\u0430\u0442\u0443\u0441\u0438 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 B2B \u0437 LP-CRM (\u0440\u0430\u0437 \u043D\u0430 30 \u0445\u0432)", async () => {
+    const at = (await db.get(`SELECT value FROM settings WHERE key = 'b2b_crm_cron_at'`))?.value || "";
+    if (at && Date.now() - Date.parse(at) < 29 * 6e4) return { skipped: true };
+    await db.run(`INSERT INTO settings (key, value) VALUES ('b2b_crm_cron_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [nowIso()]);
+    await refreshCrm({ cron: true });
+    return { ok: true };
+  });
   function onlyHeadNoSupply(c, b) {
     if (!parseInt(b.supply_id, 10) && !can(c.get("user"), "b2b.team")) {
       throw fail(403, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043E\u0444\u043E\u0440\u043C\u043B\u044E\u0454 \u043B\u0438\u0448\u0435 \u043A\u0435\u0440\u0456\u0432\u043D\u0438\u043A \u0432\u0430\u0448\u043E\u0457 \u043A\u043E\u043C\u0430\u043D\u0434\u0438 \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E.");
@@ -8366,8 +8397,13 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
       f.where.push("o.status = ?");
       f.params.push(st);
     }
+    const cs = String(c.req.query("crm_status") || "");
+    if (cs) {
+      f.where.push(`o.status = 'crm' AND o.crm_status = ?`);
+      f.params.push(cs);
+    }
     const rows = await db.all(`${SELECT} WHERE o.partner_id = ? AND o.kind = 'client' ${f.where.map((w) => `AND ${w}`).join(" ")} ORDER BY o.id DESC LIMIT 300`, [p.id, ...f.params]);
-    return c.json({ rows: rows.map(publicOrder), statuses: CLIENT_STATUS });
+    return c.json({ rows: rows.map(publicOrder), statuses: CLIENT_STATUS, crm_statuses: await crmStatuses(p.id) });
   });
   async function myClientOrder(c, p) {
     const o = await orderOf(c.req.param("id"), p.id);
@@ -8772,6 +8808,11 @@ ${link(c, `b2bclients/${o.id}`)}`);
       where.push("o.partner_id = ?");
       params.push(pid);
     }
+    const cs = String(c.req.query("crm_status") || "");
+    if (cs) {
+      where.push(`o.status = 'crm' AND o.crm_status = ?`);
+      params.push(cs);
+    }
     const rows = await db.all(
       `SELECT o.*, s.status AS supply_status, p.name AS partner, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files
        FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id JOIN b2b_partners p ON p.id = o.partner_id
@@ -8780,7 +8821,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
     );
     const cnt = await db.get(`SELECT SUM(o.status = 'new') AS new, SUM(o.status = 'crm') AS crm, SUM((o.supply_id IS NULL OR s.status = 'open') AND o.status != 'cancelled') AS nosupply,
       SUM(o.status = 'cancelled') AS cancelled FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id WHERE o.kind = 'client'`);
-    return c.json({ rows: rows.map(publicOrder), counts: cnt || {}, crm: (await crmConfig()).on });
+    return c.json({ rows: rows.map(publicOrder), counts: cnt || {}, crm: (await crmConfig()).on, crm_statuses: await crmStatuses(pid || null) });
   });
   async function clientOrder(c) {
     const o = await orderOf(c.req.param("id"));
@@ -10983,6 +11024,425 @@ ${h6(r.name)}${r.article ? ` (${h6(r.article)})` : ""}
   return { attention };
 }
 
+// src/modules/b2b/claims.js
+var CLAIM_STATUS = {
+  new: "\u041D\u043E\u0432\u0430",
+  review: "\u041D\u0430 \u0440\u043E\u0437\u0433\u043B\u044F\u0434\u0456",
+  approved: "\u041F\u043E\u0433\u043E\u0434\u0436\u0435\u043D\u043E",
+  resolved: "\u0417\u0430\u043C\u0456\u043D\u0443 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E",
+  closed: "\u0417\u0430\u043A\u0440\u0438\u0442\u043E",
+  rejected: "\u0412\u0456\u0434\u0445\u0438\u043B\u0435\u043D\u043E",
+  cancelled: "\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u043E\u043C"
+};
+var CLAIM_REASON = {
+  defect: "\u0417\u0430\u0432\u043E\u0434\u0441\u044C\u043A\u0438\u0439 \u0431\u0440\u0430\u043A",
+  damaged: "\u041F\u043E\u0448\u043A\u043E\u0434\u0436\u0435\u043D\u043E \u043F\u0440\u0438 \u0434\u043E\u0441\u0442\u0430\u0432\u0446\u0456",
+  incomplete: "\u041D\u0435\u043A\u043E\u043C\u043F\u043B\u0435\u043A\u0442",
+  wrong: "\u041F\u0435\u0440\u0435\u0441\u043E\u0440\u0442 (\u043D\u0435 \u0442\u043E\u0439 \u0442\u043E\u0432\u0430\u0440)",
+  broken: "\u041D\u0435 \u043F\u0440\u0430\u0446\u044E\u0454 / \u0437\u043B\u0430\u043C\u0430\u0432\u0441\u044F",
+  other: "\u0406\u043D\u0448\u0435"
+};
+var CLAIM_WANT = {
+  same: "\u041E\u0431\u043C\u0456\u043D \u043D\u0430 \u0442\u0430\u043A\u0438\u0439 \u0441\u0430\u043C\u0438\u0439 \u0442\u043E\u0432\u0430\u0440",
+  other: "\u0417\u0430\u043C\u0456\u043D\u0430 \u043D\u0430 \u0456\u043D\u0448\u0438\u0439 \u0442\u043E\u0432\u0430\u0440",
+  repair: "\u0420\u0435\u043C\u043E\u043D\u0442",
+  refund: "\u041F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u043A\u043E\u0448\u0442\u0456\u0432"
+};
+var RETURN_MODE = {
+  warehouse: "\u0411\u0440\u0430\u043A \u043F\u043E\u0432\u0435\u0440\u0442\u0430\u044E\u0442\u044C \u043D\u0430\u043C \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 (\u0422\u0422\u041D \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F)",
+  none: "\u0411\u0435\u0437 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F (\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u0444\u043E\u0442\u043E)",
+  supplier: "\u0411\u0440\u0430\u043A \u0456\u0434\u0435 \u043D\u0430\u043F\u0440\u044F\u043C\u0443 \u043F\u043E\u0441\u0442\u0430\u0447\u0430\u043B\u044C\u043D\u0438\u043A\u0443"
+};
+var DEFECT_STATE = {
+  awaiting: "\u0427\u0435\u043A\u0430\u0454\u043C\u043E \u0431\u0440\u0430\u043A \u043D\u0430 \u0441\u043A\u043B\u0430\u0434",
+  confirmed: "\u0411\u0440\u0430\u043A \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E \u2014 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E",
+  not_confirmed: "\u0411\u0440\u0430\u043A \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E \u2014 \u043D\u0435 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E"
+};
+var claimNo = (id) => `\u041E-${id}`;
+var OPEN = ["new", "review", "approved"];
+function mountB2bClaims(app, { db, services = {}, myPartner, orders }) {
+  const { orderOf, itemRows, storeFile, sendFile, groupOf, log, tgAdmins, tgPartner, tgGroup, link, uah: uah4, h: h7, entityText } = orders;
+  const userName6 = (u) => u?.name || u?.login || "";
+  const J = (v, d) => {
+    try {
+      return JSON.parse(v || "") ?? d;
+    } catch {
+      return d;
+    }
+  };
+  const claimOf = async (id, partnerId = null) => {
+    const r = await db.get(`SELECT * FROM b2b_claims WHERE id = ?${partnerId ? " AND partner_id = ?" : ""}`, partnerId ? [id, partnerId] : [id]);
+    if (!r) throw fail(404, "\u0417\u0430\u044F\u0432\u043A\u0443 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return r;
+  };
+  const pub = (r) => ({
+    ...r,
+    number: claimNo(r.id),
+    status_name: CLAIM_STATUS[r.status] || r.status,
+    reason_name: CLAIM_REASON[r.reason] || r.reason,
+    want_name: CLAIM_WANT[r.want] || r.want,
+    return_name: RETURN_MODE[r.return_mode] || "",
+    defect_name: DEFECT_STATE[r.defect] || "",
+    items: J(r.items, []),
+    want_items: J(r.want_items, []),
+    order_number: r.order_id ? orderNo(r.order_id) : "",
+    exch_number: r.exch_supply_id ? orderNo(r.exch_supply_id) : ""
+  });
+  const clog = (id, u, action) => db.run(`INSERT INTO b2b_claim_log (claim_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [id, nowIso(), userName6(u), String(action).slice(0, 2e3)]);
+  const itemsLine = (list) => list.map((i) => `\u2022 ${h7(i.name)}${i.article ? ` (${h7(i.article)})` : ""} \xD7 ${i.qty}`).join("\n");
+  async function claimText(r, title) {
+    const c = pub(r);
+    const p = await db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [r.partner_id]);
+    return `${title}
+<b>\u0417\u0430\u044F\u0432\u043A\u0430 ${claimNo(r.id)}</b> \xB7 ${h7(p?.name || "")} \xB7 <b>${h7(c.status_name)}</b>
+${r.order_kind === "client" ? "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430" : "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F"} ${c.order_number}${r.client_name ? ` \xB7 ${h7(r.client_name)}${r.client_phone ? `, +${h7(r.client_phone)}` : ""}` : ""}${r.ttn ? ` \xB7 \u0422\u0422\u041D ${h7(r.ttn)}` : ""}
+<b>\u0422\u043E\u0432\u0430\u0440:</b>
+${itemsLine(c.items)}
+<b>\u041F\u0440\u0438\u0447\u0438\u043D\u0430:</b> ${h7(c.reason_name)}${r.descr ? `
+<b>\u041E\u043F\u0438\u0441:</b> ${h7(r.descr)}` : ""}
+<b>\u041F\u0430\u0440\u0442\u043D\u0435\u0440 \u0445\u043E\u0447\u0435:</b> ${h7(c.want_name)}${c.want_items.length ? `
+${itemsLine(c.want_items)}` : ""}${r.deliver_to ? `
+<b>\u0417\u0430\u043C\u0456\u043D\u0443 \u043E\u0442\u0440\u0438\u043C\u0443\u0454:</b> ${r.deliver_to === "partner" ? "\u043F\u0430\u0440\u0442\u043D\u0435\u0440 (\u0443\u0436\u0435 \u0437\u0430\u043C\u0456\u043D\u0438\u0432 \u043A\u043B\u0456\u0454\u043D\u0442\u0443 \u0437\u0456 \u0441\u0432\u043E\u0433\u043E \u0441\u043A\u043B\u0430\u0434\u0443)" : "\u043A\u043B\u0456\u0454\u043D\u0442"}` : ""}${r.return_mode ? `
+<b>\u0411\u0440\u0430\u043A:</b> ${h7(c.return_name)}${r.return_ttn ? ` \xB7 \u0422\u0422\u041D \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F ${h7(r.return_ttn)}` : ""}` : ""}${r.defect ? `
+<b>\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430:</b> ${h7(c.defect_name)}${r.defect_note ? ` \u2014 ${h7(r.defect_note)}` : ""}` : ""}${r.decision_note ? `
+<b>\u0420\u0456\u0448\u0435\u043D\u043D\u044F \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430:</b> ${h7(r.decision_note)}` : ""}${r.refund_amount ? `
+<b>\u0414\u043E \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F:</b> ${uah4(r.refund_amount)}` : ""}${r.exch_supply_id ? `
+<b>\u041E\u0431\u043C\u0456\u043D\u043D\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F:</b> ${orderNo(r.exch_supply_id)} (0 \u0433\u0440\u043D)` : ""}${r.files ? `
+\u{1F4F7} \u0424\u043E\u0442\u043E/\u0432\u0456\u0434\u0435\u043E: ${r.files}` : ""}`;
+  }
+  async function notify(c, r, title, { history = "" } = {}) {
+    const fresh = await db.get(`SELECT cl.*, (SELECT COUNT(*) FROM b2b_files f WHERE f.claim_id = cl.id) AS files FROM b2b_claims cl WHERE cl.id = ?`, [r.id]);
+    if (history) {
+      await clog(r.id, c.get("user"), history);
+      if (fresh.order_id) await log(fresh.order_id, c.get("user"), `\u0437\u0430\u044F\u0432\u043A\u0430 \u043D\u0430 \u043E\u0431\u043C\u0456\u043D ${claimNo(r.id)}: ${history}`).catch(() => 0);
+    }
+    const text = await claimText(fresh, title);
+    await tgGroup(fresh.partner_id, text);
+    await tgPartner(fresh.partner_id, `${text}
+${link(c, `pclaims/${r.id}`)}`);
+    await tgAdmins(`${text}
+${link(c, `b2bclaims/${r.id}`)}`);
+  }
+  async function sourceOf(orderId, partnerId) {
+    const o = await orderOf(orderId, partnerId || void 0);
+    if (!["client", "supply"].includes(o.kind) || ["draft", "open"].includes(o.status)) throw fail(400, "\u0417\u0430\u044F\u0432\u043A\u0443 \u043C\u043E\u0436\u043D\u0430 \u043F\u043E\u0434\u0430\u0442\u0438 \u0434\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u0430\u0431\u043E \u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456.");
+    const items = await db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
+    return { o, items };
+  }
+  async function create(c, partnerId, b) {
+    const { o, items } = await sourceOf(parseInt(b.order_id, 10), partnerId);
+    const have = new Map(items.map((i) => [i.product_id, i]));
+    const list = [];
+    for (const it of Array.isArray(b.items) ? b.items : []) {
+      const id = parseInt(it.product_id, 10);
+      const qty = Math.floor(Number(it.qty) || 0);
+      if (!id || qty <= 0) continue;
+      const x = have.get(id);
+      if (!x) throw fail(400, "\u0422\u043E\u0432\u0430\u0440\u0443 \u043D\u0435\u043C\u0430\u0454 \u0432 \u0446\u044C\u043E\u043C\u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.");
+      if (qty > x.qty) throw fail(400, `${x.name}: \u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043B\u0438\u0448\u0435 ${x.qty} \u0448\u0442.`);
+      list.push({ product_id: id, name: x.name, article: x.article || "", qty, price: x.price, rrp: x.rrp });
+    }
+    if (!list.length) throw fail(400, "\u041F\u043E\u0437\u043D\u0430\u0447\u0442\u0435 \u0442\u043E\u0432\u0430\u0440 \u0456 \u043A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C, \u0437 \u044F\u043A\u0438\u043C\u0438 \u043F\u0440\u043E\u0431\u043B\u0435\u043C\u0430.");
+    const reason = CLAIM_REASON[b.reason] ? b.reason : "";
+    if (!reason) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u043F\u0440\u0438\u0447\u0438\u043D\u0443.");
+    const want = CLAIM_WANT[b.want] ? b.want : "same";
+    const descr = String(b.descr || "").trim().slice(0, 2e3);
+    if (descr.length < 5) throw fail(400, "\u041E\u043F\u0438\u0448\u0456\u0442\u044C \u043F\u0440\u043E\u0431\u043B\u0435\u043C\u0443 \u043A\u0456\u043B\u044C\u043A\u043E\u043C\u0430 \u0441\u043B\u043E\u0432\u0430\u043C\u0438.");
+    let wantItems = [];
+    if (want === "other") {
+      const cat = new Map((await db.all(
+        `SELECT product_id, name, article FROM b2b_catalog WHERE product_id IN (SELECT value FROM json_each(?))`,
+        [JSON.stringify((b.want_items || []).map((x) => parseInt(x.product_id, 10)).filter(Boolean))]
+      )).map((x) => [x.product_id, x]));
+      wantItems = (b.want_items || []).map((x) => ({ p: cat.get(parseInt(x.product_id, 10)), qty: Math.floor(Number(x.qty) || 0) })).filter((x) => x.p && x.qty > 0).map((x) => ({ product_id: x.p.product_id, name: x.p.name, article: x.p.article || "", qty: x.qty }));
+      if (!wantItems.length) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u0442\u043E\u0432\u0430\u0440 \u043D\u0430 \u0437\u0430\u043C\u0456\u043D\u0443.");
+    }
+    const deliverTo = o.kind === "client" ? b.deliver_to === "partner" ? "partner" : "client" : "partner";
+    const now = nowIso();
+    const r = await db.run(
+      `INSERT INTO b2b_claims (partner_id, order_id, order_kind, client_name, client_phone, ttn, status, reason, descr, want, items, want_items,
+        deliver_to, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        o.partner_id,
+        o.id,
+        o.kind,
+        o.client_name || "",
+        o.client_phone || "",
+        o.ttn || "",
+        reason,
+        descr,
+        want,
+        JSON.stringify(list),
+        JSON.stringify(wantItems),
+        deliverTo,
+        userName6(c.get("user")),
+        now,
+        now
+      ]
+    );
+    const cl = await claimOf(r.lastId);
+    await notify(c, cl, "\u{1F6E0} <b>\u041D\u043E\u0432\u0430 \u0437\u0430\u044F\u0432\u043A\u0430 \u043D\u0430 \u043E\u0431\u043C\u0456\u043D / \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F</b>", {
+      history: `\u043F\u043E\u0434\u0430\u043D\u043E: ${list.map((i) => `${i.name} \xD7 ${i.qty}`).join("; ")} \u2014 ${CLAIM_REASON[reason]}; \u0445\u043E\u0447\u0435: ${CLAIM_WANT[want]}`
+    });
+    return { id: cl.id, number: claimNo(cl.id) };
+  }
+  async function addFile(c, cl) {
+    if (["closed", "rejected", "cancelled"].includes(cl.status)) throw fail(400, "\u0417\u0430\u044F\u0432\u043A\u0443 \u0437\u0430\u043A\u0440\u0438\u0442\u043E.");
+    if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_files WHERE claim_id = ?`, [cl.id])).n >= 10) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 10 \u0444\u0430\u0439\u043B\u0456\u0432 \u0443 \u0437\u0430\u044F\u0432\u0446\u0456.");
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    let name = "file";
+    try {
+      name = decodeURIComponent(c.req.header("x-file-name") || "file");
+    } catch {
+    }
+    const f = await storeFile({ id: 0 }, "claim", { bytes, name, mime: c.req.header("content-type") }, c.get("user"));
+    await db.run(`UPDATE b2b_files SET claim_id = ? WHERE id = ?`, [cl.id, f.id]);
+    await clog(cl.id, c.get("user"), `\u0434\u043E\u0434\u0430\u043D\u043E \u0444\u043E\u0442\u043E/\u0432\u0456\u0434\u0435\u043E \xAB${f.name}\xBB`);
+    const caption = `\u{1F4F7} \u0417\u0430\u044F\u0432\u043A\u0430 ${claimNo(cl.id)} (${cl.order_kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F"} ${orderNo(cl.order_id)})`;
+    const g = await groupOf(cl.partner_id);
+    if (g) await services.notify?.sendFile?.({ chatIds: [g] }, f, caption).catch(() => 0);
+    await services.notify?.sendFile?.({ chatIds: await adminChats() }, f, caption).catch(() => 0);
+    return { id: f.id };
+  }
+  const adminChats = async () => (await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin', 'admin_lite') LIMIT 5`)).map((r) => r.tg_chat_id);
+  async function detail(cl) {
+    const [files, history] = await Promise.all([
+      db.all(`SELECT id, name, mime, size, created_by, created_at FROM b2b_files WHERE claim_id = ? ORDER BY id`, [cl.id]),
+      db.all(`SELECT at, user_name, action FROM b2b_claim_log WHERE claim_id = ? ORDER BY id DESC`, [cl.id])
+    ]);
+    const p = await db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [cl.partner_id]);
+    return { claim: { ...pub(cl), partner: p?.name || "" }, files, history };
+  }
+  async function listOf(where, params) {
+    const rows = await db.all(`SELECT cl.*, p.name AS partner, (SELECT COUNT(*) FROM b2b_files f WHERE f.claim_id = cl.id) AS files
+      FROM b2b_claims cl JOIN b2b_partners p ON p.id = cl.partner_id WHERE ${where.join(" AND ")} ORDER BY cl.id DESC LIMIT 300`, params);
+    return rows.map(pub);
+  }
+  const countsOf = (partnerId) => db.all(`SELECT status, COUNT(*) AS n FROM b2b_claims ${partnerId ? "WHERE partner_id = ?" : ""} GROUP BY status`, partnerId ? [partnerId] : []);
+  async function comment(c, cl, text, who) {
+    const t = String(text || "").trim().slice(0, 1e3);
+    if (t.length < 2) throw fail(400, "\u041D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440.");
+    await notify(c, cl, `\u{1F4AC} <b>\u041A\u043E\u043C\u0435\u043D\u0442\u0430\u0440 ${who}</b>: ${h7(t)}`, { history: `\u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440: ${t}` });
+    return { ok: true };
+  }
+  app.get("/api/b2b/p/claims", async (c) => {
+    const p = await myPartner(c);
+    const st = c.req.query("status");
+    const where = ["cl.partner_id = ?"];
+    const params = [p.id];
+    if (st === "open") where.push(`cl.status IN ('new', 'review', 'approved')`);
+    else if (CLAIM_STATUS[st]) {
+      where.push("cl.status = ?");
+      params.push(st);
+    }
+    return c.json({ rows: await listOf(where, params), statuses: CLAIM_STATUS, counts: await countsOf(p.id) });
+  });
+  app.get("/api/b2b/p/claims/meta", async (c) => {
+    await myPartner(c);
+    return c.json({ reasons: CLAIM_REASON, wants: CLAIM_WANT });
+  });
+  app.get("/api/b2b/p/claims/source/:orderId", async (c) => {
+    const p = await myPartner(c);
+    const { o, items } = await sourceOf(c.req.param("orderId"), p.id);
+    return c.json({ order: { id: o.id, number: orderNo(o.id), kind: o.kind, client_name: o.client_name || "", ttn: o.ttn || "" }, items, reasons: CLAIM_REASON, wants: CLAIM_WANT });
+  });
+  app.get("/api/b2b/p/claims/:id", async (c) => {
+    const p = await myPartner(c);
+    return c.json(await detail(await claimOf(c.req.param("id"), p.id)));
+  });
+  app.post("/api/b2b/p/claims", async (c) => {
+    const p = await myPartner(c);
+    if (!can(c.get("user"), "b2b.order")) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432.");
+    return c.json(await create(c, p.id, await c.req.json()));
+  });
+  app.post("/api/b2b/p/claims/:id/files", async (c) => {
+    const p = await myPartner(c);
+    return c.json(await addFile(c, await claimOf(c.req.param("id"), p.id)));
+  });
+  app.get("/api/b2b/p/claims/:id/files/:fid", async (c) => {
+    const p = await myPartner(c);
+    const cl = await claimOf(c.req.param("id"), p.id);
+    const f = await db.get(`SELECT * FROM b2b_files WHERE id = ? AND claim_id = ?`, [c.req.param("fid"), cl.id]);
+    if (!f) throw fail(404, "\u0424\u0430\u0439\u043B \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (\u0437\u0431\u0435\u0440\u0456\u0433\u0430\u044E\u0442\u044C\u0441\u044F 30 \u0434\u043D\u0456\u0432).");
+    return sendFile(f);
+  });
+  app.post("/api/b2b/p/claims/:id/comment", async (c) => {
+    const p = await myPartner(c);
+    return c.json(await comment(c, await claimOf(c.req.param("id"), p.id), (await c.req.json()).text, "\u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430"));
+  });
+  app.put("/api/b2b/p/claims/:id/return-ttn", async (c) => {
+    const p = await myPartner(c);
+    const cl = await claimOf(c.req.param("id"), p.id);
+    if (!["approved", "resolved"].includes(cl.status) || cl.return_mode !== "warehouse") throw fail(400, "\u0422\u0422\u041D \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u0432\u043D\u043E\u0441\u044F\u0442\u044C, \u043A\u043E\u043B\u0438 \u0437\u0430\u044F\u0432\u043A\u0443 \u043F\u043E\u0433\u043E\u0434\u0436\u0435\u043D\u043E \u0437 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F\u043C \u0431\u0440\u0430\u043A\u0443 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434.");
+    const ttn = String((await c.req.json()).ttn || "").replace(/\s/g, "").slice(0, 30);
+    if (!/^[0-9A-Za-z-]{6,30}$/.test(ttn)) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043D\u043E\u043C\u0435\u0440 \u0422\u0422\u041D.");
+    await db.run(`UPDATE b2b_claims SET return_ttn = ?, updated_at = ? WHERE id = ?`, [ttn, nowIso(), cl.id]);
+    await notify(c, { ...cl }, `\u{1F4E6} <b>\u0411\u0440\u0430\u043A \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u043D\u0430 \u0441\u043A\u043B\u0430\u0434</b>, \u0422\u0422\u041D ${h7(ttn)}`, { history: `\u0422\u0422\u041D \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u0431\u0440\u0430\u043A\u0443: ${ttn}` });
+    return c.json({ ok: true });
+  });
+  app.post("/api/b2b/p/claims/:id/cancel", async (c) => {
+    const p = await myPartner(c);
+    const cl = await claimOf(c.req.param("id"), p.id);
+    if (!["new", "review"].includes(cl.status)) throw fail(400, "\u0417\u0430\u044F\u0432\u043A\u0443 \u0432\u0436\u0435 \u043F\u043E\u0433\u043E\u0434\u0436\u0435\u043D\u043E \u2014 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438 \u043C\u043E\u0436\u0435 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440.");
+    await db.run(`UPDATE b2b_claims SET status = 'cancelled', updated_at = ?, closed_at = ? WHERE id = ?`, [nowIso(), nowIso(), cl.id]);
+    await notify(c, cl, "\u{1F6AB} <b>\u041F\u0430\u0440\u0442\u043D\u0435\u0440 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u0437\u0430\u044F\u0432\u043A\u0443</b>", { history: "\u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u043E\u043C" });
+    return c.json({ ok: true });
+  });
+  app.get("/api/b2b/claims", async (c) => {
+    need(c, "b2b.admin");
+    const st = c.req.query("status");
+    const pid = parseInt(c.req.query("partner"), 10);
+    const where = ["1 = 1"];
+    const params = [];
+    if (st === "open") where.push(`cl.status IN ('new', 'review', 'approved')`);
+    else if (CLAIM_STATUS[st]) {
+      where.push("cl.status = ?");
+      params.push(st);
+    }
+    if (pid) {
+      where.push("cl.partner_id = ?");
+      params.push(pid);
+    }
+    return c.json({ rows: await listOf(where, params), statuses: CLAIM_STATUS, counts: await countsOf(null) });
+  });
+  app.get("/api/b2b/claims/meta", async (c) => {
+    need(c, "b2b.admin");
+    return c.json({ reasons: CLAIM_REASON, wants: CLAIM_WANT, returns: RETURN_MODE, defects: DEFECT_STATE });
+  });
+  app.get("/api/b2b/claims/source/:orderId", async (c) => {
+    need(c, "b2b.admin");
+    const { o, items } = await sourceOf(c.req.param("orderId"));
+    return c.json({ order: { id: o.id, number: orderNo(o.id), kind: o.kind, client_name: o.client_name || "", ttn: o.ttn || "" }, items, reasons: CLAIM_REASON, wants: CLAIM_WANT });
+  });
+  app.get("/api/b2b/claims/:id", async (c) => {
+    need(c, "b2b.admin");
+    return c.json(await detail(await claimOf(c.req.param("id"))));
+  });
+  app.post("/api/b2b/claims", async (c) => {
+    need(c, "b2b.admin");
+    const b = await c.req.json();
+    const o = await orderOf(parseInt(b.order_id, 10));
+    return c.json(await create(c, o.partner_id, b));
+  });
+  app.post("/api/b2b/claims/:id/files", async (c) => {
+    need(c, "b2b.admin");
+    return c.json(await addFile(c, await claimOf(c.req.param("id"))));
+  });
+  app.post("/api/b2b/claims/:id/comment", async (c) => {
+    need(c, "b2b.admin");
+    return c.json(await comment(c, await claimOf(c.req.param("id")), (await c.req.json()).text, "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430"));
+  });
+  async function exchangeSupply(c, cl, delivery) {
+    const src = await orderOf(cl.order_id);
+    const supId = src.kind === "supply" ? src.id : src.supply_id;
+    const sup = supId ? await db.get(`SELECT entity_id, entity FROM b2b_orders WHERE id = ?`, [supId]) : null;
+    let entityId = sup?.entity_id || null;
+    let entity = sup?.entity || "";
+    if (!entityId) {
+      const e = await db.get(`SELECT * FROM b2b_entities WHERE partner_id = ? ORDER BY id LIMIT 1`, [cl.partner_id]);
+      if (e) {
+        entityId = e.id;
+        entity = entityText(e);
+      }
+    }
+    const base = cl.want === "other" ? J(cl.want_items, []) : J(cl.items, []);
+    const rrp = new Map((await db.all(
+      `SELECT product_id, rrp FROM b2b_catalog WHERE product_id IN (SELECT value FROM json_each(?))`,
+      [JSON.stringify(base.map((i) => i.product_id))]
+    )).map((x) => [x.product_id, x.rrp]));
+    const items = base.map((i) => ({ product_id: i.product_id, name: i.name, article: i.article || "", qty: i.qty, price: 0, rrp: i.rrp ?? rrp.get(i.product_id) ?? 0 }));
+    const now = nowIso();
+    const note = `\u043E\u0431\u043C\u0456\u043D \u0437\u0430 \u0437\u0430\u044F\u0432\u043A\u043E\u044E ${claimNo(cl.id)}`;
+    const r = await db.run(
+      `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery,
+        paid_amount, paid_at, paid_by, paid_note, claim_id) VALUES (?, 'supply', 'paid', ?, ?, 0, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+      [cl.partner_id, entityId, entity, `\u041E\u0411\u041C\u0406\u041D \u0437\u0430 \u0437\u0430\u044F\u0432\u043A\u043E\u044E ${claimNo(cl.id)} (${orderNo(cl.order_id)})`, userName6(c.get("user")), now, now, delivery, now, userName6(c.get("user")), note, cl.id]
+    );
+    await db.batch(itemRows(r.lastId, items));
+    await log(r.lastId, c.get("user"), `\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u043E\u0431\u043C\u0456\u043D\u043D\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E (0 \u0433\u0440\u043D, \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E \u0432\u0440\u0443\u0447\u043D\u0443\xBB: ${note}): ${items.map((i) => `${i.name} \xD7 ${i.qty}`).join("; ")}`);
+    return r.lastId;
+  }
+  app.post("/api/b2b/claims/:id/action", async (c) => {
+    need(c, "b2b.admin");
+    const cl = await claimOf(c.req.param("id"));
+    const b = await c.req.json();
+    const note = String(b.note || "").trim().slice(0, 1e3);
+    const now = nowIso();
+    const set = async (fields) => {
+      const keys = Object.keys(fields);
+      await db.run(`UPDATE b2b_claims SET ${keys.map((k) => `${k} = ?`).join(", ")}, updated_at = ? WHERE id = ?`, [...keys.map((k) => fields[k]), now, cl.id]);
+      return { ...cl, ...fields };
+    };
+    switch (b.action) {
+      case "review": {
+        if (cl.status !== "new") throw fail(400, "\u0417\u0430\u044F\u0432\u043A\u0443 \u0432\u0436\u0435 \u0440\u043E\u0437\u0433\u043B\u044F\u0434\u0430\u044E\u0442\u044C.");
+        await notify(c, await set({ status: "review" }), "\u{1F440} <b>\u0417\u0430\u044F\u0432\u043A\u0443 \u0432\u0437\u044F\u0442\u043E \u043D\u0430 \u0440\u043E\u0437\u0433\u043B\u044F\u0434</b>", { history: "\u0432\u0437\u044F\u0442\u043E \u043D\u0430 \u0440\u043E\u0437\u0433\u043B\u044F\u0434" });
+        break;
+      }
+      case "approve": {
+        if (!["new", "review"].includes(cl.status)) throw fail(400, "\u0417\u0430\u044F\u0432\u043A\u0443 \u0432\u0436\u0435 \u0432\u0438\u0440\u0456\u0448\u0435\u043D\u043E.");
+        const mode = RETURN_MODE[b.return_mode] ? b.return_mode : "";
+        if (!mode) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C, \u0449\u043E \u0440\u043E\u0431\u0438\u0442\u0438 \u0437 \u0431\u0440\u0430\u043A\u043E\u0432\u0430\u043D\u0438\u043C \u0442\u043E\u0432\u0430\u0440\u043E\u043C.");
+        const refund = cl.want === "refund" || cl.want === "other" ? Math.max(0, round2(Number(String(b.refund_amount ?? "").replace(",", ".")) || 0)) : 0;
+        const r22 = await set({ status: "approved", return_mode: mode, decision_note: note, refund_amount: refund, defect: mode === "warehouse" ? "awaiting" : "" });
+        await notify(
+          c,
+          r22,
+          `\u2705 <b>\u0417\u0430\u044F\u0432\u043A\u0443 \u043F\u043E\u0433\u043E\u0434\u0436\u0435\u043D\u043E</b>${mode === "warehouse" ? "\n\u{1F4E6} \u0412\u0456\u0434\u043F\u0440\u0430\u0432\u0442\u0435 \u0431\u0440\u0430\u043A \u043D\u0430\u043C \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u0456 \u0432\u043D\u0435\u0441\u0456\u0442\u044C \u0422\u0422\u041D \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u0432 \u0437\u0430\u044F\u0432\u0446\u0456." : ""}`,
+          { history: `\u043F\u043E\u0433\u043E\u0434\u0436\u0435\u043D\u043E: ${RETURN_MODE[mode]}${note ? ` \u2014 ${note}` : ""}${refund ? `; \u0434\u043E \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F ${uah4(refund)}` : ""}` }
+        );
+        break;
+      }
+      case "reject": {
+        if (!OPEN.includes(cl.status)) throw fail(400, "\u0417\u0430\u044F\u0432\u043A\u0443 \u0432\u0436\u0435 \u0437\u0430\u043A\u0440\u0438\u0442\u043E.");
+        if (note.length < 3) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043F\u0440\u0438\u0447\u0438\u043D\u0443 \u0432\u0456\u0434\u043C\u043E\u0432\u0438.");
+        await notify(c, await set({ status: "rejected", decision_note: note, closed_at: now }), "\u274C <b>\u0417\u0430\u044F\u0432\u043A\u0443 \u0432\u0456\u0434\u0445\u0438\u043B\u0435\u043D\u043E</b>", { history: `\u0432\u0456\u0434\u0445\u0438\u043B\u0435\u043D\u043E: ${note}` });
+        break;
+      }
+      case "defect": {
+        if (!["approved", "resolved", "closed"].includes(cl.status)) throw fail(400, "\u0421\u043F\u0435\u0440\u0448\u0443 \u043F\u043E\u0433\u043E\u0434\u044C\u0442\u0435 \u0437\u0430\u044F\u0432\u043A\u0443.");
+        const d = ["confirmed", "not_confirmed"].includes(b.defect) ? b.defect : "";
+        if (!d) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0438.");
+        if (d === "not_confirmed" && note.length < 3) throw fail(400, "\u041E\u043F\u0438\u0448\u0456\u0442\u044C, \u0449\u043E \u0432\u0438\u044F\u0432\u0438\u043B\u0430 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430.");
+        await notify(c, await set({ defect: d, defect_note: note }), `\u{1F50E} <b>${DEFECT_STATE[d]}</b>`, { history: `${DEFECT_STATE[d].toLowerCase()}${note ? `: ${note}` : ""}` });
+        break;
+      }
+      case "replace": {
+        if (cl.status !== "approved") throw fail(400, "\u0417\u0430\u043C\u0456\u043D\u0443 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u044F\u044E\u0442\u044C \u043F\u0456\u0441\u043B\u044F \u043F\u043E\u0433\u043E\u0434\u0436\u0435\u043D\u043D\u044F.");
+        if (!["same", "other", "repair"].includes(cl.want)) throw fail(400, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440 \u043F\u0440\u043E\u0441\u0438\u0442\u044C \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u043A\u043E\u0448\u0442\u0456\u0432 \u2014 \u043F\u043E\u0437\u043D\u0430\u0447\u0442\u0435 \xAB\u041A\u043E\u0448\u0442\u0438 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043E\xBB.");
+        const delivery = b.delivery === "pickup" ? "pickup" : "np";
+        const sid = await exchangeSupply(c, cl, delivery);
+        const r22 = await set({ status: "resolved", exch_supply_id: sid });
+        await notify(
+          c,
+          r22,
+          `\u{1F501} <b>\u0417\u0430\u043C\u0456\u043D\u0443 \u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E</b> \u2014 \u043E\u0431\u043C\u0456\u043D\u043D\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(sid)} (0 \u0433\u0440\u043D, \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E)
+${delivery === "pickup" ? "\u{1F697} \u0421\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456, \u0445\u0442\u043E \u0437\u0430\u0431\u0438\u0440\u0430\u0454." : cl.deliver_to === "client" ? "\u{1F4EE} \u041E\u0444\u043E\u0440\u043C\u0456\u0442\u044C \u0456\u0437 \u043D\u0435\u0457 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 (\u0422\u0422\u041D \u0456 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F) \u2014 \u044F\u043A \u0437\u0432\u0438\u0447\u0430\u0439\u043D\u043E." : "\u{1F4EE} \u041E\u0444\u043E\u0440\u043C\u0456\u0442\u044C \u0456\u0437 \u043D\u0435\u0457 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u0441\u043E\u0431\u0456 \u0430\u0431\u043E \u043A\u043B\u0456\u0454\u043D\u0442\u0443 \u2014 \u044F\u043A \u0437\u0432\u0438\u0447\u0430\u0439\u043D\u043E."}`,
+          { history: `\u0437\u0430\u043C\u0456\u043D\u0443 \u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E: \u043E\u0431\u043C\u0456\u043D\u043D\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(sid)}${note ? ` \u2014 ${note}` : ""}` }
+        );
+        return c.json({ ok: true, supply_id: sid });
+      }
+      case "refund": {
+        if (cl.status !== "approved") throw fail(400, "\u0421\u043F\u0435\u0440\u0448\u0443 \u043F\u043E\u0433\u043E\u0434\u044C\u0442\u0435 \u0437\u0430\u044F\u0432\u043A\u0443.");
+        const amt = Math.max(0, round2(Number(String(b.refund_amount ?? cl.refund_amount ?? "").replace(",", ".")) || 0));
+        if (!amt) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u0441\u0443\u043C\u0443 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F.");
+        if (note.length < 3) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C, \u044F\u043A \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u043B\u0438 \u043A\u043E\u0448\u0442\u0438 (\u0437\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043D\u043D\u044F, \u043F\u0435\u0440\u0435\u043A\u0430\u0437 \u0442\u043E\u0449\u043E).");
+        await notify(c, await set({ status: "resolved", refund_amount: amt, decision_note: note }), `\u{1F4B8} <b>\u041A\u043E\u0448\u0442\u0438 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043E</b>: ${uah4(amt)}`, { history: `\u043A\u043E\u0448\u0442\u0438 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043E: ${uah4(amt)} \u2014 ${note}` });
+        break;
+      }
+      case "close": {
+        if (!["approved", "resolved"].includes(cl.status)) throw fail(400, "\u0417\u0430\u043A\u0440\u0438\u0442\u0438 \u043C\u043E\u0436\u043D\u0430 \u043F\u043E\u0433\u043E\u0434\u0436\u0435\u043D\u0443 \u0437\u0430\u044F\u0432\u043A\u0443.");
+        await notify(c, await set({ status: "closed", closed_at: now }), "\u{1F3C1} <b>\u0417\u0430\u044F\u0432\u043A\u0443 \u0437\u0430\u043A\u0440\u0438\u0442\u043E</b>", { history: `\u0437\u0430\u043A\u0440\u0438\u0442\u043E${note ? `: ${note}` : ""}` });
+        break;
+      }
+      default:
+        throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0430 \u0434\u0456\u044F.");
+    }
+    return c.json({ ok: true });
+  });
+  return { CLAIM_STATUS };
+}
+
 // src/modules/b2b/index.js
 var partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 var BATCH = 50;
@@ -11008,6 +11468,7 @@ var num3 = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
+}, onCron = () => {
 } }) {
   const audit = (c, refId, action, changes = []) => logAudit(db, { user: c.get("user"), kind: "b2b", refId, action, changes });
   async function brandNames() {
@@ -11563,8 +12024,9 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   });
   const hooks = {};
   const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup, hooks });
-  mountB2bClients(app, { db, fetchFn, services, myPartner, orders, hooks });
+  mountB2bClients(app, { db, fetchFn, services, myPartner, orders, hooks, onCron });
   mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice });
+  mountB2bClaims(app, { db, services, myPartner, orders });
   const tgdocs = mountB2bTgDocs(app, { db, services, orders, hooks });
   const pay = mountB2bPay(app, { db, services, orders, hooks });
   onCleanup(() => hooks.cleanup?.());
@@ -15712,7 +16174,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 32,
+  version: 33,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -15792,6 +16254,44 @@ var schema11 = {
     created_at TEXT
   )`,
     `CREATE INDEX IF NOT EXISTS b2b_couriers_p ON b2b_couriers (partner_id)`,
+    // Обміни й повернення браку (заявки): див. claims.js. items / want_items — JSON [{ product_id, name, article, qty, price }].
+    `CREATE TABLE IF NOT EXISTS b2b_claims (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER NOT NULL,
+    order_id INTEGER,
+    order_kind TEXT DEFAULT '',
+    client_name TEXT DEFAULT '',
+    client_phone TEXT DEFAULT '',
+    ttn TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'new',
+    reason TEXT DEFAULT '',
+    descr TEXT DEFAULT '',
+    want TEXT DEFAULT 'same',
+    items TEXT DEFAULT '[]',
+    want_items TEXT DEFAULT '[]',
+    deliver_to TEXT DEFAULT '',
+    return_mode TEXT DEFAULT '',
+    return_ttn TEXT DEFAULT '',
+    defect TEXT DEFAULT '',
+    defect_note TEXT DEFAULT '',
+    decision_note TEXT DEFAULT '',
+    refund_amount REAL NOT NULL DEFAULT 0,
+    exch_supply_id INTEGER,
+    created_by TEXT DEFAULT '',
+    created_at TEXT,
+    updated_at TEXT,
+    closed_at TEXT DEFAULT ''
+  )`,
+    `CREATE INDEX IF NOT EXISTS b2b_claims_p ON b2b_claims (partner_id, status)`,
+    `CREATE INDEX IF NOT EXISTS b2b_claims_o ON b2b_claims (order_id)`,
+    `CREATE TABLE IF NOT EXISTS b2b_claim_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    claim_id INTEGER NOT NULL,
+    at TEXT,
+    user_name TEXT DEFAULT '',
+    action TEXT
+  )`,
+    `CREATE INDEX IF NOT EXISTS b2b_claim_log_c ON b2b_claim_log (claim_id)`,
     // Замовлення партнерів. kind: supply — закупівля в нас; client — замовлення для клієнта партнера (етап 3).
     `CREATE TABLE IF NOT EXISTS b2b_orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -16013,6 +16513,9 @@ var schema11 = {
     // Самовивіз: хто забирає зі складу (JSON: name, phone, note) — вносить партнер; останній — підказка для наступних.
     ["b2b_orders", "pickup_by", "TEXT DEFAULT ''"],
     ["b2b_partners", "pickup_last", "TEXT DEFAULT ''"],
+    // Обміни: фото/відео заявки (b2b_files.claim_id) і обмінна закупівля (b2b_orders.claim_id).
+    ["b2b_files", "claim_id", "INTEGER"],
+    ["b2b_orders", "claim_id", "INTEGER"],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ["b2b_tg_docs", "source", "TEXT DEFAULT 'private'"],
     ["b2b_tg_docs", "reply_to", "INTEGER"],

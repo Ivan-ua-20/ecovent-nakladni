@@ -20,6 +20,7 @@ import { createPartnerPages } from './pages/partner.js';
 import { createHomePages } from './pages/home.js';
 import { createB2bStats } from './pages/b2b-stats.js';
 import { createPriceLogPages } from './pages/b2b-pricelog.js';
+import { createClaimPages } from './pages/b2b-claims.js';
 import { createRetailPages } from './pages/retail.js';
 
 // ---------- стан ----------
@@ -50,6 +51,7 @@ const SECTIONS = [
   { id: 'b2b', label: 'B2B партнери', perm: 'b2b.view', edit: 'b2b.admin', home: 'b2borders', tabs: [
     { id: 'b2borders', label: 'Закупівлі' },
     { id: 'b2bclients', label: 'Замовлення клієнтів' },
+    { id: 'b2bclaims', label: 'Обміни' },
     { id: 'b2bpartners', label: 'Партнери' },
     { id: 'b2bcatalog', label: 'Каталог і ціни' },
     { id: 'b2bprices', label: 'Журнал цін' },
@@ -65,6 +67,7 @@ const SECTIONS = [
     { id: 'porders', label: 'Закупівлі' },
     { id: 'pstatement', label: 'Взаєморозрахунки' },
     { id: 'pclients', label: 'Замовлення клієнтів' },
+    { id: 'pclaims', label: 'Обміни' },
     { id: 'pentities', label: 'Мої юрособи' },
     { id: 'pcouriers', label: 'Кур’єри' },
     { id: 'pstats', label: 'Аналітика' },
@@ -289,6 +292,8 @@ const { viewUsers } = createUsersPages(ctx);
 const { viewErrors } = createErrorsPages(ctx);
 const B2BSTATS = createB2bStats();
 const PRICELOG = createPriceLogPages();
+const CLAIMS = createClaimPages(ctx);
+ctx.openClaimForm = CLAIMS.openClaimForm;
 const RETAIL = createRetailPages(ctx);
 const { viewPartners, viewCatalog, viewOrders: viewB2bOrders, viewClients: viewB2bClients, viewTrash: viewB2bTrash } = createB2bPages(ctx);
 const HOME = createHomePages(ctx);
@@ -328,6 +333,8 @@ const routes = {
   b2bclients: viewB2bClients,
   b2btrash: viewB2bTrash,
   b2bprices: () => PRICELOG.viewAdmin(),
+  b2bclaims: CLAIMS.viewAdminClaims,
+  pclaims: CLAIMS.viewPartnerClaims,
   pprices: () => PRICELOG.viewPartner(),
   ptrash: viewPartnerTrash,
   pentities: viewEntities,
@@ -356,8 +363,8 @@ async function route() {
   // Посилання з нашого розділу B2B відкрив партнер (закладка, переслане, інший акаунт у цьому браузері) —
   // та сама сторінка в кабінеті партнера; інший недоступний розділ — на головну, без «Немає доступу».
   if (sec.perm && !can(sec.perm)) {
-    const P = { b2borders: 'porders', b2bclients: 'pclients', b2bstatement: 'pstatement', b2bstats: 'pstats', b2bprices: 'pprices', b2btrash: 'ptrash', b2bcatalog: 'pcatalog' };
-    const to = can('b2b.partner') && P[name] ? [P[name], ...(['b2borders', 'b2bclients'].includes(name) ? args.filter((x) => /^\d+$/.test(x)).slice(0, 1) : [])].join('/') : homeRoute();
+    const P = { b2borders: 'porders', b2bclients: 'pclients', b2bstatement: 'pstatement', b2bstats: 'pstats', b2bprices: 'pprices', b2btrash: 'ptrash', b2bcatalog: 'pcatalog', b2bclaims: 'pclaims' };
+    const to = can('b2b.partner') && P[name] ? [P[name], ...(['b2borders', 'b2bclients', 'b2bclaims'].includes(name) ? args.filter((x) => /^\d+$/.test(x)).slice(0, 1) : [])].join('/') : homeRoute();
     if (to !== name) { location.replace(`#/${to}`); return; }
   }
   sec = sectionOf(name);

@@ -4,7 +4,7 @@ import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
 import { viewAdminSupplyForm } from './b2b-supply.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect } from './b2b-shared.js';
 
 const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
 
@@ -848,7 +848,7 @@ export function createB2bPages(ctx = {}) {
     const closed = o.status === 'cancelled';
     const pkCouriers = o.delivery === 'pickup' && !closed ? await api('GET', `/api/b2b/partners/${o.partner_id}/couriers`).catch(() => []) : [];
     main.innerHTML = `
-      <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2borders">← До списку</a>${o.status === 'draft' ? '<button class="btn primary" id="oSendDraft">Відправити закупівлю</button>' : ''}${o.status === 'open' ? '<button class="btn primary" id="oForm">🧾 Сформувати закупівлю</button>' : ''}${closed ? '' : '<button class="btn" id="oEdit">✏️ Змінити</button>'}<button class="btn danger" id="oDel">Видалити</button></div></div>
+      <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2borders">← До списку</a>${o.status === 'draft' ? '<button class="btn primary" id="oSendDraft">Відправити закупівлю</button>' : ''}${o.status === 'open' ? '<button class="btn primary" id="oForm">🧾 Сформувати закупівлю</button>' : ''}${['pay_wait', 'partial', 'paid', 'done'].includes(o.status) && !ro() ? '<button class="btn" id="oClaim">🛠 Брак / обмін</button>' : ''}${closed ? '' : '<button class="btn" id="oEdit">✏️ Змінити</button>'}<button class="btn danger" id="oDel">Видалити</button></div></div>
       ${o.reinvoice ? `<div class="alert warn" style="margin-bottom:12px"><b>Закупівлю змінено після рахунку</b> — потрібно переробити рахунок № ${esc(o.reinvoice)}. Запит надіслано в «Фінансові питання»; новий рахунок замінить старий файл і піде в групу партнера.${o.paid_amount ? ` Уже оплачено: ${uah(o.paid_amount)}.` : ''}</div>` : ''}
       ${o.status === 'open' ? '<div class="alert info" style="margin-bottom:12px"><b>Відкрита закупівля</b> — сюди автоматично складаються замовлення клієнтів партнера без закупівлі. Сформуйте її («🧾 Сформувати закупівлю»): оберіть юрособу партнера й оплату — вона стане звичайною закупівлею «Очікує рахунок», а наступні замовлення без закупівлі підуть у нову відкриту.</div>' : ''}
       ${o.status === 'confirm' ? '<div class="alert warn" style="margin-bottom:12px"><b>Чекає підтвердження партнера</b> — закупівлю створили ми; партнер отримав її в кабінеті й у Telegram. Після підтвердження він обере юрособу, і в «Фінансові питання» піде запит рахунку. Склад ще можна змінити («✏️ Змінити»).</div>' : ''}
@@ -936,6 +936,7 @@ export function createB2bPages(ctx = {}) {
       try { await api('DELETE', `/api/b2b/orders/${o.id}`); toast('Закупівлю перенесено в кошик'); location.hash = '#/b2borders'; } catch (er) { toast(er.message, true); }
     };
     $('#oEdit') && ($('#oEdit').onclick = () => editSupply(o, items));
+    if ($('#oClaim')) $('#oClaim').onclick = () => ctx.openClaimForm(o.id, { admin: true }).catch((e) => toast(e.message, true));
     if (!closed && !ro()) wirePriceTable(items, async (rows) => {
       if (o.invoice_no && ['pay_wait', 'partial', 'paid', 'done'].includes(o.status)
         && !(await confirmDanger(`Змінити ціни в закупівлі з рахунком № ${o.invoice_no}?`, 'Рахунок доведеться переробити: бухгалтер отримає запит у «Фінансові питання», партнер — сповіщення.', 'Зберегти ціни'))) return false;
@@ -1080,12 +1081,12 @@ export function createB2bPages(ctx = {}) {
   }
 
   // ---------------------------------------------------------------- замовлення клієнтів партнерів
-  let clFilter = { view: '', partner: '', q: '', from: '', to: '', pay: '' };
+  let clFilter = { view: '', partner: '', q: '', from: '', to: '', pay: '', crm_status: '' };
   const VIEWS = { '': 'Усі', new: 'Нові', crm: 'Передані в CRM', nosupply: 'Без закупівлі', cancelled: 'Скасовані' };
   async function viewClients(id) {
     if (id) return viewClient(id);
     const qs = filterQs(clFilter);
-    const [{ rows, counts, crm }, partners, cfg] = await Promise.all([
+    const [{ rows, counts, crm, crm_statuses: crmSts = [] }, partners, cfg] = await Promise.all([
       api('GET', `/api/b2b/clients${qs ? `?${qs}` : ''}`), api('GET', '/api/b2b/partners'), api('GET', '/api/b2b/crm-settings'),
     ]);
     main.innerHTML = `
@@ -1096,10 +1097,11 @@ export function createB2bPages(ctx = {}) {
       <div class="btn-row" style="margin-bottom:12px;flex-wrap:wrap">
         ${Object.entries(VIEWS).map(([k, v]) => `<button class="chip ${clFilter.view === k ? 'on' : ''}" data-v="${k}">${esc(v)}${k && counts[k] ? ` · ${counts[k]}` : ''}</button>`).join('')}
         <select id="clPartner" aria-label="Партнер"><option value="">Усі партнери</option>${partners.map((p) => `<option value="${p.id}" ${String(clFilter.partner) === String(p.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+        ${crmStatusSelect(crmSts, clFilter.crm_status)}
       </div>
       ${filterBar(clFilter, { pay: true })}
       ${bulkBar()}
-      ${rows.length ? `<table class="list"><thead><tr>${selHead()}<th>№</th><th>Партнер / клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th class="hide-m">CRM</th></tr></thead><tbody>
+      ${rows.length ? `<table class="list"><thead><tr>${selHead()}<th>№</th><th>Партнер / клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th>Статус LP-CRM</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click ${o.pending ? 'row-info' : o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''}" data-o="${o.id}">
           ${selCell(o.id)}
           <td><b>${esc(o.number)}</b><div>${supplyMark(o)}</div>${o.pending ? '<div><span class="badge info">🔵 чекає підтвердження партнера</span></div>' : ''}<div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
@@ -1107,7 +1109,7 @@ export function createB2bPages(ctx = {}) {
           <td class="r"><b>${uah(o.total)}</b></td>
           <td>${statusBadge(o)}</td>
           <td class="hide-m">${payBadge(o)}</td>
-          <td class="hide-m">${crmCell(o)}</td>
+          <td>${crmCell(o)}</td>
         </tr>`).join('')}</tbody></table>`
         : `<div class="card empty"><div class="big">Замовлень немає</div>${qs ? 'За цими фільтрами нічого не знайдено.' : 'Тут з’являться замовлення, які партнери оформлюють для своїх клієнтів.'}</div>`}`;
     wireFilterBar(clFilter, () => viewClients());
@@ -1122,6 +1124,7 @@ export function createB2bPages(ctx = {}) {
     ], { onDone: () => viewClients(), confirmDanger });
     $$('[data-v]').forEach((b) => (b.onclick = () => { clFilter.view = b.dataset.v; viewClients(); }));
     $('#clPartner').onchange = (e) => { clFilter.partner = e.target.value; viewClients(); };
+    if ($('#crmSt')) $('#crmSt').onchange = (e) => { clFilter.crm_status = e.target.value; viewClients(); };
     $$('[data-o]').forEach((tr) => (tr.onclick = () => { location.hash = `#/b2bclients/${tr.dataset.o}`; }));
     $('#clLabels').onclick = () => labelsGroup();
     $('#clCfg').onclick = () => {
@@ -1197,7 +1200,7 @@ export function createB2bPages(ctx = {}) {
     if (o.kind !== 'client') { location.hash = `#/b2borders/${id}`; return; }
     const closed = o.status === 'cancelled';
     main.innerHTML = `
-      <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)} ${payBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2bclients">← До списку</a>${closed ? '' : '<button class="btn" id="clEdit">✏️ Змінити</button>'}<button class="btn danger" id="clDel">Видалити</button></div></div>
+      <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)} ${payBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2bclients">← До списку</a>${o.status === 'crm' && !ro() ? '<button class="btn" id="clClaim">🛠 Брак / обмін</button>' : ''}${closed ? '' : '<button class="btn" id="clEdit">✏️ Змінити</button>'}<button class="btn danger" id="clDel">Видалити</button></div></div>
       ${o.pending ? `<div class="card form-stack card-info" style="margin-bottom:12px"><b>🔵 Чекає підтвердження партнера</b>
           ${o.pending.crm_old ? `<div class="small">Старе замовлення в LP-CRM № <b>${esc(o.pending.crm_old)}</b> анульовано — скасуйте його в CRM; нове передайте після підтвердження.</div>` : ''}
           ${o.pending.changes.length ? `<ul class="small" style="margin:0;padding-left:18px">${o.pending.changes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
@@ -1220,7 +1223,7 @@ export function createB2bPages(ctx = {}) {
           <div class="card form-stack">
             <h3>LP-CRM</h3>
             ${missing.length ? `<div class="alert bad small">Бракує: <b>${missing.map(esc).join(', ')}</b> — «Додати в CRM» не спрацює, доки партнер їх не додасть.</div>` : ''}
-            ${o.crm_id ? `<div>Замовлення № <b>${esc(o.crm_id)}</b>${o.crm_status ? ` · <span class="badge info">${esc(o.crm_status)}</span>` : ''}</div>` : ''}
+            ${o.crm_id ? `<div>Замовлення № <b>${esc(o.crm_id)}</b>${o.crm_status ? ` · ${crmBadge(o.crm_status)}` : ''}</div>` : ''}
             ${!closed && o.status === 'new' ? `<button class="btn primary" id="clCrm" ${cfg.on && !o.pending ? '' : 'disabled'}>Додати в CRM</button>${o.pending ? '<div class="small muted">Спершу партнер має підтвердити зміни.</div>' : ''}
               ${cfg.on ? '' : '<div class="small muted">Передача в LP-CRM ще вимкнена (вкладка «Замовлення клієнтів» → «Налаштування CRM»). Поки що створіть замовлення в CRM вручну і впишіть номер нижче.</div>'}` : ''}
             ${!closed ? `<form id="clLink" class="btn-row"><input name="crm_id" value="${esc(o.crm_id)}" inputmode="numeric" placeholder="№ або код замовлення LP-CRM" style="max-width:220px" aria-label="Номер замовлення LP-CRM">
@@ -1285,6 +1288,7 @@ export function createB2bPages(ctx = {}) {
       try { await api('DELETE', `/api/b2b/orders/${o.id}`); toast('Замовлення перенесено в кошик'); location.hash = '#/b2bclients'; } catch (er) { toast(er.message, true); }
     };
     $('#clEdit') && ($('#clEdit').onclick = () => editClient(o, items));
+    if ($('#clClaim')) $('#clClaim').onclick = () => ctx.openClaimForm(o.id, { admin: true }).catch((e) => toast(e.message, true));
     if (!closed && !ro()) wirePriceTable(items, async (rows) => {
       const r = await api('PUT', `/api/b2b/clients/${o.id}/prices`, { items: rows.map((x) => ({ product_id: x.product_id, price: x.price, rrp: x.rrp })) });
       toast(!r.changed ? 'Змін немає' : r.draft ? `Ціни змінено в чернетці ${r.draft} — для всіх її замовлень` : `Ціни збережено, партнеру надіслано сповіщення${r.crm ? `. У LP-CRM № ${r.crm} змініть вручну` : ''}`);

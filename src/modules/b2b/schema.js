@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 32,
+  version: 33,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,6 +83,44 @@ export const schema = {
     created_at TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS b2b_couriers_p ON b2b_couriers (partner_id)`,
+  // Обміни й повернення браку (заявки): див. claims.js. items / want_items — JSON [{ product_id, name, article, qty, price }].
+  `CREATE TABLE IF NOT EXISTS b2b_claims (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER NOT NULL,
+    order_id INTEGER,
+    order_kind TEXT DEFAULT '',
+    client_name TEXT DEFAULT '',
+    client_phone TEXT DEFAULT '',
+    ttn TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'new',
+    reason TEXT DEFAULT '',
+    descr TEXT DEFAULT '',
+    want TEXT DEFAULT 'same',
+    items TEXT DEFAULT '[]',
+    want_items TEXT DEFAULT '[]',
+    deliver_to TEXT DEFAULT '',
+    return_mode TEXT DEFAULT '',
+    return_ttn TEXT DEFAULT '',
+    defect TEXT DEFAULT '',
+    defect_note TEXT DEFAULT '',
+    decision_note TEXT DEFAULT '',
+    refund_amount REAL NOT NULL DEFAULT 0,
+    exch_supply_id INTEGER,
+    created_by TEXT DEFAULT '',
+    created_at TEXT,
+    updated_at TEXT,
+    closed_at TEXT DEFAULT ''
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_claims_p ON b2b_claims (partner_id, status)`,
+  `CREATE INDEX IF NOT EXISTS b2b_claims_o ON b2b_claims (order_id)`,
+  `CREATE TABLE IF NOT EXISTS b2b_claim_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    claim_id INTEGER NOT NULL,
+    at TEXT,
+    user_name TEXT DEFAULT '',
+    action TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_claim_log_c ON b2b_claim_log (claim_id)`,
   // Замовлення партнерів. kind: supply — закупівля в нас; client — замовлення для клієнта партнера (етап 3).
   `CREATE TABLE IF NOT EXISTS b2b_orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -303,6 +341,9 @@ export const schema = {
     // Самовивіз: хто забирає зі складу (JSON: name, phone, note) — вносить партнер; останній — підказка для наступних.
     ['b2b_orders', 'pickup_by', "TEXT DEFAULT ''"],
     ['b2b_partners', 'pickup_last', "TEXT DEFAULT ''"],
+    // Обміни: фото/відео заявки (b2b_files.claim_id) і обмінна закупівля (b2b_orders.claim_id).
+    ['b2b_files', 'claim_id', 'INTEGER'],
+    ['b2b_orders', 'claim_id', 'INTEGER'],
     // документи з групи: звідки (private | fin), на яке повідомлення відповісти, хто надіслав, з чого вибирати
     ['b2b_tg_docs', 'source', "TEXT DEFAULT 'private'"],
     ['b2b_tg_docs', 'reply_to', 'INTEGER'],

@@ -24,7 +24,7 @@ const TTN_FIELDS = ['', 'additional_2', 'additional_3', 'additional_4', 'deliver
 // Код нового замовлення — як у прикладі LP-CRM: microtime×10 (11 цифр) + 5 випадкових.
 const newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(10000 + Math.random() * 90000))}`;
 
-export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, hooks = {} }) {
+export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, hooks = {}, onCron = () => {} }) {
   const { itemsTxt, itemsDiff, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h } = orders;
   const userName = (u) => u?.name || u?.login || '';
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files,
@@ -94,6 +94,17 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
   });
 
   // ---------------------------------------------------------------- статуси з CRM
+  // Тон статусу LP-CRM: ok — доставлено/виконано, bad — повернення/відмова, info — в дорозі/відправлено.
+  const crmTone = (name) => {
+    const n = String(name || '').toLowerCase();
+    if (/возв|поверн|отказ|відмов|відказ|отмен|скасов|не забр|невикуп|невыкуп/.test(n)) return 'bad';
+    if (/доставл|выполн|викон|получ|отрим|заверш|оплачен|оплачено|успіш|успеш|забра/.test(n)) return 'ok';
+    if (/отправ|відправ|в пути|в дороз|в дорог|на відділ|на отдел|у відділ|в отдел|прибув|прибыл|ожида|очіку/.test(n)) return 'info';
+    return '';
+  };
+  // Статуси LP-CRM у замовленнях клієнтів (для фільтра) з кількістю.
+  const crmStatuses = (partnerId) => db.all(`SELECT crm_status AS name, COUNT(*) AS n FROM b2b_orders WHERE kind = 'client' AND status = 'crm' AND crm_status != ''
+    ${partnerId ? 'AND partner_id = ?' : ''} GROUP BY crm_status ORDER BY n DESC LIMIT 40`, partnerId ? [partnerId] : []);
   async function statusNames(creds) {
     const row = await db.get(`SELECT value FROM settings WHERE key = 'statuses_cache'`);
     const cache = row?.value ? JSON.parse(row.value) : null;
@@ -111,15 +122,18 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
       || await db.get(`SELECT code FROM order_keys WHERE k = ? LIMIT 1`, [String(id)]).catch(() => null);
     return r?.code ? String(r.code) : '';
   }
-  async function refreshCrm({ partnerId = null, ids = null } = {}) {
+  // cron — фоново (раз на 30 хв): усі замовлення за 60 днів (до 500, по 100 за запит), у базу — лише змінені.
+  async function refreshCrm({ partnerId = null, ids = null, cron = false } = {}) {
     const border = new Date(Date.now() - CRM_REFRESH_MIN * 60000).toISOString();
     const since = new Date(Date.now() - CRM_TRACK_DAYS * 86400000).toISOString();
     const where = [`kind = 'client'`, `status = 'crm'`, `(crm_id != '' OR crm_ext != '')`];
     const params = [];
     if (ids) { where.push(`id IN (SELECT value FROM json_each(?))`); params.push(JSON.stringify(ids)); }
+    else if (cron) { where.push('created_at > ?'); params.push(since); }
     else { where.push('crm_checked_at < ?', 'created_at > ?'); params.push(border, since); }
     if (partnerId) { where.push('partner_id = ?'); params.push(partnerId); }
-    const rows = await db.all(`SELECT id, crm_id, crm_ext FROM b2b_orders WHERE ${where.join(' AND ')} ORDER BY crm_checked_at LIMIT 100`, params);
+    const rows = await db.all(`SELECT id, crm_id, crm_ext, crm_status, partner_id, client_name FROM b2b_orders WHERE ${where.join(' AND ')} ORDER BY crm_checked_at LIMIT ${cron ? 500 : 100}`, params);
+    const changed = []; // [замовлення, старий статус, новий]
     const linked = []; // замовлення, що щойно отримали номер у CRM
     if (!rows.length) return;
     const { creds } = await crmConfig();
@@ -128,24 +142,37 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     for (const r of rows) if (!r.crm_ext && r.crm_id) r.crm_ext = await codeOfId(r.crm_id);
     const known = rows.filter((r) => r.crm_ext);
     const unknown = rows.filter((r) => !r.crm_ext);
-    const st = unknown.map((r) => [`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ? WHERE id = ?`,
-      ['Статус з’явиться після оновлення аналітики', now, r.id]]);
+    const WAIT = 'Статус з’явиться після оновлення аналітики';
+    const st = unknown.filter((r) => !cron || r.crm_status !== WAIT).map((r) => [`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ? WHERE id = ?`, [WAIT, now, r.id]]);
     try {
       if (known.length) {
-        const found = await getOrdersBatch(fetchFn, creds, [...new Set(known.map((r) => r.crm_ext))]);
         const names = await statusNames(creds).catch(() => ({}));
+        const codes = [...new Set(known.map((r) => r.crm_ext))];
+        const found = [];
+        for (let i = 0; i < codes.length; i += 100) found.push(...await getOrdersBatch(fetchFn, creds, codes.slice(i, i + 100)));
         const byCode = new Map(found.map((o) => [String(o.order_id ?? ''), o]));
         for (const r of known) {
           const o = byCode.get(r.crm_ext);
           const s = o ? String(o.status ?? o.status_id ?? '') : '';
           const name = o ? String((names[s]?.name ?? names[s]) || s || '—').trim() : 'Не знайдено в CRM';
           const num = o && /^\d+$/.test(String(o.id ?? '')) ? String(o.id) : r.crm_id;
+          const same = name === (r.crm_status || '') && (num || '') === (r.crm_id || '');
+          if (cron && same) continue; // фоново — пишемо лише зміни (менше записів у базу)
           st.push([`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ?, crm_ext = ?, crm_id = ? WHERE id = ?`, [name, now, r.crm_ext, num || '', r.id]]);
           if (num && !r.crm_id) linked.push([r.id, num]);
+          if (o && r.crm_status && r.crm_status !== WAIT && name !== r.crm_status) changed.push([r, r.crm_status, name]);
         }
       }
     } catch { /* CRM недоступна — покажемо останній відомий статус */ }
     if (st.length) await db.batch(st);
+    // Зміна статусу — в історію замовлення; «доставлено» / «повернення, відмова» — партнеру в бот.
+    for (const [r, was, now2] of changed) {
+      await log(r.id, null, `статус у LP-CRM: «${was}» → «${now2}»`).catch(() => 0);
+      const tone = crmTone(now2);
+      if (tone === 'ok' || tone === 'bad') {
+        await tgPartner(r.partner_id, `${tone === 'ok' ? '✅' : '↩️'} Замовлення клієнта ${orderNo(r.id)} (${h(r.client_name || '')})${r.crm_id ? ` · LP-CRM № ${h(r.crm_id)}` : ''}: <b>${h(now2)}</b>`).catch(() => 0);
+      }
+    }
     for (const [id, num] of linked) await hooks.crmLinked?.(id, num).catch(() => 0);
     // номер з'явився — можливо, вся закупівля вже в роботі
     if (linked.length) {
@@ -153,6 +180,15 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
       for (const r of sup) await supplyInWork(r.supply_id).catch(() => 0);
     }
   }
+
+  // Фоново: статуси замовлень клієнтів з LP-CRM — раз на 30 хв (розклад кличе частіше; зайве пропускаємо).
+  onCron('b2b-crm-status', 'Статуси замовлень клієнтів B2B з LP-CRM (раз на 30 хв)', async () => {
+    const at = (await db.get(`SELECT value FROM settings WHERE key = 'b2b_crm_cron_at'`))?.value || '';
+    if (at && Date.now() - Date.parse(at) < 29 * 60000) return { skipped: true };
+    await db.run(`INSERT INTO settings (key, value) VALUES ('b2b_crm_cron_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [nowIso()]);
+    await refreshCrm({ cron: true });
+    return { ok: true };
+  });
 
   // Без закупівлі (у відкриту закупівлю чи чернетку) оформлює лише керівник команди партнера;
   // менеджер — тільки з закупівель (оплачених або тих, що чекають на оплату).
@@ -496,8 +532,10 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     const f = listFilter(c, { client: true });
     const st = c.req.query('status');
     if (st && CLIENT_STATUS[st]) { f.where.push('o.status = ?'); f.params.push(st); }
+    const cs = String(c.req.query('crm_status') || '');
+    if (cs) { f.where.push(`o.status = 'crm' AND o.crm_status = ?`); f.params.push(cs); }
     const rows = await db.all(`${SELECT} WHERE o.partner_id = ? AND o.kind = 'client' ${f.where.map((w) => `AND ${w}`).join(' ')} ORDER BY o.id DESC LIMIT 300`, [p.id, ...f.params]);
-    return c.json({ rows: rows.map(publicOrder), statuses: CLIENT_STATUS });
+    return c.json({ rows: rows.map(publicOrder), statuses: CLIENT_STATUS, crm_statuses: await crmStatuses(p.id) });
   });
 
   async function myClientOrder(c, p) {
@@ -884,6 +922,8 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     const pid = parseInt(c.req.query('partner'), 10);
     if (VIEWS[v]) where.push(VIEWS[v]);
     if (pid) { where.push('o.partner_id = ?'); params.push(pid); }
+    const cs = String(c.req.query('crm_status') || '');
+    if (cs) { where.push(`o.status = 'crm' AND o.crm_status = ?`); params.push(cs); }
     const rows = await db.all(
       `SELECT o.*, s.status AS supply_status, p.name AS partner, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files
        FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id JOIN b2b_partners p ON p.id = o.partner_id
@@ -891,7 +931,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     );
     const cnt = await db.get(`SELECT SUM(o.status = 'new') AS new, SUM(o.status = 'crm') AS crm, SUM((o.supply_id IS NULL OR s.status = 'open') AND o.status != 'cancelled') AS nosupply,
       SUM(o.status = 'cancelled') AS cancelled FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id WHERE o.kind = 'client'`);
-    return c.json({ rows: rows.map(publicOrder), counts: cnt || {}, crm: (await crmConfig()).on });
+    return c.json({ rows: rows.map(publicOrder), counts: cnt || {}, crm: (await crmConfig()).on, crm_statuses: await crmStatuses(pid || null) });
   });
 
   async function clientOrder(c) {
