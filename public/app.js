@@ -352,14 +352,22 @@ async function route() {
   // Після «?» — параметри сторінки (напр. період виписки); у маршрут не входять.
   let [, name = homeRoute(), ...args] = location.hash.replace(/^#/, '').split('?')[0].split('/');
   if (!routes[name]) name = homeRoute();
-  const sec = sectionOf(name);
+  let sec = sectionOf(name);
+  // Посилання з нашого розділу B2B відкрив партнер (закладка, переслане, інший акаунт у цьому браузері) —
+  // та сама сторінка в кабінеті партнера; інший недоступний розділ — на головну, без «Немає доступу».
+  if (sec.perm && !can(sec.perm)) {
+    const P = { b2borders: 'porders', b2bclients: 'pclients', b2bstatement: 'pstatement', b2bstats: 'pstats', b2bprices: 'pprices', b2btrash: 'ptrash', b2bcatalog: 'pcatalog' };
+    const to = can('b2b.partner') && P[name] ? [P[name], ...(['b2borders', 'b2bclients'].includes(name) ? args.filter((x) => /^\d+$/.test(x)).slice(0, 1) : [])].join('/') : homeRoute();
+    if (to !== name) { location.replace(`#/${to}`); return; }
+  }
+  sec = sectionOf(name);
   const tab = sec.tabs.find((t) => t.id === name);
   // Розділ «Рахунки» для перегляду відкриває список, а не формування
   if (name === 'rahunky' && !can('docs.edit')) { location.hash = '#/rlist'; return; }
   activeRoute = name;
   document.body.classList.toggle('an-mode', sec.id === 'an');
   // Лише перегляд (напр., B2B для менеджера): кнопки змін сховані, сервер зміни й так не прийме.
-  main.classList.toggle('ro', Boolean(sec.edit && !can(sec.edit)));
+  main.classList.toggle('ro', Boolean(sec.edit && can(sec.perm) && !can(sec.edit)));
   renderNav(name);
   // На телефоні меню гортається вбік — активний пункт має бути видно
   for (const a of $$('.main-tabs a.active, .subnav a.active')) a.scrollIntoView({ block: 'nearest', inline: 'center' });
