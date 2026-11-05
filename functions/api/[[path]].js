@@ -7777,7 +7777,54 @@ ${link(c, `porders/${o.id}`)}`);
     if (!f) throw fail(404, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440 \u0449\u0435 \u043D\u0435 \u0434\u043E\u0434\u0430\u0432 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F (\u0430\u0431\u043E \u0444\u0430\u0439\u043B \u0441\u0442\u0430\u0440\u0448\u0438\u0439 \u0437\u0430 30 \u0434\u043D\u0456\u0432).");
     return sendFile(f);
   });
+  app.get("/api/b2b/supply-doc/:id", async (c) => {
+    need(c, "docs.view");
+    const f = await db.get(`SELECT f.* FROM b2b_files f JOIN b2b_orders o ON o.id = f.order_id
+      WHERE f.id = ? AND f.kind IN ('invoice', 'waybill') AND o.kind = 'supply' AND (o.crm_id != '' OR COALESCE(o.crm_ext, '') != '')`, [c.req.param("id")]);
+    if (!f) throw fail(404, "\u0424\u0430\u0439\u043B \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (\u0437\u0431\u0435\u0440\u0456\u0433\u0430\u044E\u0442\u044C\u0441\u044F 30 \u0434\u043D\u0456\u0432).");
+    return sendFile(f);
+  });
+  async function supplyCrmInfo(ids, comment) {
+    const m = /B2B-(\d+)\s*·\s*(?:САМОВИВІЗ|закупівля B2B)/.exec(String(comment || ""));
+    let o = m ? await db.get(`SELECT * FROM b2b_orders WHERE id = ? AND kind = 'supply'`, [Number(m[1])]) : null;
+    if (!o && ids.length) {
+      o = await db.get(`SELECT * FROM b2b_orders WHERE kind = 'supply' AND ((crm_id != '' AND crm_id IN (SELECT value FROM json_each(?)))
+        OR (COALESCE(crm_ext, '') != '' AND crm_ext IN (SELECT value FROM json_each(?)))) ORDER BY id DESC LIMIT 1`, [JSON.stringify(ids), JSON.stringify(ids)]);
+    }
+    if (!o) return null;
+    const [p, files, items] = await Promise.all([
+      db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [o.partner_id]),
+      db.all(`SELECT id, kind, name, created_at FROM b2b_files WHERE order_id = ? AND kind IN ('invoice', 'waybill') ORDER BY id DESC`, [o.id]),
+      db.all(`SELECT name, article, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id])
+    ]);
+    const last = (k) => files.find((f) => f.kind === k) || null;
+    const paid = ["paid", "done"].includes(o.status);
+    return {
+      kind: "supply",
+      id: o.id,
+      number: orderNo(o.id),
+      partner: p?.name || "",
+      status: o.status,
+      status_name: ORDER_STATUS[o.status] || o.status,
+      delivery: deliveryOf(o.delivery),
+      entity: o.entity || "",
+      pickup_by: parsePickup(o.pickup_by),
+      ship_to: parseShipTo(o.ship_to),
+      invoice_no: o.invoice_no || "",
+      invoice_date: o.invoice_date || "",
+      waybill_no: o.waybill_no || "",
+      total: o.total,
+      paid,
+      postpay: o.pay_terms === "postpay",
+      due: paid ? 0 : round2(o.total - (o.paid_amount || 0)),
+      invoice: last("invoice"),
+      waybill: last("waybill"),
+      items
+    };
+  }
   async function crmOrderInfo({ ids = [], comment = "" } = {}) {
+    const sup = await supplyCrmInfo([...new Set(ids.map((x) => String(x || "").trim()).filter(Boolean))], comment);
+    if (sup) return sup;
     const m = /B2B-(\d+)\s*·\s*B2B «/.exec(String(comment || ""));
     let o = m ? await db.get(`SELECT * FROM b2b_orders WHERE id = ? AND kind = 'client'`, [Number(m[1])]) : null;
     const list = [...new Set(ids.map((x) => String(x || "").trim()).filter(Boolean))];

@@ -83,9 +83,56 @@ async function loadInvoice(orderId, fresh = false, wide = false) {
   }
 }
 
+// Закупівля B2B, передана на склад (самовивіз або на склад партнера): накладну ФОП не формуємо — рахунок і накладна
+// вже є в закупівлі (на юрособу партнера); склад друкує їх і видає разом з товаром. При самовивозі — хто забирає.
+const phoneTxt = (ph) => { const d = String(ph || '').replace(/\D/g, ''); return d.length === 12 ? `+${d.slice(0, 2)} ${d.slice(2, 5)} ${d.slice(5, 8)} ${d.slice(8, 10)} ${d.slice(10)}` : d; };
+function renderB2bSupplyView() {
+  const b = current.b2b;
+  const o = current.order;
+  const pk = b.delivery === 'pickup';
+  const doc = (f, label, no) => (f ? `📄 <b>${esc(label)}${no ? ` № ${esc(no)}` : ''}</b> <span class="small muted">· ${esc(f.name)} · ${esc(fmtDateTime(f.created_at))}</span>`
+    : `<span class="badge bad">файлу ще немає</span>${no ? ` <span class="small">№ ${esc(no)}</span>` : ''} <span class="small muted">— бухгалтер додає його в закупівлю</span>`);
+  $('#invArea').innerHTML = `<div class="card form-stack" style="max-width:820px">
+      <h3 style="margin:0">${pk ? '🚗 Самовивіз — закупівля B2B партнера' : '🏬 Закупівля B2B на склад партнера'}</h3>
+      <div class="alert info">Накладна ФОП для закупівель B2B не формується: рахунок і накладна вже виставлені на юрособу партнера — роздрукуйте їх кнопками вгорі й ${pk ? 'видайте разом з товаром тому, хто забирає' : 'вкладіть у відправлення'}.</div>
+      ${b.paid ? '<div class="alert ok"><b>✅ Оплачено</b></div>'
+        : b.postpay ? `<div class="alert warn"><b>⏳ Відстрочка оплати</b> — до оплати ${esc(money(b.due))} грн; видавати можна.</div>`
+          : `<div class="alert bad"><b>⚠️ Ще не оплачено</b> — до оплати ${esc(money(b.due))} грн. Перед ${pk ? 'видачею' : 'відправкою'} узгодьте з менеджером B2B.</div>`}
+      ${pk ? `<div class="card" style="border-width:2px;border-color:var(--accent, #0f766e)"><div class="small muted">Хто забирає — звірте з документом</div>
+        ${b.pickup_by ? `<div style="font-size:18px;margin-top:4px"><b>${esc(b.pickup_by.name)}</b> · ${esc(phoneTxt(b.pickup_by.phone))}</div>${b.pickup_by.note ? `<div class="small">${esc(b.pickup_by.note)}</div>` : ''}`
+          : '<div><span class="badge bad">партнер ще не вказав</span> — уточніть у менеджера B2B.</div>'}</div>`
+        : b.ship_to ? `<div><b>Отримувач:</b> ${esc([b.ship_to.name, phoneTxt(b.ship_to.phone), b.ship_to.address].filter(Boolean).join(', '))}</div>` : ''}
+      <dl class="kv">
+        <dt>Замовлення LP-CRM</dt><dd>№${esc(o.orderId)}${o.shortId ? ` · ${esc(o.shortId)}` : ''}</dd>
+        <dt>Закупівля</dt><dd><b>${esc(b.number)}</b> · ${esc(b.partner)} · ${esc(b.status_name)}</dd>
+        <dt>Платник (юрособа)</dt><dd style="white-space:pre-line">${esc(String(b.entity || '—').split('\n')[0])}</dd>
+        <dt>Рахунок</dt><dd>${doc(b.invoice, 'Рахунок', b.invoice_no)}${b.invoice_date ? ` <span class="small muted">від ${esc(dateUa(b.invoice_date))}</span>` : ''}</dd>
+        <dt>Накладна</dt><dd>${doc(b.waybill, 'Накладна', b.waybill_no)}</dd>
+        <dt>Сума</dt><dd><b>${esc(money(b.total))} грн</b></dd>
+      </dl>
+      <table class="list"><thead><tr><th>Товар</th><th class="r">К-сть</th></tr></thead><tbody>
+        ${b.items.map((i) => `<tr><td>${esc(i.name)}${i.article ? `<div class="small muted">${esc(i.article)}</div>` : ''}</td><td class="r"><b>${i.qty}</b></td></tr>`).join('')}</tbody></table>
+      ${can('b2b.view') ? `<div><a class="btn sm" href="#/b2borders/${b.id}">Відкрити ${esc(b.number)} у B2B</a></div>` : ''}
+    </div>`;
+  $('#invActions').innerHTML = `${b.invoice ? `<button class="btn primary" data-sdoc="${b.invoice.id}">📄 Рахунок</button>` : '<button class="btn" disabled>📄 Рахунок</button>'}
+    ${b.waybill ? `<button class="btn primary" data-sdoc="${b.waybill.id}">📄 Накладна</button>` : '<button class="btn" disabled>📄 Накладна</button>'}
+    <button class="btn" id="actRefresh">Оновити з CRM</button>`;
+  $$('[data-sdoc]').forEach((btn) => (btn.onclick = async () => {
+    const win = window.open('', '_blank');
+    try {
+      const res = await fetch(`/api/b2b/supply-doc/${btn.dataset.sdoc}`);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Файл не отримано.');
+      const url = URL.createObjectURL(await res.blob());
+      if (win) win.location.href = url; else window.open(url, '_blank');
+    } catch (e) { if (win) win.close(); toast(e.message, true); }
+  }));
+  $('#actRefresh').onclick = () => loadInvoice(current.requestedId, true);
+}
+
 // Замовлення від B2B-партнера: накладну не формуємо — лише маркування, яке партнер додав у своє замовлення.
 function renderB2bView() {
   const b = current.b2b;
+  if (b.kind === 'supply') { renderB2bSupplyView(); return; }
   const o = current.order;
   $('#invArea').innerHTML = `<div class="card form-stack" style="max-width:760px">
       <h3 style="margin:0">📦 Замовлення від B2B партнера</h3>

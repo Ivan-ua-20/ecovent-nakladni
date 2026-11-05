@@ -86,6 +86,7 @@ textarea { resize: vertical; min-height: 64px; }
 .alert.bad { background: var(--bad-soft); color: var(--bad); }
 .alert.warn { background: var(--warn-soft); color: var(--warn); }
 .alert.info { background: var(--info-soft); color: #173aa8; }
+.alert.ok { background: var(--ok-soft); color: var(--ok); }
 
 /* ----- Накладна ----- */
 .order-bar { display: flex; gap: 10px; align-items: center; margin: -18px -24px 16px; padding: 12px 24px; flex-wrap: wrap; position: sticky; top: 0; z-index: 20; background: rgba(244, 245, 244, .96); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
