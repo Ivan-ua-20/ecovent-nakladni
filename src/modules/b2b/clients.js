@@ -8,6 +8,7 @@
 // номер замовлення з CRM вручну. Статус замовлення в CRM партнер бачить у кабінеті (оновлюється не частіше ніж раз на 10 хв).
 // Передачу в CRM вмикає адмін у «Налаштуваннях CRM» (ID відділу + перемикач) — коли ключ LP-CRM отримає дозвіл на addNewOrder.
 import { fail, need, nowIso, loadSettings, MASK } from '../../core/common.js';
+import { crmTone } from './crm-tone.js';
 import { can } from '../../core/auth.js';
 import { addNewOrder, getOrdersBatch, getStatuses, phpSerialize, phpUrlencode } from '../../integrations/lpcrm.js';
 import { CLIENT_STATUS, ORDER_STATUS, CLOSED_SQL, payState, orderNo, overdueDays } from './orders.js';
@@ -94,14 +95,6 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
   });
 
   // ---------------------------------------------------------------- статуси з CRM
-  // Тон статусу LP-CRM: ok — доставлено/виконано, bad — повернення/відмова, info — в дорозі/відправлено.
-  const crmTone = (name) => {
-    const n = String(name || '').toLowerCase();
-    if (/возв|поверн|отказ|відмов|відказ|отмен|скасов|не забр|невикуп|невыкуп/.test(n)) return 'bad';
-    if (/доставл|выполн|викон|получ|отрим|заверш|оплачен|оплачено|успіш|успеш|забра/.test(n)) return 'ok';
-    if (/отправ|відправ|в пути|в дороз|в дорог|на відділ|на отдел|у відділ|в отдел|прибув|прибыл|ожида|очіку/.test(n)) return 'info';
-    return '';
-  };
   // Статуси LP-CRM у замовленнях клієнтів (для фільтра) з кількістю.
   const crmStatuses = (partnerId) => db.all(`SELECT crm_status AS name, COUNT(*) AS n FROM b2b_orders WHERE kind = 'client' AND status = 'crm' AND crm_status != ''
     ${partnerId ? 'AND partner_id = ?' : ''} GROUP BY crm_status ORDER BY n DESC LIMIT 40`, partnerId ? [partnerId] : []);
