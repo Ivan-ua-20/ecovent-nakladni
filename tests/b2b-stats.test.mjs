@@ -112,6 +112,30 @@ assert.equal(st.series.at(-1).cnt, expCnt, 'сьогоднішні замовл�
 assert.equal(st.weekdays.reduce((t, n) => t + n, 0), expCnt);
 assert.equal(st.partners, undefined, 'партнер не бачить рейтингу інших');
 assert.equal(st.salesPrev.cnt, 0);
+// фільтри: бренд / категорія лишають у замовленнях тільки свої товари; «лише доставлені» — за статусом LP-CRM
+assert.deepEqual(st.facets.brands.map((b) => b.name).sort(), ['Other', 'TestBrand']);
+assert.equal(st.facets.cats.find((c) => c.name === 'Обігрівачі').units, 1);
+const heat = await req('GET', '/api/b2b/p/stats?cats=6', null, A);
+assert.equal(heat.sales.cnt, 1, 'тільки замовлення з обігрівачем');
+assert.equal(heat.sales.sum, 1600, 'сума — лише відфільтровані товари');
+assert.equal(heat.products.length, 1);
+assert.equal(heat.facets.brands.length, 1, 'бренди — в межах обраної категорії');
+assert.equal(heat.facets.cats.length, 2, 'категорії — усі, щоб можна було додати');
+const fan901 = await req('GET', '/api/b2b/p/stats?brands=901', null, A);
+assert.equal(fan901.sales.sum, sum - 1600);
+assert.equal(fan901.series.reduce((t, r) => t + r.earn, 0), fan901.sales.earn, 'заробіток по днях = загальному');
+assert.equal((await req('GET', '/api/b2b/p/stats?delivered=1', null, A)).sales.cnt, 0, 'ще нічого не доставлено');
+await db.run(`UPDATE b2b_orders SET crm_status = 'Виконано' WHERE id = ?`, [c1.id]);
+await db.run(`UPDATE b2b_orders SET crm_status = 'Повернення' WHERE id = ?`, [c2.id]);
+const st2 = await req('GET', '/api/b2b/p/stats', null, A);
+assert.deepEqual([st2.delivery.ok, st2.delivery.bad], [1, 1]);
+assert.equal(st2.sales.returns, 1);
+assert.equal(st2.sales.returnsPct, Math.round((1 / expCnt) * 10000) / 100);
+const dl = await req('GET', '/api/b2b/p/stats?delivered=1', null, A);
+assert.equal(dl.sales.cnt, 1);
+assert.equal(dl.sales.sum, 2700);
+assert.equal(dl.filters.delivered, true);
+assert.equal((await req('GET', '/api/b2b/p/stats?brands=abc,1;drop', null, A)).filters.brands.length, 0, 'сміття у фільтрі ігнорується');
 // період без даних
 assert.equal((await req('GET', '/api/b2b/p/stats?from=2020-01-01&to=2020-01-31', null, A)).sales.cnt, 0);
 // ізоляція

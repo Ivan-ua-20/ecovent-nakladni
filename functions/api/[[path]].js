@@ -7873,6 +7873,15 @@ ${link(c, `porders/${o.id}`)}`);
   return { parsePickup, pickupTxt, itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, sendFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h3 };
 }
 
+// src/modules/b2b/crm-tone.js
+var crmTone = (name) => {
+  const n = String(name || "").toLowerCase();
+  if (/возв|поверн|отказ|відмов|відказ|отмен|скасов|не забр|невикуп|невыкуп/.test(n)) return "bad";
+  if (/доставл|выполн|викон|получ|отрим|заверш|оплачен|оплачено|успіш|успеш|забра/.test(n)) return "ok";
+  if (/отправ|відправ|в пути|в дороз|в дорог|на відділ|на отдел|у відділ|в отдел|прибув|прибыл|ожида|очіку/.test(n)) return "info";
+  return "";
+};
+
 // src/modules/b2b/clients.js
 var CRM_REFRESH_MIN = 10;
 var CRM_TRACK_DAYS = 60;
@@ -7964,13 +7973,6 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     await db.batch(st);
     return c.json({ ok: true });
   });
-  const crmTone = (name) => {
-    const n = String(name || "").toLowerCase();
-    if (/возв|поверн|отказ|відмов|відказ|отмен|скасов|не забр|невикуп|невыкуп/.test(n)) return "bad";
-    if (/доставл|выполн|викон|получ|отрим|заверш|оплачен|оплачено|успіш|успеш|забра/.test(n)) return "ok";
-    if (/отправ|відправ|в пути|в дороз|в дорог|на відділ|на отдел|у відділ|в отдел|прибув|прибыл|ожида|очіку/.test(n)) return "info";
-    return "";
-  };
   const crmStatuses = (partnerId) => db.all(`SELECT crm_status AS name, COUNT(*) AS n FROM b2b_orders WHERE kind = 'client' AND status = 'crm' AND crm_status != ''
     ${partnerId ? "AND partner_id = ?" : ""} GROUP BY crm_status ORDER BY n DESC LIMIT 40`, partnerId ? [partnerId] : []);
   async function statusNames(creds) {
@@ -9057,6 +9059,7 @@ ${link(c, `pclients/${o.id}`)}`);
 // src/modules/b2b/stats.js
 var DAY = 864e5;
 var addDays2 = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * DAY).toISOString().slice(0, 10);
+var idSet = (v) => new Set(String(v || "").split(",").filter((x) => /^\d+$/.test(x)).map(Number));
 var daysBetween2 = (a, b) => Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / DAY) + 1;
 function mountB2bStats(app, { db, myPartner }) {
   async function names() {
@@ -9087,22 +9090,78 @@ function mountB2bStats(app, { db, myPartner }) {
     }
     const cur = orders.filter((o) => o.cur);
     const prev = orders.filter((o) => !o.cur);
-    const items = cur.length ? await db.all(
-      `SELECT order_id, product_id, name, qty, price, rrp FROM b2b_order_items WHERE order_id IN (SELECT value FROM json_each(?))`,
-      [JSON.stringify(cur.map((o) => o.id))]
-    ) : [];
-    const prevItems = prev.length ? await db.all(
-      `SELECT order_id, qty, price, rrp FROM b2b_order_items WHERE order_id IN (SELECT value FROM json_each(?))`,
-      [JSON.stringify(prev.filter((o) => o.kind === "client").map((o) => o.id))]
-    ) : [];
-    const kindOf3 = new Map(orders.map((o) => [o.id, o.kind]));
-    const sales = (list, its) => {
-      const ids = new Set(list.filter((o) => o.kind === "client").map((o) => o.id));
-      const li = its.filter((i) => ids.has(i.order_id));
-      const sum = round2(list.filter((o) => o.kind === "client").reduce((t, o) => t + o.total, 0));
-      const rrp = round2(li.reduce((t, i) => t + (i.rrp || i.price) * i.qty, 0));
-      const cnt = ids.size;
-      return { cnt, units: li.reduce((t, i) => t + i.qty, 0), sum, rrp, earn: round2(rrp - sum), avg: cnt ? round2(sum / cnt) : 0, perDay: round2(cnt / days) };
+    const clientIds = (list) => JSON.stringify(list.filter((o) => o.kind === "client").map((o) => o.id));
+    const [items, prevItems] = await Promise.all([
+      cur.length ? db.all(`SELECT order_id, product_id, name, qty, price, rrp FROM b2b_order_items WHERE order_id IN (SELECT value FROM json_each(?))`, [clientIds(cur)]) : [],
+      prev.length ? db.all(`SELECT order_id, product_id, qty, price, rrp FROM b2b_order_items WHERE order_id IN (SELECT value FROM json_each(?))`, [clientIds(prev)]) : []
+    ]);
+    const pids = [...new Set([...items, ...prevItems].map((i) => i.product_id))];
+    const meta = pids.length ? new Map((await db.all(
+      `SELECT c.product_id, c.brand_id, COALESCE(p.cat_manual, p.category_id) AS cat FROM b2b_catalog c LEFT JOIN an_products p ON p.product_id = c.product_id
+       WHERE c.product_id IN (SELECT value FROM json_each(?))`,
+      [JSON.stringify(pids)]
+    ).catch(() => [])).map((r) => [r.product_id, r])) : /* @__PURE__ */ new Map();
+    const brandOf2 = (i) => meta.get(i.product_id)?.brand_id || 0;
+    const catOf = (i) => meta.get(i.product_id)?.cat || 0;
+    const nm = await names();
+    const fBrands = idSet(q.brands);
+    const fCats = idSet(q.cats);
+    const delivered = q.delivered === "1";
+    const byItems = fBrands.size > 0 || fCats.size > 0;
+    const okOrder = (o) => o.kind === "client" && (!delivered || crmTone(o.crm_status) === "ok");
+    const facet = (keyOf, nameOf, other) => {
+      const ok = new Set(cur.filter(okOrder).map((o) => o.id));
+      const m = /* @__PURE__ */ new Map();
+      for (const i of items) {
+        if (!ok.has(i.order_id) || other.size && !other.has(other === fBrands ? brandOf2(i) : catOf(i))) continue;
+        const k = keyOf(i);
+        const r = m.get(k) || { id: k, name: nameOf(k), units: 0 };
+        r.units += i.qty;
+        m.set(k, r);
+      }
+      return [...m.values()].sort((a, b) => b.units - a.units);
+    };
+    const facets = {
+      brands: facet(brandOf2, (k) => nm.brand.get(k) || "\u0406\u043D\u0448\u0456", fCats),
+      cats: facet(catOf, (k) => nm.cat.get(k) || "\u0411\u0435\u0437 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457", fBrands)
+    };
+    const itemOk = (i) => (!fBrands.size || fBrands.has(brandOf2(i))) && (!fCats.size || fCats.has(catOf(i)));
+    const filterOrders = (list, its) => {
+      const byOrder = /* @__PURE__ */ new Map();
+      for (const i of its) if (itemOk(i)) {
+        const a = byOrder.get(i.order_id) || [];
+        a.push(i);
+        byOrder.set(i.order_id, a);
+      }
+      const out2 = [];
+      for (const o of list) {
+        if (!okOrder(o)) continue;
+        const li = byOrder.get(o.id) || [];
+        if (byItems && !li.length) continue;
+        const sum = byItems ? round2(li.reduce((t, i) => t + i.price * i.qty, 0)) : o.total;
+        const rrp = round2(li.reduce((t, i) => t + (i.rrp || i.price) * i.qty, 0));
+        out2.push({ ...o, fsum: sum, frrp: rrp, funits: li.reduce((t, i) => t + i.qty, 0), fitems: li });
+      }
+      return out2;
+    };
+    const curF = filterOrders(cur, items);
+    const prevF = filterOrders(prev, prevItems);
+    const sales = (list) => {
+      const sum = round2(list.reduce((t, o) => t + o.fsum, 0));
+      const rrp = round2(list.reduce((t, o) => t + o.frrp, 0));
+      const cnt = list.length;
+      const bad = list.filter((o) => crmTone(o.crm_status) === "bad").length;
+      return {
+        cnt,
+        units: list.reduce((t, o) => t + o.funits, 0),
+        sum,
+        rrp,
+        earn: round2(rrp - sum),
+        avg: cnt ? round2(sum / cnt) : 0,
+        perDay: round2(cnt / days),
+        returns: bad,
+        returnsPct: cnt ? round2(bad / cnt * 100) : 0
+      };
     };
     const supplies = (list) => {
       const s = list.filter((o) => o.kind === "supply");
@@ -9111,28 +9170,22 @@ function mountB2bStats(app, { db, myPartner }) {
     const series = [];
     const byDay = /* @__PURE__ */ new Map();
     for (let d = from; d <= to && series.length < 400; d = nextDay(d)) {
-      const r = { d, cnt: 0, sum: 0, supply: 0 };
+      const r = { d, cnt: 0, sum: 0, earn: 0, supply: 0 };
       series.push(r);
       byDay.set(d, r);
     }
-    for (const o of cur) {
+    for (const o of curF) {
       const r = byDay.get(o.day);
-      if (!r) continue;
-      if (o.kind === "client") {
+      if (r) {
         r.cnt++;
-        r.sum = round2(r.sum + o.total);
-      } else r.supply = round2(r.supply + o.total);
+        r.sum = round2(r.sum + o.fsum);
+        r.earn = round2(r.earn + o.frrp - o.fsum);
+      }
     }
+    for (const o of cur) if (o.kind === "supply" && byDay.get(o.day)) byDay.get(o.day).supply = round2(byDay.get(o.day).supply + o.total);
     const weekdays = [0, 0, 0, 0, 0, 0, 0];
-    for (const o of cur) if (o.kind === "client") weekdays[((/* @__PURE__ */ new Date(`${o.day}T12:00:00Z`)).getUTCDay() + 6) % 7]++;
-    const clientItems = items.filter((i) => kindOf3.get(i.order_id) === "client");
-    const pids = [...new Set(clientItems.map((i) => i.product_id))];
-    const meta = pids.length ? new Map((await db.all(
-      `SELECT c.product_id, c.brand_id, COALESCE(p.cat_manual, p.category_id) AS cat FROM b2b_catalog c LEFT JOIN an_products p ON p.product_id = c.product_id
-       WHERE c.product_id IN (SELECT value FROM json_each(?))`,
-      [JSON.stringify(pids)]
-    ).catch(() => [])).map((r) => [r.product_id, r])) : /* @__PURE__ */ new Map();
-    const nm = await names();
+    for (const o of curF) weekdays[((/* @__PURE__ */ new Date(`${o.day}T12:00:00Z`)).getUTCDay() + 6) % 7]++;
+    const clientItems = curF.flatMap((o) => o.fitems);
     const agg = (keyOf, nameOf) => {
       const m = /* @__PURE__ */ new Map();
       for (const i of clientItems) {
@@ -9155,12 +9208,14 @@ function mountB2bStats(app, { db, myPartner }) {
       })).sort((a, b) => b.sum - a.sum);
     };
     const products = agg((i) => i.product_id, (i) => i.name).slice(0, 100);
-    const categories = agg((i) => meta.get(i.product_id)?.cat || 0, (i, k) => nm.cat.get(k) || "\u0411\u0435\u0437 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457");
-    const brands = agg((i) => meta.get(i.product_id)?.brand_id ?? 0, (i, k) => nm.brand.get(k) || "\u0406\u043D\u0448\u0456");
+    const categories = agg(catOf, (i, k) => nm.cat.get(k) || "\u0411\u0435\u0437 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457");
+    const brands = agg(brandOf2, (i, k) => nm.brand.get(k) || "\u0406\u043D\u0448\u0456");
     const crm = /* @__PURE__ */ new Map();
-    for (const o of cur) if (o.kind === "client") {
+    const delivery = { ok: 0, info: 0, bad: 0, none: 0 };
+    for (const o of curF) {
       const k = o.crm_status || (o.status === "crm" ? "\u041F\u0435\u0440\u0435\u0434\u0430\u043D\u043E" : "\u0429\u0435 \u043D\u0435 \u0432 CRM");
       crm.set(k, (crm.get(k) || 0) + 1);
+      delivery[crmTone(o.crm_status) || "none"]++;
     }
     const [debt, stockIn, stockOut] = await Promise.all([
       db.get(`SELECT SUM(CASE WHEN o.status = 'invoice_wait' THEN o.total ELSE 0 END) AS wait,
@@ -9172,13 +9227,16 @@ function mountB2bStats(app, { db, myPartner }) {
       db.get(`SELECT SUM(i.qty) AS units, SUM(i.qty * i.price) AS sum FROM b2b_order_items i JOIN b2b_orders o ON o.id = i.order_id
         WHERE o.kind = 'client' AND o.status != 'cancelled' AND o.supply_id IS NOT NULL ${byPartner}`, pp)
     ]);
-    const noSupply = cur.filter((o) => o.kind === "client" && (!o.supply_id || o.supply_status === "open")).length;
-    const unpaidClients = cur.filter((o) => o.kind === "client" && !(o.supply_id ? ["paid", "done"].includes(o.supply_status) : o.paid_at)).length;
+    const noSupply = curF.filter((o) => !o.supply_id || o.supply_status === "open").length;
+    const unpaidClients = curF.filter((o) => !(o.supply_id ? ["paid", "done"].includes(o.supply_status) : o.paid_at)).length;
     const out = {
       period: { from, to, days },
       prev: { from: prevFrom, to: prevTo },
-      sales: sales(cur, items),
-      salesPrev: sales(prev, prevItems),
+      sales: sales(curF),
+      salesPrev: sales(prevF),
+      filters: { brands: [...fBrands], cats: [...fCats], delivered },
+      facets,
+      delivery,
       supplies: supplies(cur),
       suppliesPrev: supplies(prev),
       noSupply,
@@ -9190,7 +9248,7 @@ function mountB2bStats(app, { db, myPartner }) {
       products,
       categories,
       brands,
-      crm: [...crm].map(([status, n]) => ({ status, n })).sort((a, b) => b.n - a.n)
+      crm: [...crm].map(([status, n]) => ({ status, n, tone: crmTone(status) })).sort((a, b) => b.n - a.n)
     };
     if (!partnerId) {
       const ps = new Map((await db.all(`SELECT id, name FROM b2b_partners`)).map((p) => [p.id, { id: p.id, name: p.name, cnt: 0, sum: 0, supply: 0 }]));
