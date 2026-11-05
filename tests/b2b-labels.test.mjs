@@ -217,6 +217,11 @@ kdd = await req('GET', `/api/b2b/p/clients/${kd.id}`, null, A);
 assert.deepEqual(kdd.missing, ['маркування']);
 assert.deepEqual(kdd.files.map((f) => f.kind_name).sort(), ['Гарантійний талон', 'Чек для клієнта']);
 assert.deepEqual((await req('GET', `/api/b2b/orders/${kd.id}`)).missing, ['маркування'], 'адмін бачить, чого бракує');
+// сторінка «Накладні»: документи партнера до замовлення клієнта — відкриваються за правом docs.view
+const docIds = (await db.all(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = 'doc' ORDER BY id`, [kd.id])).map((r) => r.id);
+assert.equal(docIds.length, 2);
+assert.equal((await app.request(`/api/b2b/client-doc/${docIds[0]}`, { headers: { Cookie: H.Cookie } })).status, 200);
+assert.equal((await app.request(`/api/b2b/client-doc/${docIds[0]}`, { headers: { Cookie: A.Cookie } })).status, 403, 'партнеру — ні');
 // вид документа прибрали — у старому замовленні назва лишається
 dt = (await req('PUT', '/api/b2b/p/doc-types', { types: [{ id: dt[0].id, name: 'Чек для клієнта', required: true, print: true }] }, A)).types;
 assert.equal(dt.length, 1);

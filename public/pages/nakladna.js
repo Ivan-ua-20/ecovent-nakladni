@@ -136,18 +136,31 @@ function renderB2bView() {
   const o = current.order;
   $('#invArea').innerHTML = `<div class="card form-stack" style="max-width:760px">
       <h3 style="margin:0">📦 Замовлення від B2B партнера</h3>
-      <div class="alert info">Накладна для замовлень від B2B-партнерів не формується. Маркування додав партнер — кнопка «Маркування» відкриє його файл.</div>
+      <div class="alert info">Накладна для замовлень від B2B-партнерів не формується. Маркування й документи додав партнер — кнопки вгорі відкривають їхні файли (📄 — до друку й вкладення в посилку).</div>
+      ${b.missing?.length ? `<div class="alert bad">Партнер ще не додав обов’язкове: <b>${b.missing.map(esc).join(', ')}</b></div>` : ''}
       <dl class="kv">
         <dt>Замовлення LP-CRM</dt><dd>№${esc(o.orderId)}${o.shortId ? ` · ${esc(o.shortId)}` : ''}</dd>
         <dt>Партнер</dt><dd><b>${esc(b.partner)}</b> · ${esc(b.number)}</dd>
         <dt>Клієнт</dt><dd>${esc(b.client_name || o.buyer?.name || '')}</dd>
         ${b.ttn ? `<dt>ТТН партнера</dt><dd>${esc(b.ttn)}</dd>` : ''}
         <dt>Маркування</dt><dd>${b.label ? `📎 ${esc(b.label.name)} <span class="small muted">· ${esc(fmtDateTime(b.label.created_at))}</span>` : '<span class="badge bad">партнер ще не додав (або файл старший за 30 днів)</span>'}</dd>
+        <dt>Документи</dt><dd>${(b.docs || []).length ? b.docs.map((d) => `<div>${d.print ? '📄' : '📎'} <b>${esc(d.title)}</b> <span class="small muted">· ${esc(d.name)} · ${esc(fmtDateTime(d.created_at))}${d.print ? ' · друкувати' : ''}</span></div>`).join('') : '<span class="small muted">немає</span>'}</dd>
       </dl>
       ${can('b2b.admin') ? `<div><a class="btn sm" href="#/b2bclients/${b.id}">Відкрити ${esc(b.number)} у B2B</a></div>` : ''}
     </div>`;
-  $('#invActions').innerHTML = `<button class="btn primary" id="actNp" ${b.label ? '' : 'disabled'}>Маркування</button><button class="btn" id="actRefresh">Оновити з CRM</button>`;
+  $('#invActions').innerHTML = `<button class="btn primary" id="actNp" ${b.label ? '' : 'disabled'}>Маркування</button>
+    ${(b.docs || []).map((d) => `<button class="btn ${d.print ? 'primary' : ''}" data-cdoc="${d.id}" title="${esc(d.name)}">${d.print ? '📄' : '📎'} ${esc(d.title)}</button>`).join('')}
+    <button class="btn" id="actRefresh">Оновити з CRM</button>`;
   $('#actNp').onclick = () => npMarking($('#actNp'));
+  $$('[data-cdoc]').forEach((btn) => (btn.onclick = async () => {
+    const win = window.open('', '_blank');
+    try {
+      const res = await fetch(`/api/b2b/client-doc/${btn.dataset.cdoc}`);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Файл не отримано.');
+      const url = URL.createObjectURL(await res.blob());
+      if (win) win.location.href = url; else window.open(url, '_blank');
+    } catch (e) { if (win) win.close(); toast(e.message, true); }
+  }));
   $('#actRefresh').onclick = () => loadInvoice(current.requestedId, true);
 }
 
