@@ -7777,6 +7777,12 @@ ${link(c, `porders/${o.id}`)}`);
     if (!f) throw fail(404, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440 \u0449\u0435 \u043D\u0435 \u0434\u043E\u0434\u0430\u0432 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F (\u0430\u0431\u043E \u0444\u0430\u0439\u043B \u0441\u0442\u0430\u0440\u0448\u0438\u0439 \u0437\u0430 30 \u0434\u043D\u0456\u0432).");
     return sendFile(f);
   });
+  app.get("/api/b2b/client-doc/:id", async (c) => {
+    need(c, "docs.view");
+    const f = await db.get(`SELECT f.* FROM b2b_files f JOIN b2b_orders o ON o.id = f.order_id WHERE f.id = ? AND o.kind = 'client'`, [c.req.param("id")]);
+    if (!f) throw fail(404, "\u0424\u0430\u0439\u043B \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (\u0437\u0431\u0435\u0440\u0456\u0433\u0430\u044E\u0442\u044C\u0441\u044F 30 \u0434\u043D\u0456\u0432).");
+    return sendFile(f);
+  });
   app.get("/api/b2b/supply-doc/:id", async (c) => {
     need(c, "docs.view");
     const f = await db.get(`SELECT f.* FROM b2b_files f JOIN b2b_orders o ON o.id = f.order_id
@@ -7837,11 +7843,26 @@ ${link(c, `porders/${o.id}`)}`);
       );
     }
     if (!o) return null;
-    const [p, label] = await Promise.all([
+    const [p, label, files] = await Promise.all([
       db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [o.partner_id]),
-      db.get(`SELECT id, name, mime, created_at FROM b2b_files WHERE order_id = ? AND kind = 'label' ORDER BY id DESC LIMIT 1`, [o.id])
+      db.get(`SELECT id, name, mime, created_at FROM b2b_files WHERE order_id = ? AND kind = 'label' ORDER BY id DESC LIMIT 1`, [o.id]),
+      // Усі документи партнера до замовлення (крім маркування): вид документа, чи друкувати («Чек для клієнта» тощо).
+      db.all(`SELECT f.id, f.kind, f.name, f.created_at, t.name AS type_name, COALESCE(t.print, 1) AS print
+        FROM b2b_files f LEFT JOIN b2b_doc_types t ON t.id = f.doc_type WHERE f.order_id = ? AND f.kind != 'label' ORDER BY COALESCE(t.sort, 99), f.id`, [o.id])
     ]);
-    return { id: o.id, number: orderNo(o.id), partner: p?.name || "", client_name: o.client_name, ttn: o.ttn || "", status: o.status, label: label || null };
+    const types = await db.all(`SELECT id, name FROM b2b_doc_types WHERE partner_id = ? AND active = 1 AND required = 1 ORDER BY sort, id`, [o.partner_id]);
+    const have = new Set(files.map((f) => f.type_name).filter(Boolean));
+    return {
+      id: o.id,
+      number: orderNo(o.id),
+      partner: p?.name || "",
+      client_name: o.client_name,
+      ttn: o.ttn || "",
+      status: o.status,
+      label: label || null,
+      docs: files.map((f) => ({ id: f.id, name: f.name, created_at: f.created_at, title: f.type_name || FILE_KIND[f.kind] || "\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442", print: Boolean(f.print) })),
+      missing: types.filter((t) => !have.has(t.name)).map((t) => t.name)
+    };
   }
   app.get("/api/b2b/p/files/:id", async (c) => {
     const p = await myPartner(c);
