@@ -1107,8 +1107,42 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (!f) throw fail(404, 'Партнер ще не додав маркування (або файл старший за 30 днів).');
     return sendFile(f);
   });
+  // Рахунок / накладна закупівлі B2B для сторінки накладної (склад видає їх кур'єру партнера при самовивозі).
+  app.get('/api/b2b/supply-doc/:id', async (c) => {
+    need(c, 'docs.view');
+    const f = await db.get(`SELECT f.* FROM b2b_files f JOIN b2b_orders o ON o.id = f.order_id
+      WHERE f.id = ? AND f.kind IN ('invoice', 'waybill') AND o.kind = 'supply' AND (o.crm_id != '' OR COALESCE(o.crm_ext, '') != '')`, [c.req.param('id')]);
+    if (!f) throw fail(404, 'Файл не знайдено (зберігаються 30 днів).');
+    return sendFile(f);
+  });
+  // Закупівля B2B, передана в LP-CRM (самовивіз або на склад партнера): за «B2B-… · САМОВИВІЗ / закупівля B2B» у коментарі або за № / кодом.
+  async function supplyCrmInfo(ids, comment) {
+    const m = /B2B-(\d+)\s*·\s*(?:САМОВИВІЗ|закупівля B2B)/.exec(String(comment || ''));
+    let o = m ? await db.get(`SELECT * FROM b2b_orders WHERE id = ? AND kind = 'supply'`, [Number(m[1])]) : null;
+    if (!o && ids.length) {
+      o = await db.get(`SELECT * FROM b2b_orders WHERE kind = 'supply' AND ((crm_id != '' AND crm_id IN (SELECT value FROM json_each(?)))
+        OR (COALESCE(crm_ext, '') != '' AND crm_ext IN (SELECT value FROM json_each(?)))) ORDER BY id DESC LIMIT 1`, [JSON.stringify(ids), JSON.stringify(ids)]);
+    }
+    if (!o) return null;
+    const [p, files, items] = await Promise.all([
+      db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [o.partner_id]),
+      db.all(`SELECT id, kind, name, created_at FROM b2b_files WHERE order_id = ? AND kind IN ('invoice', 'waybill') ORDER BY id DESC`, [o.id]),
+      db.all(`SELECT name, article, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]),
+    ]);
+    const last = (k) => files.find((f) => f.kind === k) || null;
+    const paid = ['paid', 'done'].includes(o.status);
+    return {
+      kind: 'supply', id: o.id, number: orderNo(o.id), partner: p?.name || '', status: o.status, status_name: ORDER_STATUS[o.status] || o.status,
+      delivery: deliveryOf(o.delivery), entity: o.entity || '', pickup_by: parsePickup(o.pickup_by), ship_to: parseShipTo(o.ship_to),
+      invoice_no: o.invoice_no || '', invoice_date: o.invoice_date || '', waybill_no: o.waybill_no || '', total: o.total,
+      paid, postpay: o.pay_terms === 'postpay', due: paid ? 0 : round2(o.total - (o.paid_amount || 0)),
+      invoice: last('invoice'), waybill: last('waybill'), items,
+    };
+  }
   // Чи замовлення LP-CRM — від B2B-партнера: за «B2B-…» у коментарі (так ми передаємо в CRM), інакше за № / кодом у CRM.
   async function crmOrderInfo({ ids = [], comment = '' } = {}) {
+    const sup = await supplyCrmInfo([...new Set(ids.map((x) => String(x || '').trim()).filter(Boolean))], comment);
+    if (sup) return sup;
     const m = /B2B-(\d+)\s*·\s*B2B «/.exec(String(comment || ''));
     let o = m ? await db.get(`SELECT * FROM b2b_orders WHERE id = ? AND kind = 'client'`, [Number(m[1])]) : null;
     const list = [...new Set(ids.map((x) => String(x || '').trim()).filter(Boolean))];

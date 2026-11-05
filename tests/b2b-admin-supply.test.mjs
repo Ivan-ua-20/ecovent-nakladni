@@ -145,6 +145,18 @@ assert.ok(d.order.crm_id || d.order.crm_ext);
 assert.ok(d.history.some((x) => /склад готує самовивіз/.test(x.action)));
 assert.ok(tg.some((m) => /готуємо до самовивозу/.test(m.text)), 'партнеру — що склад готує');
 assert.match(await errOf(() => req('POST', `/api/b2b/orders/${pk.id}/crm`)), /Уже в LP-CRM/);
+// сторінка «Накладні»: рахунок і накладна закупівлі (склад друкує й видає кур'єру) — за правом docs.view
+const up = await mk().request(`/api/b2b/orders/${pk.id}/files?kind=invoice`, { method: 'POST', headers: { Cookie: H.Cookie, 'Content-Type': 'application/pdf', 'X-File-Name': 'rahunok.pdf' }, body: new Uint8Array([37, 80, 68, 70, 1]) }).then((r) => r.json());
+const fid = (await db.get(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = 'invoice' ORDER BY id DESC`, [pk.id])).id;
+assert.ok(up && fid);
+const dl = await mk().request(`/api/b2b/supply-doc/${fid}`, { headers: { Cookie: H.Cookie } });
+assert.equal(dl.status, 200);
+assert.equal((await mk().request(`/api/b2b/supply-doc/${fid}`, { headers: { Cookie: A.Cookie } })).status, 403, 'партнер — ні');
+const np0 = await req('POST', '/api/b2b/p/orders', { entity_id: ea.id, items: [{ product_id: 12, qty: 1 }] }, A);
+await mk().request(`/api/b2b/orders/${np0.id}/files?kind=invoice`, { method: 'POST', headers: { Cookie: H.Cookie, 'Content-Type': 'application/pdf', 'X-File-Name': 'r2.pdf' }, body: new Uint8Array([37, 80, 68, 70, 2]) });
+const fid2 = (await db.get(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = 'invoice'`, [np0.id])).id;
+assert.equal((await mk().request(`/api/b2b/supply-doc/${fid2}`, { headers: { Cookie: H.Cookie } })).status, 404, 'лише закупівлі, передані на склад');
+
 // змінили, хто забирає, після передачі на склад — адмінам: оновіть у LP-CRM
 tg.length = 0;
 await req('PUT', `/api/b2b/p/orders/${pk.id}/pickup`, { name: 'Петро Кур’єр', phone: '0501234567' }, A);
