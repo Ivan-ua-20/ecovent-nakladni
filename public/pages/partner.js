@@ -2,7 +2,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
@@ -37,7 +37,7 @@ export function createPartnerPages(ctx = {}) {
     });
   }
   const supFilter = { status: '', q: '', from: '', to: '' };
-  const cliFilter = { status: '', q: '', from: '', to: '', pay: '' };
+  const cliFilter = { status: '', q: '', from: '', to: '', pay: '', crm_status: '' };
   const filter = { brand: '', q: '', cat: '', sort: 'brand' };
 
   // Пауза: нові закупівлі й замовлення тимчасово недоступні (ставить менеджер).
@@ -312,6 +312,7 @@ export function createPartnerPages(ctx = {}) {
       ${ob.html}
       <div class="head-row"><h2>Закупівля ${esc(o.number)} ${statusBadge(o)}</h2>
         <div class="btn-row"><a class="btn" href="#/porders">← До списку</a>
+          ${['pay_wait', 'partial', 'paid', 'done'].includes(o.status) && canEdit() ? '<button class="btn" id="oClaim">🛠 Брак / обмін</button>' : ''}
           ${isDraft && head ? '<button class="btn primary" id="oSend">Відправити закупівлю</button>' : ''}
           ${editable ? `<a class="btn" href="#/porders/${o.id}/edit">Змінити</a><button class="btn danger" id="oCancel">${isDraft ? 'Видалити чернетку' : 'Скасувати'}</button>` : ''}</div></div>
       ${toConfirm ? `<div class="card form-stack" style="margin-bottom:12px;border-color:var(--warn)">
@@ -356,6 +357,7 @@ export function createPartnerPages(ctx = {}) {
         </div>
       </div>`;
     ob.wire(() => viewOrder(o.id));
+    if ($('#oClaim')) $('#oClaim').onclick = () => ctx.openClaimForm(o.id).catch((e) => toast(e.message, true));
     if (o.delivery === 'pickup') wirePickupCard(o, `/api/b2b/p/orders/${o.id}/pickup`, () => viewOrder(o.id), couriers);
     $('#oCancel') && ($('#oCancel').onclick = async () => {
       if (isDraft) {
@@ -499,28 +501,30 @@ export function createPartnerPages(ctx = {}) {
     if (id && mode === 'edit') return clientForm(id);
     if (id) return viewClient(id);
     const qs = filterQs(cliFilter);
-    const [{ rows, statuses }, ob] = await Promise.all([api('GET', `/api/b2b/p/clients${qs ? `?${qs}` : ''}`), openBanner()]);
+    const [{ rows, statuses, crm_statuses: crmSts = [] }, ob] = await Promise.all([api('GET', `/api/b2b/p/clients${qs ? `?${qs}` : ''}`), openBanner()]);
     main.innerHTML = `
       <div class="head-row"><h2>Замовлення клієнтів</h2>${canEdit() ? '<a class="btn primary" href="#/pclients/new">+ Замовлення клієнта</a>' : ''}</div>
       ${ob.html}
       <div class="small muted" style="margin-bottom:10px">Замовлення, яке ви оформлюєте для свого клієнта: товари з вашої закупівлі, ваша ТТН і маркування.
         <span class="badge bad">Без закупівлі</span> — товари не з закупівлі, менеджер виставить рахунок окремо.</div>
       <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap"><button class="chip ${cliFilter.status ? '' : 'on'}" data-pst="">Усі</button>
-        ${Object.entries(statuses).map(([k, v]) => `<button class="chip ${cliFilter.status === k ? 'on' : ''}" data-pst="${k}">${esc(v)}</button>`).join('')}</div>
+        ${Object.entries(statuses).map(([k, v]) => `<button class="chip ${cliFilter.status === k ? 'on' : ''}" data-pst="${k}">${esc(v)}</button>`).join('')}
+        ${crmStatusSelect(crmSts, cliFilter.crm_status)}</div>
       ${filterBar(cliFilter, { pay: true })}
-      ${rows.length ? `<table class="list"><thead><tr><th>№</th><th>Клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th class="hide-m">CRM</th></tr></thead><tbody>
+      ${rows.length ? `<table class="list"><thead><tr><th>№</th><th>Клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th>Статус відправлення</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click ${o.pending ? 'row-info' : o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''}" data-o="${o.id}">
           <td><b>${esc(o.number)}</b><div>${supplyMark(o)}</div>${o.pending ? '<div><span class="badge info">🔵 зміни менеджера — підтвердіть</span></div>' : ''}<div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
           <td>${esc(o.client_name)}<div class="small muted">${esc(phoneFmt(o.client_phone))}${o.ttn ? ` · ТТН ${esc(o.ttn)}` : ''}</div></td>
           <td class="r"><b>${uah(o.total)}</b></td>
           <td>${statusBadge(o)}</td>
           <td class="hide-m">${payBadge(o)}</td>
-          <td class="hide-m">${crmCell(o)}</td>
+          <td>${crmCell(o)}</td>
         </tr>`).join('')}</tbody></table>`
         : `<div class="card empty"><div class="big">${qs ? 'Нічого не знайдено' : 'Замовлень клієнтів ще немає'}</div>${qs ? 'Змініть фільтри.' : 'Відкрийте закупівлю і натисніть «+ Замовлення клієнта» або створіть замовлення тут.'}</div>`}`;
     wireFilterBar(cliFilter, () => viewClients());
     ob.wire(() => viewClients());
     $$('[data-pst]').forEach((b) => (b.onclick = () => { cliFilter.status = b.dataset.pst; viewClients(); }));
+    if ($('#crmSt')) $('#crmSt').onchange = (e) => { cliFilter.crm_status = e.target.value; viewClients(); };
     $$('[data-o]').forEach((tr) => (tr.onclick = () => { location.hash = `#/pclients/${tr.dataset.o}`; }));
   }
 
@@ -530,6 +534,7 @@ export function createPartnerPages(ctx = {}) {
     main.innerHTML = `
       <div class="head-row"><h2>Замовлення ${esc(o.number)} ${statusBadge(o)} ${payBadge(o)}</h2>
         <div class="btn-row"><a class="btn" href="#/pclients">← До списку</a>
+          ${o.status === 'crm' && canEdit() ? '<button class="btn" id="cClaim">🛠 Брак / обмін</button>' : ''}
           ${editable ? `<a class="btn" href="#/pclients/${o.id}/edit">Змінити</a><button class="btn danger" id="cCancel">Скасувати</button>` : ''}</div></div>
       ${o.pending ? `<div class="card form-stack card-info" style="margin-bottom:12px">
           <h3 style="margin:0">🔵 Менеджер змінив замовлення — підтвердіть або відхиліть</h3>
@@ -556,7 +561,7 @@ export function createPartnerPages(ctx = {}) {
           </div>
           <div class="card form-stack">
             <h3>Статус у CRM</h3>
-            ${o.crm_id ? `<div>Замовлення № <b>${esc(o.crm_id)}</b></div><div>${o.crm_status ? `<span class="badge info">${esc(o.crm_status)}</span>` : '<span class="small muted">статус оновиться за кілька хвилин</span>'}</div>`
+            ${o.crm_id ? `<div>Замовлення № <b>${esc(o.crm_id)}</b></div><div>${o.crm_status ? crmBadge(o.crm_status) : '<span class="small muted">статус оновиться за кілька хвилин</span>'}</div>`
               : (o.status === 'crm' ? '<div>Передано в роботу.</div>' : '<div class="small muted">Ще не передано — менеджер перевірить замовлення й передасть його в роботу.</div>')}
           </div>
           <div class="card form-stack">
@@ -580,6 +585,7 @@ export function createPartnerPages(ctx = {}) {
       if (!(await confirmDanger(`Відхилити зміни в ${o.number}?`, 'Замовлення повернеться таким, яким було до змін менеджера; менеджер отримає сповіщення.', 'Відхилити зміни'))) return;
       try { await api('POST', `/api/b2b/p/clients/${o.id}/reject`); toast('Зміни відхилено — повернуто як було'); viewClient(o.id); } catch (e) { toast(e.message, true); }
     });
+    if ($('#cClaim')) $('#cClaim').onclick = () => ctx.openClaimForm(o.id).catch((e) => toast(e.message, true));
     $('#cCancel') && ($('#cCancel').onclick = async () => {
       // замовлення в чернетці — його товари приберуться з чернетки (сервер вимагає підтвердження)
       const txt = o.draft_supply ? `Товари цього замовлення буде <b>прибрано з чернетки закупівлі ${esc(o.supply_number)}</b>.` : 'Товари повернуться в залишок закупівлі.';

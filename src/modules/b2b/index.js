@@ -19,6 +19,7 @@ import { mountB2bEdits } from './edits.js';
 import { mountB2bHome } from './home.js';
 import { mountB2bCrm } from './crm.js';
 import { mountB2bNewProducts } from './newproducts.js';
+import { mountB2bClaims } from './claims.js';
 
 export const partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 
@@ -48,7 +49,7 @@ const num = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 
-export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {} }) {
+export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}, onCron = () => {} }) {
   const audit = (c, refId, action, changes = []) => logAudit(db, { user: c.get('user'), kind: 'b2b', refId, action, changes });
   async function brandNames() {
     const rows = await db.all(`SELECT id, name FROM an_brands ORDER BY sort, id`).catch(() => []);
@@ -598,8 +599,9 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   // hooks — зв'язки між частинами модуля, що підключаються пізніше (маркування → Telegram, № у CRM → група маркувань).
   const hooks = {};
   const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup, hooks });
-  mountB2bClients(app, { db, fetchFn, services, myPartner, orders, hooks });
+  mountB2bClients(app, { db, fetchFn, services, myPartner, orders, hooks, onCron });
   mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice });
+  mountB2bClaims(app, { db, services, myPartner, orders });
   const tgdocs = mountB2bTgDocs(app, { db, services, orders, hooks });
   const pay = mountB2bPay(app, { db, services, orders, hooks });
   onCleanup(() => hooks.cleanup?.());

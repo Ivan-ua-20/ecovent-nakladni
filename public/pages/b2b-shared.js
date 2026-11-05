@@ -10,8 +10,20 @@ const PAY_CLS = { paid: 'ok', partial: 'info', unpaid: 'warn' };
 export const payBadge = (o) => (o.pay ? `<span class="badge ${PAY_CLS[o.pay] || ''}">${esc(o.pay_name || o.pay)}</span>` : '');
 export const supplyMark = (o) => (o.no_supply ? '<span class="badge bad">Без закупівлі</span>'
   : o.draft_supply ? `<span class="small muted">у чернетці ${esc(o.supply_number)}</span>` : `<span class="small muted">із ${esc(o.supply_number)}</span>`);
-export const crmCell = (o) => (o.crm_id ? `<b>№ ${esc(o.crm_id)}</b>${o.crm_status ? `<div class="small">${esc(o.crm_status)}</div>` : ''}`
-  : (o.status === 'crm' ? `<span class="small">${esc(o.crm_status || 'Передано')}</span>` : '<span class="small muted">—</span>'));
+// Статус замовлення в LP-CRM кольором: зелений — доставлено/виконано, червоний — повернення/відмова, синій — в дорозі.
+export const crmTone = (name) => {
+  const n = String(name || '').toLowerCase();
+  if (/возв|поверн|отказ|відмов|відказ|отмен|скасов|не забр|невикуп|невыкуп/.test(n)) return 'bad';
+  if (/доставл|выполн|викон|получ|отрим|заверш|оплачен|оплачено|успіш|успеш|забра/.test(n)) return 'ok';
+  if (/отправ|відправ|в пути|в дороз|в дорог|на відділ|на отдел|у відділ|в отдел|прибув|прибыл|ожида|очіку/.test(n)) return 'info';
+  return '';
+};
+export const crmBadge = (name) => (name ? `<span class="badge ${crmTone(name)}">${esc(name)}</span>` : '');
+export const crmCell = (o) => (o.crm_id ? `<b>№ ${esc(o.crm_id)}</b>${o.crm_status ? `<div>${crmBadge(o.crm_status)}</div>` : ''}`
+  : (o.status === 'crm' ? crmBadge(o.crm_status || 'Передано') : '<span class="small muted">—</span>'));
+// Фільтр за статусом LP-CRM (список статусів з кількістю приходить зі списку замовлень).
+export const crmStatusSelect = (list, cur) => (list?.length ? `<select id="crmSt" aria-label="Статус у LP-CRM" style="max-width:240px"><option value="">Будь-який статус LP-CRM</option>
+  ${list.map((x) => `<option value="${esc(x.name)}" ${cur === x.name ? 'selected' : ''}>${esc(x.name)} · ${x.n}</option>`).join('')}</select>` : '');
 export const phoneFmt = (p) => (/^380\d{9}$/.test(p || '') ? `+${p.slice(0, 2)} ${p.slice(2, 5)} ${p.slice(5, 8)} ${p.slice(8, 10)} ${p.slice(10)}` : (p || ''));
 export const historyCard = (history) => `<div class="card"><h3>Історія</h3>${history.map((h) => `<div class="small"><span class="muted">${esc(fmtDT(h.at))}</span> · ${esc(h.action)}${h.user_name ? ` <span class="muted">(${esc(h.user_name)})</span>` : ''}</div>`).join('')}</div>`;
 export const fmtDay = (d) => (d ? d.slice(0, 10).split('-').reverse().join('.') : '');
