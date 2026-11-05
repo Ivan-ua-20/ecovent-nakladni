@@ -24,13 +24,16 @@ export function mountB2bStats(app, { db, myPartner }) {
 
   async function report(partnerId, q) {
     const today = kyivDayOf(new Date().toISOString());
-    const to = isDay(q.to) ? q.to : today;
-    const from = isDay(q.from) && q.from <= to ? q.from : addDays(to, -29);
-    const days = Math.min(daysBetween(from, to), 400);
-    const prevTo = addDays(from, -1);
-    const prevFrom = addDays(prevTo, -(days - 1));
     const byPartner = partnerId ? 'AND o.partner_id = ?' : '';
     const pp = partnerId ? [partnerId] : [];
+    // all=1 — за весь час: від першого замовлення / закупівлі (без порівняння з попереднім періодом).
+    const all = q.all === '1';
+    const first = all ? (await db.get(`SELECT MIN(o.created_at) AS at FROM b2b_orders o WHERE o.status NOT IN ('cancelled', 'draft', 'confirm') ${byPartner}`, pp))?.at : '';
+    const to = all ? today : isDay(q.to) ? q.to : today;
+    const from = all ? (first ? kyivDayOf(first) : today) : isDay(q.from) && q.from <= to ? q.from : addDays(to, -29);
+    const days = Math.min(daysBetween(from, to), 3000);
+    const prevTo = addDays(from, -1);
+    const prevFrom = addDays(prevTo, -(days - 1));
 
     const orders = await db.all(
       `SELECT o.id, o.partner_id, o.kind, o.status, o.supply_id, o.total, o.paid_amount, o.paid_at, o.created_at, o.crm_status, s.status AS supply_status
@@ -116,7 +119,7 @@ export function mountB2bStats(app, { db, myPartner }) {
     // ---------- по днях
     const series = [];
     const byDay = new Map();
-    for (let d = from; d <= to && series.length < 400; d = nextDay(d)) { const r = { d, cnt: 0, sum: 0, earn: 0, supply: 0 }; series.push(r); byDay.set(d, r); }
+    for (let d = from; d <= to && series.length < 3000; d = nextDay(d)) { const r = { d, cnt: 0, sum: 0, earn: 0, supply: 0 }; series.push(r); byDay.set(d, r); }
     for (const o of curF) {
       const r = byDay.get(o.day);
       if (r) { r.cnt++; r.sum = round2(r.sum + o.fsum); r.earn = round2(r.earn + o.frrp - o.fsum); }
@@ -168,7 +171,7 @@ export function mountB2bStats(app, { db, myPartner }) {
     const unpaidClients = curF.filter((o) => !(o.supply_id ? ['paid', 'done'].includes(o.supply_status) : o.paid_at)).length;
 
     const out = {
-      period: { from, to, days }, prev: { from: prevFrom, to: prevTo },
+      period: { from, to, days, all }, prev: { from: prevFrom, to: prevTo },
       sales: sales(curF), salesPrev: sales(prevF),
       filters: { brands: [...fBrands], cats: [...fCats], delivered }, facets, delivery,
       supplies: supplies(cur), suppliesPrev: supplies(prev),

@@ -25,9 +25,10 @@ const PERIODS = {
   },
   30: () => [shift(kday(), -29), kday()],
   90: () => [shift(kday(), -89), kday()],
+  all: () => ['', kday()],
 };
 // Масив, а не об'єкт: числові ключі ('30', '90') в об'єкті завжди йдуть першими.
-const PERIOD_LIST = [['today', 'Сьогодні'], ['week', 'Цей тиждень'], ['month', 'Цей місяць'], ['lastmonth', 'Минулий місяць'], ['30', 'Останні 30 днів'], ['90', 'Останні 90 днів']];
+const PERIOD_LIST = [['today', 'Сьогодні'], ['week', 'Цей тиждень'], ['month', 'Цей місяць'], ['lastmonth', 'Минулий місяць'], ['30', 'Останні 30 днів'], ['90', 'Останні 90 днів'], ['all', 'За весь час']];
 const PERIOD_NAMES = Object.fromEntries(PERIOD_LIST);
 const uah0 = (v) => `${nf0.format(Math.round(v || 0))} грн`;
 
@@ -55,17 +56,54 @@ function lineChart(series) {
   const grid = [0, 0.5, 1].map((f) => `<line x1="${L}" y1="${y(max * f)}" x2="${W}" y2="${y(max * f)}" stroke="#eef0ef"></line>
     <text x="${L - 6}" y="${y(max * f) + 4}" font-size="11" text-anchor="end" fill="var(--muted)">${nf0.format(Math.round((max * f) / 1000))}к</text>`).join('');
   const anchor = (i) => (series.length > 1 && i === series.length - 1 ? 'end' : series.length > 1 && i === 0 ? 'start' : 'middle');
-  const labels = series.map((r, i) => (i % step === 0 || i === series.length - 1 ? `<text x="${x(i)}" y="${H - 4}" font-size="11" text-anchor="${anchor(i)}" fill="var(--muted)">${fmtD(r.d)}</text>` : '')).join('');
-  const hits = series.map((r, i) => `<rect x="${x(i) - bw / 2}" y="0" width="${bw}" height="${H - B}" fill="transparent"><title>${fmtD(r.d)} · ${WD[wdOf(r.d)]}
-Продажі: ${uah(r.sum)} (${r.cnt} замовл.)
-Заробіток: ${uah(r.earn)}</title></rect>`).join('');
+  const long = series.length > 366;
+  const lbl = (d) => (long ? `${fmtD(d)}.${d.slice(2, 4)}` : fmtD(d));
+  const labels = series.map((r, i) => (i % step === 0 || i === series.length - 1 ? `<text x="${x(i)}" y="${H - 4}" font-size="11" text-anchor="${anchor(i)}" fill="var(--muted)">${lbl(r.d)}</text>` : '')).join('');
+  // Підказка: вертикальна лінія, точка і віконце з цифрами за день — wireChart() рухає їх за курсором / пальцем.
+  const hover = `<line class="an7-gl" x1="0" y1="${T}" x2="0" y2="${H - B}" stroke="var(--muted)" stroke-dasharray="3 3" visibility="hidden"></line>
+    <circle class="an7-gd" r="5" fill="var(--accent)" stroke="#fff" stroke-width="2" visibility="hidden"></circle>
+    <rect class="an7-hit" x="${L}" y="0" width="${W - L}" height="${H - B}" fill="transparent"></rect>`;
+  lineChart.geo = { W, L, x, y, n: series.length, bw };
   const dots = series.length <= 45 ? series.map((r, i) => (r.sum ? `<circle cx="${x(i)}" cy="${y(r.sum)}" r="3" fill="var(--accent)"></circle>` : '')).join('') : '';
   return `<div class="an7-chart"><svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" role="img" aria-label="Продажі й заробіток по днях">
     ${grid}
     <polygon points="${x(0)},${y(0)} ${pts('sum')} ${x(series.length - 1)},${y(0)}" fill="var(--accent)" opacity=".1"></polygon>
     <polyline points="${pts('sum')}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round"></polyline>
     <polyline points="${pts('earn')}" fill="none" stroke="${EARN}" stroke-width="2" stroke-dasharray="6 4" stroke-linejoin="round"></polyline>
-    ${dots}${labels}${hits}</svg></div>`;
+    ${dots}${labels}${hover}</svg><div class="an7-tip" hidden></div></div>`;
+}
+
+function wireChart(series) {
+  const box = $('.an7-chart');
+  const svg = box?.querySelector('svg');
+  const g = lineChart.geo;
+  if (!svg || !g) return;
+  const tip = box.querySelector('.an7-tip');
+  const gl = svg.querySelector('.an7-gl');
+  const gd = svg.querySelector('.an7-gd');
+  const hide = () => { tip.hidden = true; gl.setAttribute('visibility', 'hidden'); gd.setAttribute('visibility', 'hidden'); };
+  const show = (e) => {
+    const rc = svg.getBoundingClientRect();
+    const vx = ((e.clientX - rc.left) / rc.width) * g.W;
+    let i = g.n === 1 ? 0 : Math.round(((vx - g.L) / (g.W - g.L - 6)) * (g.n - 1));
+    i = Math.max(0, Math.min(g.n - 1, i));
+    const r = series[i];
+    const cx = g.x(i);
+    gl.setAttribute('x1', cx); gl.setAttribute('x2', cx); gl.setAttribute('visibility', 'visible');
+    gd.setAttribute('cx', cx); gd.setAttribute('cy', g.y(r.sum)); gd.setAttribute('visibility', 'visible');
+    tip.innerHTML = `<b>${fmtD(r.d)}.${r.d.slice(0, 4)} · ${WD[wdOf(r.d)]}</b>
+      <div class="an7-tr"><span><span class="an7-ln" style="background:var(--accent)"></span>Продажі</span><b>${uah(r.sum)}</b></div>
+      <div class="an7-tr"><span>Замовлень</span><b>${r.cnt}</b></div>
+      <div class="an7-tr"><span><span class="an7-ln" style="background:${EARN}"></span>Заробіток</span><b>${uah(r.earn)}</b></div>`;
+    tip.hidden = false;
+    const px = (cx / g.W) * rc.width + (svg.offsetLeft || 0);
+    const left = px + 14 + tip.offsetWidth > box.scrollLeft + box.clientWidth ? px - 14 - tip.offsetWidth : px + 14;
+    tip.style.left = `${Math.max(0, left)}px`;
+    tip.style.top = `${Math.max(0, (g.y(r.sum) / 220) * rc.height - tip.offsetHeight / 2)}px`;
+  };
+  svg.addEventListener('pointermove', show);
+  svg.addEventListener('pointerdown', show);
+  svg.addEventListener('pointerleave', hide);
 }
 
 // Кільце статусів відправлення (тони LP-CRM).
@@ -160,7 +198,7 @@ export function createB2bStats() {
   async function view({ url, admin = false, title = 'Аналітика продажів', partner = '' } = {}) {
     if (partner !== undefined && partner !== '') state.partner = String(partner);
     const [from, to] = state.period === 'custom' ? [state.from, state.to] : PERIODS[state.period]();
-    const qs = new URLSearchParams({ from, to });
+    const qs = new URLSearchParams(state.period === 'all' ? { all: '1' } : { from, to });
     if (admin && state.partner) qs.set('partner', state.partner);
     if (state.brands.length) qs.set('brands', state.brands.join(','));
     if (state.cats.length) qs.set('cats', state.cats.join(','));
@@ -174,6 +212,7 @@ export function createB2bStats() {
     if (state.open === null) state.open = window.matchMedia?.('(min-width: 901px)').matches ?? true;
     const checks = (list, sel, attr) => (list.length ? list.map((r) => `<label class="an7-c"><input type="checkbox" data-${attr}="${r.id}" ${!sel.length || sel.includes(r.id) ? 'checked' : ''}>
       <span class="an7-ell">${esc(r.name)}</span><span class="small muted">${nf0.format(r.units)}</span></label>`).join('') : '<div class="small muted">Немає продажів за період.</div>');
+    const cmp = d.period.all ? () => '' : delta;
     const perLabel = state.period === 'custom' ? `${fmtD(d.period.from)}–${fmtD(d.period.to)}` : PERIOD_NAMES[state.period];
 
     main.innerHTML = `
@@ -200,14 +239,14 @@ export function createB2bStats() {
         </details>
 
         <div class="an7-main">
-          <div class="small muted">Період ${fmtD(d.period.from)}–${fmtD(d.period.to)} (${d.period.days} дн.) · порівняння з ${fmtD(d.prev.from)}–${fmtD(d.prev.to)}.
+          <div class="small muted">Період ${fmtD(d.period.from)}${d.period.all ? `.${d.period.from.slice(0, 4)}` : ''}–${fmtD(d.period.to)} (${d.period.days} дн.)${d.period.all ? '' : ` · порівняння з ${fmtD(d.prev.from)}–${fmtD(d.prev.to)}`}.
             «Заробіток» — різниця між РРЦ і ціною партнера, якщо продавати за РРЦ.</div>
           <div class="kpis an7-k">
-            ${kpi('Продажі', uah0(s.sum), delta(s.sum, sp.sum))}
-            ${kpi('Замовлень', nf0.format(s.cnt), `${delta(s.cnt, sp.cnt)} <span class="muted">${nf1.format(s.perDay)} на день</span>`)}
-            ${kpi('Середній чек', uah0(s.avg), delta(s.avg, sp.avg))}
-            ${kpi('Заробіток', uah0(s.earn), delta(s.earn, sp.earn))}
-            ${kpi('Повернення', `${nf1.format(s.returnsPct || 0)}<small>%</small>`, `${delta(s.returnsPct || 0, sp.returnsPct || 0, { lowerBetter: true, points: true })} <span class="muted">${s.returns || 0} замовл.</span>`)}
+            ${kpi('Продажі', uah0(s.sum), cmp(s.sum, sp.sum))}
+            ${kpi('Замовлень', nf0.format(s.cnt), `${cmp(s.cnt, sp.cnt)} <span class="muted">${nf1.format(s.perDay)} на день</span>`)}
+            ${kpi('Середній чек', uah0(s.avg), cmp(s.avg, sp.avg))}
+            ${kpi('Заробіток', uah0(s.earn), cmp(s.earn, sp.earn))}
+            ${kpi('Повернення', `${nf1.format(s.returnsPct || 0)}<small>%</small>`, `${cmp(s.returnsPct || 0, sp.returnsPct || 0, { lowerBetter: true, points: true })} <span class="muted">${s.returns || 0} замовл.</span>`)}
           </div>
           <div class="card form-stack">
             <h3 style="margin:0">Продажі й заробіток</h3>
@@ -243,6 +282,7 @@ export function createB2bStats() {
       </div>`;
 
     const again = () => view({ url, admin, title });
+    wireChart(d.series);
     $('.an7-f').ontoggle = (e) => { state.open = e.target.open; };
     $$('[data-per]').forEach((b) => (b.onclick = () => { state.period = b.dataset.per; again(); }));
     const custom = () => { if ($('#stFrom').value && $('#stTo').value) { state.period = 'custom'; state.from = $('#stFrom').value; state.to = $('#stTo').value; again(); } };

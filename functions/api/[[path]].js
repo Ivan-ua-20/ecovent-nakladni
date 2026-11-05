@@ -9071,13 +9071,15 @@ function mountB2bStats(app, { db, myPartner }) {
   }
   async function report(partnerId, q) {
     const today3 = kyivDayOf((/* @__PURE__ */ new Date()).toISOString());
-    const to = isDay2(q.to) ? q.to : today3;
-    const from = isDay2(q.from) && q.from <= to ? q.from : addDays2(to, -29);
-    const days = Math.min(daysBetween2(from, to), 400);
-    const prevTo = addDays2(from, -1);
-    const prevFrom = addDays2(prevTo, -(days - 1));
     const byPartner = partnerId ? "AND o.partner_id = ?" : "";
     const pp = partnerId ? [partnerId] : [];
+    const all = q.all === "1";
+    const first = all ? (await db.get(`SELECT MIN(o.created_at) AS at FROM b2b_orders o WHERE o.status NOT IN ('cancelled', 'draft', 'confirm') ${byPartner}`, pp))?.at : "";
+    const to = all ? today3 : isDay2(q.to) ? q.to : today3;
+    const from = all ? first ? kyivDayOf(first) : today3 : isDay2(q.from) && q.from <= to ? q.from : addDays2(to, -29);
+    const days = Math.min(daysBetween2(from, to), 3e3);
+    const prevTo = addDays2(from, -1);
+    const prevFrom = addDays2(prevTo, -(days - 1));
     const orders = await db.all(
       `SELECT o.id, o.partner_id, o.kind, o.status, o.supply_id, o.total, o.paid_amount, o.paid_at, o.created_at, o.crm_status, s.status AS supply_status
        FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id
@@ -9169,7 +9171,7 @@ function mountB2bStats(app, { db, myPartner }) {
     };
     const series = [];
     const byDay = /* @__PURE__ */ new Map();
-    for (let d = from; d <= to && series.length < 400; d = nextDay(d)) {
+    for (let d = from; d <= to && series.length < 3e3; d = nextDay(d)) {
       const r = { d, cnt: 0, sum: 0, earn: 0, supply: 0 };
       series.push(r);
       byDay.set(d, r);
@@ -9230,7 +9232,7 @@ function mountB2bStats(app, { db, myPartner }) {
     const noSupply = curF.filter((o) => !o.supply_id || o.supply_status === "open").length;
     const unpaidClients = curF.filter((o) => !(o.supply_id ? ["paid", "done"].includes(o.supply_status) : o.paid_at)).length;
     const out = {
-      period: { from, to, days },
+      period: { from, to, days, all },
       prev: { from: prevFrom, to: prevTo },
       sales: sales(curF),
       salesPrev: sales(prevF),

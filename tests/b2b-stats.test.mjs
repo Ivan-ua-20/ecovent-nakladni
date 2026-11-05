@@ -136,6 +136,13 @@ assert.equal(dl.sales.cnt, 1);
 assert.equal(dl.sales.sum, 2700);
 assert.equal(dl.filters.delivered, true);
 assert.equal((await req('GET', '/api/b2b/p/stats?brands=abc,1;drop', null, A)).filters.brands.length, 0, 'сміття у фільтрі ігнорується');
+// за весь час: від першого замовлення, без порівняння
+const allT = await req('GET', '/api/b2b/p/stats?all=1', null, A);
+assert.equal(allT.period.all, true);
+assert.equal(allT.period.from, today, 'усі замовлення створено сьогодні');
+assert.equal(allT.sales.cnt, st2.sales.cnt);
+assert.equal(allT.salesPrev.cnt, 0);
+assert.equal((await req('GET', '/api/b2b/p/stats?all=1', null, B)).supplies.cnt, 1);
 // період без даних
 assert.equal((await req('GET', '/api/b2b/p/stats?from=2020-01-01&to=2020-01-31', null, A)).sales.cnt, 0);
 // ізоляція
