@@ -2,7 +2,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
@@ -142,6 +142,7 @@ export function createPartnerPages(ctx = {}) {
     };
     main.innerHTML = `
       <div class="head-row"><h2>Каталог — ${esc(partner.name)}</h2><div class="btn-row">${products.length ? '<button class="btn" id="pcXlsx">⬇ Excel</button>' : ''}${products.length && canEdit() ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div></div>
+      <div id="pcFeeds"></div>
       ${products.length ? `
         <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap">
           ${brands.length > 1 ? `<button class="chip ${filter.brand ? '' : 'on'}" data-br="">Усі бренди</button>` : ''}
@@ -156,6 +157,14 @@ export function createPartnerPages(ctx = {}) {
         <div class="small muted" style="margin-bottom:8px">Ціни з ПДВ. «Ваша ціна» = РРЦ − ваша знижка на бренд; РРЦ — рекомендована роздрібна ціна.</div>
         <div id="pcList"></div>`
         : '<div class="card empty"><div class="big">Каталог ще порожній</div>Ваш менеджер ще не відкрив вам бренди. Зверніться до нього — після цього товари з’являться тут.</div>'}`;
+    // Фіди й таблиці від менеджера — показуємо, лише якщо є.
+    api('GET', '/api/b2b/p/feeds').then((list) => {
+      const box = $('#pcFeeds');
+      if (!box || !list.length) return;
+      box.innerHTML = `<div class="card form-stack" style="margin-bottom:12px"><h3 style="margin:0">Фіди й таблиці</h3>
+        <div class="small muted">Посилання від вашого менеджера — для сайту, маркетплейсів чи прайсу.</div>${feedsList(list)}</div>`;
+      wireFeedsList(box, list);
+    }).catch(() => {});
     if (!products.length) return;
     $$('[data-br]').forEach((b) => (b.onclick = () => { filter.brand = b.dataset.br; filter.cat = ''; saveFilter(); viewPartnerCatalog(); }));
     let t;

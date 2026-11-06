@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 33,
+  version: 34,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,6 +83,21 @@ export const schema = {
     created_at TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS b2b_couriers_p ON b2b_couriers (partner_id)`,
+  // Фіди й таблиці партнера — лише довідкові посилання (XML-фід, Google-таблиця, прайс). partner_id = 0 — для всіх.
+  `CREATE TABLE IF NOT EXISTS b2b_feeds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER NOT NULL DEFAULT 0,
+    title TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'other',
+    url TEXT NOT NULL,
+    note TEXT DEFAULT '',
+    sort INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT DEFAULT '',
+    created_at TEXT,
+    updated_at TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_feeds_p ON b2b_feeds (partner_id, active)`,
   // Обміни й повернення браку (заявки): див. claims.js. items / want_items — JSON [{ product_id, name, article, qty, price }].
   `CREATE TABLE IF NOT EXISTS b2b_claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
