@@ -753,3 +753,36 @@ main.ro input[data-ip], main.ro input[data-ir] { pointer-events: none; border-co
 .feed-u { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 .feed-a { flex: none; }
 @media (max-width: 700px) { .feed { flex-wrap: wrap; } .feed-a { width: 100%; padding-left: 32px; } }
+
+/* Сторінки кабінету «панель фільтрів + таблиця» (стиль «Аналітики») */
+.fp { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 14px; align-items: start; }
+.fp-main { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.fp-main > .card { margin: 0; }
+.fp-main > .kpis { margin-bottom: 0; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.fp-f select, .fp-f input[type=search] { width: 100%; }
+.fp-f input[type=search] { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: #fff; color: var(--ink); font-size: 14px; box-sizing: border-box; }
+.lim-row { display: flex; flex-direction: column; gap: 4px; }
+.lim-row > span { display: flex; justify-content: space-between; gap: 8px; }
+.an7-per .small { opacity: .8; }
+.an7-per { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+@media (max-width: 900px) { .fp { grid-template-columns: minmax(0, 1fr); } .fp-f { position: static; } }
+/* Головна партнера: дії зліва + стрічка подій */
+.home2 { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 14px; align-items: start; }
+.home2-side, .home2-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.home2 .card { margin: 0; }
+.home2-act { display: flex; flex-direction: column; gap: 8px; }
+.home2-act .btn { justify-content: flex-start; text-align: left; }
+.feed-row { display: flex; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); align-items: flex-start; text-decoration: none; color: inherit; }
+.feed-row:first-child { border-top: 0; }
+.feed-row:hover .feed-t { color: var(--accent); }
+.feed-ic { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; flex: none; }
+.feed-ic.supply { background: var(--accent-soft); color: var(--accent); }
+.feed-ic.client { background: #e7eefe; color: #1d4ed8; }
+.feed-ic.claim { background: #fff4dc; color: #9a5b00; }
+.feed-ic.price { background: #eef0ef; color: var(--muted); }
+.feed-b { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.limit-bar { height: 8px; border-radius: 4px; background: #eef0ef; overflow: hidden; }
+.limit-bar > i { display: block; height: 8px; background: var(--accent); }
+.limit-bar > i.bad { background: var(--bad); }
+@media (max-width: 900px) { .home2 { grid-template-columns: minmax(0, 1fr); } }
+.kpi.kpi-bad .kpi-v { color: var(--bad); }

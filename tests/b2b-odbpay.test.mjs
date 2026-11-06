@@ -196,6 +196,15 @@ assert.match(await errOf(() => req('GET', '/api/b2b/p/statement?from=2026-02-01&
 const ph = await req('GET', '/api/b2b/p/home', null, A);
 assert.equal(ph.debt.total, 4500);
 assert.equal(ph.partner.name, 'Партнер А');
+assert.equal(ph.manager, null, 'менеджера ще не призначено');
+// стрічка подій головної: історія своїх закупівель, найновіше першим, з посиланням
+const feed = await req('GET', '/api/b2b/p/feed?limit=5', null, A);
+assert.ok(feed.rows.length > 0 && feed.rows.length <= 5);
+assert.ok(feed.rows.every((r) => r.kind === 'supply' && r.link.startsWith('#/porders/') && r.number.startsWith('B2B-')));
+assert.ok(feed.rows.every((r, i, a) => i === 0 || a[i - 1].at >= r.at), 'від нових до старих');
+const owner = await db.get(`SELECT id FROM users WHERE login = 'owner'`);
+await db.run(`UPDATE b2b_partners SET manager_id = ? WHERE id = ?`, [owner.id, pa.id]);
+assert.ok((await req('GET', '/api/b2b/p/home', null, A)).manager.name, 'ім’я менеджера');
 const home = await req('GET', '/api/home');
 assert.ok(home.items.some((x) => x.key === 'b2b_paycheck' && x.count >= 1), 'неоднозначний платіж — у черзі');
 assert.equal((await errOf(() => req('GET', '/api/home', null, A))) !== '', true, 'партнерові — ні');
@@ -204,6 +213,7 @@ assert.equal((await errOf(() => req('GET', '/api/home', null, A))) !== '', true,
 const pb = await req('POST', '/api/b2b/partners', { name: 'Партнер Б' });
 await req('POST', `/api/b2b/partners/${pb.id}/users`, { login: 'pb', password: 'pass1234' });
 const B = await login('pb', 'pass1234');
+assert.equal((await req('GET', '/api/b2b/p/feed', null, B)).rows.length, 0, 'чужої історії не видно');
 assert.match(await errOf(() => req('POST', '/api/b2b/p/entities', { name: 'Не моя', code: '1234567890' }, B)), /іншого партнера/);
 const entB = await req('POST', '/api/b2b/p/entities', { name: 'ФОП Бета', code: '2234567890' }, B);
 assert.match(await errOf(() => req('PUT', `/api/b2b/p/entities/${entB.id}`, { name: 'ФОП Бета', code: '1234567890' }, B)), /іншого партнера/);
