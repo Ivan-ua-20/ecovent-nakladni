@@ -324,3 +324,26 @@ export async function apiKeysCard(box, base, { canEdit = true, admin = false } =
     try { await api('DELETE', `${base}/${k.id}`); toast('Ключ відкликано'); again(); } catch (e) { toast(e.message, true); }
   }));
 }
+
+// ---------- Сторінка «панель фільтрів + вміст» (як «Аналітика») ----------
+// Ті самі id полів, що й у горизонтального filterBar (fQ, fFrom, fTo, fPay, fReset), тож wireFilterBar працює без змін.
+let fpOpen = null;
+export function fpLayout(aside, body, { summary = '' } = {}) {
+  if (fpOpen === null) fpOpen = window.matchMedia?.('(min-width: 901px)').matches ?? true;
+  return `<div class="fp"><details class="card an7-f fp-f" ${fpOpen ? 'open' : ''}><summary><b>Фільтри</b><span class="small muted">${esc(summary)}</span></summary>${aside}</details>
+    <div class="fp-main">${body}</div></div>`;
+}
+export function wireFp() {
+  const d = $('.fp-f');
+  if (d) d.ontoggle = () => { fpOpen = d.open; };
+}
+export const fpGroup = (title, inner) => (inner ? `<div class="an7-g"><div class="an7-h">${title}</div>${inner}</div>` : '');
+export const fpBtn = (label, on, attrs) => `<button type="button" class="an7-per ${on ? 'on' : ''}" ${attrs}>${label}</button>`;
+export function filterSide(f, { pay = false, placeholder = '№, клієнт, телефон, ТТН…', dates = true } = {}) {
+  return `${fpGroup('Пошук', `<input id="fQ" type="search" value="${esc(f.q || '')}" placeholder="${esc(placeholder)}" aria-label="Пошук">`)}
+    ${dates ? fpGroup('Період', `<div class="an7-dates ${f.from || f.to ? 'on' : ''}"><input id="fFrom" type="date" value="${esc(f.from || '')}" aria-label="З дати"><input id="fTo" type="date" value="${esc(f.to || '')}" aria-label="По дату"></div>`) : ''}
+    ${pay ? fpGroup('Оплата закупівлі', `<select id="fPay" aria-label="Оплата"><option value="">Будь-яка</option><option value="paid" ${f.pay === 'paid' ? 'selected' : ''}>Оплачені</option><option value="unpaid" ${f.pay === 'unpaid' ? 'selected' : ''}>Не оплачені</option></select>`) : ''}
+    ${f.q || f.from || f.to || f.pay ? '<button type="button" class="btn sm" id="fReset">Скинути пошук і дати</button>' : ''}`;
+}
+// Картка-показник у ряду над таблицею.
+export const fpKpi = (label, value, sub = '', cls = '') => `<div class="kpi ${cls}"><span class="kpi-l">${label}</span><span class="kpi-v">${value}</span>${sub ? `<span class="small muted">${sub}</span>` : ''}</div>`;

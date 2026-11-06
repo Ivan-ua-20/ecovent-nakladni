@@ -2,7 +2,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
@@ -38,7 +38,7 @@ export function createPartnerPages(ctx = {}) {
   }
   const supFilter = { status: '', q: '', from: '', to: '' };
   const cliFilter = { status: '', q: '', from: '', to: '', pay: '', crm_status: '' };
-  const filter = { brand: '', q: '', cat: '', sort: 'brand' };
+  const filter = { brand: '', q: '', cat: '', sort: 'brand', show: '' };
 
   // Пауза: нові закупівлі й замовлення тимчасово недоступні (ставить менеджер).
   const pauseHtml = (lim) => (lim?.paused ? `<div class="alert bad" style="margin-bottom:12px"><b>⏸ Нові закупівлі й замовлення тимчасово призупинено</b>${lim.paused.note ? ` — ${esc(lim.paused.note)}` : ''}. Зверніться до менеджера.</div>` : '');
@@ -84,12 +84,16 @@ export function createPartnerPages(ctx = {}) {
   const saveFilter = () => { try { localStorage.setItem(FKEY, JSON.stringify(filter)); } catch { /* */ } };
   const SORTS = { often: 'Часто замовляю', brand: 'За брендом', name: 'За назвою', cheap: 'Дешевші спочатку', dear: 'Дорожчі спочатку', profit: 'Найбільша вигода' };
   const pct = (v) => `${String(Math.round((Number(v) || 0) * 100) / 100).replace('.', ',')}%`;
+  // «Показати»: лише часто замовлювані, новинки, акції / особливі ціни, ті, де ціна скоро зміниться.
+  const SHOWS = { '': ['Усі товари', () => true], often: ['Часто замовляю', (p) => p.ordered > 0], new: ['Новинки', (p) => p.is_new],
+    special: ['Акції й особливі ціни', (p) => p.special], grace: ['Ціна скоро зміниться', (p) => p.grace_until] };
 
   async function viewPartnerCatalog() {
     const { partner, brands, categories = [], products } = await api('GET', '/api/b2b/p/catalog');
     if (filter.brand && !brands.some((b) => String(b.id) === String(filter.brand))) filter.brand = '';
     filter.cat = filter.cat ?? '';
     filter.sort = SORTS[filter.sort] ? filter.sort : 'often';
+    filter.show = SHOWS[filter.show] ? filter.show : '';
     const catName = new Map(categories.map((c) => [String(c.id), c.name]));
     const byBrand = (p) => !filter.brand || String(p.brand_id) === String(filter.brand);
     const matchQ = (p) => {
@@ -101,11 +105,13 @@ export function createPartnerPages(ctx = {}) {
       const inBrand = products.filter(byBrand);
       const counts = inBrand.reduce((m, p) => m.set(String(p.cat), (m.get(String(p.cat)) || 0) + 1), new Map());
       if (filter.cat !== '' && !counts.has(String(filter.cat))) filter.cat = '';
-      $('#pcCats').innerHTML = counts.size > 1 ? `<button class="chip ${filter.cat === '' ? 'on' : ''}" data-cat="">Усі категорії · ${inBrand.length}</button>
+      $('#pcCats').innerHTML = counts.size > 1 ? fpGroup('Категорії', `${fpBtn(`<span>Усі категорії</span><span class="small">${inBrand.length}</span>`, filter.cat === '', 'data-cat=""')}
         ${[...counts].sort((a, b) => (catName.get(a[0]) || '').localeCompare(catName.get(b[0]) || '', 'uk'))
-          .map(([id, n]) => `<button class="chip ${String(filter.cat) === id ? 'on' : ''}" data-cat="${esc(id)}">${esc(catName.get(id) || 'Інше')} · ${n}</button>`).join('')}` : '';
+          .map(([id, n]) => fpBtn(`<span>${esc(catName.get(id) || 'Інше')}</span><span class="small">${n}</span>`, String(filter.cat) === id, `data-cat="${esc(id)}"`)).join('')}`) : '';
       $$('[data-cat]').forEach((b) => (b.onclick = () => { filter.cat = b.dataset.cat; saveFilter(); draw(); }));
-      let list = inBrand.filter((p) => (filter.cat === '' || String(p.cat) === String(filter.cat)) && matchQ(p));
+      const show = SHOWS[filter.show][1];
+      let list = inBrand.filter((p) => (filter.cat === '' || String(p.cat) === String(filter.cat)) && matchQ(p) && show(p));
+      $$('[data-show]').forEach((b) => b.classList.toggle('on', b.dataset.show === filter.show));
       const byBrandName = (a, b) => a.brand.localeCompare(b.brand, 'uk') || a.name.localeCompare(b.name, 'uk');
       const by = {
         often: (a, b) => (b.ordered || 0) - (a.ordered || 0) || (b.ordered_qty || 0) - (a.ordered_qty || 0) || byBrandName(a, b),
@@ -136,27 +142,25 @@ export function createPartnerPages(ctx = {}) {
       $('#pcCount').textContent = `Знайдено: ${list.length} з ${products.length}`;
       $('#pcList').innerHTML = list.length ? `<table class="list"><thead><tr><th></th><th>Товар</th><th class="hide-m">Бренд</th><th class="r">РРЦ</th><th class="r hide-m">Знижка від РРЦ</th><th class="r">Ваша ціна</th></tr></thead>
         <tbody>${rowsHtml}</tbody></table>`
-        : `<div class="card empty"><div class="big">Нічого не знайдено</div>Змініть пошук, бренд чи категорію.
+        : `<div class="card empty"><div class="big">Нічого не знайдено</div>Змініть пошук, бренд, категорію чи «Показати».
           <div class="btn-row" style="justify-content:center;margin-top:10px"><button class="btn" id="pcReset">Скинути фільтри</button></div></div>`;
-      $('#pcReset') && ($('#pcReset').onclick = () => { Object.assign(filter, { brand: '', cat: '', q: '' }); saveFilter(); viewPartnerCatalog(); });
+      $('#pcReset') && ($('#pcReset').onclick = () => { Object.assign(filter, { brand: '', cat: '', q: '', show: '' }); saveFilter(); viewPartnerCatalog(); });
     };
+    const aside = `${fpGroup('Пошук', `<input id="pcQ" type="search" placeholder="Назва або артикул" value="${esc(filter.q)}" aria-label="Пошук товару">`)}
+        ${fpGroup('Сортування', `<select id="pcSort" aria-label="Сортування">${Object.entries(SORTS).map(([k, v]) => `<option value="${k}" ${filter.sort === k ? 'selected' : ''}>${v}</option>`).join('')}</select>`)}
+        ${fpGroup('Бренди · ваша знижка', `${brands.length > 1 ? fpBtn('<span>Усі бренди</span>', !filter.brand, 'data-br=""') : ''}
+          ${brands.map((b) => fpBtn(`<span>${esc(b.name)}</span><span class="small">−${pct(b.margin)}</span>`, String(filter.brand) === String(b.id) || brands.length === 1, `data-br="${b.id}"`)).join('')}`)}
+        <div id="pcCats"></div>
+        ${fpGroup('Показати', Object.entries(SHOWS).map(([k, [label]]) => fpBtn(`<span>${label}</span>`, filter.show === k, `data-show="${k}"`)).join(''))}
+        <button type="button" class="btn" id="pcXlsx">⬇ Excel</button>`;
+    const body = `<div id="pcFeeds"></div>
+        <div class="head-row" style="margin:0"><span class="small muted" id="pcCount"></span><span class="small muted">Ціни з ПДВ. «Ваша ціна» = РРЦ − ваша знижка на бренд.</span></div>
+        <div id="pcList"></div>`;
     main.innerHTML = `
-      <div class="head-row"><h2>Каталог — ${esc(partner.name)}</h2><div class="btn-row">${products.length ? '<button class="btn" id="pcXlsx">⬇ Excel</button>' : ''}${products.length && canEdit() ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div></div>
-      <div id="pcFeeds"></div>
-      ${products.length ? `
-        <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap">
-          ${brands.length > 1 ? `<button class="chip ${filter.brand ? '' : 'on'}" data-br="">Усі бренди</button>` : ''}
-          ${brands.map((b) => `<button class="chip ${String(filter.brand) === String(b.id) || brands.length === 1 ? 'on' : ''}" data-br="${b.id}">${esc(b.name)} <span class="small">−${pct(b.margin)}</span></button>`).join('')}
-        </div>
-        <div class="btn-row" id="pcCats" style="margin-bottom:8px;flex-wrap:wrap"></div>
-        <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap;align-items:center">
-          <input id="pcQ" type="search" placeholder="Пошук за назвою або артикулом" value="${esc(filter.q)}" style="max-width:300px" aria-label="Пошук товару">
-          <select id="pcSort" aria-label="Сортування" style="max-width:220px">${Object.entries(SORTS).map(([k, v]) => `<option value="${k}" ${filter.sort === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
-          <span class="small muted" id="pcCount"></span>
-        </div>
-        <div class="small muted" style="margin-bottom:8px">Ціни з ПДВ. «Ваша ціна» = РРЦ − ваша знижка на бренд; РРЦ — рекомендована роздрібна ціна.</div>
-        <div id="pcList"></div>`
-        : '<div class="card empty"><div class="big">Каталог ще порожній</div>Ваш менеджер ще не відкрив вам бренди. Зверніться до нього — після цього товари з’являться тут.</div>'}`;
+      <div class="head-row"><h2>Каталог — ${esc(partner.name)}</h2><div class="btn-row">${products.length && canEdit() ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div></div>
+      ${products.length ? fpLayout(aside, body, { summary: `${products.length} товарів` })
+        : '<div id="pcFeeds"></div><div class="card empty"><div class="big">Каталог ще порожній</div>Ваш менеджер ще не відкрив вам бренди. Зверніться до нього — після цього товари з’являться тут.</div>'}`;
+    wireFp();
     // Фіди й таблиці від менеджера — показуємо, лише якщо є.
     api('GET', '/api/b2b/p/feeds').then((list) => {
       const box = $('#pcFeeds');
@@ -170,6 +174,7 @@ export function createPartnerPages(ctx = {}) {
     let t;
     $('#pcQ').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { filter.q = e.target.value.trim(); saveFilter(); draw(); }, 200); };
     $('#pcSort').onchange = (e) => { filter.sort = e.target.value; saveFilter(); draw(); };
+    $$('[data-show]').forEach((b) => (b.onclick = () => { filter.show = b.dataset.show; saveFilter(); draw(); }));
     // Excel: кожна категорія — окремий аркуш; назва, артикул, бренд, РРЦ, ваша ціна, знижка (маржа) від РРЦ у %.
     $('#pcXlsx').onclick = () => {
       const byCat = new Map();
@@ -284,14 +289,18 @@ export function createPartnerPages(ctx = {}) {
     const qs = filterQs(supFilter);
     const [{ rows, statuses }, lim] = await Promise.all([api('GET', `/api/b2b/p/orders${qs ? `?${qs}` : ''}`), api('GET', '/api/b2b/p/limits').catch(() => null)]);
     const debt = lim?.debt;
-    main.innerHTML = `
-      <div class="head-row"><h2>Закупівлі</h2>${canEdit() && !lim?.paused ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div>
-      ${pauseHtml(lim)}${debt?.total ? `<div class="alert ${debt.overdue ? 'bad' : 'info'}" style="margin-bottom:10px">До оплати: <b>${uah(debt.total)}</b>${debt.rows.length ? ` — за рахунками ${uah(debt.invoiced ?? debt.total)} (${debt.rows.length} ${debt.rows.length === 1 ? 'закупівля' : 'закупівлі'})` : ''}${debt.shippedTotal ? `${debt.rows.length ? ',' : ' —'} відвантажено без рахунку ${uah(debt.shippedTotal)}` : ''}${debt.overdue ? ` · <b>прострочено ${uah(debt.overdue)}</b> — оплатіть, будь ласка` : ''}
-        ${lim.postpay?.days ? `<div class="small">Відстрочка оплати: ${lim.postpay.days} дн. від дати рахунку${lim.postpay.limit != null ? ` · використано ${uah(lim.postpay.used)} з ${uah(lim.postpay.limit)}` : ''}</div>` : ''}</div>` : ''}
-      <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap"><button class="chip ${supFilter.status ? '' : 'on'}" data-pst="">Усі</button>
-        ${Object.entries(statuses).map(([k, v]) => `<button class="chip ${supFilter.status === k ? 'on' : ''}" data-pst="${k}">${esc(v)}</button>`).join('')}</div>
-      ${filterBar(supFilter, { placeholder: '№, юрособа, № рахунку…' })}
-      ${rows.length ? `<table class="list"><thead><tr><th>№</th><th class="hide-m">Дата</th><th>Сума</th><th>Статус</th><th class="hide-m">Рахунок</th></tr></thead><tbody>
+    const sum = rows.reduce((t, o) => t + (Number(o.total) || 0), 0);
+    const aside = `${filterSide(supFilter, { placeholder: '№, юрособа, № рахунку…' })}
+      ${fpGroup('Статус', `${fpBtn('<span>Усі</span>', !supFilter.status, 'data-pst=""')}
+        ${Object.entries(statuses).map(([k, v]) => fpBtn(`<span>${esc(v)}</span>`, supFilter.status === k, `data-pst="${k}"`)).join('')}`)}`;
+    const bar = (v, max) => `<div class="limit-bar"><i class="${v >= max - 0.01 ? 'bad' : ''}" style="width:${max ? Math.min(100, Math.round((v / max) * 100)) : 0}%"></i></div>`;
+    const kpis = `<div class="kpis">
+        ${fpKpi('Знайдено', String(rows.length), uah(sum))}
+        ${lim?.open?.id ? fpKpi('Відкрита закупівля', uah(lim.open.total), `${bar(lim.open.total, lim.open.limit)}<span>з ліміту ${uah(lim.open.limit)} · <a href="#/porders/${lim.open.id}">${esc(lim.open.number)}</a></span>`) : ''}
+        ${lim?.unpaid ? fpKpi('Неоплачені закупівлі', uah(lim.unpaid.total), `${bar(lim.unpaid.total, lim.unpaid.limit)}<span>з ліміту ${uah(lim.unpaid.limit)}</span>`) : ''}
+        ${debt ? fpKpi('До оплати', uah(debt.total || 0), debt.overdue ? `<span class="badge bad">прострочено ${uah(debt.overdue)}</span>` : 'прострочень немає', debt.overdue ? 'kpi-bad' : '') : ''}
+      </div>`;
+    const table = rows.length ? `<table class="list"><thead><tr><th>№</th><th class="hide-m">Дата</th><th>Сума</th><th>Статус</th><th class="hide-m">Рахунок</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click" data-o="${o.id}">
           <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? ' <span class="badge info">🚗 самовивіз</span>' : o.delivery === 'warehouse' ? ' <span class="badge info">🏬 на ваш склад</span>' : ''}${o.status === 'confirm' ? ' <span class="badge warn">👉 підтвердіть</span>' : ''}${o.pay_terms === 'postpay' ? ` <span class="badge ${o.overdue ? 'bad' : 'warn'}">відстрочка${o.due_date ? ` до ${esc(fmtDay(o.due_date))}` : ''}</span>` : ''}<div class="small muted">${esc(o.entity.split('\n')[0].split(',')[0])}</div></td>
           <td class="small hide-m">${esc(fmtDateTime(o.created_at))}</td>
@@ -299,7 +308,14 @@ export function createPartnerPages(ctx = {}) {
           <td>${statusBadge(o)}</td>
           <td class="small hide-m">${o.invoice_no ? `№ ${esc(o.invoice_no)}${o.files ? ` · 📎 ${o.files}` : ''}` : '—'}</td>
         </tr>`).join('')}</tbody></table>`
-        : `<div class="card empty"><div class="big">${qs ? 'Нічого не знайдено' : 'Закупівель ще немає'}</div>${qs ? 'Змініть фільтри.' : 'Оберіть товари в каталозі й оформіть першу закупівлю.'}</div>`}`;
+      : `<div class="card empty"><div class="big">${qs ? 'Нічого не знайдено' : 'Закупівель ще немає'}</div>${qs ? 'Змініть фільтри.' : 'Оберіть товари в каталозі й оформіть першу закупівлю.'}</div>`;
+    main.innerHTML = `
+      <div class="head-row"><h2>Закупівлі</h2>${canEdit() && !lim?.paused ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div>
+      ${pauseHtml(lim)}
+      ${fpLayout(aside, `${kpis}${debt?.total ? `<div class="alert ${debt.overdue ? 'bad' : 'info'}">До оплати: <b>${uah(debt.total)}</b>${debt.rows.length ? ` — за рахунками ${uah(debt.invoiced ?? debt.total)} (${debt.rows.length} ${debt.rows.length === 1 ? 'закупівля' : 'закупівлі'})` : ''}${debt.shippedTotal ? `${debt.rows.length ? ',' : ' —'} відвантажено без рахунку ${uah(debt.shippedTotal)}` : ''}${debt.overdue ? ` · <b>прострочено ${uah(debt.overdue)}</b> — оплатіть, будь ласка` : ''}
+        ${lim.postpay?.days ? `<div class="small">Відстрочка оплати: ${lim.postpay.days} дн. від дати рахунку${lim.postpay.limit != null ? ` · використано ${uah(lim.postpay.used)} з ${uah(lim.postpay.limit)}` : ''}</div>` : ''}</div>` : ''}${table}`,
+      { summary: supFilter.status ? statuses[supFilter.status] || '' : '' })}`;
+    wireFp();
     wireFilterBar(supFilter, () => viewOrders());
     $$('[data-pst]').forEach((b) => (b.onclick = () => { supFilter.status = b.dataset.pst; viewOrders(); }));
     $$('[data-o]').forEach((tr) => (tr.onclick = () => { location.hash = `#/porders/${tr.dataset.o}`; }));
@@ -511,16 +527,15 @@ export function createPartnerPages(ctx = {}) {
     if (id) return viewClient(id);
     const qs = filterQs(cliFilter);
     const [{ rows, statuses, crm_statuses: crmSts = [] }, ob] = await Promise.all([api('GET', `/api/b2b/p/clients${qs ? `?${qs}` : ''}`), openBanner()]);
-    main.innerHTML = `
-      <div class="head-row"><h2>Замовлення клієнтів</h2>${canEdit() ? '<a class="btn primary" href="#/pclients/new">+ Замовлення клієнта</a>' : ''}</div>
-      ${ob.html}
-      <div class="small muted" style="margin-bottom:10px">Замовлення, яке ви оформлюєте для свого клієнта: товари з вашої закупівлі, ваша ТТН і маркування.
-        <span class="badge bad">Без закупівлі</span> — товари не з закупівлі, менеджер виставить рахунок окремо.</div>
-      <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap"><button class="chip ${cliFilter.status ? '' : 'on'}" data-pst="">Усі</button>
-        ${Object.entries(statuses).map(([k, v]) => `<button class="chip ${cliFilter.status === k ? 'on' : ''}" data-pst="${k}">${esc(v)}</button>`).join('')}
-        ${crmStatusSelect(crmSts, cliFilter.crm_status)}</div>
-      ${filterBar(cliFilter, { pay: true })}
-      ${rows.length ? `<table class="list"><thead><tr><th>№</th><th>Клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th>Статус відправлення</th></tr></thead><tbody>
+    const live = rows.filter((o) => o.status !== 'cancelled');
+    const noSup = live.filter((o) => o.no_supply).length;
+    const pend = rows.filter((o) => o.pending).length;
+    const crmSel = crmStatusSelect(crmSts, cliFilter.crm_status);
+    const aside = `${filterSide(cliFilter, { pay: true })}
+      ${fpGroup('Статус', `${fpBtn('<span>Усі</span>', !cliFilter.status, 'data-pst=""')}
+        ${Object.entries(statuses).map(([k, v]) => fpBtn(`<span>${esc(v)}</span>`, cliFilter.status === k, `data-pst="${k}"`)).join('')}`)}
+      ${crmSel ? fpGroup('Статус у LP-CRM', crmSel) : ''}`;
+    const table = rows.length ? `<table class="list"><thead><tr><th>№</th><th>Клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th>Статус відправлення</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click ${o.pending ? 'row-info' : o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''}" data-o="${o.id}">
           <td><b>${esc(o.number)}</b><div>${supplyMark(o)}</div>${o.pending ? '<div><span class="badge info">🔵 зміни менеджера — підтвердіть</span></div>' : ''}<div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
           <td>${esc(o.client_name)}<div class="small muted">${esc(phoneFmt(o.client_phone))}${o.ttn ? ` · ТТН ${esc(o.ttn)}` : ''}</div></td>
@@ -529,7 +544,19 @@ export function createPartnerPages(ctx = {}) {
           <td class="hide-m">${payBadge(o)}</td>
           <td>${crmCell(o)}</td>
         </tr>`).join('')}</tbody></table>`
-        : `<div class="card empty"><div class="big">${qs ? 'Нічого не знайдено' : 'Замовлень клієнтів ще немає'}</div>${qs ? 'Змініть фільтри.' : 'Відкрийте закупівлю і натисніть «+ Замовлення клієнта» або створіть замовлення тут.'}</div>`}`;
+      : `<div class="card empty"><div class="big">${qs ? 'Нічого не знайдено' : 'Замовлень клієнтів ще немає'}</div>${qs ? 'Змініть фільтри.' : 'Відкрийте закупівлю і натисніть «+ Замовлення клієнта» або створіть замовлення тут.'}</div>`;
+    main.innerHTML = `
+      <div class="head-row"><h2>Замовлення клієнтів</h2>${canEdit() ? '<a class="btn primary" href="#/pclients/new">+ Замовлення клієнта</a>' : ''}</div>
+      ${ob.html}
+      ${fpLayout(aside, `<div class="kpis">
+          ${fpKpi('Знайдено', String(rows.length), uah(live.reduce((t, o) => t + (Number(o.total) || 0), 0)))}
+          ${fpKpi('Без закупівлі', String(noSup), noSup ? 'менеджер виставить рахунок окремо' : 'усе із закупівель', noSup ? 'kpi-bad' : '')}
+          ${fpKpi('Чекають вашого підтвердження', String(pend), pend ? 'зміни менеджера' : 'нічого не чекає')}
+        </div>
+        <div class="small muted">Замовлення, яке ви оформлюєте для свого клієнта: товари з вашої закупівлі, ваша ТТН і маркування.
+          <span class="badge bad">Без закупівлі</span> — товари не з закупівлі, менеджер виставить рахунок окремо.</div>
+        ${table}`, { summary: [cliFilter.status && statuses[cliFilter.status], cliFilter.crm_status].filter(Boolean).join(' · ') })}`;
+    wireFp();
     wireFilterBar(cliFilter, () => viewClients());
     ob.wire(() => viewClients());
     $$('[data-pst]').forEach((b) => (b.onclick = () => { cliFilter.status = b.dataset.pst; viewClients(); }));

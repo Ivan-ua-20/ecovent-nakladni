@@ -3,6 +3,7 @@
 // повернення, коментує; менеджер розглядає, погоджує / відхиляє, перевіряє брак, оформлює заміну чи повернення коштів.
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
+import { fpLayout, wireFp, fpGroup, fpBtn, fpKpi } from './b2b-shared.js';
 
 const ST_CLS = { new: 'warn', review: 'info', approved: 'info', resolved: 'ok', closed: 'ok', rejected: 'bad', cancelled: '' };
 const badge = (r) => `<span class="badge ${ST_CLS[r.status] || ''}">${esc(r.status_name)}</span>`;
@@ -70,17 +71,10 @@ export function createClaimPages(ctx) {
     const { rows = [], statuses = {}, counts = [] } = await api('GET', `${base}${st ? `?status=${st}` : ''}`);
     const cnt = Object.fromEntries(counts.map((x) => [x.status, x.n]));
     const open = (cnt.new || 0) + (cnt.review || 0) + (cnt.approved || 0);
-    main.innerHTML = `
-      <div class="head-row"><h2>Обміни й повернення</h2></div>
-      <div class="alert info help" style="margin-bottom:12px">${admin
-        ? 'Заявки партнерів на брак: розгляньте, погодьте (куди йде брак) або відхиліть; заміна — «обмінна закупівля» на 0 грн, з якої партнер оформлює відправку. Нова заявка — кнопка «🛠 Брак / обмін» у замовленні клієнта чи закупівлі.'
-        : 'Брак чи пошкодження: відкрийте замовлення клієнта або закупівлю й натисніть «🛠 Брак / обмін». Заявка й усі зміни приходять у вашу Telegram-групу.'}</div>
-      <div class="btn-row" style="margin-bottom:10px;flex-wrap:wrap">
-        <button class="chip ${st === 'open' ? 'on' : ''}" data-cs="open">Відкриті${open ? ` · ${open}` : ''}</button>
-        <button class="chip ${st === '' ? 'on' : ''}" data-cs="">Усі</button>
-        ${Object.entries(statuses).map(([k, v]) => `<button class="chip ${st === k ? 'on' : ''}" data-cs="${k}">${esc(v)}${cnt[k] ? ` · ${cnt[k]}` : ''}</button>`).join('')}
-      </div>
-      ${rows.length ? `<table class="list"><thead><tr><th>№</th>${admin ? '<th>Партнер</th>' : ''}<th>Замовлення / клієнт</th><th>Товар</th><th>Причина</th><th>Статус</th></tr></thead><tbody>
+    const aside = fpGroup('Статус', `${fpBtn(`<span>Відкриті</span><span class="small">${open || ''}</span>`, st === 'open', 'data-cs="open"')}
+        ${fpBtn('<span>Усі</span>', st === '', 'data-cs=""')}
+        ${Object.entries(statuses).map(([k, v]) => fpBtn(`<span>${esc(v)}</span><span class="small">${cnt[k] || ''}</span>`, st === k, `data-cs="${k}"`)).join('')}`);
+    const table = rows.length ? `<table class="list"><thead><tr><th>№</th>${admin ? '<th>Партнер</th>' : ''}<th>Замовлення / клієнт</th><th>Товар</th><th>Причина</th><th>Статус</th></tr></thead><tbody>
         ${rows.map((r) => `<tr class="click" data-cl="${r.id}">
           <td><b>${esc(r.number)}</b><div class="small muted">${esc(fmtDateTime(r.created_at))}</div></td>
           ${admin ? `<td>${esc(r.partner)}</td>` : ''}
@@ -88,7 +82,20 @@ export function createClaimPages(ctx) {
           <td class="small">${itemsLine(r.items)}</td>
           <td class="small">${esc(r.reason_name)}<div class="muted">${esc(r.want_name)}</div>${r.files ? `<div class="muted">📷 ${r.files}</div>` : ''}</td>
           <td>${badge(r)}${r.defect_name ? `<div class="small muted">${esc(r.defect_name)}</div>` : ''}</td></tr>`).join('')}</tbody></table>`
-        : '<div class="card empty"><div class="big">Заявок немає</div>Тут з’являться заявки на обмін і повернення браку.</div>'}`;
+      : '<div class="card empty"><div class="big">Заявок немає</div>Тут з’являться заявки на обмін і повернення браку.</div>';
+    main.innerHTML = `
+      <div class="head-row"><h2>Обміни й повернення</h2></div>
+      ${fpLayout(aside, `<div class="kpis">
+          ${fpKpi('Відкриті', String(open))}
+          ${fpKpi('Нові', String(cnt.new || 0), admin ? 'чекають розгляду' : 'чекають менеджера')}
+          ${fpKpi('Погоджені', String(cnt.approved || 0), admin ? 'чекають брак / заміну' : 'внесіть ТТН повернення, якщо потрібно')}
+          ${fpKpi('Вирішені', String((cnt.resolved || 0) + (cnt.closed || 0)))}
+        </div>
+        <div class="alert info help">${admin
+    ? 'Заявки партнерів на брак: розгляньте, погодьте (куди йде брак) або відхиліть; заміна — «обмінна закупівля» на 0 грн, з якої партнер оформлює відправку. Нова заявка — кнопка «🛠 Брак / обмін» у замовленні клієнта чи закупівлі.'
+    : 'Брак чи пошкодження: відкрийте замовлення клієнта або закупівлю й натисніть «🛠 Брак / обмін». Заявка й усі зміни приходять у вашу Telegram-групу.'}</div>
+        ${table}`, { summary: st === 'open' ? 'відкриті' : st ? statuses[st] || '' : 'усі' })}`;
+    wireFp();
     $$('[data-cs]').forEach((b) => (b.onclick = () => { viewList.st = b.dataset.cs; viewList(admin); }));
     $$('[data-cl]').forEach((tr) => (tr.onclick = () => { location.hash = `#/${admin ? 'b2bclaims' : 'pclaims'}/${tr.dataset.cl}`; }));
   }

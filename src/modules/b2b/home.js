@@ -44,13 +44,34 @@ export function mountB2bHome(app, { db, myPartner, orders }) {
       ...debt.rows.filter((o) => o.overdue).map((o) => ({ text: `Прострочено оплату ${o.number}: ${o.due.toLocaleString('uk-UA')} грн (${o.overdue} дн.)`, link: `#/porders/${o.id}`, bad: true })),
     ];
     const next = debt.rows.filter((o) => o.due_date && !o.overdue).sort((a, b) => a.due_date.localeCompare(b.due_date))[0];
+    const mgr = p.manager_id ? await db.get(`SELECT name, login FROM users WHERE id = ? AND active = 1`, [p.manager_id]).catch(() => null) : null;
     return c.json({
       partner: { name: p.name, paused: Boolean(p.paused) },
+      manager: mgr ? { name: mgr.name || mgr.login } : null,
       todo,
       debt: { total: debt.total, overdue: debt.overdue, next: next ? { number: next.number, id: next.id, due: next.due, due_date: next.due_date } : null },
       postpay: { days: postpay.days, limit: postpay.limit, used: postpay.used },
       recent: recent.map((o) => ({ id: o.id, number: orderNo(o.id), kind: o.kind, status: o.status, total: o.total, client_name: o.client_name || '', created_at: o.created_at })),
     });
+  });
+
+  // ---------- партнер: стрічка подій (історія закупівель, замовлень клієнтів і заявок на обмін) ----------
+  // kind: supply | client | claim; ціни партнерський кабінет добирає окремо з /api/b2b/p/price-log.
+  app.get('/api/b2b/p/feed', async (c) => {
+    const p = await myPartner(c);
+    const lim = Math.min(Math.max(parseInt(c.req.query('limit'), 10) || 40, 1), 100);
+    const [ol, cl] = await Promise.all([
+      db.all(`SELECT l.id, l.at, l.user_name, l.action, o.id AS oid, o.kind, o.client_name FROM b2b_order_log l JOIN b2b_orders o ON o.id = l.order_id
+        WHERE o.partner_id = ? AND o.status != 'open' ORDER BY l.id DESC LIMIT ?`, [p.id, lim]),
+      db.all(`SELECT l.id, l.at, l.user_name, l.action, c.id AS cid FROM b2b_claim_log l JOIN b2b_claims c ON c.id = l.claim_id
+        WHERE c.partner_id = ? ORDER BY l.id DESC LIMIT ?`, [p.id, Math.min(lim, 30)]).catch(() => []),
+    ]);
+    const rows = [
+      ...ol.map((r) => ({ kind: r.kind === 'supply' ? 'supply' : 'client', at: r.at, who: r.user_name || '', text: r.action, number: orderNo(r.oid), client_name: r.client_name || '',
+        link: `#/${r.kind === 'supply' ? 'porders' : 'pclients'}/${r.oid}` })),
+      ...cl.map((r) => ({ kind: 'claim', at: r.at, who: r.user_name || '', text: r.action, number: `О-${r.cid}`, client_name: '', link: `#/pclaims/${r.cid}` })),
+    ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0)).slice(0, lim);
+    return c.json({ rows });
   });
 
   // ---------- виписка взаєморозрахунків ----------
