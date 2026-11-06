@@ -1911,6 +1911,7 @@ async function resetOwnerPassword(db, newPassword) {
 // src/core/common.js
 var MASK = "\u2022\u2022\u2022\u2022\u2022\u2022";
 var nowIso = () => (/* @__PURE__ */ new Date()).toISOString();
+var API_USER = /* @__PURE__ */ Symbol.for("ecovent.apiUser");
 var fail = (status, message) => Object.assign(new Error(message), { status });
 var need = (c, perm) => {
   const u = c.get("user");
@@ -2135,8 +2136,9 @@ function mountAuth(app, { db, runCleanup, onCleanup }) {
   });
   const PARTNER_PATHS = ["/api/b2b/p", "/api/me/password", "/api/tg/me", "/api/tg/link", "/api/bootstrap"];
   app.use("/api/*", async (c, next) => {
+    if (c.req.path.startsWith("/api/v1/")) return next();
     if (c.req.path.startsWith("/api/auth/") || c.req.path === "/api/odb/hook" || c.req.path === "/api/tg/hook" || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/rzs/hook/")) return next();
-    const user = await sessionUser(c);
+    const user = c.env?.[API_USER] || await sessionUser(c);
     if (!user) throw fail(401, "\u041F\u043E\u0442\u0440\u0456\u0431\u043D\u043E \u0443\u0432\u0456\u0439\u0442\u0438.");
     c.set("user", user);
     if (user.role === "partner" && !PARTNER_PATHS.some((p) => c.req.path === p || c.req.path.startsWith(`${p}/`))) {
@@ -7895,7 +7897,7 @@ var newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Ma
 function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, hooks = {}, onCron = () => {
 } }) {
   const { itemsTxt, itemsDiff, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah4, h: h8 } = orders;
-  const userName7 = (u) => u?.name || u?.login || "";
+  const userName8 = (u) => u?.name || u?.login || "";
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files,
     (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id AND f.kind = 'label') AS labels
     FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id`;
@@ -8035,7 +8037,7 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
           const num6 = o && /^\d+$/.test(String(o.id ?? "")) ? String(o.id) : r.crm_id;
           const same = name === (r.crm_status || "") && (num6 || "") === (r.crm_id || "");
           if (cron && same) continue;
-          st.push([`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ?, crm_ext = ?, crm_id = ? WHERE id = ?`, [name, now, r.crm_ext, num6 || "", r.id]]);
+          st.push(same ? [`UPDATE b2b_orders SET crm_checked_at = ? WHERE id = ?`, [now, r.id]] : [`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ?, crm_ext = ?, crm_id = ?, updated_at = ? WHERE id = ?`, [name, now, r.crm_ext, num6 || "", now, r.id]]);
           if (num6 && !r.crm_id) linked.push([r.id, num6]);
           if (o && r.crm_status && r.crm_status !== WAIT && name !== r.crm_status) changed.push([r, r.crm_status, name]);
         }
@@ -8219,7 +8221,7 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     ]);
     if (s?.status === "open") await rebuildOpen(s.id);
     if (!quiet) {
-      const who = userName7(c.get("user")) || "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440";
+      const who = userName8(c.get("user")) || "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440";
       const total = (await db.get(`SELECT total FROM b2b_orders WHERE id = ?`, [o.id])).total;
       await log(o.id, c.get("user"), `\u0446\u0456\u043D\u0438 \u0437\u043C\u0456\u043D\u0438\u0432 ${who}: ${list.join("; ")} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah4(total)}`.slice(0, 1800));
       await tgPartner(o.partner_id, `\u270F\uFE0F <b>\u0426\u0456\u043D\u0438 \u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0438\u0432 ${h8(who)}</b> (${h8(o.client_name)})
@@ -8467,11 +8469,11 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     const r = await db.run(
       `INSERT INTO b2b_orders (partner_id, kind, status, supply_id, client_name, client_phone, ttn, total, comment, created_by, created_at, updated_at)
        VALUES (?, 'client', 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [p.id, it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, userName7(u), now, now]
+      [p.id, it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, userName8(u), now, now]
     );
     await db.batch([...itemRows(r.lastId, it.items), [
       `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-      [r.lastId, now, userName7(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah4(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : it.draftId ? ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u2014 \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}: ${itemsTxt(it.items)}`.slice(0, 2e3)]
+      [r.lastId, now, userName8(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah4(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : it.draftId ? ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u2014 \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}: ${itemsTxt(it.items)}`.slice(0, 2e3)]
     ]]);
     if (it.draftId) {
       await draftAdjust(it.draftId, it.items);
@@ -8647,7 +8649,7 @@ ${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah4(i.price)}`).join(
     const after = await snapOf(o);
     const changes = diffOf(before, after);
     const crmOld = wasCrm ? oldCrm : o.pending ? JSON.parse(o.pending).crm_old || "" : "";
-    const by = userName7(c.get("user"));
+    const by = userName8(c.get("user"));
     await db.run(
       `UPDATE b2b_orders SET pending = ? WHERE id = ?`,
       [changes.length || crmOld ? JSON.stringify({ before, changes, by, at: now, crm_old: crmOld }) : "", o.id]
@@ -9031,7 +9033,7 @@ ${link(c, `pclients/${o.id}`)}`);
     if (paid && note.length < 3) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440: \u0447\u043E\u043C\u0443 \u043E\u043F\u043B\u0430\u0442\u0443 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E \u0432\u0440\u0443\u0447\u043D\u0443.");
     const u = c.get("user");
     const now = nowIso();
-    if (paid) await db.run(`UPDATE b2b_orders SET paid_amount = total, paid_at = ?, paid_by = ?, paid_note = ?, updated_at = ? WHERE id = ?`, [now, userName7(u), note, now, o.id]);
+    if (paid) await db.run(`UPDATE b2b_orders SET paid_amount = total, paid_at = ?, paid_by = ?, paid_note = ?, updated_at = ? WHERE id = ?`, [now, userName8(u), note, now, o.id]);
     else await db.run(`UPDATE b2b_orders SET paid_amount = 0, paid_at = '', paid_by = '', paid_note = '', updated_at = ? WHERE id = ?`, [now, o.id]);
     await log(o.id, u, paid ? `\u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443: ${note}` : "\u0437\u043D\u044F\u0442\u043E \u043F\u043E\u0437\u043D\u0430\u0447\u043A\u0443 \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB");
     if (paid) await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E</b>: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h8(o.client_name)}) \u2014 ${uah4(o.total)}
@@ -11122,7 +11124,7 @@ var claimNo = (id) => `\u041E-${id}`;
 var OPEN = ["new", "review", "approved"];
 function mountB2bClaims(app, { db, services = {}, myPartner, orders }) {
   const { orderOf, itemRows, storeFile, sendFile, groupOf, log, tgAdmins, tgPartner, tgGroup, link, uah: uah4, h: h8, entityText } = orders;
-  const userName7 = (u) => u?.name || u?.login || "";
+  const userName8 = (u) => u?.name || u?.login || "";
   const J = (v, d) => {
     try {
       return JSON.parse(v || "") ?? d;
@@ -11148,7 +11150,7 @@ function mountB2bClaims(app, { db, services = {}, myPartner, orders }) {
     order_number: r.order_id ? orderNo(r.order_id) : "",
     exch_number: r.exch_supply_id ? orderNo(r.exch_supply_id) : ""
   });
-  const clog = (id, u, action) => db.run(`INSERT INTO b2b_claim_log (claim_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [id, nowIso(), userName7(u), String(action).slice(0, 2e3)]);
+  const clog = (id, u, action) => db.run(`INSERT INTO b2b_claim_log (claim_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [id, nowIso(), userName8(u), String(action).slice(0, 2e3)]);
   const itemsLine = (list) => list.map((i) => `\u2022 ${h8(i.name)}${i.article ? ` (${h8(i.article)})` : ""} \xD7 ${i.qty}`).join("\n");
   async function claimText(r, title) {
     const c = pub(r);
@@ -11235,7 +11237,7 @@ ${link(c, `b2bclaims/${r.id}`)}`);
         JSON.stringify(list),
         JSON.stringify(wantItems),
         deliverTo,
-        userName7(c.get("user")),
+        userName8(c.get("user")),
         now,
         now
       ]
@@ -11416,7 +11418,7 @@ ${link(c, `b2bclaims/${r.id}`)}`);
     const r = await db.run(
       `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery,
         paid_amount, paid_at, paid_by, paid_note, claim_id) VALUES (?, 'supply', 'paid', ?, ?, 0, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
-      [cl.partner_id, entityId, entity, `\u041E\u0411\u041C\u0406\u041D \u0437\u0430 \u0437\u0430\u044F\u0432\u043A\u043E\u044E ${claimNo(cl.id)} (${orderNo(cl.order_id)})`, userName7(c.get("user")), now, now, delivery, now, userName7(c.get("user")), note, cl.id]
+      [cl.partner_id, entityId, entity, `\u041E\u0411\u041C\u0406\u041D \u0437\u0430 \u0437\u0430\u044F\u0432\u043A\u043E\u044E ${claimNo(cl.id)} (${orderNo(cl.order_id)})`, userName8(c.get("user")), now, now, delivery, now, userName8(c.get("user")), note, cl.id]
     );
     await db.batch(itemRows(r.lastId, items));
     await log(r.lastId, c.get("user"), `\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u043E\u0431\u043C\u0456\u043D\u043D\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E (0 \u0433\u0440\u043D, \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E \u0432\u0440\u0443\u0447\u043D\u0443\xBB: ${note}): ${items.map((i) => `${i.name} \xD7 ${i.qty}`).join("; ")}`);
@@ -11576,6 +11578,302 @@ ${link(c, "pcatalog")}`;
     const r = await db.run(`UPDATE b2b_feeds SET active = 0, updated_at = ? WHERE id = ? AND active = 1`, [nowIso(), c.req.param("id")]);
     if (!r.changes) throw fail(404, "\u041F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     return c.json({ ok: true });
+  });
+}
+
+// src/modules/b2b/api.js
+var PREFIX = "ecv_";
+var MAX_KEYS = 5;
+var sha2562 = async (s) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+var userName6 = (u) => u?.name || u?.login || "";
+var isoOk = (s) => /^\d{4}-\d{2}-\d{2}([T ][\d:.]+(Z|[+-]\d{2}:?\d{2})?)?$/.test(String(s || "")) && !Number.isNaN(Date.parse(s));
+function mountB2bApi(app, { db, myPartner, tgPartner, CLIENT_STATUS: CLIENT_STATUS2, orderNo: orderNo2, payState: payState2, PAY_NAME: PAY_NAME2 }) {
+  const keyRow = (k) => ({ id: k.id, name: k.name, prefix: k.prefix, created_by: k.created_by, created_at: k.created_at, last_used_at: k.last_used_at || "", revoked_at: k.revoked_at || "" });
+  const keysOf = (partnerId) => db.all(`SELECT * FROM b2b_api_keys WHERE partner_id = ? ORDER BY revoked_at IS NOT NULL AND revoked_at != '', id DESC`, [partnerId]);
+  async function createKey(partnerId, name, by) {
+    const n = (await db.get(`SELECT COUNT(*) AS n FROM b2b_api_keys WHERE partner_id = ? AND COALESCE(revoked_at, '') = ''`, [partnerId])).n;
+    if (n >= MAX_KEYS) throw fail(400, `\u0423\u0436\u0435 ${MAX_KEYS} \u0430\u043A\u0442\u0438\u0432\u043D\u0438\u0445 \u043A\u043B\u044E\u0447\u0456\u0432 \u2014 \u0432\u0456\u0434\u043A\u043B\u0438\u0447\u0442\u0435 \u043D\u0435\u043F\u043E\u0442\u0440\u0456\u0431\u043D\u0438\u0439.`);
+    const title = String(name || "").trim().replace(/\s+/g, " ").slice(0, 60) || "API";
+    const key = `${PREFIX}${randomToken(24)}`;
+    const now = nowIso();
+    const r = await db.run(
+      `INSERT INTO b2b_api_keys (partner_id, name, prefix, hash, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      [partnerId, title, key.slice(0, 10), await sha2562(key), by, now]
+    );
+    await tgPartner(partnerId, `\u{1F511} \u0421\u0442\u0432\u043E\u0440\u0435\u043D\u043E API-\u043A\u043B\u044E\u0447 \xAB${title}\xBB (${key.slice(0, 10)}\u2026) \u2014 ${by}. \u042F\u043A\u0449\u043E \u0446\u0435 \u043D\u0435 \u0432\u0438, \u0432\u0456\u0434\u043A\u043B\u0438\u0447\u0442\u0435 \u0439\u043E\u0433\u043E \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456: \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 API.`).catch(() => 0);
+    return { id: r.lastId, name: title, key, prefix: key.slice(0, 10), created_at: now };
+  }
+  async function revokeKey(partnerId, id, by) {
+    const r = await db.run(`UPDATE b2b_api_keys SET revoked_at = ?, revoked_by = ? WHERE id = ? AND partner_id = ? AND COALESCE(revoked_at, '') = ''`, [nowIso(), by, id, partnerId]);
+    if (!r.changes) throw fail(404, "\u041A\u043B\u044E\u0447 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0430\u0431\u043E \u0432\u0436\u0435 \u0432\u0456\u0434\u043A\u043B\u0438\u043A\u0430\u043D\u043E.");
+  }
+  app.get("/api/b2b/p/api-keys", async (c) => {
+    const p = await myPartner(c);
+    need(c, "b2b.team");
+    return c.json((await keysOf(p.id)).map(keyRow));
+  });
+  app.post("/api/b2b/p/api-keys", async (c) => {
+    const p = await myPartner(c);
+    need(c, "b2b.team");
+    if (c.get("user")?.api_key_id) throw fail(403, "\u041A\u043B\u044E\u0447\u0456 \u0441\u0442\u0432\u043E\u0440\u044E\u044E\u0442\u044C\u0441\u044F \u043B\u0438\u0448\u0435 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456.");
+    return c.json(await createKey(p.id, (await c.req.json().catch(() => ({}))).name, userName6(c.get("user"))));
+  });
+  app.delete("/api/b2b/p/api-keys/:id", async (c) => {
+    const p = await myPartner(c);
+    need(c, "b2b.team");
+    if (c.get("user")?.api_key_id) throw fail(403, "\u041A\u043B\u044E\u0447\u0456 \u0432\u0456\u0434\u043A\u043B\u0438\u043A\u0430\u044E\u0442\u044C\u0441\u044F \u043B\u0438\u0448\u0435 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456.");
+    await revokeKey(p.id, c.req.param("id"), userName6(c.get("user")));
+    return c.json({ ok: true });
+  });
+  app.get("/api/b2b/partners/:id/api-keys", async (c) => {
+    need(c, "b2b.view");
+    return c.json((await keysOf(Number(c.req.param("id")))).map(keyRow));
+  });
+  app.post("/api/b2b/partners/:id/api-keys", async (c) => {
+    need(c, "b2b.admin");
+    const pid = Number(c.req.param("id"));
+    if (!await db.get(`SELECT id FROM b2b_partners WHERE id = ? AND active = 1`, [pid])) throw fail(404, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return c.json(await createKey(pid, (await c.req.json().catch(() => ({}))).name, userName6(c.get("user"))));
+  });
+  app.delete("/api/b2b/partners/:id/api-keys/:kid", async (c) => {
+    need(c, "b2b.admin");
+    await revokeKey(Number(c.req.param("id")), c.req.param("kid"), userName6(c.get("user")));
+    return c.json({ ok: true });
+  });
+  app.use("/api/v1/*", async (c, next) => {
+    const auth = c.req.header("authorization") || "";
+    const key = (auth.match(/^Bearer\s+(\S+)$/i)?.[1] || c.req.header("x-api-key") || "").trim();
+    if (!key.startsWith(PREFIX)) throw fail(401, "\u041F\u043E\u0442\u0440\u0456\u0431\u0435\u043D API-\u043A\u043B\u044E\u0447: \u0437\u0430\u0433\u043E\u043B\u043E\u0432\u043E\u043A Authorization: Bearer ecv_\u2026");
+    const k = await db.get(`SELECT k.*, p.name AS partner_name FROM b2b_api_keys k JOIN b2b_partners p ON p.id = k.partner_id
+      WHERE k.hash = ? AND COALESCE(k.revoked_at, '') = '' AND p.active = 1`, [await sha2562(key)]);
+    if (!k) throw fail(401, "\u041D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 \u0430\u0431\u043E \u0432\u0456\u0434\u043A\u043B\u0438\u043A\u0430\u043D\u0438\u0439 API-\u043A\u043B\u044E\u0447.");
+    if (!k.last_used_at || Date.now() - Date.parse(k.last_used_at) > 6e4) {
+      await db.run(`UPDATE b2b_api_keys SET last_used_at = ?, last_ip = ? WHERE id = ?`, [nowIso(), (c.req.header("cf-connecting-ip") || "").slice(0, 64), k.id]);
+    }
+    const user = { id: 0, login: "api", name: `API \xB7 ${k.name}`, role: "partner", partner_role: "head", partner_id: k.partner_id, active: 1, api_key_id: k.id };
+    c.set("user", user);
+    c.set("apiKey", k);
+    await next();
+  });
+  async function call2(c, method, path, { json, raw: raw2, headers = {} } = {}) {
+    const init = { method, headers: { ...headers } };
+    if (raw2) init.body = raw2;
+    else if (json !== void 0) {
+      init.body = JSON.stringify(json);
+      init.headers["Content-Type"] = "application/json";
+    }
+    let ctx;
+    try {
+      ctx = c.executionCtx;
+    } catch {
+      ctx = void 0;
+    }
+    const r = await app.request(path, init, { ...c.env || {}, [API_USER]: c.get("user") }, ctx);
+    const j = await r.json().catch(() => ({}));
+    if (r.status >= 400) throw fail(r.status, j.error || "\u041F\u043E\u043C\u0438\u043B\u043A\u0430");
+    return j;
+  }
+  const statusOut = (o) => ({ status: o.status, status_name: CLIENT_STATUS2[o.status] || o.status });
+  function orderOut(o, items, files = null, missing = null) {
+    return {
+      id: o.id,
+      number: orderNo2(o.id),
+      external_id: o.ext_id || null,
+      ...statusOut(o),
+      crm: { order_id: o.crm_id || null, status: o.status === "crm" ? o.crm_status || null : null },
+      client: { name: o.client_name, phone: o.client_phone },
+      ttn: o.ttn || null,
+      comment: o.comment || "",
+      total: o.total,
+      supply: o.supply_id ? { id: o.supply_id, number: orderNo2(o.supply_id) } : null,
+      ...o.pay ? { pay: o.pay, pay_name: o.pay_name } : {},
+      pending_changes: Boolean(o.pending),
+      items: items.map((i) => ({ product_id: i.product_id, article: i.article || "", name: i.name, qty: i.qty, price: i.price, rrp: i.rrp || 0 })),
+      ...files ? { files: files.map((f) => ({ id: f.id, kind: f.kind, kind_name: f.kind_name, doc_type_id: f.doc_type || null, name: f.name, size: f.size, created_at: f.created_at })) } : {},
+      ...missing ? { missing_docs: missing } : {},
+      created_at: o.created_at,
+      updated_at: o.updated_at
+    };
+  }
+  async function findOrder(c) {
+    const ref = String(c.req.param("ref") || "");
+    const id = Number(ref.replace(/^B2B-/i, ""));
+    const o = Number.isInteger(id) && id > 0 ? await db.get(`SELECT id FROM b2b_orders WHERE id = ? AND partner_id = ? AND kind = 'client'`, [id, c.get("user").partner_id]) : null;
+    if (!o) throw fail(404, `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${ref} \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.`);
+    return o.id;
+  }
+  async function getOrder2(c, id) {
+    const d = await call2(c, "GET", `/api/b2b/p/clients/${id}`);
+    const ext = await db.get(`SELECT ext_id FROM b2b_orders WHERE id = ?`, [id]);
+    return orderOut({ ...d.order, ext_id: ext?.ext_id }, d.items, d.files, d.missing);
+  }
+  async function orderIn(c, b) {
+    if (!b || typeof b !== "object") throw fail(400, "\u041E\u0447\u0456\u043A\u0443\u0454\u0442\u044C\u0441\u044F JSON.");
+    const items = Array.isArray(b.items) ? b.items : [];
+    if (!items.length) throw fail(400, "items: \u0434\u043E\u0434\u0430\u0439\u0442\u0435 \u0445\u043E\u0447\u0430 \u0431 \u043E\u0434\u0438\u043D \u0442\u043E\u0432\u0430\u0440.");
+    let byArticle = null;
+    if (items.some((i) => !i.product_id && i.article)) {
+      const cat = await call2(c, "GET", "/api/b2b/p/catalog");
+      byArticle = new Map(cat.products.filter((p) => p.article).map((p) => [String(p.article).trim().toLowerCase(), p.id]));
+    }
+    const out = items.map((i, n) => {
+      const pid = parseInt(i.product_id, 10) || byArticle?.get(String(i.article || "").trim().toLowerCase());
+      if (!pid) throw fail(400, `items[${n}]: \u0442\u043E\u0432\u0430\u0440 ${i.article ? `\u0437 \u0430\u0440\u0442\u0438\u043A\u0443\u043B\u043E\u043C \xAB${i.article}\xBB \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 \u043A\u0430\u0442\u0430\u043B\u043E\u0437\u0456` : "\u043D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E (product_id \u0430\u0431\u043E article)"}.`);
+      const qty = Number(i.qty);
+      if (!Number.isInteger(qty) || qty <= 0 || qty > 999) throw fail(400, `items[${n}]: qty \u2014 \u0446\u0456\u043B\u0435 \u0447\u0438\u0441\u043B\u043E \u0432\u0456\u0434 1 \u0434\u043E 999.`);
+      return { product_id: pid, qty };
+    });
+    const client = b.client || {};
+    const supplyId = parseInt(String(b.supply_id ?? b.supply ?? "").replace(/^B2B-/i, ""), 10) || 0;
+    return {
+      client_name: client.name ?? b.client_name,
+      client_phone: client.phone ?? b.client_phone,
+      ttn: b.ttn ?? "",
+      comment: b.comment ?? "",
+      supply_id: supplyId || "",
+      into: b.into === "open" ? "new" : parseInt(b.into, 10) || "",
+      items: out
+    };
+  }
+  const extIdOf = (b) => {
+    const v = b?.external_id;
+    if (v == null || v === "") return "";
+    const s = String(v).trim();
+    if (!/^[\w.:/#-]{1,64}$/.test(s)) throw fail(400, "external_id: \u0434\u043E 64 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432 \u2014 \u043B\u0430\u0442\u0438\u043D\u0438\u0446\u044F, \u0446\u0438\u0444\u0440\u0438, . _ - : / #");
+    return s;
+  };
+  app.get("/api/v1/me", async (c) => {
+    const k = c.get("apiKey");
+    return c.json({ partner: { id: k.partner_id, name: k.partner_name }, key: { name: k.name, prefix: k.prefix } });
+  });
+  app.get("/api/v1/products", async (c) => {
+    const d = await call2(c, "GET", "/api/b2b/p/catalog");
+    const cats = new Map(d.categories.map((x) => [x.id, x.name]));
+    return c.json({
+      products: d.products.map((p) => ({
+        product_id: p.id,
+        article: p.article || "",
+        name: p.name,
+        brand: p.brand,
+        category: cats.get(p.cat) || "",
+        image: p.image || "",
+        rrp: p.rrp,
+        price: p.price,
+        special: p.special,
+        special_until: p.special_until || null,
+        is_new: p.is_new,
+        ...p.rrp_new ? { next_price: { rrp: p.rrp_new, price: p.price_new, from: p.grace_until } } : {}
+      })).sort((a, b) => a.name.localeCompare(b.name, "uk"))
+    });
+  });
+  app.get("/api/v1/supplies", async (c) => {
+    const d = await call2(c, "GET", "/api/b2b/p/supplies");
+    return c.json({ supplies: d.map((s) => ({
+      id: s.id,
+      number: s.number,
+      status: s.status,
+      status_name: s.status_name,
+      pay: s.pay,
+      created_at: s.created_at,
+      items: s.items.map((i) => ({ product_id: i.product_id, article: i.article || "", name: i.name, price: i.price, qty: i.qty, left: i.left }))
+    })) });
+  });
+  app.get("/api/v1/doc-types", async (c) => {
+    const d = await call2(c, "GET", "/api/b2b/p/doc-types");
+    return c.json({ doc_types: d.map((t) => ({ id: t.id, name: t.name, required: Boolean(t.required) })) });
+  });
+  app.get("/api/v1/statuses", async (c) => {
+    const crm = await db.all(`SELECT crm_status AS name, COUNT(*) AS orders FROM b2b_orders WHERE partner_id = ? AND kind = 'client' AND status = 'crm' AND COALESCE(crm_status, '') != '' GROUP BY crm_status ORDER BY orders DESC`, [c.get("user").partner_id]);
+    return c.json({ statuses: Object.entries(CLIENT_STATUS2).map(([id, name]) => ({ id, name })), crm_statuses: crm });
+  });
+  app.get("/api/v1/orders", async (c) => {
+    const pid = c.get("user").partner_id;
+    const q = c.req.query();
+    const limit = Math.min(Math.max(parseInt(q.limit, 10) || 50, 1), 200);
+    const where = ["o.partner_id = ?", "o.kind = 'client'"];
+    const params = [pid];
+    if (q.updated_since) {
+      if (!isoOk(q.updated_since)) throw fail(400, "updated_since \u2014 \u0434\u0430\u0442\u0430 ISO 8601, \u043D\u0430\u043F\u0440. 2026-11-06T10:00:00Z.");
+      where.push("o.updated_at > ?");
+      params.push(new Date(q.updated_since).toISOString());
+    }
+    if (q.status) {
+      if (!CLIENT_STATUS2[q.status]) throw fail(400, `status \u2014 \u043E\u0434\u043D\u0435 \u0437: ${Object.keys(CLIENT_STATUS2).join(", ")}.`);
+      where.push("o.status = ?");
+      params.push(q.status);
+    }
+    if (q.external_id) {
+      where.push("o.ext_id = ?");
+      params.push(String(q.external_id));
+    }
+    const rows = await db.all(`SELECT o.*, s.status AS supply_status FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id WHERE ${where.join(" AND ")} ORDER BY ${q.updated_since ? "o.updated_at, o.id" : "o.id DESC"} LIMIT ?`, [...params, limit + 1]);
+    const page = rows.slice(0, limit);
+    const items = page.length ? await db.all(`SELECT order_id, product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id IN (SELECT value FROM json_each(?)) ORDER BY id`, [JSON.stringify(page.map((o) => o.id))]) : [];
+    const by = items.reduce((m, i) => m.set(i.order_id, [...m.get(i.order_id) || [], i]), /* @__PURE__ */ new Map());
+    return c.json({ orders: page.map((o) => orderOut({ ...o, pay: payState2(o), pay_name: PAY_NAME2[payState2(o)] }, by.get(o.id) || [])), has_more: rows.length > limit, ...q.updated_since && page.length ? { next_updated_since: page[page.length - 1].updated_at } : {} });
+  });
+  app.get("/api/v1/orders/:ref", async (c) => c.json(await getOrder2(c, await findOrder(c))));
+  app.post("/api/v1/orders", async (c) => {
+    const b = await c.req.json().catch(() => null);
+    const ext = extIdOf(b);
+    const pid = c.get("user").partner_id;
+    if (ext) {
+      const was = await db.get(`SELECT id FROM b2b_orders WHERE partner_id = ? AND kind = 'client' AND ext_id = ?`, [pid, ext]);
+      if (was) return c.json({ duplicate: true, order: await getOrder2(c, was.id) });
+    }
+    const r = await call2(c, "POST", "/api/b2b/p/clients", { json: await orderIn(c, b) });
+    if (ext) await db.run(`UPDATE b2b_orders SET ext_id = ? WHERE id = ?`, [ext, r.id]);
+    return c.json({ duplicate: false, order: await getOrder2(c, r.id) }, 201);
+  });
+  app.put("/api/v1/orders/:ref", async (c) => {
+    const id = await findOrder(c);
+    const b = await c.req.json().catch(() => null);
+    await call2(c, "PUT", `/api/b2b/p/clients/${id}`, { json: await orderIn(c, b) });
+    return c.json({ order: await getOrder2(c, id) });
+  });
+  app.post("/api/v1/orders/:ref/cancel", async (c) => {
+    const id = await findOrder(c);
+    await call2(c, "POST", `/api/b2b/p/clients/${id}/cancel`, { json: { confirm: true } });
+    return c.json({ order: await getOrder2(c, id) });
+  });
+  app.post("/api/v1/orders/:ref/files", async (c) => {
+    const id = await findOrder(c);
+    const ct = (c.req.header("content-type") || "").toLowerCase();
+    let kind = c.req.query("kind") || "label";
+    let typeId = parseInt(c.req.query("doc_type_id"), 10) || 0;
+    let name = c.req.query("filename") || "";
+    let bytes;
+    let mime = ct.split(";")[0];
+    if (ct.startsWith("application/json")) {
+      const b = await c.req.json().catch(() => ({}));
+      kind = b.kind || kind;
+      typeId = parseInt(b.doc_type_id, 10) || typeId;
+      name = b.filename || name;
+      try {
+        const bin = atob(String(b.content_base64 || "").replace(/^data:[^,]*,/, "").replace(/\s/g, ""));
+        bytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0));
+      } catch {
+        throw fail(400, "content_base64 \u2014 \u043D\u0435\u0432\u0456\u0440\u043D\u0438\u0439 base64.");
+      }
+      mime = b.mime || (bytes[0] === 37 && bytes[1] === 80 ? "application/pdf" : "application/octet-stream");
+    } else bytes = new Uint8Array(await c.req.arrayBuffer());
+    if (!bytes?.length) throw fail(400, "\u041F\u043E\u0440\u043E\u0436\u043D\u0456\u0439 \u0444\u0430\u0439\u043B.");
+    if (bytes.length > 5 * 1024 * 1024) throw fail(400, "\u0424\u0430\u0439\u043B \u0431\u0456\u043B\u044C\u0448\u0438\u0439 \u0437\u0430 5 \u041C\u0411.");
+    if (!["label", "doc"].includes(kind)) throw fail(400, "kind \u2014 label (\u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F) \u0430\u0431\u043E doc (\u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442).");
+    if (kind === "doc" && !typeId) throw fail(400, "\u0414\u043B\u044F \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0430 \u0432\u043A\u0430\u0436\u0456\u0442\u044C doc_type_id (\u0434\u0438\u0432. GET /api/v1/doc-types).");
+    const r = await call2(c, "POST", `/api/b2b/p/clients/${id}/files${kind === "doc" ? `?type=${typeId}` : ""}`, {
+      raw: bytes,
+      headers: { "Content-Type": mime || "application/octet-stream", "X-File-Name": encodeURIComponent(String(name || (kind === "label" ? "label.pdf" : "document")).slice(0, 120)) }
+    });
+    return c.json({ file_id: r.id, warnings: r.warnings || [], order: await getOrder2(c, id) }, 201);
+  });
+  app.delete("/api/v1/orders/:ref/files/:fid", async (c) => {
+    const id = await findOrder(c);
+    await call2(c, "DELETE", `/api/b2b/p/clients/${id}/files/${parseInt(c.req.param("fid"), 10) || 0}`);
+    return c.json({ order: await getOrder2(c, id) });
+  });
+  app.all("/api/v1/*", () => {
+    throw fail(404, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u043C\u0435\u0442\u043E\u0434 API. \u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0430\u0446\u0456\u044F: /api-docs.html");
   });
 }
 
@@ -12163,6 +12461,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   mountB2bClients(app, { db, fetchFn, services, myPartner, orders, hooks, onCron });
   mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice });
   mountB2bClaims(app, { db, services, myPartner, orders });
+  mountB2bApi(app, { db, myPartner, tgPartner: orders.tgPartner, CLIENT_STATUS, orderNo, payState, PAY_NAME });
   mountB2bFeeds(app, { db, myPartner, tgPartner: orders.tgPartner, tgGroup: orders.tgGroup, link: orders.link });
   const tgdocs = mountB2bTgDocs(app, { db, services, orders, hooks });
   const pay = mountB2bPay(app, { db, services, orders, hooks });
@@ -13120,7 +13419,7 @@ var num4 = (v) => {
 var normSeat = (s) => Object.fromEntries(["lengthCm", "widthCm", "heightCm", "weightKg"].map((k) => [k, num4(s?.[k]) ?? 0]));
 var goodSeat = (s) => ["lengthCm", "widthCm", "heightCm", "weightKg"].every((k) => Number(s?.[k]) > 0);
 var seatOf = (s) => ({ lengthCm: round2(Number(s.lengthCm)), widthCm: round2(Number(s.widthCm)), heightCm: round2(Number(s.heightCm)), weightKg: round2(Number(s.weightKg)) });
-var userName6 = (u) => u?.name || u?.login || "";
+var userName7 = (u) => u?.name || u?.login || "";
 var lastTickTry = 0;
 var esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
@@ -13567,7 +13866,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     const confirmed = JSON.parse(r.products || "[]").map((x) => ({ ...x, ...sent.get(String(x.supplierCode)) }));
     await db.run(
       `UPDATE rzs_orders SET status = ?, products = ?, confirmed_at = COALESCE(NULLIF(confirmed_at, ''), ?), note = ? WHERE id = ?`,
-      [res.status || "confirmed", JSON.stringify(confirmed), nowIso(), `\u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432(\u043B\u0430) ${userName6(c.get("user"))}`, r.id]
+      [res.status || "confirmed", JSON.stringify(confirmed), nowIso(), `\u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432(\u043B\u0430) ${userName7(c.get("user"))}`, r.id]
     );
     return c.json({ ok: true, status: res.status, warnings: res.warnings.map((w) => w.message || String(w)) });
   });
@@ -13607,7 +13906,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     }
     if (!seats.length || seats.length > 50) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u043C\u0456\u0441\u0446\u044C \u0434\u043B\u044F \u0422\u0422\u041D.");
     const res = await rzsCreateTtn(fetchFn, a.token, r.id, seats, { replaceExisting: replace });
-    await db.run(`UPDATE rzs_orders SET ttn = ?, status = ?, ttn_at = ?, note = ? WHERE id = ?`, [res.ttn || r.ttn, res.status || "shipping", nowIso(), `\u0422\u0422\u041D \u0441\u0442\u0432\u043E\u0440\u0438\u0432(\u043B\u0430) ${userName6(c.get("user"))}${res.point ? ` \xB7 ${res.point}` : ""}`, r.id]);
+    await db.run(`UPDATE rzs_orders SET ttn = ?, status = ?, ttn_at = ?, note = ? WHERE id = ?`, [res.ttn || r.ttn, res.status || "shipping", nowIso(), `\u0422\u0422\u041D \u0441\u0442\u0432\u043E\u0440\u0438\u0432(\u043B\u0430) ${userName7(c.get("user"))}${res.point ? ` \xB7 ${res.point}` : ""}`, r.id]);
     return c.json({ ok: true, ttn: res.ttn, point: res.point, seats: seats.length });
   });
   app.post("/api/rzs/markings", async (c) => {
@@ -13693,7 +13992,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
       const found = await getOrdersBatch(fetchFn, { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key }, [code]).catch(() => []);
       crmId = String(found.find((x) => String(x.order_id) === code)?.id || "");
     }
-    await db.run(`UPDATE rzs_orders SET crm_id = ?, crm_at = ?, note = ? WHERE id = ?`, [crmId, nowIso(), `\u0443 LP-CRM \u043F\u0435\u0440\u0435\u0434\u0430\u0432(\u043B\u0430) ${userName6(c.get("user"))}`, r.id]);
+    await db.run(`UPDATE rzs_orders SET crm_id = ?, crm_at = ?, note = ? WHERE id = ?`, [crmId, nowIso(), `\u0443 LP-CRM \u043F\u0435\u0440\u0435\u0434\u0430\u0432(\u043B\u0430) ${userName7(c.get("user"))}`, r.id]);
     return c.json({ ok: true, crm_id: crmId, code });
   });
   const normTtn = (v) => String(v ?? "").replace(/\s/g, "").toUpperCase();
@@ -13811,7 +14110,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     const r = await orderRow(c.req.param("id"));
     const val = String((await c.req.json().catch(() => ({}))).crm ?? "").replace(/\s/g, "");
     if (!val) {
-      await db.run(`UPDATE rzs_orders SET crm_id = '', crm_code = '', crm_at = '', note = ? WHERE id = ?`, [`\u0432\u0456\u0434\u0432'\u044F\u0437\u0430\u0432(\u043B\u0430) \u0432\u0456\u0434 LP-CRM ${userName6(c.get("user"))}`, r.id]);
+      await db.run(`UPDATE rzs_orders SET crm_id = '', crm_code = '', crm_at = '', note = ? WHERE id = ?`, [`\u0432\u0456\u0434\u0432'\u044F\u0437\u0430\u0432(\u043B\u0430) \u0432\u0456\u0434 LP-CRM ${userName7(c.get("user"))}`, r.id]);
       return c.json({ ok: true, crm_id: "" });
     }
     if (!/^\d{1,20}$/.test(val)) throw fail(400, "\u041D\u043E\u043C\u0435\u0440 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM \u2014 \u043B\u0438\u0448\u0435 \u0446\u0438\u0444\u0440\u0438.");
@@ -13826,7 +14125,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     }
     const other = await db.get(`SELECT order_num FROM rzs_orders WHERE id != ? AND ((crm_id != '' AND crm_id = ?) OR (crm_code != '' AND crm_code = ?)) LIMIT 1`, [r.id, id, code]);
     if (other) throw fail(400, `\u0426\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM \u0443\u0436\u0435 \u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u0435 \u0434\u043E ${other.order_num}.`);
-    await db.run(`UPDATE rzs_orders SET crm_id = ?, crm_code = ?, crm_at = ?, note = ? WHERE id = ?`, [id, code, nowIso(), `\u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u0432(\u043B\u0430) \u0434\u043E LP-CRM ${userName6(c.get("user"))}`, r.id]);
+    await db.run(`UPDATE rzs_orders SET crm_id = ?, crm_code = ?, crm_at = ?, note = ? WHERE id = ?`, [id, code, nowIso(), `\u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u0432(\u043B\u0430) \u0434\u043E LP-CRM ${userName7(c.get("user"))}`, r.id]);
     return c.json({ ok: true, crm_id: id, code });
   });
   app.get("/api/rzs/products", async (c) => {
@@ -16311,7 +16610,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 34,
+  version: 35,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -16391,6 +16690,21 @@ var schema11 = {
     created_at TEXT
   )`,
     `CREATE INDEX IF NOT EXISTS b2b_couriers_p ON b2b_couriers (partner_id)`,
+    // API-ключі партнерів (публічне API v1): зберігаємо лише SHA-256 ключа й перші символи для впізнавання.
+    `CREATE TABLE IF NOT EXISTS b2b_api_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    prefix TEXT NOT NULL DEFAULT '',
+    hash TEXT NOT NULL UNIQUE,
+    created_by TEXT DEFAULT '',
+    created_at TEXT,
+    last_used_at TEXT DEFAULT '',
+    last_ip TEXT DEFAULT '',
+    revoked_at TEXT DEFAULT '',
+    revoked_by TEXT DEFAULT ''
+  )`,
+    `CREATE INDEX IF NOT EXISTS b2b_api_keys_p ON b2b_api_keys (partner_id)`,
     // Фіди й таблиці партнера — лише довідкові посилання (XML-фід, Google-таблиця, прайс). partner_id = 0 — для всіх.
     `CREATE TABLE IF NOT EXISTS b2b_feeds (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -16690,7 +17004,9 @@ var schema11 = {
     ["b2b_partners", "pause_override", "TEXT DEFAULT ''"],
     // Новинки каталогу: коли товар уперше отримав РРЦ; коли адмін надіслав (або відмітив) його партнерам.
     ["b2b_catalog", "first_priced_at", "TEXT DEFAULT ''"],
-    ["b2b_catalog", "announced_at", "TEXT DEFAULT ''"]
+    ["b2b_catalog", "announced_at", "TEXT DEFAULT ''"],
+    // API: № замовлення в системі партнера (external_id) — щоб повторний запит не створив дубль.
+    ["b2b_orders", "ext_id", "TEXT DEFAULT ''"]
   ],
   // Індекси на нові колонки — після ALTER TABLE (у старих базах колонок ще немає, коли створюються таблиці).
   async seed(db) {
@@ -16704,7 +17020,9 @@ var schema11 = {
       // Сторінка накладної: чи це замовлення B2B-партнера (за № / кодом замовлення в LP-CRM).
       [`CREATE INDEX IF NOT EXISTS b2b_orders_crm ON b2b_orders (crm_id) WHERE crm_id != ''`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_orders_crmext ON b2b_orders (crm_ext) WHERE crm_ext != ''`, []],
-      [`CREATE INDEX IF NOT EXISTS b2b_payments_payer ON b2b_payments (payer_code)`, []]
+      [`CREATE INDEX IF NOT EXISTS b2b_payments_payer ON b2b_payments (payer_code)`, []],
+      [`CREATE UNIQUE INDEX IF NOT EXISTS b2b_orders_ext ON b2b_orders (partner_id, ext_id) WHERE ext_id != ''`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_upd ON b2b_orders (partner_id, updated_at)`, []]
     ]);
     const done = await db.get(`SELECT value FROM settings WHERE key = 'b2b_newprod_init'`);
     if (!done) {

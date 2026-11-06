@@ -3,6 +3,8 @@ import { can } from './auth.js';
 
 export const MASK = '••••••';
 export const nowIso = () => new Date().toISOString();
+// Користувач API-ключа для внутрішніх викликів (env[API_USER]) — символ, тож ззовні його не підробити.
+export const API_USER = Symbol.for('ecovent.apiUser');
 
 // Помилка з HTTP-статусом (обробник у app.js віддає її клієнту як { error }).
 export const fail = (status, message) => Object.assign(new Error(message), { status });

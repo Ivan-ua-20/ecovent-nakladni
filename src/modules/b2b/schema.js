@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 34,
+  version: 35,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,6 +83,21 @@ export const schema = {
     created_at TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS b2b_couriers_p ON b2b_couriers (partner_id)`,
+  // API-ключі партнерів (публічне API v1): зберігаємо лише SHA-256 ключа й перші символи для впізнавання.
+  `CREATE TABLE IF NOT EXISTS b2b_api_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    prefix TEXT NOT NULL DEFAULT '',
+    hash TEXT NOT NULL UNIQUE,
+    created_by TEXT DEFAULT '',
+    created_at TEXT,
+    last_used_at TEXT DEFAULT '',
+    last_ip TEXT DEFAULT '',
+    revoked_at TEXT DEFAULT '',
+    revoked_by TEXT DEFAULT ''
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_api_keys_p ON b2b_api_keys (partner_id)`,
   // Фіди й таблиці партнера — лише довідкові посилання (XML-фід, Google-таблиця, прайс). partner_id = 0 — для всіх.
   `CREATE TABLE IF NOT EXISTS b2b_feeds (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -382,6 +397,8 @@ export const schema = {
     // Новинки каталогу: коли товар уперше отримав РРЦ; коли адмін надіслав (або відмітив) його партнерам.
     ['b2b_catalog', 'first_priced_at', "TEXT DEFAULT ''"],
     ['b2b_catalog', 'announced_at', "TEXT DEFAULT ''"],
+    // API: № замовлення в системі партнера (external_id) — щоб повторний запит не створив дубль.
+    ['b2b_orders', 'ext_id', "TEXT DEFAULT ''"],
   ],
   // Індекси на нові колонки — після ALTER TABLE (у старих базах колонок ще немає, коли створюються таблиці).
   async seed(db) {
@@ -396,6 +413,8 @@ export const schema = {
       [`CREATE INDEX IF NOT EXISTS b2b_orders_crm ON b2b_orders (crm_id) WHERE crm_id != ''`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_orders_crmext ON b2b_orders (crm_ext) WHERE crm_ext != ''`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_payments_payer ON b2b_payments (payer_code)`, []],
+      [`CREATE UNIQUE INDEX IF NOT EXISTS b2b_orders_ext ON b2b_orders (partner_id, ext_id) WHERE ext_id != ''`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_upd ON b2b_orders (partner_id, updated_at)`, []],
     ]);
     // Один раз: усе, що вже мало РРЦ до появи новинок, — не новинка (інакше першою розсилкою пішов би весь каталог).
     const done = await db.get(`SELECT value FROM settings WHERE key = 'b2b_newprod_init'`);

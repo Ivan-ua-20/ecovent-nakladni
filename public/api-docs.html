@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API для партнерів — Еко­вент B2B</title>
+<meta name="robots" content="noindex">
+<style>
+:root { --bg: #f4f5f4; --surface: #fff; --ink: #17201d; --muted: #515d59; --line: #dfe3e1; --accent: #0f766e; --accent-soft: #e3f2ef; --top: #12201c; --code: #0f1a17; --ok: #157f3b; --bad: #b42318; --warn: #9a5b00; --warn-soft: #fff4dc; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; }
+a { color: var(--accent); }
+header { background: var(--top); color: #cfe0db; padding: 14px 24px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+header b { color: #fff; font-size: 17px; }
+header .pill { background: var(--accent); color: #fff; padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+.wrap { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 28px; max-width: 1180px; margin: 0 auto; padding: 24px 24px 80px; }
+nav { position: sticky; top: 16px; align-self: start; font-size: 14px; display: flex; flex-direction: column; gap: 2px; max-height: calc(100vh - 32px); overflow: auto; }
+nav a { text-decoration: none; color: var(--muted); padding: 4px 10px; border-radius: 6px; }
+nav a:hover { background: var(--accent-soft); color: var(--accent); }
+nav .g { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; margin: 12px 10px 2px; }
+main { min-width: 0; }
+h1 { font-size: 28px; margin: 0 0 6px; }
+h2 { font-size: 21px; margin: 40px 0 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+h3 { font-size: 16px; margin: 22px 0 6px; }
+p, li { max-width: 78ch; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; background: #e9ecea; padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code); color: #d7e6e1; padding: 14px 16px; border-radius: 10px; overflow-x: auto; font-size: 13px; line-height: 1.5; margin: 8px 0 14px; }
+pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; margin: 12px 0; }
+.m { display: inline-block; min-width: 62px; text-align: center; font: 700 12px ui-monospace, monospace; padding: 3px 8px; border-radius: 6px; margin-right: 8px; color: #fff; }
+.GET { background: #1d4ed8; } .POST { background: var(--ok); } .PUT { background: var(--warn); } .DELETE { background: var(--bad); }
+.ep { font: 600 15px ui-monospace, monospace; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 28px 0 6px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 8px 0 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+th { background: #f8f9f8; text-align: left; font-size: 12px; text-transform: uppercase; color: var(--muted); letter-spacing: .03em; }
+th, td { padding: 8px 12px; border-top: 1px solid var(--line); vertical-align: top; }
+.note { background: var(--warn-soft); border-radius: 10px; padding: 12px 16px; margin: 12px 0; }
+.info { background: var(--accent-soft); border-radius: 10px; padding: 12px 16px; margin: 12px 0; }
+.steps { counter-reset: s; list-style: none; padding: 0; }
+.steps li { counter-increment: s; position: relative; padding-left: 40px; margin: 10px 0; }
+.steps li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; }
+.tabs { display: flex; gap: 4px; margin-top: 8px; }
+.tabs button { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 6px 6px 0 0; border: 1px solid var(--line); border-bottom: 0; background: #e9ecea; cursor: pointer; }
+.tabs button.on { background: var(--code); color: #fff; border-color: var(--code); }
+.tabs + pre { margin-top: 0; border-top-left-radius: 0; }
+code { overflow-wrap: anywhere; }
+@media (max-width: 860px) { table { display: block; overflow-x: auto; } .ep { font-size: 13px; word-break: break-all; } header { padding: 12px 16px; } .wrap { padding: 16px 16px 60px; } .wrap { grid-template-columns: minmax(0, 1fr); } nav { position: static; max-height: none; flex-direction: row; flex-wrap: wrap; } nav .g { width: 100%; } }
+</style>
+</head>
+<body>
+<header><b>Еко­вент B2B</b><span class="pill">API v1</span><span>Документація для програміста партнера</span></header>
+<div class="wrap">
+<nav aria-label="Зміст">
+  <span class="g">Початок</span>
+  <a href="#intro">Що вміє API</a><a href="#auth">Ключ і вхід</a><a href="#flow">Типовий сценарій</a><a href="#rules">Загальні правила</a>
+  <span class="g">Довідники</span>
+  <a href="#me">GET /me</a><a href="#products">GET /products</a><a href="#supplies">GET /supplies</a><a href="#doc-types">GET /doc-types</a><a href="#statuses">GET /statuses</a>
+  <span class="g">Замовлення</span>
+  <a href="#order-obj">Об’єкт замовлення</a><a href="#create">POST /orders</a><a href="#get">GET /orders/{id}</a><a href="#list">GET /orders</a><a href="#update">PUT /orders/{id}</a><a href="#cancel">POST /orders/{id}/cancel</a>
+  <a href="#files">POST /orders/{id}/files</a><a href="#files-del">DELETE /orders/{id}/files/{fid}</a>
+  <span class="g">Інше</span>
+  <a href="#errors">Помилки</a><a href="#sync">Синхронізація статусів</a><a href="#examples">Приклади коду</a><a href="#faq">Питання</a>
+</nav>
+<main>
+<h1>API для замовлень клієнтів</h1>
+<p>API дозволяє вашій CRM, інтернет-магазину чи обліковій системі автоматично передавати в Еко­вент B2B <b>замовлення ваших клієнтів</b> — без ручного введення в кабінеті. Замовлення, створені через API, проходять ті самі перевірки, ліміти й сповіщення, що й створені в кабінеті, і видно їх у кабінеті у вкладці «Замовлення клієнтів».</p>
+
+<h2 id="intro">Що вміє API</h2>
+<ul>
+  <li>віддавати <b>каталог</b> з вашими цінами (ціна партнера й РРЦ) — щоб зіставити товари з вашими;</li>
+  <li>показувати <b>закупівлі</b> із залишками, з яких можна відправляти клієнтам;</li>
+  <li><b>створювати, змінювати й скасовувати</b> замовлення клієнтів;</li>
+  <li>додавати <b>маркування</b> (етикетку ТТН Нової пошти) та ваші <b>документи</b> до замовлення;</li>
+  <li>віддавати <b>статус</b> замовлення, зокрема статус і № у LP-CRM після передачі в роботу, і список змінених замовлень для синхронізації.</li>
+</ul>
+<div class="info">Базова адреса: <code class="base">https://ecovent-nakladni.pages.dev/api/v1</code>. Формат — JSON (UTF-8), гроші — гривні з копійками (число), час — ISO 8601 в UTC (<code>2026-11-06T18:19:17.534Z</code>).</div>
+
+<h2 id="auth">Ключ і вхід</h2>
+<p>Ключ створює <b>керівник вашої команди</b> в кабінеті партнера: <i>Налаштування → API для замовлень → + Ключ</i> (або ваш менеджер Еко­вент). Ключ має вигляд <code>ecv_</code> + 48 символів і показується <b>лише один раз</b>. Зберігайте його на сервері, не в коді сайту чи мобільного застосунку.</p>
+<p>Передавайте ключ у кожному запиті одним із заголовків:</p>
+<pre><code>Authorization: Bearer ecv_ваш_ключ
+# або
+X-Api-Key: ecv_ваш_ключ</code></pre>
+<p>Ключ діє від імені вашої команди з правами керівника. Можна мати до 5 активних ключів (наприклад, окремо для сайту й для CRM). У кабінеті видно, коли кожен ключ використовувався востаннє; відкликаний ключ перестає працювати одразу. Про створення ключа приходить повідомлення в Telegram.</p>
+<div class="note">Якщо ключ міг потрапити до сторонніх — відкличте його в кабінеті й створіть новий.</div>
+
+<h2 id="flow">Типовий сценарій</h2>
+<ol class="steps">
+  <li><b>Зіставте товари.</b> Раз на день (або при зміні цін) запитуйте <a href="#products"><code>GET /products</code></a> і зберігайте <code>product_id</code> та <code>article</code>. У замовленні товар можна вказати будь-яким із них.</li>
+  <li><b>Створіть замовлення.</b> <a href="#create"><code>POST /orders</code></a> з ПІБ і телефоном клієнта, товарами й вашим номером замовлення в <code>external_id</code>. Повтор того ж запиту не створить дубль.</li>
+  <li><b>Додайте маркування.</b> Створіть ТТН у своєму кабінеті Нової пошти й надішліть PDF етикетки: <a href="#files"><code>POST /orders/{id}/files</code></a>. Без маркування замовлення не передадуть у роботу (<code>missing_docs</code> покаже, чого бракує).</li>
+  <li><b>Стежте за статусом.</b> Кожні 5–15 хвилин запитуйте <a href="#list"><code>GET /orders?updated_since=…</code></a> — отримаєте лише змінені замовлення: передані в роботу, з новим статусом у LP-CRM, скасовані.</li>
+</ol>
+
+<h2 id="rules">Загальні правила</h2>
+<table>
+  <tr><th>Що</th><th>Правило</th></tr>
+  <tr><td>Клієнт</td><td><code>name</code> — обов’язково (до 150 символів); <code>phone</code> — український номер: <code>0XXXXXXXXX</code> або <code>380XXXXXXXXX</code> (пробіли, дужки, «+» можна — вони відкидаються).</td></tr>
+  <tr><td>Товари</td><td>Лише з вашого каталогу (бренди, відкриті вашій команді). <code>qty</code> — ціле число 1–999. Ціна — ваша ціна партнера на момент замовлення (її не передають — рахує система).</td></tr>
+  <tr><td>Звідки товар</td><td>Без <code>supply_id</code> — «без закупівлі»: товар іде в найновішу чернетку закупівлі з доставкою клієнтам, а якщо її немає — у відкриту закупівлю (у межах лімітів вашої команди). З <code>supply_id</code> — з конкретної закупівлі; кількість не більша за залишок (<a href="#supplies"><code>GET /supplies</code></a>).</td></tr>
+  <tr><td>Ліміти</td><td>Ліміт відкритої закупівлі й ліміт неоплачених закупівель — як у кабінеті. Перевищення — помилка 400 з поясненням.</td></tr>
+  <tr><td>ТТН</td><td>Необов’язково; 6–40 цифр / латинських літер. Одна ТТН — лише в одному замовленні.</td></tr>
+  <tr><td>Зміни</td><td>Змінити чи скасувати можна, доки <code>status = "new"</code>. Після передачі в роботу — лише через вашого менеджера.</td></tr>
+  <tr><td>Файли</td><td>PDF або зображення до 5 МБ, до 15 файлів у замовленні. Те саме маркування двічі не приймається.</td></tr>
+  <tr><td>Частота</td><td>Розумне навантаження: до ~60 запитів за хвилину. Синхронізацію статусів — не частіше ніж раз на 5 хвилин.</td></tr>
+</table>
+
+<h2 id="me">Перевірити ключ</h2>
+<div class="ep"><span class="m GET">GET</span>/api/v1/me</div>
+<pre><code>{ "partner": { "id": 12, "name": "ventbazar" }, "key": { "name": "Сайт", "prefix": "ecv_db504e" } }</code></pre>
+
+<h2 id="products">Каталог з вашими цінами</h2>
+<div class="ep"><span class="m GET">GET</span>/api/v1/products</div>
+<pre><code>{
+  "products": [
+    {
+      "product_id": 8069,
+      "article": "70448 CORE 300 RAC",
+      "name": "Очищувач повітря Levoit Core 300-RAC White",
+      "brand": "Levoit",
+      "category": "Очищувачі повітря",
+      "image": "https://…/585351262.png",
+      "rrp": 11000,            // рекомендована роздрібна ціна, грн
+      "price": 9350,           // ваша ціна партнера, грн
+      "special": false,        // особлива ціна / акція
+      "special_until": null,
+      "is_new": false,
+      "next_price": { "rrp": 11500, "price": 9775, "from": "2026-11-08T10:00:00Z" }  // лише якщо ціна зміниться
+    }
+  ]
+}</code></pre>
+<p><code>next_price</code> з’являється, коли РРЦ підвищено, але для вас ще діє стара ціна (відстрочка) — до дати <code>from</code>.</p>
+
+<h2 id="supplies">Закупівлі із залишком</h2>
+<div class="ep"><span class="m GET">GET</span>/api/v1/supplies</div>
+<p>Закупівлі за останні 180 днів, з яких ще можна відправляти клієнтам (не самовивіз і не на ваш склад), і залишок кожного товару.</p>
+<pre><code>{ "supplies": [ { "id": 145, "number": "B2B-145", "status": "paid", "status_name": "Оплачено", "pay": "paid", "created_at": "…",
+    "items": [ { "product_id": 8069, "article": "70448 CORE 300 RAC", "name": "…", "price": 9350, "qty": 10, "left": 4 } ] } ] }</code></pre>
+
+<h2 id="doc-types">Види ваших документів</h2>
+<div class="ep"><span class="m GET">GET</span>/api/v1/doc-types</div>
+<p>Документи, які ваша команда налаштувала в кабінеті (чек, гарантійний талон…). <code>required: true</code> — без нього замовлення не передадуть у роботу.</p>
+<pre><code>{ "doc_types": [ { "id": 3, "name": "Чек для клієнта", "required": true } ] }</code></pre>
+
+<h2 id="statuses">Статуси</h2>
+<div class="ep"><span class="m GET">GET</span>/api/v1/statuses</div>
+<table>
+  <tr><th>status</th><th>Значення</th></tr>
+  <tr><td><code>new</code></td><td>Нове — створене, ще не передане в роботу. Можна змінювати, скасовувати, додавати файли.</td></tr>
+  <tr><td><code>crm</code></td><td>Передано в CRM — менеджер передав у LP-CRM, склад відправляє. Далі дивіться <code>crm.status</code> («Відправлено», «Доставлено», «Повернення»… — назви з LP-CRM).</td></tr>
+  <tr><td><code>cancelled</code></td><td>Скасовано.</td></tr>
+</table>
+<p><code>crm_statuses</code> у відповіді — статуси LP-CRM, що вже траплялися у ваших замовленнях, з кількістю.</p>
+
+<h2 id="order-obj">Об’єкт замовлення</h2>
+<pre><code>{
+  "id": 2051,
+  "number": "B2B-2051",               // так замовлення видно в кабінеті
+  "external_id": "SHOP-1001",         // ваш № (якщо передали)
+  "status": "new",                    // new | crm | cancelled
+  "status_name": "Нове",
+  "crm": { "order_id": null, "status": null },   // № і статус у LP-CRM — після передачі в роботу
+  "client": { "name": "Іван Петренко", "phone": "380671234567" },
+  "ttn": null,
+  "comment": "з сайту",
+  "total": 2250,                      // сума за вашими цінами, грн
+  "supply": { "id": 145, "number": "B2B-145" },  // закупівля, з якої / в яку йде товар
+  "pay": "unpaid",                    // paid | partial | unpaid — оплата закупівлі
+  "pay_name": "В процесі оплати",
+  "pending_changes": false,           // true — менеджер змінив замовлення, підтвердіть у кабінеті
+  "items": [ { "product_id": 8069, "article": "…", "name": "…", "qty": 2, "price": 900, "rrp": 1000 } ],
+  "files": [ { "id": 77, "kind": "label", "kind_name": "Маркування", "doc_type_id": null, "name": "label.pdf", "size": 48211, "created_at": "…" } ],
+  "missing_docs": ["маркування"],     // чого бракує, щоб передати в роботу
+  "created_at": "2026-11-06T18:19:17.534Z",
+  "updated_at": "2026-11-06T18:19:17.534Z"
+}</code></pre>
+<p><code>files</code> і <code>missing_docs</code> є у відповіді на одне замовлення (у списку — немає).</p>
+
+<h2 id="create">Створити замовлення</h2>
+<div class="ep"><span class="m POST">POST</span>/api/v1/orders</div>
+<table>
+  <tr><th>Поле</th><th>Тип</th><th>Опис</th></tr>
+  <tr><td><code>external_id</code></td><td>string, рекомендовано</td><td>Ваш № замовлення (до 64 символів: латиниця, цифри, <code>. _ - : / #</code>). Повторний запит з тим самим <code>external_id</code> поверне вже створене замовлення з <code>"duplicate": true</code> і кодом 200 — безпечно повторювати при обриві зв’язку.</td></tr>
+  <tr><td><code>client.name</code></td><td>string</td><td>ПІБ клієнта.</td></tr>
+  <tr><td><code>client.phone</code></td><td>string</td><td>Телефон клієнта.</td></tr>
+  <tr><td><code>items[]</code></td><td>array</td><td><code>{ "product_id": 8069, "qty": 1 }</code> або <code>{ "article": "70448 CORE 300 RAC", "qty": 1 }</code>.</td></tr>
+  <tr><td><code>ttn</code></td><td>string</td><td>ТТН, якщо вже створена.</td></tr>
+  <tr><td><code>comment</code></td><td>string</td><td>Коментар (до 500 символів).</td></tr>
+  <tr><td><code>supply_id</code></td><td>number / "B2B-145"</td><td>З якої закупівлі. Не вказано — «без закупівлі» (див. <a href="#rules">правила</a>).</td></tr>
+  <tr><td><code>into</code></td><td>"open" / id чернетки</td><td>Лише без <code>supply_id</code>: <code>"open"</code> — у відкриту закупівлю, число — у конкретну чернетку. Не вказано — як у кабінеті.</td></tr>
+</table>
+<pre><code>POST /api/v1/orders
+Authorization: Bearer ecv_…
+Content-Type: application/json
+
+{
+  "external_id": "SHOP-1001",
+  "client": { "name": "Іван Петренко", "phone": "067 123 45 67" },
+  "comment": "з сайту",
+  "items": [ { "article": "70448 CORE 300 RAC", "qty": 2 }, { "product_id": 8071, "qty": 1 } ]
+}</code></pre>
+<p>Відповідь <b>201</b>: <code>{ "duplicate": false, "order": { …об’єкт замовлення… } }</code>. Повтор — <b>200</b> з <code>"duplicate": true</code>.</p>
+
+<h2 id="get">Отримати замовлення</h2>
+<div class="ep"><span class="m GET">GET</span>/api/v1/orders/{id}</div>
+<p><code>{id}</code> — число (<code>2051</code>) або номер (<code>B2B-2051</code>). Відповідь — об’єкт замовлення з файлами й <code>missing_docs</code>. За вашим номером: <code>GET /api/v1/orders?external_id=SHOP-1001</code>.</p>
+
+<h2 id="list">Список і синхронізація</h2>
+<div class="ep"><span class="m GET">GET</span>/api/v1/orders</div>
+<table>
+  <tr><th>Параметр</th><th>Опис</th></tr>
+  <tr><td><code>updated_since</code></td><td>ISO-дата: лише замовлення, змінені після неї; сортування — від давніших змін до новіших.</td></tr>
+  <tr><td><code>status</code></td><td><code>new</code>, <code>crm</code> або <code>cancelled</code>.</td></tr>
+  <tr><td><code>external_id</code></td><td>Знайти за вашим номером.</td></tr>
+  <tr><td><code>limit</code></td><td>1–200, за замовчуванням 50.</td></tr>
+</table>
+<pre><code>{ "orders": [ … ], "has_more": false, "next_updated_since": "2026-11-06T18:40:02.120Z" }</code></pre>
+<p>Без <code>updated_since</code> — найновіші замовлення першими.</p>
+
+<h2 id="update">Змінити замовлення</h2>
+<div class="ep"><span class="m PUT">PUT</span>/api/v1/orders/{id}</div>
+<p>Лише поки <code>status = "new"</code> і <code>pending_changes = false</code>. Тіло — як при створенні, <b>повністю</b> (клієнт, товари, ТТН, коментар): передане замінює попереднє. Відповідь: <code>{ "order": { … } }</code>.</p>
+
+<h2 id="cancel">Скасувати замовлення</h2>
+<div class="ep"><span class="m POST">POST</span>/api/v1/orders/{id}/cancel</div>
+<p>Лише поки <code>status = "new"</code>. Товари замовлення повертаються в закупівлю (або прибираються з чернетки). Відповідь: <code>{ "order": { …, "status": "cancelled" } }</code>.</p>
+
+<h2 id="files">Додати маркування чи документ</h2>
+<div class="ep"><span class="m POST">POST</span>/api/v1/orders/{id}/files</div>
+<p>Поки <code>status = "new"</code>. Два способи:</p>
+<h3>1. Файл у тілі запиту</h3>
+<pre><code>POST /api/v1/orders/2051/files?kind=label&amp;filename=ttn-20450000000000.pdf
+Authorization: Bearer ecv_…
+Content-Type: application/pdf
+
+&lt;байти PDF&gt;</code></pre>
+<h3>2. JSON з base64</h3>
+<pre><code>{ "kind": "doc", "doc_type_id": 3, "filename": "check-1001.pdf", "content_base64": "JVBERi0xLjQK…" }</code></pre>
+<table>
+  <tr><th>Поле</th><th>Опис</th></tr>
+  <tr><td><code>kind</code></td><td><code>label</code> — маркування (етикетка ТТН Нової пошти, за замовчуванням) або <code>doc</code> — ваш документ.</td></tr>
+  <tr><td><code>doc_type_id</code></td><td>Для <code>doc</code> — обов’язково, з <a href="#doc-types"><code>GET /doc-types</code></a>.</td></tr>
+  <tr><td><code>filename</code></td><td>Назва файлу (видно в кабінеті).</td></tr>
+</table>
+<p>Відповідь <b>201</b>: <code>{ "file_id": 77, "warnings": [], "order": { … } }</code>. У <code>warnings</code> — зауваження до маркування (наприклад, ТТН на етикетці не збігається з ТТН замовлення). Те саме маркування вдруге — <b>409</b>.</p>
+
+<h2 id="files-del">Прибрати файл</h2>
+<div class="ep"><span class="m DELETE">DELETE</span>/api/v1/orders/{id}/files/{file_id}</div>
+<p>Поки <code>status = "new"</code>. Відповідь: <code>{ "order": { … } }</code>.</p>
+
+<h2 id="errors">Помилки</h2>
+<p>Помилка — HTTP-код і JSON із поясненням українською, яке можна показати менеджеру:</p>
+<pre><code>{ "error": "Телефон клієнта: 0XXXXXXXXX або 380XXXXXXXXX." }</code></pre>
+<table>
+  <tr><th>Код</th><th>Коли</th><th>Що робити</th></tr>
+  <tr><td>400</td><td>Невірні дані, перевищено ліміт, замовлення вже в роботі</td><td>Виправити дані; повторювати той самий запит без змін не варто.</td></tr>
+  <tr><td>401</td><td>Немає ключа, ключ невірний чи відкликаний або кабінет вашої команди вимкнено</td><td>Перевірити заголовок; створити новий ключ; якщо не допомогло — звернутися до менеджера Еко­вент.</td></tr>
+  <tr><td>403</td><td>Дія недоступна</td><td>Звернутися до менеджера Еко­вент.</td></tr>
+  <tr><td>404</td><td>Замовлення чи метод не знайдено</td><td>Перевірити № і адресу.</td></tr>
+  <tr><td>409</td><td>Конфлікт: файл уже додано, замовлення щойно змінили</td><td>Оновити замовлення (<code>GET</code>) і вирішити, чи потрібна дія.</td></tr>
+  <tr><td>5xx</td><td>Тимчасовий збій</td><td>Повторити за 1–5 хв; для створення — з тим самим <code>external_id</code>.</td></tr>
+</table>
+
+<h2 id="sync">Синхронізація статусів</h2>
+<p>Зберігайте у себе <code>next_updated_since</code> з останньої відповіді й передавайте його наступного разу:</p>
+<pre><code>GET /api/v1/orders?updated_since=2026-11-06T18:40:02.120Z&amp;limit=200
+→ оновіть у себе кожне замовлення з "orders" (за "id" або "external_id")
+→ якщо "has_more": true — одразу запитайте ще раз із новим next_updated_since</code></pre>
+<p>Замовлення потрапляє в цей список, коли змінюється його склад чи дані, статус (передано в роботу, скасовано) або статус / № у LP-CRM. Статуси LP-CRM оновлюються в нас приблизно раз на 30 хвилин.</p>
+
+<h2 id="examples">Приклади коду</h2>
+<div class="tabs" role="tablist"><button class="on" data-t="curl">curl</button><button data-t="php">PHP</button><button data-t="js">JavaScript (Node)</button><button data-t="py">Python</button></div>
+<pre data-c="curl"><code>KEY="ecv_ваш_ключ"
+BASE="https://ecovent-nakladni.pages.dev/api/v1"
+
+# створити замовлення
+curl -s -X POST "$BASE/orders" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"external_id":"SHOP-1001","client":{"name":"Іван Петренко","phone":"0671234567"},"items":[{"article":"70448 CORE 300 RAC","qty":1}]}'
+
+# додати маркування (PDF)
+curl -s -X POST "$BASE/orders/B2B-2051/files?kind=label&amp;filename=label.pdf" -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/pdf" --data-binary @label.pdf
+
+# що змінилося
+curl -s "$BASE/orders?updated_since=2026-11-06T00:00:00Z" -H "Authorization: Bearer $KEY"</code></pre>
+<pre data-c="php" hidden><code>&lt;?php
+$key  = 'ecv_ваш_ключ';
+$base = 'https://ecovent-nakladni.pages.dev/api/v1';
+
+function ecv($method, $path, $body = null) {
+  global $key, $base;
+  $ch = curl_init($base . $path);
+  curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  => $method,
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_HTTPHEADER     => ['Authorization: Bearer ' . $key, 'Content-Type: application/json'],
+    CURLOPT_POSTFIELDS     => $body === null ? null : json_encode($body, JSON_UNESCAPED_UNICODE),
+  ]);
+  $res  = json_decode(curl_exec($ch), true);
+  $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+  if ($code &gt;= 400) throw new Exception($res['error'] ?? "HTTP $code");
+  return $res;
+}
+
+$r = ecv('POST', '/orders', [
+  'external_id' =&gt; 'SHOP-1001',
+  'client' =&gt; ['name' =&gt; 'Іван Петренко', 'phone' =&gt; '0671234567'],
+  'items'  =&gt; [['article' =&gt; '70448 CORE 300 RAC', 'qty' =&gt; 1]],
+]);
+echo $r['order']['number']; // B2B-2051
+
+// маркування
+ecv('POST', '/orders/' . $r['order']['id'] . '/files', [
+  'kind' =&gt; 'label', 'filename' =&gt; 'label.pdf', 'content_base64' =&gt; base64_encode(file_get_contents('label.pdf')),
+]);</code></pre>
+<pre data-c="js" hidden><code>const KEY = process.env.ECOVENT_KEY;
+const BASE = 'https://ecovent-nakladni.pages.dev/api/v1';
+
+async function ecv(method, path, body) {
+  const r = await fetch(BASE + path, {
+    method,
+    headers: { Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+
+const { order } = await ecv('POST', '/orders', {
+  external_id: 'SHOP-1001',
+  client: { name: 'Іван Петренко', phone: '0671234567' },
+  items: [{ article: '70448 CORE 300 RAC', qty: 1 }],
+});
+
+// синхронізація раз на 5–15 хв
+let since = loadSince(); // збережене значення
+const { orders, next_updated_since } = await ecv('GET', `/orders?updated_since=${encodeURIComponent(since)}&amp;limit=200`);
+for (const o of orders) updateMyOrder(o.external_id, o.status, o.crm.status);
+if (next_updated_since) saveSince(next_updated_since);</code></pre>
+<pre data-c="py" hidden><code>import base64, requests
+
+KEY = "ecv_ваш_ключ"
+BASE = "https://ecovent-nakladni.pages.dev/api/v1"
+H = {"Authorization": f"Bearer {KEY}"}
+
+r = requests.post(f"{BASE}/orders", headers=H, json={
+    "external_id": "SHOP-1001",
+    "client": {"name": "Іван Петренко", "phone": "0671234567"},
+    "items": [{"article": "70448 CORE 300 RAC", "qty": 1}],
+})
+data = r.json()
+if r.status_code &gt;= 400:
+    raise Exception(data["error"])
+order = data["order"]
+
+with open("label.pdf", "rb") as f:
+    requests.post(f"{BASE}/orders/{order['id']}/files", headers=H,
+                  json={"kind": "label", "filename": "label.pdf", "content_base64": base64.b64encode(f.read()).decode()})</code></pre>
+
+<h2 id="faq">Питання</h2>
+<h3>Що бачить наш менеджер у кабінеті?</h3>
+<p>Те саме замовлення, що й створене вручну. В історії замовлення автором буде «API · назва ключа». Про нове замовлення приходять ті самі сповіщення в Telegram.</p>
+<h3>Чи можна передати ціну продажу клієнту?</h3>
+<p>Ні — у замовленні рахується ваша ціна партнера за каталогом. Ціну для клієнта ви ведете у своїй системі.</p>
+<h3>Чи можна створювати закупівлі через API?</h3>
+<p>Поки що ні: API v1 — для замовлень клієнтів. Закупівлі оформлюються в кабінеті.</p>
+<h3>Як протестувати?</h3>
+<p>Створіть замовлення з коментарем «ТЕСТ» і одразу скасуйте його (<code>POST /orders/{id}/cancel</code>) — скасоване замовлення в роботу не піде. Або попросіть менеджера про окремий тестовий кабінет.</p>
+<h3>Куди звертатися?</h3>
+<p>До вашого менеджера Еко­вент — він бачить усі запити ваших ключів у кабінеті.</p>
+<p class="muted" style="color:var(--muted);font-size:13px;margin-top:40px">API v1 · листопад 2026. Нові поля можуть з’являтися у відповідях — ігноруйте невідомі поля. Наявні поля й методи v1 не змінюються без попередження.</p>
+</main>
+</div>
+<script src="/api-docs.js" defer></script>
+</body>
+</html>

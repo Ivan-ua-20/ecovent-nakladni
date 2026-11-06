@@ -1,6 +1,6 @@
 // Спільне для сторінок B2B (адмін і партнер): статуси, суми, завантаження файлів.
 import { esc, money } from '../invoice.js';
-import { fmtDateTime as fmtDT, $, $$, api, toast, modal } from '../core/ui.js';
+import { fmtDateTime as fmtDT, $, $$, api, toast, modal, confirmDanger } from '../core/ui.js';
 
 export const uah = (n) => `${money(n)} грн`;
 const ST_CLS = { confirm: 'warn', invoice_wait: 'warn', pay_wait: 'warn', partial: 'info', paid: 'ok', done: 'ok', cancelled: 'bad', new: 'warn', crm: 'info' };
@@ -275,4 +275,52 @@ export function wireFeedsList(root, list, { onEdit, onDel } = {}) {
   $$('[data-fcopy]', root).forEach((b) => (b.onclick = () => copyTo(byId.get(b.dataset.fcopy).url)));
   $$('[data-fedit]', root).forEach((b) => (b.onclick = () => onEdit?.(byId.get(b.dataset.fedit))));
   $$('[data-fdel]', root).forEach((b) => (b.onclick = () => onDel?.(byId.get(b.dataset.fdel))));
+}
+
+// ---------- API-ключі партнера (публічне API v1) ----------
+// box — контейнер картки; base — '/api/b2b/p/api-keys' (кабінет) або '/api/b2b/partners/:id/api-keys' (адмінка).
+export async function apiKeysCard(box, base, { canEdit = true, admin = false } = {}) {
+  const keys = await api('GET', base);
+  const active = keys.filter((k) => !k.revoked_at);
+  const when = (s) => (s ? fmtDT(s) : '—');
+  box.innerHTML = `
+    <div class="head-row" style="margin:0"><h3 style="margin:0">API для замовлень</h3>
+      <div class="btn-row"><a class="btn sm" href="/api-docs.html" target="_blank" rel="noopener">📘 Документація</a>${canEdit && active.length < 5 ? '<button class="btn sm primary" id="akNew">+ Ключ</button>' : ''}</div></div>
+    <div class="small muted">${admin ? 'Ключ дає програмісту партнера доступ до API: каталог із цінами партнера, створення й зміна замовлень клієнтів, маркування, статуси (зокрема з LP-CRM). Діє від імені керівника команди партнера.'
+      : 'Підключіть свою CRM чи сайт: замовлення клієнтів надходитимуть сюди автоматично, з тими самими перевірками, що й у кабінеті. Передайте ключ і посилання на документацію вашому програмісту.'}
+      Ключ показується лише один раз — збережіть його; якщо загубили чи він потрапив не туди — відкличте й створіть новий.</div>
+    ${keys.length ? `<table class="list"><thead><tr><th>Назва</th><th>Ключ</th><th class="hide-m">Створено</th><th>Востаннє використано</th>${canEdit ? '<th></th>' : ''}</tr></thead><tbody>
+      ${keys.map((k) => `<tr${k.revoked_at ? ' style="opacity:.55"' : ''}><td><b>${esc(k.name)}</b>${k.revoked_at ? ` <span class="badge bad">відкликано</span>` : ''}</td>
+        <td><code>${esc(k.prefix)}…</code></td><td class="small hide-m">${esc(when(k.created_at))}<div class="muted">${esc(k.created_by || '')}</div></td>
+        <td class="small">${k.revoked_at ? `відкликано ${esc(when(k.revoked_at))}` : esc(when(k.last_used_at))}</td>
+        ${canEdit ? `<td class="r">${k.revoked_at ? '' : `<button class="btn sm danger" data-akdel="${k.id}">Відкликати</button>`}</td>` : ''}</tr>`).join('')}</tbody></table>`
+      : '<div class="small muted">Ключів ще немає.</div>'}`;
+  const again = () => apiKeysCard(box, base, { canEdit, admin });
+  $('#akNew', box) && ($('#akNew', box).onclick = () => {
+    const m = modal('Новий API-ключ', `<form id="akF" class="form-stack"><label class="f"><span>Назва (для кого / для чого)</span>
+      <input name="name" maxlength="60" placeholder="напр. Сайт KeyCRM" required></label></form>`,
+    { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="akGo">Створити</button>' });
+    $('#akGo', m.el).onclick = async () => {
+      const f = $('#akF', m.el);
+      if (!f.reportValidity()) return;
+      try {
+        const k = await api('POST', base, { name: f.name.value });
+        m.close();
+        const s = modal('Ключ створено', `<div class="form-stack">
+          <div class="alert warn">Скопіюйте ключ зараз — більше його не буде видно ні вам, ні нам.</div>
+          <label class="f"><span>API-ключ «${esc(k.name)}»</span><input id="akVal" readonly value="${esc(k.key)}" style="font-family:ui-monospace,monospace"></label>
+          <div class="small muted">Як підключити — у <a href="/api-docs.html" target="_blank" rel="noopener">документації</a>. Заголовок запиту: <code>Authorization: Bearer ${esc(k.prefix)}…</code></div></div>`,
+        { footer: '<button class="btn" id="akCopy">Копіювати</button><button class="btn primary" data-close>Готово</button>' });
+        $('#akVal', s.el).onclick = (e) => e.target.select();
+        $('#akCopy', s.el).onclick = async () => { try { await navigator.clipboard.writeText(k.key); toast('Ключ скопійовано'); } catch { $('#akVal', s.el).select(); toast('Виділено — натисніть Ctrl+C', true); } };
+        again();
+      } catch (e) { toast(e.message, true); }
+    };
+  });
+  $$('[data-akdel]', box).forEach((b) => (b.onclick = async () => {
+    const k = keys.find((x) => String(x.id) === b.dataset.akdel);
+    const ok = await confirmDanger(`Відкликати ключ «${esc(k.name)}»?`, `Ключ <code>${esc(k.prefix)}…</code> одразу перестане працювати — інтеграція, що ним користується, зупиниться.`, 'Відкликати');
+    if (!ok) return;
+    try { await api('DELETE', `${base}/${k.id}`); toast('Ключ відкликано'); again(); } catch (e) { toast(e.message, true); }
+  }));
 }

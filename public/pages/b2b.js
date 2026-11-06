@@ -4,7 +4,7 @@ import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
 import { viewAdminSupplyForm } from './b2b-supply.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard } from './b2b-shared.js';
 
 const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
 
@@ -351,6 +351,7 @@ export function createB2bPages(ctx = {}) {
             <div class="small">Відстрочка оплати: ${postpay?.days ? `<b>${postpay.days} дн.</b> · зараз за відстрочкою <b>${money(postpay.used)}</b>${postpay.limit != null ? ` з ${money(postpay.limit)} грн` : ' (без окремого ліміту)'}` : '<span class="muted">вимкнена (лише передоплата)</span>'}</div>
             <div class="small muted">Змінити — кнопка «Змінити» вгорі картки.</div>
           </div>` : ''}
+          <div class="card form-stack" id="apiKeys"><span class="small muted">Завантаження…</span></div>
           <div class="card form-stack">
             <div class="head-row" style="margin:0"><h3 style="margin:0">Фіди й таблиці</h3>${!ro() ? '<button class="btn sm primary" id="fNew">+ Посилання</button>' : ''}</div>
             <div class="small muted">Довідкові посилання для партнера: XML-фід, Google-таблиця, прайс. Партнер бачить їх у своєму каталозі й може скопіювати. Товари й ціни на сайті — як і раніше з LP-CRM.</div>
@@ -418,13 +419,14 @@ export function createB2bPages(ctx = {}) {
       wireFeedsList(box, list, {
         onEdit: (f) => feedForm(p, f, loadFeeds),
         onDel: async (f) => {
-          if (!await confirmDanger(`Прибрати посилання «${f.title}»${f.partner_id ? '' : ' (його бачать усі партнери)'}?`, 'Прибрати')) return;
+          if (!await confirmDanger(`Прибрати посилання «${esc(f.title)}»?`, f.partner_id ? 'Партнер більше не бачитиме це посилання.' : 'Це посилання бачать <b>усі партнери</b> — воно зникне в усіх.', 'Прибрати')) return;
           try { await api('DELETE', `/api/b2b/feeds/${f.id}`); toast('Прибрано'); loadFeeds(); } catch (e) { toast(e.message, true); }
         },
       });
     };
     loadFeeds().catch(() => { $('#feeds') && ($('#feeds').innerHTML = '<span class="small muted">Не вдалося завантажити.</span>'); });
     $('#fNew') && ($('#fNew').onclick = () => feedForm(p, null, loadFeeds));
+    apiKeysCard($('#apiKeys'), `/api/b2b/partners/${p.id}/api-keys`, { canEdit: !ro(), admin: true }).catch(() => { $('#apiKeys') && ($('#apiKeys').innerHTML = '<span class="small muted">Не вдалося завантажити API-ключі.</span>'); });
     // Менеджер і нотатки
     api('GET', '/api/b2b/managers').then((list) => {
       const sel = $('#pMgr');
