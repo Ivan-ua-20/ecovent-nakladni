@@ -4,7 +4,7 @@ import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
 import { viewAdminSupplyForm } from './b2b-supply.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList } from './b2b-shared.js';
 
 const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
 
@@ -278,6 +278,33 @@ export function createB2bPages(ctx = {}) {
     };
   }
 
+  // Посилання для партнера (або для всіх): назва, URL, тип (визначається сам), примітка, сповіщення в Telegram.
+  function feedForm(p, f, onDone) {
+    const m = modal(f ? 'Змінити посилання' : 'Нове посилання', `<form id="fF" class="form-stack">
+        <label class="f"><span>Посилання *</span><input name="url" type="url" required value="${esc(f?.url || '')}" placeholder="https://… (XML-фід, Google-таблиця, прайс)"></label>
+        <div class="grid2">
+          <label class="f"><span>Назва</span><input name="title" value="${esc(f?.title || '')}" placeholder="напр. XML-фід Evoair для Prom" maxlength="120"></label>
+          <label class="f"><span>Тип</span><select name="kind"><option value="">визначити за посиланням</option>${Object.entries(FEED_KIND).map(([k, v]) => `<option value="${k}" ${f?.kind === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+        </div>
+        <label class="f"><span>Примітка для партнера</span><textarea name="note" rows="2" maxlength="500" placeholder="Що тут є, як часто оновлюється, для чого підходить">${esc(f?.note || '')}</textarea></label>
+        ${f ? '' : '<label class="check"><input type="checkbox" name="common"> Показувати всім партнерам (не лише цьому)</label>'}
+        <label class="check"><input type="checkbox" name="notify" ${f ? '' : 'checked'}> Повідомити в Telegram партнера${f && !f.partner_id ? ' (усіх партнерів)' : ''}</label>
+      </form>`, { footer: `<button class="btn" data-close>Скасувати</button><button class="btn primary" id="fSave">${f ? 'Зберегти' : 'Додати'}</button>` });
+    $('#fSave', m.el).onclick = async () => {
+      const form = $('#fF', m.el);
+      if (!form.reportValidity()) return;
+      const d = Object.fromEntries(new FormData(form));
+      d.common = Boolean(form.common?.checked);
+      d.notify = form.notify.checked;
+      try {
+        const r = f ? await api('PUT', `/api/b2b/feeds/${f.id}`, d) : await api('POST', `/api/b2b/partners/${p.id}/feeds`, d);
+        m.close();
+        toast(r.sent ? `Збережено · повідомлено партнерів: ${r.sent}` : 'Збережено');
+        onDone();
+      } catch (e) { toast(e.message, true); }
+    };
+  }
+
   async function viewPartner(id) {
     const { partner: p, users, brands, entities = [], roles = {}, limits, postpay, debt } = await api('GET', `/api/b2b/partners/${id}`);
     const byPartner = users.filter((u) => u.added_by_partner).length;
@@ -324,6 +351,11 @@ export function createB2bPages(ctx = {}) {
             <div class="small">Відстрочка оплати: ${postpay?.days ? `<b>${postpay.days} дн.</b> · зараз за відстрочкою <b>${money(postpay.used)}</b>${postpay.limit != null ? ` з ${money(postpay.limit)} грн` : ' (без окремого ліміту)'}` : '<span class="muted">вимкнена (лише передоплата)</span>'}</div>
             <div class="small muted">Змінити — кнопка «Змінити» вгорі картки.</div>
           </div>` : ''}
+          <div class="card form-stack">
+            <div class="head-row" style="margin:0"><h3 style="margin:0">Фіди й таблиці</h3>${!ro() ? '<button class="btn sm primary" id="fNew">+ Посилання</button>' : ''}</div>
+            <div class="small muted">Довідкові посилання для партнера: XML-фід, Google-таблиця, прайс. Партнер бачить їх у своєму каталозі й може скопіювати. Товари й ціни на сайті — як і раніше з LP-CRM.</div>
+            <div id="feeds"><span class="small muted">Завантаження…</span></div>
+          </div>
           <div class="card form-stack">
             <h3>Контакти</h3>
             <div class="small">${esc([p.phone, p.email].filter(Boolean).join(' · ') || 'Не вказано')}</div>
@@ -377,6 +409,22 @@ export function createB2bPages(ctx = {}) {
         </div>
       </div>`;
     $('#pEdit').onclick = () => partnerForm(p);
+    // Фіди й таблиці партнера
+    const loadFeeds = async () => {
+      const list = await api('GET', `/api/b2b/partners/${p.id}/feeds`);
+      const box = $('#feeds');
+      if (!box) return;
+      box.innerHTML = feedsList(list, { admin: !ro() });
+      wireFeedsList(box, list, {
+        onEdit: (f) => feedForm(p, f, loadFeeds),
+        onDel: async (f) => {
+          if (!await confirmDanger(`Прибрати посилання «${f.title}»${f.partner_id ? '' : ' (його бачать усі партнери)'}?`, 'Прибрати')) return;
+          try { await api('DELETE', `/api/b2b/feeds/${f.id}`); toast('Прибрано'); loadFeeds(); } catch (e) { toast(e.message, true); }
+        },
+      });
+    };
+    loadFeeds().catch(() => { $('#feeds') && ($('#feeds').innerHTML = '<span class="small muted">Не вдалося завантажити.</span>'); });
+    $('#fNew') && ($('#fNew').onclick = () => feedForm(p, null, loadFeeds));
     // Менеджер і нотатки
     api('GET', '/api/b2b/managers').then((list) => {
       const sel = $('#pMgr');

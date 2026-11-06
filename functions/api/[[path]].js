@@ -1554,10 +1554,10 @@ var RegExpRouter = class {
       const handlers = r[path];
       const pathData = trie.paths[path];
       if (!pathData) {
-        staticMap[path] = [handlers.map(([h7]) => [h7, createNullObject()]), emptyParam];
+        staticMap[path] = [handlers.map(([h8]) => [h8, createNullObject()]), emptyParam];
         continue;
       }
-      handlerData[pathData[0]] = handlers.map(([h7, handlerPath]) => [h7, trie.paths[handlerPath][1].reduceRight((map, [key], i) => {
+      handlerData[pathData[0]] = handlers.map(([h8, handlerPath]) => [h8, trie.paths[handlerPath][1].reduceRight((map, [key], i) => {
         map[key] = paramReplacementMap[pathData[1][i][1]];
         return map;
       }, createNullObject())]);
@@ -1855,7 +1855,7 @@ var hasAnalytics = (u) => permsOfUser(u).includes("an.view");
 var can = (user, perm) => Boolean(user && permsOfUser(user).includes(perm));
 var enc = new TextEncoder();
 var toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-var fromHex = (hex) => new Uint8Array(hex.match(/.{2}/g).map((h7) => parseInt(h7, 16)));
+var fromHex = (hex) => new Uint8Array(hex.match(/.{2}/g).map((h8) => parseInt(h8, 16)));
 function randomToken(bytes = 32) {
   const a = new Uint8Array(bytes);
   crypto.getRandomValues(a);
@@ -1872,15 +1872,15 @@ async function derive(password, saltBytes, iterations) {
 }
 async function hashPassword(password) {
   const salt = fromHex(randomToken(16));
-  const h7 = await derive(password, salt, ITER);
-  return `pbkdf2$${ITER}$${toHex(salt)}$${h7}`;
+  const h8 = await derive(password, salt, ITER);
+  return `pbkdf2$${ITER}$${toHex(salt)}$${h8}`;
 }
 async function verifyPassword(password, stored) {
   const [scheme, iter, saltHex, hashHex] = String(stored || "").split("$");
   if (scheme !== "pbkdf2" || !saltHex || !hashHex) return false;
-  const h7 = await derive(password, fromHex(saltHex), Number(iter));
-  let diff = h7.length ^ hashHex.length;
-  for (let i = 0; i < Math.min(h7.length, hashHex.length); i++) diff |= h7.charCodeAt(i) ^ hashHex.charCodeAt(i);
+  const h8 = await derive(password, fromHex(saltHex), Number(iter));
+  let diff = h8.length ^ hashHex.length;
+  for (let i = 0; i < Math.min(h8.length, hashHex.length); i++) diff |= h8.charCodeAt(i) ^ hashHex.charCodeAt(i);
   return diff === 0;
 }
 var publicUser = (u) => u ? {
@@ -1932,12 +1932,12 @@ var num = (v) => {
 var kyivDay = (d = /* @__PURE__ */ new Date()) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv" }).format(d);
 var parseTpl = (t) => t ? { ...t, options: JSON.parse(t.options || "{}") } : null;
 var hash = (s) => {
-  let h7 = 2166136261;
+  let h8 = 2166136261;
   for (let i = 0; i < s.length; i++) {
-    h7 ^= s.charCodeAt(i);
-    h7 = Math.imul(h7, 16777619) >>> 0;
+    h8 ^= s.charCodeAt(i);
+    h8 = Math.imul(h8, 16777619) >>> 0;
   }
-  return h7.toString(16);
+  return h8.toString(16);
 };
 function likeVariants(q) {
   const raw2 = String(q || "").trim();
@@ -2772,8 +2772,8 @@ async function getProducts(fetchFn, { subdomain, key }, ids) {
   const cached = {};
   const unique = [];
   for (const id of all) {
-    const h7 = productCache.get(`${subdomain}|${id}`);
-    if (h7 && Date.now() - h7.at < PRODUCT_TTL) cached[id] = h7.value;
+    const h8 = productCache.get(`${subdomain}|${id}`);
+    if (h8 && Date.now() - h8.at < PRODUCT_TTL) cached[id] = h8.value;
     else unique.push(id);
   }
   if (!unique.length) return cached;
@@ -7894,8 +7894,8 @@ var TTN_FIELDS = ["", "additional_2", "additional_3", "additional_4", "delivery_
 var newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Math.random() * 9e4))}`;
 function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, hooks = {}, onCron = () => {
 } }) {
-  const { itemsTxt, itemsDiff, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah4, h: h7 } = orders;
-  const userName6 = (u) => u?.name || u?.login || "";
+  const { itemsTxt, itemsDiff, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah4, h: h8 } = orders;
+  const userName7 = (u) => u?.name || u?.login || "";
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files,
     (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id AND f.kind = 'label') AS labels
     FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id`;
@@ -8047,7 +8047,7 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
       await log(r.id, null, `\u0441\u0442\u0430\u0442\u0443\u0441 \u0443 LP-CRM: \xAB${was}\xBB \u2192 \xAB${now2}\xBB`).catch(() => 0);
       const tone = crmTone(now2);
       if (tone === "ok" || tone === "bad") {
-        await tgPartner(r.partner_id, `${tone === "ok" ? "\u2705" : "\u21A9\uFE0F"} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(r.id)} (${h7(r.client_name || "")})${r.crm_id ? ` \xB7 LP-CRM \u2116 ${h7(r.crm_id)}` : ""}: <b>${h7(now2)}</b>`).catch(() => 0);
+        await tgPartner(r.partner_id, `${tone === "ok" ? "\u2705" : "\u21A9\uFE0F"} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(r.id)} (${h8(r.client_name || "")})${r.crm_id ? ` \xB7 LP-CRM \u2116 ${h8(r.crm_id)}` : ""}: <b>${h8(now2)}</b>`).catch(() => 0);
       }
     }
     for (const [id, num6] of linked) await hooks.crmLinked?.(id, num6).catch(() => 0);
@@ -8219,11 +8219,11 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     ]);
     if (s?.status === "open") await rebuildOpen(s.id);
     if (!quiet) {
-      const who = userName6(c.get("user")) || "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440";
+      const who = userName7(c.get("user")) || "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440";
       const total = (await db.get(`SELECT total FROM b2b_orders WHERE id = ?`, [o.id])).total;
       await log(o.id, c.get("user"), `\u0446\u0456\u043D\u0438 \u0437\u043C\u0456\u043D\u0438\u0432 ${who}: ${list.join("; ")} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah4(total)}`.slice(0, 1800));
-      await tgPartner(o.partner_id, `\u270F\uFE0F <b>\u0426\u0456\u043D\u0438 \u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0438\u0432 ${h7(who)}</b> (${h7(o.client_name)})
-${list.slice(0, 20).map(h7).join("\n")}
+      await tgPartner(o.partner_id, `\u270F\uFE0F <b>\u0426\u0456\u043D\u0438 \u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0438\u0432 ${h8(who)}</b> (${h8(o.client_name)})
+${list.slice(0, 20).map(h8).join("\n")}
 <b>\u0420\u0430\u0437\u043E\u043C: ${uah4(total)}</b>
 ${link(c, `pclients/${o.id}`)}`);
     }
@@ -8278,7 +8278,7 @@ ${link(c, `pclients/${o.id}`)}`);
     if (["paid", "done"].includes(st) || !o.supply_id && o.paid_at) return;
     if (s?.pay_terms === "postpay" && !overdueDays(s)) return;
     const p = await db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [o.partner_id]);
-    await tgAdmins(`\u26A0\uFE0F <b>\u0412\u0456\u0434\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u043E\u043F\u043B\u0430\u0442\u0438</b>: ${orderNo(o.id)} (${h7(o.client_name)}, ${uah4(o.total)}) \xAB${h7(p?.name || "")}\xBB \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 CRM, \u0430 ${!o.supply_id ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0435" : st === "open" ? `\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.supply_id)} \u0449\u0435 \u0431\u0435\u0437 \u0440\u0430\u0445\u0443\u043D\u043A\u0443` : `\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.supply_id)} \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0430 (${ORDER_STATUS[st] || st})`}.
+    await tgAdmins(`\u26A0\uFE0F <b>\u0412\u0456\u0434\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u043E\u043F\u043B\u0430\u0442\u0438</b>: ${orderNo(o.id)} (${h8(o.client_name)}, ${uah4(o.total)}) \xAB${h8(p?.name || "")}\xBB \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 CRM, \u0430 ${!o.supply_id ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0435" : st === "open" ? `\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.supply_id)} \u0449\u0435 \u0431\u0435\u0437 \u0440\u0430\u0445\u0443\u043D\u043A\u0443` : `\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.supply_id)} \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0430 (${ORDER_STATUS[st] || st})`}.
 ${link(c, `b2bclients/${o.id}`)}`);
   }
   function senderOf(c, siteSetting) {
@@ -8332,18 +8332,18 @@ ${link(c, `b2bclients/${o.id}`)}`);
       WHERE o.supply_id = ? AND o.kind = 'client' AND o.status = 'crm'`, [supplyId]);
     for (const o of rows) {
       const { comment } = await crmComment(o, o.partner);
-      await tgAdmins(`\u{1F4B0} <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>, \u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u0432 LP-CRM: <b>${orderNo(o.id)}</b>${o.crm_id ? ` \xB7 CRM \u2116 <b>${h7(o.crm_id)}</b>` : ""} (${h7(o.client_name)})
+      await tgAdmins(`\u{1F4B0} <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>, \u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u0432 LP-CRM: <b>${orderNo(o.id)}</b>${o.crm_id ? ` \xB7 CRM \u2116 <b>${h8(o.crm_id)}</b>` : ""} (${h8(o.client_name)})
 \u041F\u043E\u0441\u0442\u0430\u0432\u0442\u0435 \u0432 CRM \u0432\u0438\u0434 \u043E\u043F\u043B\u0430\u0442\u0438 \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0456 \u0437\u0430\u043C\u0456\u043D\u0456\u0442\u044C \u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440 \u043D\u0430:
-<pre>${h7(comment)}</pre>${base ? `
+<pre>${h8(comment)}</pre>${base ? `
 ${link(base, `b2bclients/${o.id}`)}` : ""}`);
     }
   };
   const tgNew = async (c, p, id, f, it, verb = "\u041D\u043E\u0432\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430") => {
-    const lines = it.items.slice(0, 60).map((i) => `${h7(i.name)} \u2014 ${i.qty} \u0448\u0442 \u2014 ${uah4(i.price)}`).join("\n");
-    const text = `\u{1F4E6} <b>${verb} ${orderNo(id)}</b> \u0432\u0456\u0434 \xAB${h7(p.name)}\xBB
+    const lines = it.items.slice(0, 60).map((i) => `${h8(i.name)} \u2014 ${i.qty} \u0448\u0442 \u2014 ${uah4(i.price)}`).join("\n");
+    const text = `\u{1F4E6} <b>${verb} ${orderNo(id)}</b> \u0432\u0456\u0434 \xAB${h8(p.name)}\xBB
 
-<b>\u041A\u043B\u0456\u0454\u043D\u0442:</b> ${h7(f.client_name)}, ${h7(f.client_phone)}${f.ttn ? `
-<b>\u0422\u0422\u041D:</b> ${h7(f.ttn)}` : ""}
+<b>\u041A\u043B\u0456\u0454\u043D\u0442:</b> ${h8(f.client_name)}, ${h8(f.client_phone)}${f.ttn ? `
+<b>\u0422\u0422\u041D:</b> ${h8(f.ttn)}` : ""}
 ${it.supplyId ? `\u0406\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : it.draftId ? `\u0411\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u2014 \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)}` : `\u{1F534} <b>\u0411\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456</b> \u2014 \u0443 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(it.openId)}`}
 
 <b>\u0422\u043E\u0432\u0430\u0440\u0438:</b>
@@ -8363,7 +8363,7 @@ ${link(c, `b2bclients/${id}`)}`);
     const claim = await db.run(`UPDATE b2b_orders SET group_done = 1 WHERE id = ? AND COALESCE(group_done, 0) = 0`, [s.id]);
     if (!claim.changes) return;
     const items = await db.all(`SELECT order_id, name, qty FROM b2b_order_items WHERE order_id IN (SELECT value FROM json_each(?)) ORDER BY id`, [JSON.stringify(rows.map((r) => r.id))]);
-    const lines = rows.map((r) => `\u2022 CRM \u2116 <b>${h7(r.crm_id)}</b> \xB7 ${h7(r.client_name)} \u2014 ${items.filter((i) => i.order_id === r.id).map((i) => `${h7(i.name)} \xD7 ${i.qty}`).join(", ")}`);
+    const lines = rows.map((r) => `\u2022 CRM \u2116 <b>${h8(r.crm_id)}</b> \xB7 ${h8(r.client_name)} \u2014 ${items.filter((i) => i.order_id === r.id).map((i) => `${h8(i.name)} \xD7 ${i.qty}`).join(", ")}`);
     await tgGroup(s.partner_id, `\u2705 <b>\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(s.id)}: \u0443\u0441\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0437\u044F\u0442\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443 \u0441\u043A\u043B\u0430\u0434\u043E\u043C</b>
 
 ${lines.slice(0, 60).join("\n")}${lines.length > 60 ? `
@@ -8467,11 +8467,11 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     const r = await db.run(
       `INSERT INTO b2b_orders (partner_id, kind, status, supply_id, client_name, client_phone, ttn, total, comment, created_by, created_at, updated_at)
        VALUES (?, 'client', 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [p.id, it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, userName6(u), now, now]
+      [p.id, it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, userName7(u), now, now]
     );
     await db.batch([...itemRows(r.lastId, it.items), [
       `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-      [r.lastId, now, userName6(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah4(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : it.draftId ? ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u2014 \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}: ${itemsTxt(it.items)}`.slice(0, 2e3)]
+      [r.lastId, now, userName7(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah4(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : it.draftId ? ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u2014 \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}: ${itemsTxt(it.items)}`.slice(0, 2e3)]
     ]]);
     if (it.draftId) {
       await draftAdjust(it.draftId, it.items);
@@ -8647,7 +8647,7 @@ ${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah4(i.price)}`).join(
     const after = await snapOf(o);
     const changes = diffOf(before, after);
     const crmOld = wasCrm ? oldCrm : o.pending ? JSON.parse(o.pending).crm_old || "" : "";
-    const by = userName6(c.get("user"));
+    const by = userName7(c.get("user"));
     await db.run(
       `UPDATE b2b_orders SET pending = ? WHERE id = ?`,
       [changes.length || crmOld ? JSON.stringify({ before, changes, by, at: now, crm_old: crmOld }) : "", o.id]
@@ -8658,19 +8658,19 @@ ${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah4(i.price)}`).join(
       if (wasCrm) {
         const text = `\u267B\uFE0F <b>\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440</b>
 
-\u274C \u0421\u0442\u0430\u0440\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 LP-CRM \u2116 <b>${h7(oldCrm)}</b> \u0430\u043D\u0443\u043B\u044C\u043E\u0432\u0430\u043D\u043E (\u0443\u0442\u0438\u043B\u0456\u0437\u043E\u0432\u0430\u043D\u043E):
-<pre>${h7(brief(before))}</pre>
+\u274C \u0421\u0442\u0430\u0440\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 LP-CRM \u2116 <b>${h8(oldCrm)}</b> \u0430\u043D\u0443\u043B\u044C\u043E\u0432\u0430\u043D\u043E (\u0443\u0442\u0438\u043B\u0456\u0437\u043E\u0432\u0430\u043D\u043E):
+<pre>${h8(brief(before))}</pre>
 \u2705 \u0411\u0443\u0434\u0435 \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u0435 \u043D\u043E\u0432\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0437 \u043D\u043E\u0432\u043E\u044E \u0456\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0456\u0454\u044E:
-<pre>${h7(brief(after))}</pre>
+<pre>${h8(brief(after))}</pre>
 \u041F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0456\u0442\u044C \u0437\u043C\u0456\u043D\u0438 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u2014 \u043F\u0456\u0441\u043B\u044F \u0446\u044C\u043E\u0433\u043E \u043D\u043E\u0432\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043F\u0456\u0434\u0435 \u0432 \u0440\u043E\u0431\u043E\u0442\u0443.`;
         await tgPartner(o.partner_id, `${text}
 ${url}`);
         await tgGroup(o.partner_id, text);
-        await tgAdmins(`\u267B\uFE0F ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0435\u043D\u043E: <b>\u0441\u043A\u0430\u0441\u0443\u0439\u0442\u0435 \u0432 LP-CRM \u0441\u0442\u0430\u0440\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2116 ${h7(oldCrm)}</b>. \u041F\u0456\u0441\u043B\u044F \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u043E\u043C \u043F\u0435\u0440\u0435\u0434\u0430\u0439\u0442\u0435 \u043D\u043E\u0432\u0435 (\xAB\u0414\u043E\u0434\u0430\u0442\u0438 \u0432 CRM\xBB).
+        await tgAdmins(`\u267B\uFE0F ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0435\u043D\u043E: <b>\u0441\u043A\u0430\u0441\u0443\u0439\u0442\u0435 \u0432 LP-CRM \u0441\u0442\u0430\u0440\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2116 ${h8(oldCrm)}</b>. \u041F\u0456\u0441\u043B\u044F \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u043E\u043C \u043F\u0435\u0440\u0435\u0434\u0430\u0439\u0442\u0435 \u043D\u043E\u0432\u0435 (\xAB\u0414\u043E\u0434\u0430\u0442\u0438 \u0432 CRM\xBB).
 ${link(c, `b2bclients/${o.id}`)}`);
       } else {
-        await tgPartner(o.partner_id, `\u270F\uFE0F <b>\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440</b> (${h7(f.client_name)})
-${changes.slice(0, 15).map(h7).join("\n")}
+        await tgPartner(o.partner_id, `\u270F\uFE0F <b>\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440</b> (${h8(f.client_name)})
+${changes.slice(0, 15).map(h8).join("\n")}
 
 \u041F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0456\u0442\u044C \u0430\u0431\u043E \u0432\u0456\u0434\u0445\u0438\u043B\u0456\u0442\u044C \u0437\u043C\u0456\u043D\u0438 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456.
 ${url}`);
@@ -8688,7 +8688,7 @@ ${url}`);
     const { p, o } = await pendingOrder(c);
     await db.run(`UPDATE b2b_orders SET pending = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
     await log(o.id, c.get("user"), "\u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432 \u0437\u043C\u0456\u043D\u0438 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430");
-    await tgAdmins(`\u2705 \xAB${h7(p.name)}\xBB \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432 \u0437\u043C\u0456\u043D\u0438 \u0432 ${orderNo(o.id)} (${h7(o.client_name)})${o.status === "new" ? " \u2014 \u043C\u043E\u0436\u043D\u0430 \u043F\u0435\u0440\u0435\u0434\u0430\u0432\u0430\u0442\u0438 \u0432 CRM" : ""}.
+    await tgAdmins(`\u2705 \xAB${h8(p.name)}\xBB \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432 \u0437\u043C\u0456\u043D\u0438 \u0432 ${orderNo(o.id)} (${h8(o.client_name)})${o.status === "new" ? " \u2014 \u043C\u043E\u0436\u043D\u0430 \u043F\u0435\u0440\u0435\u0434\u0430\u0432\u0430\u0442\u0438 \u0432 CRM" : ""}.
 ${link(c, `b2bclients/${o.id}`)}`);
     return c.json({ ok: true });
   });
@@ -8717,7 +8717,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
     if (s?.status === "open") await rebuildOpen(s.id);
     if (curSupply && curSupply !== bf.supply_id) await rebuildOpen(curSupply);
     await log(o.id, c.get("user"), "\u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0432\u0456\u0434\u0445\u0438\u043B\u0438\u0432 \u0437\u043C\u0456\u043D\u0438 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430 \u2014 \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u0442\u043E \u044F\u043A \u0431\u0443\u043B\u043E");
-    await tgAdmins(`\u21A9\uFE0F \xAB${h7(p.name)}\xBB <b>\u0432\u0456\u0434\u0445\u0438\u043B\u0438\u0432</b> \u0437\u043C\u0456\u043D\u0438 \u0432 ${orderNo(o.id)} (${h7(bf.client_name)}) \u2014 \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u0442\u043E \u044F\u043A \u0431\u0443\u043B\u043E.${pend.crm_old ? ` \u0421\u0442\u0430\u0440\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 LP-CRM \u2116 ${h7(pend.crm_old)} \u0437\u043D\u043E\u0432\u0443 \u0447\u0438\u043D\u043D\u0435 \u2014 \u044F\u043A\u0449\u043E \u0432\u0438 \u0439\u043E\u0433\u043E \u0432\u0436\u0435 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u043B\u0438, \u0432\u0456\u0434\u043D\u043E\u0432\u0456\u0442\u044C.` : ""}
+    await tgAdmins(`\u21A9\uFE0F \xAB${h8(p.name)}\xBB <b>\u0432\u0456\u0434\u0445\u0438\u043B\u0438\u0432</b> \u0437\u043C\u0456\u043D\u0438 \u0432 ${orderNo(o.id)} (${h8(bf.client_name)}) \u2014 \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u0442\u043E \u044F\u043A \u0431\u0443\u043B\u043E.${pend.crm_old ? ` \u0421\u0442\u0430\u0440\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 LP-CRM \u2116 ${h8(pend.crm_old)} \u0437\u043D\u043E\u0432\u0443 \u0447\u0438\u043D\u043D\u0435 \u2014 \u044F\u043A\u0449\u043E \u0432\u0438 \u0439\u043E\u0433\u043E \u0432\u0436\u0435 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u043B\u0438, \u0432\u0456\u0434\u043D\u043E\u0432\u0456\u0442\u044C.` : ""}
 ${link(c, `b2bclients/${o.id}`)}`);
     return c.json({ ok: true });
   });
@@ -8738,7 +8738,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
     }
     if (o.supply_id) await rebuildOpen(o.supply_id);
     await log(o.id, c.get("user"), `\u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430${inDraft ? ` (\u0442\u043E\u0432\u0430\u0440\u0438 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438 ${orderNo(s.id)})` : ""}`);
-    await tgAdmins(`\u274C <b>\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)}</b> (\xAB${h7(p.name)}\xBB)
+    await tgAdmins(`\u274C <b>\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)}</b> (\xAB${h8(p.name)}\xBB)
 ${link(c, `b2bclients/${o.id}`)}`);
     return c.json({ ok: true });
   });
@@ -8892,7 +8892,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
     await refreshCrm({ ids: [o.id] });
     const crmId = (await db.get(`SELECT crm_id FROM b2b_orders WHERE id = ?`, [o.id]))?.crm_id || "";
     await log(o.id, c.get("user"), `\u0434\u043E\u0434\u0430\u043D\u043E \u0432 LP-CRM${crmId ? `: \u2116 ${crmId}` : ` (\u043A\u043E\u0434 ${code}; \u043D\u043E\u043C\u0435\u0440 \u0437\u2019\u044F\u0432\u0438\u0442\u044C\u0441\u044F \u043F\u0456\u0441\u043B\u044F \u043E\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0441\u0442\u0430\u0442\u0443\u0441\u0443)`}`);
-    await tgPartner(o.partner_id, `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h7(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${crmId ? `, \u2116 \u0443 CRM ${crmId}` : ""}.
+    await tgPartner(o.partner_id, `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h8(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${crmId ? `, \u2116 \u0443 CRM ${crmId}` : ""}.
 ${link(c, `pclients/${o.id}`)}`);
     await warnUnpaidShipped(c, o);
     await supplyInWork(o.supply_id, c).catch(() => 0);
@@ -8979,7 +8979,7 @@ ${link(c, `pclients/${o.id}`)}`);
 ${link(c, `porders/${s.id}`)}`);
     } else {
       await log(s.id, c.get("user"), `\u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 LP-CRM \u043D\u0430 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430${crmId ? `: \u2116 ${crmId}` : ` (\u043A\u043E\u0434 ${code})`}`);
-      await tgPartner(s.partner_id, `\u{1F69A} \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(s.id)} \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u043D\u0430 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0432\u0430\u0448 \u0441\u043A\u043B\u0430\u0434${crmId ? ` (\u2116 ${crmId})` : ""}: ${h7(ship.name)}, ${h7(ship.address)}.
+      await tgPartner(s.partner_id, `\u{1F69A} \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(s.id)} \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u043D\u0430 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0432\u0430\u0448 \u0441\u043A\u043B\u0430\u0434${crmId ? ` (\u2116 ${crmId})` : ""}: ${h8(ship.name)}, ${h8(ship.address)}.
 ${link(c, `porders/${s.id}`)}`);
     }
     return c.json({ ok: true, crm_id: crmId, code, paid: pay.paid });
@@ -9008,8 +9008,8 @@ ${link(c, `porders/${s.id}`)}`);
       if (!isCode && num6) await hooks.crmLinked?.(o.id, num6).catch(() => 0);
       if (o.status === "new") await warnUnpaidShipped(c, o);
       const relinked = Boolean(o.crm_id || o.crm_ext);
-      await tgPartner(o.partner_id, relinked ? `\u{1F501} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h7(o.client_name)}): \u043D\u043E\u043C\u0435\u0440 \u0443 CRM \u0437\u043C\u0456\u043D\u0435\u043D\u043E${num6 ? ` \u043D\u0430 ${num6}` : ""}.
-${link(c, `pclients/${o.id}`)}` : `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h7(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${num6 ? `, \u2116 \u0443 CRM ${num6}` : ""}.
+      await tgPartner(o.partner_id, relinked ? `\u{1F501} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h8(o.client_name)}): \u043D\u043E\u043C\u0435\u0440 \u0443 CRM \u0437\u043C\u0456\u043D\u0435\u043D\u043E${num6 ? ` \u043D\u0430 ${num6}` : ""}.
+${link(c, `pclients/${o.id}`)}` : `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h8(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${num6 ? `, \u2116 \u0443 CRM ${num6}` : ""}.
 ${link(c, `pclients/${o.id}`)}`);
       await supplyInWork(o.supply_id, c).catch(() => 0);
     }
@@ -9031,11 +9031,11 @@ ${link(c, `pclients/${o.id}`)}`);
     if (paid && note.length < 3) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440: \u0447\u043E\u043C\u0443 \u043E\u043F\u043B\u0430\u0442\u0443 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E \u0432\u0440\u0443\u0447\u043D\u0443.");
     const u = c.get("user");
     const now = nowIso();
-    if (paid) await db.run(`UPDATE b2b_orders SET paid_amount = total, paid_at = ?, paid_by = ?, paid_note = ?, updated_at = ? WHERE id = ?`, [now, userName6(u), note, now, o.id]);
+    if (paid) await db.run(`UPDATE b2b_orders SET paid_amount = total, paid_at = ?, paid_by = ?, paid_note = ?, updated_at = ? WHERE id = ?`, [now, userName7(u), note, now, o.id]);
     else await db.run(`UPDATE b2b_orders SET paid_amount = 0, paid_at = '', paid_by = '', paid_note = '', updated_at = ? WHERE id = ?`, [now, o.id]);
     await log(o.id, u, paid ? `\u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443: ${note}` : "\u0437\u043D\u044F\u0442\u043E \u043F\u043E\u0437\u043D\u0430\u0447\u043A\u0443 \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB");
-    if (paid) await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E</b>: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h7(o.client_name)}) \u2014 ${uah4(o.total)}
-\u{1F4AC} ${h7(note)}`);
+    if (paid) await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E</b>: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h8(o.client_name)}) \u2014 ${uah4(o.total)}
+\u{1F4AC} ${h8(note)}`);
     return c.json({ ok: true });
   });
   app.post("/api/b2b/clients/:id/cancel", async (c) => {
@@ -9050,7 +9050,7 @@ ${link(c, `pclients/${o.id}`)}`);
     }
     if (o.supply_id) await rebuildOpen(o.supply_id);
     await log(o.id, c.get("user"), `\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430${s?.status === "draft" ? ` (\u0442\u043E\u0432\u0430\u0440\u0438 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438 ${orderNo(s.id)})` : ""}`);
-    await tgPartner(o.partner_id, `\u274C \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h7(o.client_name)}) \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u043E\u043C.`);
+    await tgPartner(o.partner_id, `\u274C \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h8(o.client_name)}) \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u043E\u043C.`);
     return c.json({ ok: true, inCrm: !!o.crm_id });
   });
   return { refreshCrm };
@@ -10275,7 +10275,7 @@ var foreignInvoice = (purpose, invoiceNo) => {
   return nos.length > 0 && !nos.includes(digitsOf(invoiceNo));
 };
 function mountB2bPay(app, { db, services, orders, hooks }) {
-  const { log, tgAdmins, tgPartner, link, uah: uah4, h: h7 } = orders;
+  const { log, tgAdmins, tgPartner, link, uah: uah4, h: h8 } = orders;
   const candidatesFor = (codes) => db.all(
     `SELECT o.id, o.partner_id, o.total, o.paid_amount, o.invoice_no, o.status, e.code FROM b2b_orders o JOIN b2b_entities e ON e.id = o.entity_id
      WHERE o.kind = 'supply' AND o.status IN ('pay_wait', 'partial') AND e.code IN (SELECT value FROM json_each(?)) ORDER BY o.id`,
@@ -10299,7 +10299,7 @@ function mountB2bPay(app, { db, services, orders, hooks }) {
 ${link(base, hash2)}` : "";
     if (status === "paid") {
       await log(o.id, user, `\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E: ${uah4(sum)}${user ? "" : " \u2014 Opendatabot"}`);
-      await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}${o.invoice_no ? `, \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h7(o.invoice_no)}` : ""} \u2014 ${uah4(o.total)}${url(`porders/${o.id}`)}`);
+      await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}${o.invoice_no ? `, \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h8(o.invoice_no)}` : ""} \u2014 ${uah4(o.total)}${url(`porders/${o.id}`)}`);
       await tgAdmins(`\u2705 <b>\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E</b>${who}: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 ${uah4(sum)}${url(`b2borders/${o.id}`)}`);
       if (o.status !== "paid") {
         await hooks.finPaid?.(o.id).catch(() => 0);
@@ -10345,8 +10345,8 @@ ${link(base, hash2)}` : "";
         hit.paid_amount = round2(hit.paid_amount + t.amount);
         await recalc(hit.id, base);
       } else {
-        const why = shared2.has(t.payer_code) ? `\u043A\u043E\u0434 \u043F\u043B\u0430\u0442\u043D\u0438\u043A\u0430 ${h7(t.payer_code)} \u0454 \u0432 \u044E\u0440\u043E\u0441\u043E\u0431\u0430\u0445 \u043A\u0456\u043B\u044C\u043A\u043E\u0445 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432` : pool.length > 1 ? `\u043F\u0456\u0434\u0445\u043E\u0434\u0438\u0442\u044C \u043A\u0456\u043B\u044C\u043A\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C: ${pool.map((o) => `${orderNo(o.id)} (\u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah4(due(o))})`).join(", ")}` : `\u0441\u0443\u043C\u0430 \u0431\u0456\u043B\u044C\u0448\u0430 \u0437\u0430 \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah4(due(pool[0]))} \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(pool[0].id)}`;
-        await tgAdmins(`\u{1F4B3} <b>\u041F\u043B\u0430\u0442\u0456\u0436 \u0437\u0430 B2B \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435</b>: ${uah4(t.amount)} \u0432\u0456\u0434 ${h7(t.payer_name || t.payer_code)}
+        const why = shared2.has(t.payer_code) ? `\u043A\u043E\u0434 \u043F\u043B\u0430\u0442\u043D\u0438\u043A\u0430 ${h8(t.payer_code)} \u0454 \u0432 \u044E\u0440\u043E\u0441\u043E\u0431\u0430\u0445 \u043A\u0456\u043B\u044C\u043A\u043E\u0445 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432` : pool.length > 1 ? `\u043F\u0456\u0434\u0445\u043E\u0434\u0438\u0442\u044C \u043A\u0456\u043B\u044C\u043A\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C: ${pool.map((o) => `${orderNo(o.id)} (\u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah4(due(o))})`).join(", ")}` : `\u0441\u0443\u043C\u0430 \u0431\u0456\u043B\u044C\u0448\u0430 \u0437\u0430 \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah4(due(pool[0]))} \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(pool[0].id)}`;
+        await tgAdmins(`\u{1F4B3} <b>\u041F\u043B\u0430\u0442\u0456\u0436 \u0437\u0430 B2B \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435</b>: ${uah4(t.amount)} \u0432\u0456\u0434 ${h8(t.payer_name || t.payer_code)}
 ${why}.
 \u0412\u043A\u0430\u0436\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0432\u0440\u0443\u0447\u043D\u0443 \u043D\u0430 \u0457\u0457 \u0441\u0442\u043E\u0440\u0456\u043D\u0446\u0456 \u0430\u0431\u043E \u0432 \xAB\u041F\u043B\u0430\u0442\u0435\u0436\u0430\u0445\xBB.${base ? `
 ${link(base, `b2borders/${pool[0].id}`)}` : ""}`);
@@ -10460,7 +10460,7 @@ var INVOICED = ["pay_wait", "partial", "paid", "done"];
 var userName4 = (u) => u?.name || u?.login || "";
 var firstLine = (s) => String(s || "").split("\n")[0];
 function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partnerPrice2 }) {
-  const { orderOf, supplyLeft, itemRows, totalOf, log, tgPartner, tgGroup, link, uah: uah4, h: h7, rebuildOpen, getOpen, entityText } = orders;
+  const { orderOf, supplyLeft, itemRows, totalOf, log, tgPartner, tgGroup, link, uah: uah4, h: h8, rebuildOpen, getOpen, entityText } = orders;
   const partnerCatalog = async (partnerId) => {
     const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [partnerId]);
     const rows = await withGrace(db, p, await db.all(
@@ -10589,13 +10589,13 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
     await log(o.id, u, `\u0437\u043C\u0456\u043D\u0438\u0432 ${who}: ${changes.join("; ")} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah4(total)}${invoiced ? ` \xB7 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${redo} \u0442\u0440\u0435\u0431\u0430 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u0438\u0442\u0438` : ""}`.slice(0, 1800));
     if (["draft", "open"].includes(o.status)) await priceToClients(o, u, cur, items);
     if (o.status === "open") await rebuildOpen(o.id);
-    const lines = changes.slice(0, 20).map(h7).join("\n");
+    const lines = changes.slice(0, 20).map(h8).join("\n");
     const what = o.status === "draft" ? "\u0427\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456" : o.status === "open" ? "\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E" : "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E";
-    const text = `\u270F\uFE0F <b>${what} ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0438\u0432 ${h7(who)}</b>
+    const text = `\u270F\uFE0F <b>${what} ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0438\u0432 ${h8(who)}</b>
 ${lines}
 <b>\u0420\u0430\u0437\u043E\u043C: ${uah4(total)}</b>${invoiced ? `
 
-\u{1F501} \u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h7(o.invoice_no)} \u0431\u0443\u0434\u0435 \u043F\u0435\u0440\u0435\u0432\u0438\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E \u2014 \u043D\u043E\u0432\u0438\u0439 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430\u0434\u0456\u0439\u0434\u0435 \u0441\u044E\u0434\u0438.${Number(o.paid_amount) > 0 ? ` \u041E\u043F\u043B\u0430\u0442\u0430 ${uah4(o.paid_amount)} \u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0430\u043D\u0430.` : ""}` : ""}`;
+\u{1F501} \u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h8(o.invoice_no)} \u0431\u0443\u0434\u0435 \u043F\u0435\u0440\u0435\u0432\u0438\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E \u2014 \u043D\u043E\u0432\u0438\u0439 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430\u0434\u0456\u0439\u0434\u0435 \u0441\u044E\u0434\u0438.${Number(o.paid_amount) > 0 ? ` \u041E\u043F\u043B\u0430\u0442\u0430 ${uah4(o.paid_amount)} \u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0430\u043D\u0430.` : ""}` : ""}`;
     await tgPartner(o.partner_id, `${text}
 ${link(c, `porders/${o.id}`)}`);
     await tgGroup(o.partner_id, text);
@@ -10657,7 +10657,7 @@ ${link(c, `porders/${o.id}`)}`);
     if (inDraft) await hooks.draftAdjust?.(o.supply_id, draftItems.map((i) => ({ ...i, qty: -i.qty })));
     if (o.kind === "client" && o.supply_id) await rebuildOpen(o.supply_id);
     if (o.status !== "draft") {
-      await tgPartner(o.partner_id, `\u{1F5D1} ${o.kind === "client" ? `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${h7(o.client_name)})` : `\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)}`} \u0432\u0438\u0434\u0430\u043B\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u2014 \u0439\u043E\u0433\u043E \u0432\u0438\u0434\u043D\u043E \u0432 \xAB\u041A\u043E\u0448\u0438\u043A\u0443\xBB.`);
+      await tgPartner(o.partner_id, `\u{1F5D1} ${o.kind === "client" ? `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${h8(o.client_name)})` : `\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)}`} \u0432\u0438\u0434\u0430\u043B\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u2014 \u0439\u043E\u0433\u043E \u0432\u0438\u0434\u043D\u043E \u0432 \xAB\u041A\u043E\u0448\u0438\u043A\u0443\xBB.`);
     }
     await logAudit(db, { user: c.get("user"), kind: "b2b", refId: o.partner_id, action: `\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u0432 \u043A\u043E\u0448\u0438\u043A ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E"} ${orderNo(o.id)} \u043D\u0430 ${uah4(o.total)}${o.crm_id ? ` (\u0443 LP-CRM \u2116 ${o.crm_id} \u2014 \u043D\u0435 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E)` : ""}` }).catch(() => 0);
     return c.json({ ok: true, inCrm: o.crm_id || "" });
@@ -10737,7 +10737,7 @@ ${link(c, `porders/${o.id}`)}`);
     ]);
     if (openId) await rebuildOpen(openId);
     if (restoreToDraft) await hooks.draftAdjust?.(restoreToDraft, (d.items || []).map((i) => ({ ...i, article: i.article || "" })));
-    await tgPartner(o.partner_id, `\u21A9\uFE0F ${o.kind === "client" ? `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${h7(o.client_name)})` : `\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)}`} \u0432\u0456\u0434\u043D\u043E\u0432\u043B\u0435\u043D\u043E \u0437 \u043A\u043E\u0448\u0438\u043A\u0430.`);
+    await tgPartner(o.partner_id, `\u21A9\uFE0F ${o.kind === "client" ? `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${h8(o.client_name)})` : `\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)}`} \u0432\u0456\u0434\u043D\u043E\u0432\u043B\u0435\u043D\u043E \u0437 \u043A\u043E\u0448\u0438\u043A\u0430.`);
     return c.json({ ok: true, id: o.id, kind: o.kind });
   });
 }
@@ -11121,8 +11121,8 @@ var DEFECT_STATE = {
 var claimNo = (id) => `\u041E-${id}`;
 var OPEN = ["new", "review", "approved"];
 function mountB2bClaims(app, { db, services = {}, myPartner, orders }) {
-  const { orderOf, itemRows, storeFile, sendFile, groupOf, log, tgAdmins, tgPartner, tgGroup, link, uah: uah4, h: h7, entityText } = orders;
-  const userName6 = (u) => u?.name || u?.login || "";
+  const { orderOf, itemRows, storeFile, sendFile, groupOf, log, tgAdmins, tgPartner, tgGroup, link, uah: uah4, h: h8, entityText } = orders;
+  const userName7 = (u) => u?.name || u?.login || "";
   const J = (v, d) => {
     try {
       return JSON.parse(v || "") ?? d;
@@ -11148,24 +11148,24 @@ function mountB2bClaims(app, { db, services = {}, myPartner, orders }) {
     order_number: r.order_id ? orderNo(r.order_id) : "",
     exch_number: r.exch_supply_id ? orderNo(r.exch_supply_id) : ""
   });
-  const clog = (id, u, action) => db.run(`INSERT INTO b2b_claim_log (claim_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [id, nowIso(), userName6(u), String(action).slice(0, 2e3)]);
-  const itemsLine = (list) => list.map((i) => `\u2022 ${h7(i.name)}${i.article ? ` (${h7(i.article)})` : ""} \xD7 ${i.qty}`).join("\n");
+  const clog = (id, u, action) => db.run(`INSERT INTO b2b_claim_log (claim_id, at, user_name, action) VALUES (?, ?, ?, ?)`, [id, nowIso(), userName7(u), String(action).slice(0, 2e3)]);
+  const itemsLine = (list) => list.map((i) => `\u2022 ${h8(i.name)}${i.article ? ` (${h8(i.article)})` : ""} \xD7 ${i.qty}`).join("\n");
   async function claimText(r, title) {
     const c = pub(r);
     const p = await db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [r.partner_id]);
     return `${title}
-<b>\u0417\u0430\u044F\u0432\u043A\u0430 ${claimNo(r.id)}</b> \xB7 ${h7(p?.name || "")} \xB7 <b>${h7(c.status_name)}</b>
-${r.order_kind === "client" ? "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430" : "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F"} ${c.order_number}${r.client_name ? ` \xB7 ${h7(r.client_name)}${r.client_phone ? `, +${h7(r.client_phone)}` : ""}` : ""}${r.ttn ? ` \xB7 \u0422\u0422\u041D ${h7(r.ttn)}` : ""}
+<b>\u0417\u0430\u044F\u0432\u043A\u0430 ${claimNo(r.id)}</b> \xB7 ${h8(p?.name || "")} \xB7 <b>${h8(c.status_name)}</b>
+${r.order_kind === "client" ? "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430" : "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F"} ${c.order_number}${r.client_name ? ` \xB7 ${h8(r.client_name)}${r.client_phone ? `, +${h8(r.client_phone)}` : ""}` : ""}${r.ttn ? ` \xB7 \u0422\u0422\u041D ${h8(r.ttn)}` : ""}
 <b>\u0422\u043E\u0432\u0430\u0440:</b>
 ${itemsLine(c.items)}
-<b>\u041F\u0440\u0438\u0447\u0438\u043D\u0430:</b> ${h7(c.reason_name)}${r.descr ? `
-<b>\u041E\u043F\u0438\u0441:</b> ${h7(r.descr)}` : ""}
-<b>\u041F\u0430\u0440\u0442\u043D\u0435\u0440 \u0445\u043E\u0447\u0435:</b> ${h7(c.want_name)}${c.want_items.length ? `
+<b>\u041F\u0440\u0438\u0447\u0438\u043D\u0430:</b> ${h8(c.reason_name)}${r.descr ? `
+<b>\u041E\u043F\u0438\u0441:</b> ${h8(r.descr)}` : ""}
+<b>\u041F\u0430\u0440\u0442\u043D\u0435\u0440 \u0445\u043E\u0447\u0435:</b> ${h8(c.want_name)}${c.want_items.length ? `
 ${itemsLine(c.want_items)}` : ""}${r.deliver_to ? `
 <b>\u0417\u0430\u043C\u0456\u043D\u0443 \u043E\u0442\u0440\u0438\u043C\u0443\u0454:</b> ${r.deliver_to === "partner" ? "\u043F\u0430\u0440\u0442\u043D\u0435\u0440 (\u0443\u0436\u0435 \u0437\u0430\u043C\u0456\u043D\u0438\u0432 \u043A\u043B\u0456\u0454\u043D\u0442\u0443 \u0437\u0456 \u0441\u0432\u043E\u0433\u043E \u0441\u043A\u043B\u0430\u0434\u0443)" : "\u043A\u043B\u0456\u0454\u043D\u0442"}` : ""}${r.return_mode ? `
-<b>\u0411\u0440\u0430\u043A:</b> ${h7(c.return_name)}${r.return_ttn ? ` \xB7 \u0422\u0422\u041D \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F ${h7(r.return_ttn)}` : ""}` : ""}${r.defect ? `
-<b>\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430:</b> ${h7(c.defect_name)}${r.defect_note ? ` \u2014 ${h7(r.defect_note)}` : ""}` : ""}${r.decision_note ? `
-<b>\u0420\u0456\u0448\u0435\u043D\u043D\u044F \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430:</b> ${h7(r.decision_note)}` : ""}${r.refund_amount ? `
+<b>\u0411\u0440\u0430\u043A:</b> ${h8(c.return_name)}${r.return_ttn ? ` \xB7 \u0422\u0422\u041D \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F ${h8(r.return_ttn)}` : ""}` : ""}${r.defect ? `
+<b>\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430:</b> ${h8(c.defect_name)}${r.defect_note ? ` \u2014 ${h8(r.defect_note)}` : ""}` : ""}${r.decision_note ? `
+<b>\u0420\u0456\u0448\u0435\u043D\u043D\u044F \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430:</b> ${h8(r.decision_note)}` : ""}${r.refund_amount ? `
 <b>\u0414\u043E \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F:</b> ${uah4(r.refund_amount)}` : ""}${r.exch_supply_id ? `
 <b>\u041E\u0431\u043C\u0456\u043D\u043D\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F:</b> ${orderNo(r.exch_supply_id)} (0 \u0433\u0440\u043D)` : ""}${r.files ? `
 \u{1F4F7} \u0424\u043E\u0442\u043E/\u0432\u0456\u0434\u0435\u043E: ${r.files}` : ""}`;
@@ -11235,7 +11235,7 @@ ${link(c, `b2bclaims/${r.id}`)}`);
         JSON.stringify(list),
         JSON.stringify(wantItems),
         deliverTo,
-        userName6(c.get("user")),
+        userName7(c.get("user")),
         now,
         now
       ]
@@ -11282,7 +11282,7 @@ ${link(c, `b2bclaims/${r.id}`)}`);
   async function comment(c, cl, text, who) {
     const t = String(text || "").trim().slice(0, 1e3);
     if (t.length < 2) throw fail(400, "\u041D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440.");
-    await notify(c, cl, `\u{1F4AC} <b>\u041A\u043E\u043C\u0435\u043D\u0442\u0430\u0440 ${who}</b>: ${h7(t)}`, { history: `\u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440: ${t}` });
+    await notify(c, cl, `\u{1F4AC} <b>\u041A\u043E\u043C\u0435\u043D\u0442\u0430\u0440 ${who}</b>: ${h8(t)}`, { history: `\u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440: ${t}` });
     return { ok: true };
   }
   app.get("/api/b2b/p/claims", async (c) => {
@@ -11337,7 +11337,7 @@ ${link(c, `b2bclaims/${r.id}`)}`);
     const ttn = String((await c.req.json()).ttn || "").replace(/\s/g, "").slice(0, 30);
     if (!/^[0-9A-Za-z-]{6,30}$/.test(ttn)) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043D\u043E\u043C\u0435\u0440 \u0422\u0422\u041D.");
     await db.run(`UPDATE b2b_claims SET return_ttn = ?, updated_at = ? WHERE id = ?`, [ttn, nowIso(), cl.id]);
-    await notify(c, { ...cl }, `\u{1F4E6} <b>\u0411\u0440\u0430\u043A \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u043D\u0430 \u0441\u043A\u043B\u0430\u0434</b>, \u0422\u0422\u041D ${h7(ttn)}`, { history: `\u0422\u0422\u041D \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u0431\u0440\u0430\u043A\u0443: ${ttn}` });
+    await notify(c, { ...cl }, `\u{1F4E6} <b>\u0411\u0440\u0430\u043A \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u043D\u0430 \u0441\u043A\u043B\u0430\u0434</b>, \u0422\u0422\u041D ${h8(ttn)}`, { history: `\u0422\u0422\u041D \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u0431\u0440\u0430\u043A\u0443: ${ttn}` });
     return c.json({ ok: true });
   });
   app.post("/api/b2b/p/claims/:id/cancel", async (c) => {
@@ -11416,7 +11416,7 @@ ${link(c, `b2bclaims/${r.id}`)}`);
     const r = await db.run(
       `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery,
         paid_amount, paid_at, paid_by, paid_note, claim_id) VALUES (?, 'supply', 'paid', ?, ?, 0, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
-      [cl.partner_id, entityId, entity, `\u041E\u0411\u041C\u0406\u041D \u0437\u0430 \u0437\u0430\u044F\u0432\u043A\u043E\u044E ${claimNo(cl.id)} (${orderNo(cl.order_id)})`, userName6(c.get("user")), now, now, delivery, now, userName6(c.get("user")), note, cl.id]
+      [cl.partner_id, entityId, entity, `\u041E\u0411\u041C\u0406\u041D \u0437\u0430 \u0437\u0430\u044F\u0432\u043A\u043E\u044E ${claimNo(cl.id)} (${orderNo(cl.order_id)})`, userName7(c.get("user")), now, now, delivery, now, userName7(c.get("user")), note, cl.id]
     );
     await db.batch(itemRows(r.lastId, items));
     await log(r.lastId, c.get("user"), `\u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u043E\u0431\u043C\u0456\u043D\u043D\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E (0 \u0433\u0440\u043D, \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E \u0432\u0440\u0443\u0447\u043D\u0443\xBB: ${note}): ${items.map((i) => `${i.name} \xD7 ${i.qty}`).join("; ")}`);
@@ -11501,6 +11501,82 @@ ${delivery === "pickup" ? "\u{1F697} \u0421\u0430\u043C\u043E\u0432\u0438\u0432\
     return c.json({ ok: true });
   });
   return { CLAIM_STATUS };
+}
+
+// src/modules/b2b/feeds.js
+var FEED_KIND = { xml: "XML-\u0444\u0456\u0434", gsheet: "Google-\u0442\u0430\u0431\u043B\u0438\u0446\u044F", csv: "CSV / Excel", other: "\u041F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F" };
+var feedKindOf = (url) => {
+  const u = String(url || "").toLowerCase();
+  if (/docs\.google\.com\/spreadsheets|sheets\.google\.com/.test(u)) return "gsheet";
+  if (/\.(xml|yml)(\?|#|$)|[?&](format|type)=(xml|yml)|\/(feed|yml|xml)(\/|\?|$)/.test(u)) return "xml";
+  if (/\.(csv|xlsx?)(\?|#|$)|format=(csv|xlsx)/.test(u)) return "csv";
+  return "other";
+};
+var userName5 = (u) => u?.name || u?.login || "";
+var h7 = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function mountB2bFeeds(app, { db, myPartner, tgPartner, tgGroup, link }) {
+  const feedIn = (b) => {
+    const url = String(b.url || "").trim();
+    if (!/^https?:\/\/[^\s]+\.[^\s]+$/i.test(url) || url.length > 1e3) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F, \u0449\u043E \u043F\u043E\u0447\u0438\u043D\u0430\u0454\u0442\u044C\u0441\u044F \u0437 https://");
+    const title = String(b.title || "").trim().slice(0, 120);
+    const kind = FEED_KIND[b.kind] ? b.kind : feedKindOf(url);
+    return { url, kind, title: title || FEED_KIND[kind], note: String(b.note || "").trim().slice(0, 500) };
+  };
+  const COLS2 = "id, partner_id, title, kind, url, note, created_by, created_at, updated_at";
+  const list = (partnerId) => db.all(`SELECT ${COLS2} FROM b2b_feeds WHERE active = 1 AND partner_id IN (0, ?) ORDER BY partner_id DESC, sort, id`, [partnerId]);
+  async function notify(c, partnerId, f, verb) {
+    const text = `\u{1F517} <b>${verb}: ${h7(f.title)}</b> (${FEED_KIND[f.kind]})
+${h7(f.url)}${f.note ? `
+${h7(f.note)}` : ""}
+
+\u0423\u0441\u0456 \u043F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u2014 \u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456, \u0432\u043A\u043B\u0430\u0434\u043A\u0430 \xAB\u041A\u0430\u0442\u0430\u043B\u043E\u0433\xBB.
+${link(c, "pcatalog")}`;
+    const ids = partnerId ? [partnerId] : (await db.all(`SELECT id FROM b2b_partners WHERE active = 1`)).map((r) => r.id);
+    for (const id of ids) {
+      await tgPartner(id, text);
+      await tgGroup(id, text);
+    }
+    return ids.length;
+  }
+  app.get("/api/b2b/p/feeds", async (c) => {
+    const p = await myPartner(c);
+    return c.json((await list(p.id)).map(({ created_by, partner_id, ...f }) => ({ ...f, common: !partner_id })));
+  });
+  app.get("/api/b2b/partners/:id/feeds", async (c) => {
+    need(c, "b2b.view");
+    return c.json(await list(Number(c.req.param("id")) || 0));
+  });
+  app.post("/api/b2b/partners/:id/feeds", async (c) => {
+    need(c, "b2b.admin");
+    const b = await c.req.json();
+    const pid = b.common ? 0 : Number(c.req.param("id"));
+    if (pid && !await db.get(`SELECT id FROM b2b_partners WHERE id = ?`, [pid])) throw fail(404, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    if ((await db.get(`SELECT COUNT(*) AS n FROM b2b_feeds WHERE active = 1 AND partner_id = ?`, [pid])).n >= 30) throw fail(400, "\u0423\u0436\u0435 30 \u043F\u043E\u0441\u0438\u043B\u0430\u043D\u044C \u2014 \u043F\u0440\u0438\u0431\u0435\u0440\u0456\u0442\u044C \u0437\u0430\u0439\u0432\u0456.");
+    const f = feedIn(b);
+    const now = nowIso();
+    const r = await db.run(
+      `INSERT INTO b2b_feeds (partner_id, title, kind, url, note, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [pid, f.title, f.kind, f.url, f.note, userName5(c.get("user")), now, now]
+    );
+    const sent = b.notify ? await notify(c, pid, f, "\u041D\u043E\u0432\u0435 \u043F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F") : 0;
+    return c.json({ id: r.lastId, sent });
+  });
+  app.put("/api/b2b/feeds/:id", async (c) => {
+    need(c, "b2b.admin");
+    const old = await db.get(`SELECT * FROM b2b_feeds WHERE id = ? AND active = 1`, [c.req.param("id")]);
+    if (!old) throw fail(404, "\u041F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const b = await c.req.json();
+    const f = feedIn(b);
+    await db.run(`UPDATE b2b_feeds SET title = ?, kind = ?, url = ?, note = ?, updated_at = ? WHERE id = ?`, [f.title, f.kind, f.url, f.note, nowIso(), old.id]);
+    const sent = b.notify ? await notify(c, old.partner_id, f, "\u041E\u043D\u043E\u0432\u043B\u0435\u043D\u043E \u043F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F") : 0;
+    return c.json({ ok: true, sent });
+  });
+  app.delete("/api/b2b/feeds/:id", async (c) => {
+    need(c, "b2b.admin");
+    const r = await db.run(`UPDATE b2b_feeds SET active = 0, updated_at = ? WHERE id = ? AND active = 1`, [nowIso(), c.req.param("id")]);
+    if (!r.changes) throw fail(404, "\u041F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return c.json({ ok: true });
+  });
 }
 
 // src/modules/b2b/index.js
@@ -12087,6 +12163,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   mountB2bClients(app, { db, fetchFn, services, myPartner, orders, hooks, onCron });
   mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice });
   mountB2bClaims(app, { db, services, myPartner, orders });
+  mountB2bFeeds(app, { db, myPartner, tgPartner: orders.tgPartner, tgGroup: orders.tgGroup, link: orders.link });
   const tgdocs = mountB2bTgDocs(app, { db, services, orders, hooks });
   const pay = mountB2bPay(app, { db, services, orders, hooks });
   onCleanup(() => hooks.cleanup?.());
@@ -12989,7 +13066,7 @@ var COLS = {
 function parseRzsProductsCsv(text) {
   const rows = csvRows(text);
   if (!rows.length) throw Object.assign(new Error("\u0424\u0430\u0439\u043B \u043F\u043E\u0440\u043E\u0436\u043D\u0456\u0439."), { status: 400 });
-  const head = rows[0].map((h7) => String(h7).trim().toLowerCase());
+  const head = rows[0].map((h8) => String(h8).trim().toLowerCase());
   const idx = Object.fromEntries(Object.entries(COLS).map(([k, names]) => [k, names.map((n) => head.indexOf(n)).find((i) => i >= 0) ?? -1]));
   if (idx.code < 0) throw Object.assign(new Error("\u0423 \u0444\u0430\u0439\u043B\u0456 \u043D\u0435\u043C\u0430\u0454 \u043A\u043E\u043B\u043E\u043D\u043A\u0438 \xAB\u0410\u0440\u0442\u0438\u043A\u0443\u043B \u0442\u043E\u0432\u0430\u0440\u0443\xBB \u2014 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0442\u0435 \u0432\u0438\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043D\u044F \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0437 \u041A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u043F\u043E\u0441\u0442\u0430\u0447\u0430\u043B\u044C\u043D\u0438\u043A\u0430 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (CSV)."), { status: 400 });
   const get = (r, k) => idx[k] >= 0 ? String(r[idx[k]] ?? "").trim() : "";
@@ -13043,7 +13120,7 @@ var num4 = (v) => {
 var normSeat = (s) => Object.fromEntries(["lengthCm", "widthCm", "heightCm", "weightKg"].map((k) => [k, num4(s?.[k]) ?? 0]));
 var goodSeat = (s) => ["lengthCm", "widthCm", "heightCm", "weightKg"].every((k) => Number(s?.[k]) > 0);
 var seatOf = (s) => ({ lengthCm: round2(Number(s.lengthCm)), widthCm: round2(Number(s.widthCm)), heightCm: round2(Number(s.heightCm)), weightKg: round2(Number(s.weightKg)) });
-var userName5 = (u) => u?.name || u?.login || "";
+var userName6 = (u) => u?.name || u?.login || "";
 var lastTickTry = 0;
 var esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
@@ -13490,7 +13567,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     const confirmed = JSON.parse(r.products || "[]").map((x) => ({ ...x, ...sent.get(String(x.supplierCode)) }));
     await db.run(
       `UPDATE rzs_orders SET status = ?, products = ?, confirmed_at = COALESCE(NULLIF(confirmed_at, ''), ?), note = ? WHERE id = ?`,
-      [res.status || "confirmed", JSON.stringify(confirmed), nowIso(), `\u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432(\u043B\u0430) ${userName5(c.get("user"))}`, r.id]
+      [res.status || "confirmed", JSON.stringify(confirmed), nowIso(), `\u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432(\u043B\u0430) ${userName6(c.get("user"))}`, r.id]
     );
     return c.json({ ok: true, status: res.status, warnings: res.warnings.map((w) => w.message || String(w)) });
   });
@@ -13530,7 +13607,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     }
     if (!seats.length || seats.length > 50) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u043C\u0456\u0441\u0446\u044C \u0434\u043B\u044F \u0422\u0422\u041D.");
     const res = await rzsCreateTtn(fetchFn, a.token, r.id, seats, { replaceExisting: replace });
-    await db.run(`UPDATE rzs_orders SET ttn = ?, status = ?, ttn_at = ?, note = ? WHERE id = ?`, [res.ttn || r.ttn, res.status || "shipping", nowIso(), `\u0422\u0422\u041D \u0441\u0442\u0432\u043E\u0440\u0438\u0432(\u043B\u0430) ${userName5(c.get("user"))}${res.point ? ` \xB7 ${res.point}` : ""}`, r.id]);
+    await db.run(`UPDATE rzs_orders SET ttn = ?, status = ?, ttn_at = ?, note = ? WHERE id = ?`, [res.ttn || r.ttn, res.status || "shipping", nowIso(), `\u0422\u0422\u041D \u0441\u0442\u0432\u043E\u0440\u0438\u0432(\u043B\u0430) ${userName6(c.get("user"))}${res.point ? ` \xB7 ${res.point}` : ""}`, r.id]);
     return c.json({ ok: true, ttn: res.ttn, point: res.point, seats: seats.length });
   });
   app.post("/api/rzs/markings", async (c) => {
@@ -13616,7 +13693,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
       const found = await getOrdersBatch(fetchFn, { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key }, [code]).catch(() => []);
       crmId = String(found.find((x) => String(x.order_id) === code)?.id || "");
     }
-    await db.run(`UPDATE rzs_orders SET crm_id = ?, crm_at = ?, note = ? WHERE id = ?`, [crmId, nowIso(), `\u0443 LP-CRM \u043F\u0435\u0440\u0435\u0434\u0430\u0432(\u043B\u0430) ${userName5(c.get("user"))}`, r.id]);
+    await db.run(`UPDATE rzs_orders SET crm_id = ?, crm_at = ?, note = ? WHERE id = ?`, [crmId, nowIso(), `\u0443 LP-CRM \u043F\u0435\u0440\u0435\u0434\u0430\u0432(\u043B\u0430) ${userName6(c.get("user"))}`, r.id]);
     return c.json({ ok: true, crm_id: crmId, code });
   });
   const normTtn = (v) => String(v ?? "").replace(/\s/g, "").toUpperCase();
@@ -13734,7 +13811,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     const r = await orderRow(c.req.param("id"));
     const val = String((await c.req.json().catch(() => ({}))).crm ?? "").replace(/\s/g, "");
     if (!val) {
-      await db.run(`UPDATE rzs_orders SET crm_id = '', crm_code = '', crm_at = '', note = ? WHERE id = ?`, [`\u0432\u0456\u0434\u0432'\u044F\u0437\u0430\u0432(\u043B\u0430) \u0432\u0456\u0434 LP-CRM ${userName5(c.get("user"))}`, r.id]);
+      await db.run(`UPDATE rzs_orders SET crm_id = '', crm_code = '', crm_at = '', note = ? WHERE id = ?`, [`\u0432\u0456\u0434\u0432'\u044F\u0437\u0430\u0432(\u043B\u0430) \u0432\u0456\u0434 LP-CRM ${userName6(c.get("user"))}`, r.id]);
       return c.json({ ok: true, crm_id: "" });
     }
     if (!/^\d{1,20}$/.test(val)) throw fail(400, "\u041D\u043E\u043C\u0435\u0440 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM \u2014 \u043B\u0438\u0448\u0435 \u0446\u0438\u0444\u0440\u0438.");
@@ -13749,7 +13826,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     }
     const other = await db.get(`SELECT order_num FROM rzs_orders WHERE id != ? AND ((crm_id != '' AND crm_id = ?) OR (crm_code != '' AND crm_code = ?)) LIMIT 1`, [r.id, id, code]);
     if (other) throw fail(400, `\u0426\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM \u0443\u0436\u0435 \u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u0435 \u0434\u043E ${other.order_num}.`);
-    await db.run(`UPDATE rzs_orders SET crm_id = ?, crm_code = ?, crm_at = ?, note = ? WHERE id = ?`, [id, code, nowIso(), `\u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u0432(\u043B\u0430) \u0434\u043E LP-CRM ${userName5(c.get("user"))}`, r.id]);
+    await db.run(`UPDATE rzs_orders SET crm_id = ?, crm_code = ?, crm_at = ?, note = ? WHERE id = ?`, [id, code, nowIso(), `\u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u0432(\u043B\u0430) \u0434\u043E LP-CRM ${userName6(c.get("user"))}`, r.id]);
     return c.json({ ok: true, crm_id: id, code });
   });
   app.get("/api/rzs/products", async (c) => {
@@ -16234,7 +16311,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 33,
+  version: 34,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -16314,6 +16391,21 @@ var schema11 = {
     created_at TEXT
   )`,
     `CREATE INDEX IF NOT EXISTS b2b_couriers_p ON b2b_couriers (partner_id)`,
+    // Фіди й таблиці партнера — лише довідкові посилання (XML-фід, Google-таблиця, прайс). partner_id = 0 — для всіх.
+    `CREATE TABLE IF NOT EXISTS b2b_feeds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER NOT NULL DEFAULT 0,
+    title TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'other',
+    url TEXT NOT NULL,
+    note TEXT DEFAULT '',
+    sort INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT DEFAULT '',
+    created_at TEXT,
+    updated_at TEXT
+  )`,
+    `CREATE INDEX IF NOT EXISTS b2b_feeds_p ON b2b_feeds (partner_id, active)`,
     // Обміни й повернення браку (заявки): див. claims.js. items / want_items — JSON [{ product_id, name, article, qty, price }].
     `CREATE TABLE IF NOT EXISTS b2b_claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -16988,7 +17080,7 @@ async function onRequest(ctx) {
   await ready;
   if (env.OWNER_RESET_PASSWORD && env.OWNER_RESET_PASSWORD.length >= 6) {
     const mark = await db.get(`SELECT value FROM settings WHERE key = 'owner_reset_mark'`);
-    const tag = `${env.OWNER_RESET_PASSWORD.length}:${[...env.OWNER_RESET_PASSWORD].reduce((h7, ch) => Math.imul(h7, 31) + ch.charCodeAt(0) >>> 0, 7)}`;
+    const tag = `${env.OWNER_RESET_PASSWORD.length}:${[...env.OWNER_RESET_PASSWORD].reduce((h8, ch) => Math.imul(h8, 31) + ch.charCodeAt(0) >>> 0, 7)}`;
     if (mark?.value !== tag) {
       await resetOwnerPassword(db, env.OWNER_RESET_PASSWORD);
       await db.run(`INSERT INTO settings (key, value) VALUES ('owner_reset_mark', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [tag]);

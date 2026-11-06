@@ -743,3 +743,13 @@ main.ro input[data-ip], main.ro input[data-ir] { pointer-events: none; border-co
 .an7-tip .an7-tr { display: flex; justify-content: space-between; gap: 14px; color: #cfe0db; }
 .an7-tip .an7-tr b { color: #fff; }
 .an7-chart > svg { min-width: 560px; }
+
+/* Фіди й таблиці партнера */
+.feed-list { display: flex; flex-direction: column; }
+.feed { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.feed:first-child { border-top: 0; padding-top: 2px; }
+.feed-i { font-size: 20px; line-height: 1.2; flex: none; }
+.feed-b { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.feed-u { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.feed-a { flex: none; }
+@media (max-width: 700px) { .feed { flex-wrap: wrap; } .feed-a { width: 100%; padding-left: 32px; } }

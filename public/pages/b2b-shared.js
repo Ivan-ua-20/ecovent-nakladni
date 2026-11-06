@@ -251,3 +251,28 @@ export function wireTracking(url) {
     b.disabled = false;
   };
 }
+
+// ---------- Фіди й таблиці партнера (довідкові посилання: XML-фід, Google-таблиця, прайс) ----------
+export const FEED_KIND = { xml: 'XML-фід', gsheet: 'Google-таблиця', csv: 'CSV / Excel', other: 'Посилання' };
+const FEED_ICON = { xml: '🧾', gsheet: '📊', csv: '📄', other: '🔗' };
+const copyTo = async (text) => {
+  try { await navigator.clipboard.writeText(text); toast('Посилання скопійовано'); } catch { toast('Не вдалося скопіювати — виділіть посилання вручну', true); }
+};
+// Список посилань. admin — з кнопками «Змінити» / «Прибрати» і позначкою «для всіх».
+export function feedsList(list, { admin = false } = {}) {
+  if (!list.length) return '<div class="small muted">Посилань ще немає.</div>';
+  return `<div class="feed-list">${list.map((f) => `<div class="feed">
+    <span class="feed-i" aria-hidden="true">${FEED_ICON[f.kind] || '🔗'}</span>
+    <div class="feed-b"><div><b>${esc(f.title)}</b> <span class="small muted">· ${FEED_KIND[f.kind] || 'Посилання'}</span>${admin && !f.partner_id ? ' <span class="badge info">для всіх партнерів</span>' : ''}</div>
+      <a class="feed-u small" href="${esc(f.url)}" target="_blank" rel="noopener noreferrer">${esc(f.url)}</a>
+      ${f.note ? `<div class="small muted">${esc(f.note)}</div>` : ''}</div>
+    <div class="btn-row feed-a"><button class="btn sm" data-fcopy="${f.id}">Копіювати</button><a class="btn sm" href="${esc(f.url)}" target="_blank" rel="noopener noreferrer">Відкрити</a>
+      ${admin ? `<button class="btn sm" data-fedit="${f.id}">Змінити</button><button class="btn sm danger" data-fdel="${f.id}" aria-label="Прибрати ${esc(f.title)}">✕</button>` : ''}</div>
+  </div>`).join('')}</div>`;
+}
+export function wireFeedsList(root, list, { onEdit, onDel } = {}) {
+  const byId = new Map(list.map((f) => [String(f.id), f]));
+  $$('[data-fcopy]', root).forEach((b) => (b.onclick = () => copyTo(byId.get(b.dataset.fcopy).url)));
+  $$('[data-fedit]', root).forEach((b) => (b.onclick = () => onEdit?.(byId.get(b.dataset.fedit))));
+  $$('[data-fdel]', root).forEach((b) => (b.onclick = () => onDel?.(byId.get(b.dataset.fdel))));
+}
