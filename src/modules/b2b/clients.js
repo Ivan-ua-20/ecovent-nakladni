@@ -151,7 +151,9 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
           const num = o && /^\d+$/.test(String(o.id ?? '')) ? String(o.id) : r.crm_id;
           const same = name === (r.crm_status || '') && (num || '') === (r.crm_id || '');
           if (cron && same) continue; // фоново — пишемо лише зміни (менше записів у базу)
-          st.push([`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ?, crm_ext = ?, crm_id = ? WHERE id = ?`, [name, now, r.crm_ext, num || '', r.id]]);
+          // зміна статусу чи № у LP-CRM — і updated_at (API партнерів синхронізує за ним)
+          st.push(same ? [`UPDATE b2b_orders SET crm_checked_at = ? WHERE id = ?`, [now, r.id]]
+            : [`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ?, crm_ext = ?, crm_id = ?, updated_at = ? WHERE id = ?`, [name, now, r.crm_ext, num || '', now, r.id]]);
           if (num && !r.crm_id) linked.push([r.id, num]);
           if (o && r.crm_status && r.crm_status !== WAIT && name !== r.crm_status) changed.push([r, r.crm_status, name]);
         }

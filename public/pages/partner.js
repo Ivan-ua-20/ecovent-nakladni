@@ -2,7 +2,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
@@ -989,7 +989,9 @@ export function createPartnerPages(ctx = {}) {
     const head = ctx.can ? ctx.can('b2b.team') : true;
     main.innerHTML = `<div class="head-row"><h2>Налаштування</h2></div>
       ${head ? '<div class="card form-stack" id="setTeam" style="max-width:980px;margin-bottom:14px"><span class="spinner"></span></div>' : ''}
-      <div id="setDocs"></div>`;
+      <div id="setDocs"></div>
+      ${head ? '<div class="card form-stack" id="setApi" style="max-width:980px;margin-top:14px"><span class="spinner"></span></div>' : ''}`;
+    if (head) apiKeysCard($('#setApi'), '/api/b2b/p/api-keys').catch((e) => { $('#setApi').innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; });
     if (head) viewTeam($('#setTeam')).catch((e) => { $('#setTeam').innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; });
     const draw = () => {
       $('#setDocs').innerHTML = `

@@ -2,7 +2,7 @@
 // Також реєструє перевірку входу для всіх інших /api-маршрутів — тому монтується першим.
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { ROLES, can, hashPassword, verifyPassword, randomToken, publicUser, crmLogins, accessOf, cleanAccess, ACCESS_ROLES } from '../../core/auth.js';
-import { fail, need, nowIso } from '../../core/common.js';
+import { fail, need, nowIso, API_USER } from '../../core/common.js';
 
 export function mountAuth(app, { db, runCleanup, onCleanup }) {
   // Старі сесії (понад 90 днів) прибираються разом з іншою щогодинною чисткою.
@@ -77,8 +77,11 @@ export function mountAuth(app, { db, runCleanup, onCleanup }) {
   // Усе інше в /api — лише після входу.
   app.use('/api/*', async (c, next) => {
     // /api/cron/* — для запуску за розкладом (Cloudflare Worker): без входу, але з ключем, який перевіряє сам маршрут.
+    // /api/v1/* — API партнерів: вхід ключем перевіряє сам модуль (b2b/api.js).
+    if (c.req.path.startsWith('/api/v1/')) return next();
     if (c.req.path.startsWith('/api/auth/') || c.req.path === '/api/odb/hook' || c.req.path === '/api/tg/hook' || c.req.path.startsWith('/api/cron/') || c.req.path.startsWith('/api/rzs/hook/')) return next();
-    const user = await sessionUser(c);
+    // Внутрішній виклик від імені API-ключа (лише з b2b/api.js): користувач — у env під символом, ззовні недоступним.
+    const user = c.env?.[API_USER] || await sessionUser(c);
     if (!user) throw fail(401, 'Потрібно увійти.');
     c.set('user', user);
     // Партнер (B2B) бачить лише свій кабінет: усе інше на сайті для нього закрите.

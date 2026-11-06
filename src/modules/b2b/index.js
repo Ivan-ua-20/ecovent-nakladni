@@ -9,7 +9,7 @@ import { hashPassword, can, PARTNER_ROLES, partnerRole, randomToken } from '../.
 import { fail, need, nowIso, kyivDay, loadSettings, round2 } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
 import { call } from '../../integrations/lpcrm.js';
-import { mountB2bOrders, PM_JOIN, PM_COLS, withGrace, graceHoursOf } from './orders.js';
+import { mountB2bOrders, PM_JOIN, PM_COLS, withGrace, graceHoursOf, CLIENT_STATUS, orderNo, payState, PAY_NAME } from './orders.js';
 import { mountB2bClients } from './clients.js';
 import { mountB2bStats } from './stats.js';
 import { mountB2bPrices } from './prices.js';
@@ -21,6 +21,7 @@ import { mountB2bCrm } from './crm.js';
 import { mountB2bNewProducts } from './newproducts.js';
 import { mountB2bClaims } from './claims.js';
 import { mountB2bFeeds } from './feeds.js';
+import { mountB2bApi } from './api.js';
 
 export const partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 
@@ -603,6 +604,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   mountB2bClients(app, { db, fetchFn, services, myPartner, orders, hooks, onCron });
   mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice });
   mountB2bClaims(app, { db, services, myPartner, orders });
+  mountB2bApi(app, { db, myPartner, tgPartner: orders.tgPartner, CLIENT_STATUS, orderNo, payState, PAY_NAME });
   mountB2bFeeds(app, { db, myPartner, tgPartner: orders.tgPartner, tgGroup: orders.tgGroup, link: orders.link });
   const tgdocs = mountB2bTgDocs(app, { db, services, orders, hooks });
   const pay = mountB2bPay(app, { db, services, orders, hooks });
