@@ -1793,6 +1793,7 @@ var PERMS = {
 };
 var SECTION_LEVELS = { b2b: ["none", "view", "full"], retail: ["none", "view", "work"], market: ["none", "view", "work"], returns: ["none", "view"] };
 var ACCESS_ROLES = ["manager", "viewer"];
+var TG_SECTIONS = ["b2b", "retail", "market"];
 var ROLE_ACCESS = {
   manager: { b2b: "none", retail: "work", market: "work", returns: "view", shops: null, tg: [] },
   viewer: { b2b: "none", retail: "view", market: "view", returns: "view", shops: null, tg: [] }
@@ -1809,7 +1810,7 @@ function accessOf(u) {
   const out = { ...def };
   for (const [k, lv] of Object.entries(SECTION_LEVELS)) if (lv.includes(a[k])) out[k] = a[k];
   if (Array.isArray(a.shops)) out.shops = [...new Set(a.shops.map(String).filter((x) => /^[a-z]+:\d+$/.test(x)))];
-  if (Array.isArray(a.tg)) out.tg = a.tg.filter((x) => ["b2b", "retail"].includes(x));
+  if (Array.isArray(a.tg)) out.tg = a.tg.filter((x) => TG_SECTIONS.includes(x));
   if (u.role === "viewer") {
     for (const k of Object.keys(SECTION_LEVELS)) if (out[k] !== "none") out[k] = "view";
   }
@@ -1821,7 +1822,7 @@ function cleanAccess(b) {
   const a = {};
   for (const [k, lv] of Object.entries(SECTION_LEVELS)) a[k] = lv.includes(b[k]) ? b[k] : "none";
   a.shops = Array.isArray(b.shops) ? [...new Set(b.shops.map(String).filter((x) => /^[a-z]+:\d+$/.test(x)))].slice(0, 100) : null;
-  a.tg = Array.isArray(b.tg) ? b.tg.filter((x) => ["b2b", "retail"].includes(x)) : [];
+  a.tg = Array.isArray(b.tg) ? b.tg.filter((x) => TG_SECTIONS.includes(x)) : [];
   return a;
 }
 var sectionPerms = (a) => [
@@ -4609,6 +4610,8 @@ function normalizeAnOrder(raw2) {
     total: round2(total),
     deliv: delivName(raw2),
     ttn: ttnOf(raw2),
+    phone: String(raw2.phone || "").replace(/\D/g, "").slice(-9),
+    buyer: String(raw2.bayer_name || "").trim().slice(0, 120),
     lines
   };
 }
@@ -4820,6 +4823,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const sent = new Map((await db.all(`SELECT ttn, codes FROM an_ttn_dups WHERE ttn IN (SELECT value FROM json_each(?))`, [JSON.stringify(dups.map(([t]) => t))])).map((r) => [r.ttn, r.codes]));
     const names = await getJson2("an_status_names") || {};
     const users = await db.all(`SELECT tg_chat_id, crm_logins FROM users WHERE active = 1 AND tg_chat_id != '' AND crm_logins != ''`);
+    const owners = (await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'owner'`)).map((u) => u.tg_chat_id);
     const esc2 = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     let n = 0;
     const recent = addDays(kyivDay(), -recentDays);
@@ -4830,18 +4834,25 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
         await db.run(`INSERT INTO an_ttn_dups (ttn, codes, at) VALUES (?, ?, ?) ON CONFLICT(ttn) DO UPDATE SET codes = excluded.codes, at = excluded.at`, [ttn, codes, nowIso()]);
         continue;
       }
-      const text = `\u26A0\uFE0F <b>\u0414\u0443\u0431\u043B\u044C \u0422\u0422\u041D ${esc2(ttn)}</b> \u0443 LP-CRM \u2014 \u0446\u044F \u0422\u0422\u041D \u0454 \u0432 ${list.length} \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F\u0445:
-` + list.map((r) => `\u2022 \u2116 <b>${esc2(r.code)}</b> \xB7 ${esc2(names[r.status] || `\u0441\u0442\u0430\u0442\u0443\u0441 ${r.status}`)} \xB7 ${esc2(r.day.split("-").reverse().join("."))}${r.user ? ` \xB7 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 ${esc2(r.user)}` : ""}`).join("\n") + "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u043F\u043E\u043C\u0438\u043B\u043A\u0430 (\u043E\u0434\u043D\u0430 \u043F\u043E\u0441\u0438\u043B\u043A\u0430 \u043D\u0430 \u0434\u0432\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F).";
+      const tel = ttn.startsWith("tel:") ? ttn.slice(4) : "";
+      const text = (tel ? `\u26A0\uFE0F <b>\u0414\u0443\u0431\u043B\u044C \u0437\u0430 \u0442\u0435\u043B\u0435\u0444\u043E\u043D\u043E\u043C 0${esc2(tel)}</b> \u0443 LP-CRM \u2014 ${list.length} \u043F\u0440\u0438\u0439\u043D\u044F\u0442\u0438\u0445 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0437 \u043E\u0434\u043D\u0438\u043C \u043D\u043E\u043C\u0435\u0440\u043E\u043C:
+` : `\u26A0\uFE0F <b>\u0414\u0443\u0431\u043B\u044C \u0422\u0422\u041D ${esc2(ttn)}</b> \u0443 LP-CRM \u2014 \u0446\u044F \u0422\u0422\u041D \u0454 \u0432 ${list.length} \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F\u0445:
+`) + list.map((r) => `\u2022 \u2116 <b>${esc2(r.code)}</b> \xB7 ${esc2(names[r.status] || `\u0441\u0442\u0430\u0442\u0443\u0441 ${r.status}`)} \xB7 ${esc2(r.day.split("-").reverse().join("."))}${r.buyer ? ` \xB7 ${esc2(r.buyer)}` : ""}${r.user ? ` \xB7 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 ${esc2(r.user)}` : ""}`).join("\n") + (tel ? "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0434\u0432\u0456\u0447\u0456." : "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u043F\u043E\u043C\u0438\u043B\u043A\u0430 (\u043E\u0434\u043D\u0430 \u043F\u043E\u0441\u0438\u043B\u043A\u0430 \u043D\u0430 \u0434\u0432\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F).");
       const logins = new Set(list.map((r) => r.user).filter(Boolean));
-      const chats = users.filter((u) => crmLogins(u.crm_logins).some((l) => logins.has(l))).map((u) => u.tg_chat_id);
+      const chats = [.../* @__PURE__ */ new Set([...users.filter((u) => crmLogins(u.crm_logins).some((l) => logins.has(l))).map((u) => u.tg_chat_id), ...owners])];
       if (chats.length) await services.notify?.sendText({ chatIds: chats }, text).catch(() => 0);
-      else await services.notify?.sendText({ admins: true }, text).catch(() => 0);
       await db.run(`INSERT INTO an_ttn_dups (ttn, codes, at) VALUES (?, ?, ?) ON CONFLICT(ttn) DO UPDATE SET codes = excluded.codes, at = excluded.at`, [ttn, codes, nowIso()]);
       n++;
     }
     return n;
   }
   const TTN_EVERY = 10 * 6e4;
+  const PHONE_DAYS = 7;
+  async function acceptedStatus() {
+    const names = await getJson2("an_status_names") || {};
+    const hit = Object.entries(names).find(([, n]) => /^(принят|прийнят)/i.test(String(n).trim()));
+    return Number(hit?.[0]) || Number((await getSt()).okStatuses?.[0]) || 0;
+  }
   async function ttnQuick({ force = false } = {}) {
     const now = Date.now();
     if (!force) {
@@ -4862,6 +4873,12 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       const j = await lp(cr, "getOrdersIdByStatus", { status: String(x), date_start: from, date_end: today3 }).catch(() => null);
       if (j?.status === "ok") for (const code of asList(j.data).map(String).filter(Boolean)) listed.set(code, x);
     }
+    const acc = await acceptedStatus();
+    const weekAgo = addDays(today3, -PHONE_DAYS);
+    if (acc) {
+      const j = await lp(cr, "getOrdersIdByStatus", { status: String(acc), date_start: weekAgo, date_end: today3 }).catch(() => null);
+      if (j?.status === "ok") for (const code of asList(j.data).map(String).filter(Boolean)) listed.set(code, acc);
+    }
     const codes = [...listed.keys()];
     if (!(await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_v2'`))?.value) {
       await db.run(`DELETE FROM an_ttn_recent WHERE ttn = ''`);
@@ -4870,8 +4887,8 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     let fetched = 0;
     let found = 0;
     if (codes.length) {
-      const known = new Map((await db.all(`SELECT code, status FROM an_ttn_recent WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => [r.code, r.status]));
-      const todo = codes.filter((x) => known.get(x) !== listed.get(x)).slice(0, 300);
+      const known = new Map((await db.all(`SELECT code, status, phone FROM an_ttn_recent WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => [r.code, r]));
+      const todo = codes.filter((x) => known.get(x)?.status !== listed.get(x) || listed.get(x) === acc && known.get(x).phone == null).slice(0, 300);
       const got = [];
       for (let i = 0; i < todo.length; i += 100) {
         const j = await lp(cr, "getOrdersByID", { order_id: todo.slice(i, i + 100).join(",") }).catch(() => null);
@@ -4879,8 +4896,11 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       }
       fetched = got.length;
       if (got.length) {
-        await db.batch(got.map((o) => [`INSERT INTO an_ttn_recent (code, ttn, day, user, status) VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(code) DO UPDATE SET ttn = excluded.ttn, day = excluded.day, user = excluded.user, status = excluded.status`, [o.code, o.ttn || "", o.day, o.user, o.status]]));
+        await db.batch(got.map((o) => [
+          `INSERT INTO an_ttn_recent (code, ttn, day, user, status, phone, buyer) VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(code) DO UPDATE SET ttn = excluded.ttn, day = excluded.day, user = excluded.user, status = excluded.status, phone = excluded.phone, buyer = excluded.buyer`,
+          [o.code, o.ttn || "", o.day, o.user, o.status, o.phone || "", o.buyer || ""]
+        ]));
         const ttns = [...new Set(got.map((o) => o.ttn).filter(Boolean))];
         if (ttns.length) {
           const week = addDays(today3, -7);
@@ -4891,6 +4911,13 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
           const seen = new Set(a.map((r) => r.code));
           found = await notifyDups([...a, ...b.filter((r) => !seen.has(r.code))], { recentDays: 7 });
         }
+        const phones = [...new Set(got.filter((o) => o.status === acc && o.phone.length === 9).map((o) => o.phone))];
+        if (acc && phones.length) {
+          const rows = await db.all(`SELECT code, user, phone, buyer, status, day FROM an_ttn_recent WHERE phone IN (SELECT value FROM json_each(?)) AND status = ? AND day >= ?`, [JSON.stringify(phones), acc, weekAgo]);
+          const silent = !(await db.get(`SELECT value FROM settings WHERE key = 'an_phone_seen'`))?.value;
+          found += await notifyDups(rows.map((r) => ({ ...r, ttn: `tel:${r.phone}` })), { silent, recentDays: PHONE_DAYS });
+        }
+        if (acc && !(await db.get(`SELECT value FROM settings WHERE key = 'an_phone_seen'`))?.value) await putSetting2("an_phone_seen", nowIso());
       }
     }
     const pruneDay = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_prune'`))?.value || "";
@@ -12788,6 +12815,14 @@ async function rzOrderChat(fetchFn, token, orderId) {
 async function rzSendMessage(fetchFn, token, { chatId, receiverId, body }) {
   return getContent(fetchFn, token, "/messages/create", { method: "POST", body: { chat_id: chatId, receiver_id: receiverId, body, sendEmailUser: 1 } });
 }
+async function rzMessageCounts(fetchFn, token) {
+  return await getContent(fetchFn, token, "/messages/counts") || {};
+}
+async function rzUnreadChats(fetchFn, token, msgType, page = 1) {
+  const q = new URLSearchParams({ msgType, read: "0", page: String(page), sort: "-updated", expand: "messages,user_fio,unread_messages_count,item" });
+  const c = await getContent(fetchFn, token, `/messages/search?${q}`);
+  return { chats: Array.isArray(c?.chats) ? c.chats : [], pageCount: Number(c?._meta?.pageCount) || 1 };
+}
 async function getJson(fetchFn, token, path) {
   const res = await send(fetchFn, path, { token });
   const j = await res.json().catch(() => null);
@@ -16263,7 +16298,7 @@ var ROW = {
 };
 function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
 }, onCleanup = () => {
-} }) {
+}, shared: shared2 = {} }) {
   const borderOf = (days2) => new Date(Date.now() - days2 * 864e5).toISOString().slice(0, 10);
   onCleanup(async () => {
     const own = Object.keys(KEEP_DAYS_BY_MP);
@@ -16649,6 +16684,84 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
   onCron("market", "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0456\u0432 (\u0420\u043E\u0437\u0435\u0442\u043A\u0430, Prom, \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440)", syncAll);
   onCron("market-history", "\u0406\u0441\u0442\u043E\u0440\u0456\u044F \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u0437\u0430 \u043E\u0431\u0440\u0430\u043D\u0438\u0439 \u043F\u0435\u0440\u0456\u043E\u0434 (\u043F\u043E\u043A\u0438 \u043D\u0435 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043E)", histAll);
   onCron("market-reviews", "\u0412\u0456\u0434\u0433\u0443\u043A\u0438 \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u0438 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (\u0440\u0430\u0437 \u043D\u0430 3 \u0433\u043E\u0434)", reviewsAll);
+  onCron("market-msgs", "\u041F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F \u043F\u043E\u043A\u0443\u043F\u0446\u0456\u0432 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u2192 Telegram \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430\u043C (\u041F\u043D\u2013\u041F\u0442 9\u201318, \u0421\u0431 10\u201317)", () => rzMsgNotify({ now: shared2.clock ? shared2.clock() : Date.now() }));
+  const RZ_CABINET = "https://seller.rozetka.com.ua/main/messages";
+  const MSG_FRESH_DAYS = 7;
+  const MSG_SEND_MAX = 15;
+  function workTime(ms = Date.now()) {
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Kyiv", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+    const m = Number(p.hour) * 60 + Number(p.minute);
+    if (p.weekday === "Sun") return false;
+    if (p.weekday === "Sat") return m >= 10 * 60 && m < 17 * 60;
+    return m >= 9 * 60 && m < 18 * 60;
+  }
+  async function rzMsgNotify({ now = Date.now() } = {}) {
+    if (!workTime(now)) return { skipped: "\u043D\u0435\u0440\u043E\u0431\u043E\u0447\u0438\u0439 \u0447\u0430\u0441" };
+    if (!services.notify?.sendText) return { skipped: "Telegram \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E" };
+    const shops = ((await shopsOf()).rozetka || []).filter((a) => a.active);
+    if (!shops.length) return { skipped: "\u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0438 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E" };
+    const users = (await db.all(`SELECT * FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('manager', 'viewer')`)).filter((u) => accessOf(u)?.tg.includes("market"));
+    const seen = await getSetting("rzmsg_seen", {});
+    const esc2 = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const hm = (v) => String(v || "").slice(11, 16);
+    const fresh = kyivDT(now - MSG_FRESH_DAYS * 864e5);
+    const out = { shops: 0, chats: 0, sent: 0, errors: 0 };
+    for (const acc of shops) {
+      const to = users.filter((u) => shopAllowed(u, "rozetka", acc.id)).map((u) => u.tg_chat_id);
+      if (!to.length) {
+        delete seen[acc.id];
+        continue;
+      }
+      try {
+        const cnt = await rzCall(acc, (t) => rzMessageCounts(fetchFn, t));
+        out.shops++;
+        const types = [["orders", Number(cnt.ordersChatUnread) || 0], ["items", Number(cnt.itemsChatUnread) || 0]].filter(([, n]) => n > 0);
+        const prev = seen[acc.id] || {};
+        const next = {};
+        const items = [];
+        for (const [type] of types) {
+          for (let page = 1, pages = 1; page <= pages && page <= 3; page++) {
+            const r = await rzCall(acc, (t) => rzUnreadChats(fetchFn, t, type, page));
+            pages = r.pageCount;
+            for (const ch of r.chats) {
+              const msgs = (Array.isArray(ch.messages) ? ch.messages : []).filter((m) => Number(m.sender) !== 2);
+              const unread = msgs.slice(-Math.max(1, Number(ch.unread_messages_count) || 1));
+              const last = Math.max(0, ...unread.map((m) => Number(m.id) || 0));
+              next[ch.id] = Math.max(last, prev[ch.id] || 0);
+              const neu = unread.filter((m) => (Number(m.id) || 0) > (prev[ch.id] || 0));
+              if (!neu.length || String(ch.updated || "") < fresh) continue;
+              items.push({ type, ch, neu });
+            }
+          }
+        }
+        if (!items.length) {
+          seen[acc.id] = next;
+          continue;
+        }
+        out.chats += items.length;
+        const head = `\u{1F4AC} <b>\u0420\u043E\u0437\u0435\u0442\u043A\u0430${acc.name ? ` \xB7 ${esc2(acc.name)}` : ""}</b>`;
+        const link = (it) => it.type === "orders" && it.ch.order_id ? `${RZ_CABINET}/orders?msgType=orders&search=${encodeURIComponent(it.ch.order_id)}` : it.ch.item_id || it.ch.item?.id ? `${RZ_CABINET}/items?msgType=items&search=${encodeURIComponent(it.ch.item_id || it.ch.item.id)}` : `${RZ_CABINET}/items?msgType=items`;
+        const what = (it) => it.type === "orders" ? `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2116${esc2(it.ch.order_id || "")}` : it.ch.item?.name ? `\u041F\u0438\u0442\u0430\u043D\u043D\u044F \u043F\u0440\u043E \u0442\u043E\u0432\u0430\u0440: ${esc2(String(it.ch.item.name).slice(0, 90))}` : "\u041F\u0438\u0442\u0430\u043D\u043D\u044F \u0432\u0456\u0434 \u043F\u043E\u043A\u0443\u043F\u0446\u044F";
+        const texts = items.length > 3 ? [`${head} \xB7 \u043D\u043E\u0432\u0456 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F: ${items.length}
+${items.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio || "")} \xB7 ${hm(it.neu[it.neu.length - 1].created)}`).join("\n")}${items.length > 25 ? `
+\u2026\u0456 \u0449\u0435 ${items.length - 25}` : ""}
+
+<a href="${RZ_CABINET}/orders">\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0438 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438</a>`] : items.map((it) => `${head} \xB7 \u043D\u043E\u0432\u0435 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F
+<b>${what(it)}</b> \xB7 \u0447\u0430\u0442 ${esc2(it.ch.id)}
+\u0412\u0456\u0434: ${esc2(it.ch.user_fio || "\u2014")}
+` + it.neu.slice(-3).map((m) => `\xAB${esc2(String(m.body || (m.files?.length ? "[\u0444\u0430\u0439\u043B]" : "")).slice(0, 300))}\xBB <i>${hm(m.created)}</i>`).join("\n") + `
+<a href="${link(it)}">\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0438 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438</a>`);
+        if (out.sent + texts.length * to.length > MSG_SEND_MAX) break;
+        for (const t of texts) out.sent += await services.notify.sendText({ chatIds: to }, t).catch(() => 0) || 0;
+        seen[acc.id] = next;
+      } catch (e) {
+        if (e.pending) break;
+        out.errors++;
+      }
+    }
+    await putSetting2("rzmsg_seen", seen);
+    return out;
+  }
   async function cachedCounts() {
     let c = null;
     try {
@@ -17587,7 +17700,7 @@ async function upgradeV10(db) {
 }
 var schema8 = {
   name: "analytics",
-  version: 7,
+  version: 8,
   tables: [
     // ---------- Аналітика ----------
     // Замовлення: id = короткий номер LP-CRM (зростає з часом), code = довгий код для API.
@@ -17657,7 +17770,11 @@ var schema8 = {
     // Служба доставки з LP-CRM (назва); NULL — ще не дозаповнено для старих замовлень.
     ["an_orders", "deliv", "TEXT"],
     // ТТН із замовлення LP-CRM — для перевірки дублів.
-    ["an_orders", "ttn", "TEXT DEFAULT ''"]
+    ["an_orders", "ttn", "TEXT DEFAULT ''"],
+    // Телефон (останні 9 цифр) і ПІБ покупця свіжих замовлень — для перевірки дублів за телефоном у «Принят»;
+    // NULL — ще не читали (замовлення перечитується один раз).
+    ["an_ttn_recent", "phone", "TEXT"],
+    ["an_ttn_recent", "buyer", "TEXT DEFAULT ''"]
   ],
   // Нова база: засіяти й позначити старі оновлення виконаними; стара — догнати оновлення v9–v12.
   async seed(db, { fresh }) {

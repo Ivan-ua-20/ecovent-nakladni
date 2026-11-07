@@ -214,7 +214,7 @@ async function upgradeV10(db) {
 
 export const schema = {
   name: 'analytics',
-  version: 7,
+  version: 8,
   tables: [
   // ---------- Аналітика ----------
   // Замовлення: id = короткий номер LP-CRM (зростає з часом), code = довгий код для API.
@@ -285,6 +285,10 @@ export const schema = {
     ['an_orders', 'deliv', "TEXT"],
     // ТТН із замовлення LP-CRM — для перевірки дублів.
     ['an_orders', 'ttn', "TEXT DEFAULT ''"],
+    // Телефон (останні 9 цифр) і ПІБ покупця свіжих замовлень — для перевірки дублів за телефоном у «Принят»;
+    // NULL — ще не читали (замовлення перечитується один раз).
+    ['an_ttn_recent', 'phone', "TEXT"],
+    ['an_ttn_recent', 'buyer', "TEXT DEFAULT ''"],
   ],
   // Нова база: засіяти й позначити старі оновлення виконаними; стара — догнати оновлення v9–v12.
   async seed(db, { fresh }) {

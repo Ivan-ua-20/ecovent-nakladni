@@ -465,6 +465,34 @@ await db.run(`INSERT INTO settings (key, value) VALUES ('an_ttn_check_at', ?) ON
   await db.run(`UPDATE users SET tg_chat_id = '', crm_logins = '' WHERE login = 'o'`);
 }
 
+// ---------- Дублі за телефоном серед прийнятих («Принят») за 7 днів → менеджерам цих замовлень і власнику ----------
+{
+  const acc = [...orders.values()].filter((o) => o.status === '11' && o.datetime.slice(0, 10) >= addDays(today, -6));
+  assert.ok(acc.length >= 3, 'є прийняті за тиждень');
+  const [x, y, z] = acc;
+  assert.ok((await db.get(`SELECT value FROM settings WHERE key = 'an_phone_seen'`))?.value, 'перша перевірка — лише запам’ятала');
+  x.phone = '+38 (050) 123-45-67'; y.phone = '380501234567'; x.bayer_name = 'Петренко Іван'; y.bayer_name = 'Петренко І.';
+  z.phone = '0679998877';
+  await db.run(`DELETE FROM an_ttn_recent WHERE code IN (?, ?, ?)`, [x.order_id, y.order_id, z.order_id]);
+  await db.run(`UPDATE users SET tg_chat_id = '43', crm_logins = ? WHERE login = 'o'`, [x.user]);
+  await db.run(`UPDATE users SET tg_chat_id = '44' WHERE login = 'man'`); // власник
+  tgSent.length = 0;
+  const r = await req('POST', '/api/an/ttn-check');
+  assert.equal(r.dups, 1, JSON.stringify(r));
+  const m = tgSent.filter((t) => /Дубль за телефоном 0501234567/.test(t.text));
+  assert.deepEqual(m.map((t) => String(t.chat_id)).sort(), ['43', '44'], 'менеджеру замовлення і власнику');
+  assert.ok(m[0].text.includes(x.order_id) && m[0].text.includes(y.order_id) && m[0].text.includes('Петренко Іван') && !m[0].text.includes(z.order_id));
+  assert.equal((await req('POST', '/api/an/ttn-check')).dups, 0, 'не повторюється');
+  // ТТН-дубль тепер теж іде і власнику
+  const [p, q] = acc.slice(3, 5).length === 2 ? acc.slice(3, 5) : [x, z];
+  p.ttn = '20451111222233'; q.ttn = '20451111222233';
+  await db.run(`DELETE FROM an_ttn_recent WHERE code IN (?, ?)`, [p.order_id, q.order_id]);
+  tgSent.length = 0;
+  await req('POST', '/api/an/ttn-check');
+  assert.ok(tgSent.some((t) => /Дубль ТТН 20451111222233/.test(t.text) && String(t.chat_id) === '44'), 'ТТН-дубль — і власнику');
+  await db.run(`UPDATE users SET tg_chat_id = '', crm_logins = '' WHERE login IN ('o', 'man')`);
+}
+
 // ---------- 10. Самоперевірка після оновлення ----------
 {
   await runSync('daily');

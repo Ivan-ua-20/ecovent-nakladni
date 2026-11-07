@@ -129,6 +129,18 @@ export async function rzSendMessage(fetchFn, token, { chatId, receiverId, body }
   return getContent(fetchFn, token, '/messages/create', { method: 'POST', body: { chat_id: chatId, receiver_id: receiverId, body, sendEmailUser: 1 } });
 }
 
+// Лічильники непрочитаного: ordersChatUnread, itemsChatUnread тощо (одним запитом).
+export async function rzMessageCounts(fetchFn, token) {
+  return (await getContent(fetchFn, token, '/messages/counts')) || {};
+}
+// Непрочитані чати з покупцями: msgType 'orders' (по замовленнях) або 'items' (питання про товари), найсвіжіші першими.
+// Повідомлення: sender 2 — продавець, інше — покупець. Список не позначає чати прочитаними.
+export async function rzUnreadChats(fetchFn, token, msgType, page = 1) {
+  const q = new URLSearchParams({ msgType, read: '0', page: String(page), sort: '-updated', expand: 'messages,user_fio,unread_messages_count,item' });
+  const c = await getContent(fetchFn, token, `/messages/search?${q}`);
+  return { chats: Array.isArray(c?.chats) ? c.chats : [], pageCount: Number(c?._meta?.pageCount) || 1 };
+}
+
 // ---------------------------------------------------------------- повернення
 async function getJson(fetchFn, token, path) {
   const res = await send(fetchFn, path, { token });

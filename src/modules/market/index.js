@@ -4,7 +4,7 @@
 // синхронізації — по кілька сторінок за раз; незавершений прохід продовжується з наступної сторінки.
 import { fail, need, nowIso } from '../../core/common.js';
 import { shopAllowed, accessOf } from '../../core/auth.js';
-import { rzOrdersSearch, rzItemComments, rzSuccessStatuses, rzOrderChat, rzSendMessage } from '../../integrations/rozetka.js';
+import { rzOrdersSearch, rzItemComments, rzSuccessStatuses, rzOrderChat, rzSendMessage, rzMessageCounts, rzUnreadChats } from '../../integrations/rozetka.js';
 import { promOrders } from '../../integrations/prom.js';
 import { epcOrdersPage } from '../../integrations/epicentr.js';
 
@@ -104,7 +104,7 @@ const ROW = {
   }),
 };
 
-export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}, onCleanup = () => {} }) {
+export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}, onCleanup = () => {}, shared = {} }) {
   const borderOf = (days) => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
   onCleanup(async () => {
     const own = Object.keys(KEEP_DAYS_BY_MP);
@@ -441,6 +441,89 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
   onCron('market', 'Замовлення маркетплейсів (Розетка, Prom, Епіцентр)', syncAll);
   onCron('market-history', 'Історія замовлень Розетки за обраний період (поки не завантажено)', histAll);
   onCron('market-reviews', 'Відгуки на товари Розетки (раз на 3 год)', reviewsAll);
+  // shared.clock — лише для тестів (робочий час).
+  onCron('market-msgs', 'Повідомлення покупців Розетки → Telegram менеджерам (Пн–Пт 9–18, Сб 10–17)', () => rzMsgNotify({ now: shared.clock ? shared.clock() : Date.now() }));
+
+  // ---------- нові повідомлення покупців Розетки → Telegram менеджерам магазину ----------
+  // Кому: менеджери (і «перегляд») з увімкненим у «Користувачах» сповіщенням розділу «Маркетплейси» (tg: 'market'),
+  // яким доступний цей магазин; нікого — нікому. Лише в робочий час (за Києвом): Пн–Пт 9:00–18:00, Сб 10:00–17:00,
+  // у неділю — ні; що прийшло поза ним, надсилається на початку робочого часу (якщо ще не прочитано).
+  // Запити: лічильник непрочитаного (1 на магазин), і лише коли є непрочитане — список таких чатів. Прочитаними не позначаємо.
+  // Одне повідомлення — одне сповіщення (rzmsg_seen: останнє сповіщене повідомлення кожного непрочитаного чату).
+  const RZ_CABINET = 'https://seller.rozetka.com.ua/main/messages';
+  const MSG_FRESH_DAYS = 7; // давніші непрочитані чати не надсилаємо
+  const MSG_SEND_MAX = 15; // повідомлень у Telegram за один запуск
+  function workTime(ms = Date.now()) {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Kyiv', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+      .formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+    const m = Number(p.hour) * 60 + Number(p.minute);
+    if (p.weekday === 'Sun') return false;
+    if (p.weekday === 'Sat') return m >= 10 * 60 && m < 17 * 60;
+    return m >= 9 * 60 && m < 18 * 60;
+  }
+  async function rzMsgNotify({ now = Date.now() } = {}) {
+    if (!workTime(now)) return { skipped: 'неробочий час' };
+    if (!services.notify?.sendText) return { skipped: 'Telegram не підключено' };
+    const shops = ((await shopsOf()).rozetka || []).filter((a) => a.active);
+    if (!shops.length) return { skipped: 'магазини Розетки не підключено' };
+    const users = (await db.all(`SELECT * FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('manager', 'viewer')`))
+      .filter((u) => accessOf(u)?.tg.includes('market'));
+    const seen = await getSetting('rzmsg_seen', {});
+    const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const hm = (v) => String(v || '').slice(11, 16);
+    const fresh = kyivDT(now - MSG_FRESH_DAYS * 86400e3);
+    const out = { shops: 0, chats: 0, sent: 0, errors: 0 };
+    for (const acc of shops) {
+      const to = users.filter((u) => shopAllowed(u, 'rozetka', acc.id)).map((u) => u.tg_chat_id);
+      if (!to.length) { delete seen[acc.id]; continue; } // нікому не надсилаємо — і не питаємо Розетку
+      try {
+        const cnt = await rzCall(acc, (t) => rzMessageCounts(fetchFn, t));
+        out.shops++;
+        const types = [['orders', Number(cnt.ordersChatUnread) || 0], ['items', Number(cnt.itemsChatUnread) || 0]].filter(([, n]) => n > 0);
+        const prev = seen[acc.id] || {};
+        const next = {};
+        const items = [];
+        for (const [type] of types) {
+          for (let page = 1, pages = 1; page <= pages && page <= 3; page++) {
+            const r = await rzCall(acc, (t) => rzUnreadChats(fetchFn, t, type, page));
+            pages = r.pageCount;
+            for (const ch of r.chats) {
+              const msgs = (Array.isArray(ch.messages) ? ch.messages : []).filter((m) => Number(m.sender) !== 2);
+              const unread = msgs.slice(-Math.max(1, Number(ch.unread_messages_count) || 1));
+              const last = Math.max(0, ...unread.map((m) => Number(m.id) || 0));
+              next[ch.id] = Math.max(last, prev[ch.id] || 0);
+              const neu = unread.filter((m) => (Number(m.id) || 0) > (prev[ch.id] || 0));
+              if (!neu.length || String(ch.updated || '') < fresh) continue;
+              items.push({ type, ch, neu });
+            }
+          }
+        }
+        if (!items.length) { seen[acc.id] = next; continue; }
+        out.chats += items.length;
+        const head = `💬 <b>Розетка${acc.name ? ` · ${esc(acc.name)}` : ''}</b>`;
+        const link = (it) => (it.type === 'orders' && it.ch.order_id
+          ? `${RZ_CABINET}/orders?msgType=orders&search=${encodeURIComponent(it.ch.order_id)}`
+          : it.ch.item_id || it.ch.item?.id ? `${RZ_CABINET}/items?msgType=items&search=${encodeURIComponent(it.ch.item_id || it.ch.item.id)}` // пошук за кодом товару
+            : `${RZ_CABINET}/items?msgType=items`);
+        const what = (it) => (it.type === 'orders' ? `Замовлення №${esc(it.ch.order_id || '')}`
+          : it.ch.item?.name ? `Питання про товар: ${esc(String(it.ch.item.name).slice(0, 90))}` : 'Питання від покупця');
+        const texts = items.length > 3
+          ? [`${head} · нові повідомлення: ${items.length}\n${items.slice(0, 25).map((it) => `• ${what(it)} · ${esc(it.ch.user_fio || '')} · ${hm(it.neu[it.neu.length - 1].created)}`).join('\n')}${items.length > 25 ? `\n…і ще ${items.length - 25}` : ''}\n\n<a href="${RZ_CABINET}/orders">Відкрити повідомлення в кабінеті Розетки</a>`]
+          : items.map((it) => `${head} · нове повідомлення\n<b>${what(it)}</b> · чат ${esc(it.ch.id)}\nВід: ${esc(it.ch.user_fio || '—')}\n`
+            + it.neu.slice(-3).map((m) => `«${esc(String(m.body || (m.files?.length ? '[файл]' : '')).slice(0, 300))}» <i>${hm(m.created)}</i>`).join('\n')
+            + `\n<a href="${link(it)}">Відкрити в кабінеті Розетки</a>`);
+        // Ліміт звернень Cloudflare на один запуск: не вміщається — надішлемо наступного разу (через 3 хв), не позначаючи сповіщеним.
+        if (out.sent + texts.length * to.length > MSG_SEND_MAX) break;
+        for (const t of texts) out.sent += (await services.notify.sendText({ chatIds: to }, t).catch(() => 0)) || 0;
+        seen[acc.id] = next;
+      } catch (e) {
+        if (e.pending) break;
+        out.errors++;
+      }
+    }
+    await putSetting('rzmsg_seen', seen);
+    return out;
+  }
 
   // ---------- для сторінки «Маркетплейси» ----------
   // Кількість замовлень у магазинах — з кешу на 30 хв (повний підрахунок читає всі рядки, а з історією їх десятки тисяч).

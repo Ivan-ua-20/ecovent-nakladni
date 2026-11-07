@@ -157,6 +157,8 @@ export function normalizeAnOrder(raw) {
     total: round2(total),
     deliv: delivName(raw),
     ttn: ttnOf(raw),
+    phone: String(raw.phone || '').replace(/\D/g, '').slice(-9),
+    buyer: String(raw.bayer_name || '').trim().slice(0, 120),
     lines,
   };
 }
@@ -371,7 +373,7 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
     const rows = await db.all(`SELECT code, user, ttn, status, day FROM an_orders WHERE ttn IN (SELECT value FROM json_each(?)) AND status != 0 ORDER BY id`, [JSON.stringify(ttns)]);
     return notifyDups(rows, { silent, recentDays: 14 });
   }
-  // rows: { code, user, ttn, status, day } — групування за ТТН, сповіщення про нові дублі.
+  // rows: { code, user, ttn, status, day } — групування за ТТН (або 'tel:<телефон>'), сповіщення про нові дублі.
   async function notifyDups(rows, { silent = false, recentDays = 14 } = {}) {
     const by = new Map();
     for (const r of rows) { if (!by.has(r.ttn)) by.set(r.ttn, []); by.get(r.ttn).push(r); }
@@ -380,6 +382,7 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
     const sent = new Map((await db.all(`SELECT ttn, codes FROM an_ttn_dups WHERE ttn IN (SELECT value FROM json_each(?))`, [JSON.stringify(dups.map(([t]) => t))])).map((r) => [r.ttn, r.codes]));
     const names = (await getJson('an_status_names')) || {};
     const users = await db.all(`SELECT tg_chat_id, crm_logins FROM users WHERE active = 1 AND tg_chat_id != '' AND crm_logins != ''`);
+    const owners = (await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'owner'`)).map((u) => u.tg_chat_id);
     const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     let n = 0;
     const recent = addDays(kyivDay(), -recentDays);
@@ -390,13 +393,15 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
         await db.run(`INSERT INTO an_ttn_dups (ttn, codes, at) VALUES (?, ?, ?) ON CONFLICT(ttn) DO UPDATE SET codes = excluded.codes, at = excluded.at`, [ttn, codes, nowIso()]);
         continue;
       }
-      const text = `⚠️ <b>Дубль ТТН ${esc(ttn)}</b> у LP-CRM — ця ТТН є в ${list.length} замовленнях:\n`
-        + list.map((r) => `• № <b>${esc(r.code)}</b> · ${esc(names[r.status] || `статус ${r.status}`)} · ${esc(r.day.split('-').reverse().join('.'))}${r.user ? ` · менеджер ${esc(r.user)}` : ''}`).join('\n')
-        + '\n\nПеревірте, чи не помилка (одна посилка на два замовлення).';
+      const tel = ttn.startsWith('tel:') ? ttn.slice(4) : '';
+      const text = (tel ? `⚠️ <b>Дубль за телефоном 0${esc(tel)}</b> у LP-CRM — ${list.length} прийнятих замовлення з одним номером:\n`
+        : `⚠️ <b>Дубль ТТН ${esc(ttn)}</b> у LP-CRM — ця ТТН є в ${list.length} замовленнях:\n`)
+        + list.map((r) => `• № <b>${esc(r.code)}</b> · ${esc(names[r.status] || `статус ${r.status}`)} · ${esc(r.day.split('-').reverse().join('.'))}${r.buyer ? ` · ${esc(r.buyer)}` : ''}${r.user ? ` · менеджер ${esc(r.user)}` : ''}`).join('\n')
+        + (tel ? '\n\nПеревірте, чи не створено замовлення двічі.' : '\n\nПеревірте, чи не помилка (одна посилка на два замовлення).');
+      // Менеджерам цих замовлень (за логіном LP-CRM) і власнику.
       const logins = new Set(list.map((r) => r.user).filter(Boolean));
-      const chats = users.filter((u) => crmLogins(u.crm_logins).some((l) => logins.has(l))).map((u) => u.tg_chat_id);
+      const chats = [...new Set([...users.filter((u) => crmLogins(u.crm_logins).some((l) => logins.has(l))).map((u) => u.tg_chat_id), ...owners])];
       if (chats.length) await services.notify?.sendText({ chatIds: chats }, text).catch(() => 0);
-      else await services.notify?.sendText({ admins: true }, text).catch(() => 0);
       await db.run(`INSERT INTO an_ttn_dups (ttn, codes, at) VALUES (?, ?, ?) ON CONFLICT(ttn) DO UPDATE SET codes = excluded.codes, at = excluded.at`, [ttn, codes, nowIso()]);
       n++;
     }
@@ -407,6 +412,13 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
   // Нові замовлення LP-CRM за сьогодні й учора (і ті, що змінили статус) — їхня ТТН проти інших замовлень за 7 днів.
   // Запуск: Cloudflare Worker за розкладом (/api/cron/ttn з ключем) або сам на запитах до сайту, не частіше разу на 10 хв.
   const TTN_EVERY = 10 * 60e3;
+  const PHONE_DAYS = 7; // дублі за телефоном — серед прийнятих за 7 днів
+  // Статус «Принят» у LP-CRM (за назвою; інакше — перший зі статусів продажу).
+  async function acceptedStatus() {
+    const names = (await getJson('an_status_names')) || {};
+    const hit = Object.entries(names).find(([, n]) => /^(принят|прийнят)/i.test(String(n).trim()));
+    return Number(hit?.[0]) || Number((await getSt()).okStatuses?.[0]) || 0;
+  }
   async function ttnQuick({ force = false } = {}) {
     const now = Date.now();
     if (!force) {
@@ -425,6 +437,13 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
       const j = await lp(cr, 'getOrdersIdByStatus', { status: String(x), date_start: from, date_end: today }).catch(() => null);
       if (j?.status === 'ok') for (const code of asList(j.data).map(String).filter(Boolean)) listed.set(code, x);
     }
+    // Прийняті (статус «Принят») за 7 днів — для дублів за телефоном: одне й те саме замовлення, створене двічі.
+    const acc = await acceptedStatus();
+    const weekAgo = addDays(today, -PHONE_DAYS);
+    if (acc) {
+      const j = await lp(cr, 'getOrdersIdByStatus', { status: String(acc), date_start: weekAgo, date_end: today }).catch(() => null);
+      if (j?.status === 'ok') for (const code of asList(j.data).map(String).filter(Boolean)) listed.set(code, acc);
+    }
     const codes = [...listed.keys()];
     // Разово: раніше ТТН з дефісом (ROZETKA Delivery «RMP-…», Prom «PRM-…») не розпізнавались — свіжі замовлення без ТТН перечитати.
     if (!(await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_v2'`))?.value) {
@@ -434,8 +453,9 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
     let fetched = 0;
     let found = 0;
     if (codes.length) {
-      const known = new Map((await db.all(`SELECT code, status FROM an_ttn_recent WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => [r.code, r.status]));
-      const todo = codes.filter((x) => known.get(x) !== listed.get(x)).slice(0, 300);
+      const known = new Map((await db.all(`SELECT code, status, phone FROM an_ttn_recent WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(codes)])).map((r) => [r.code, r]));
+      // Нові, зі зміненим статусом, а також прийняті, телефон яких ще не читали.
+      const todo = codes.filter((x) => known.get(x)?.status !== listed.get(x) || (listed.get(x) === acc && known.get(x).phone == null)).slice(0, 300);
       const got = [];
       for (let i = 0; i < todo.length; i += 100) {
         const j = await lp(cr, 'getOrdersByID', { order_id: todo.slice(i, i + 100).join(',') }).catch(() => null);
@@ -443,8 +463,9 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
       }
       fetched = got.length;
       if (got.length) {
-        await db.batch(got.map((o) => [`INSERT INTO an_ttn_recent (code, ttn, day, user, status) VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(code) DO UPDATE SET ttn = excluded.ttn, day = excluded.day, user = excluded.user, status = excluded.status`, [o.code, o.ttn || '', o.day, o.user, o.status]]));
+        await db.batch(got.map((o) => [`INSERT INTO an_ttn_recent (code, ttn, day, user, status, phone, buyer) VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(code) DO UPDATE SET ttn = excluded.ttn, day = excluded.day, user = excluded.user, status = excluded.status, phone = excluded.phone, buyer = excluded.buyer`,
+        [o.code, o.ttn || '', o.day, o.user, o.status, o.phone || '', o.buyer || '']]));
         const ttns = [...new Set(got.map((o) => o.ttn).filter(Boolean))];
         if (ttns.length) {
           const week = addDays(today, -7);
@@ -455,6 +476,14 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
           const seen = new Set(a.map((r) => r.code));
           found = await notifyDups([...a, ...b.filter((r) => !seen.has(r.code))], { recentDays: 7 });
         }
+        // Дублі за телефоном серед прийнятих (перша перевірка — лише запам'ятати наявні, без сповіщень).
+        const phones = [...new Set(got.filter((o) => o.status === acc && o.phone.length === 9).map((o) => o.phone))];
+        if (acc && phones.length) {
+          const rows = await db.all(`SELECT code, user, phone, buyer, status, day FROM an_ttn_recent WHERE phone IN (SELECT value FROM json_each(?)) AND status = ? AND day >= ?`, [JSON.stringify(phones), acc, weekAgo]);
+          const silent = !(await db.get(`SELECT value FROM settings WHERE key = 'an_phone_seen'`))?.value;
+          found += await notifyDups(rows.map((r) => ({ ...r, ttn: `tel:${r.phone}` })), { silent, recentDays: PHONE_DAYS });
+        }
+        if (acc && !(await db.get(`SELECT value FROM settings WHERE key = 'an_phone_seen'`))?.value) await putSetting('an_phone_seen', nowIso());
       }
     }
     // Старі записи (понад 10 днів) — раз на добу.

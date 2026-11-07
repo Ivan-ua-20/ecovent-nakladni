@@ -12,7 +12,7 @@ async function viewUsers() {
   const SECS = [
     { k: 'b2b', label: 'B2B партнери', lv: [['view', 'перегляд'], ['full', 'повний — зміни, ціни, оплати, партнери']], tg: true },
     { k: 'retail', label: 'Рітейл', lv: [['view', 'перегляд'], ['work', 'робота — підтвердити, ТТН, LP-CRM']], tg: true },
-    { k: 'market', label: 'Маркетплейси', lv: [['view', 'перегляд'], ['work', 'робота — нагадування про відгуки, чат, оновити']] },
+    { k: 'market', label: 'Маркетплейси', lv: [['view', 'перегляд'], ['work', 'робота — нагадування про відгуки, чат, оновити']], tg: true, tgLabel: 'повідомлення покупців Розетки в Telegram (Пн–Пт 9–18, Сб 10–17)' },
     { k: 'returns', label: 'Повернення', lv: [['view', 'перегляд і «Оновити інформацію»']] },
   ];
   const LVN = { view: 'перегляд', work: 'робота', full: 'повний' };
@@ -76,7 +76,7 @@ async function viewUsers() {
           ${SECS.map((x) => `<div class="btn-row" style="align-items:center;gap:10px;flex-wrap:wrap">
               <label class="check" style="min-width:170px"><input type="checkbox" data-sec="${x.k}"> <b>${esc(x.label)}</b></label>
               <select data-lv="${x.k}" style="max-width:360px" aria-label="Рівень доступу: ${esc(x.label)}">${x.lv.map(([v, t]) => `<option value="${v}">${esc(t)}</option>`).join('')}</select>
-              ${x.tg ? `<label class="check small"><input type="checkbox" data-tgs="${x.k}"> сповіщення в Telegram</label>` : ''}</div>`).join('')}
+              ${x.tg ? `<label class="check small"><input type="checkbox" data-tgs="${x.k}"> ${esc(x.tgLabel || 'сповіщення в Telegram')}</label>` : ''}</div>`).join('')}
           </div>
           <div id="uShops" class="form-stack" style="gap:4px;margin-top:6px">
             <label class="check small"><input type="checkbox" id="shAll"> <b>Усі магазини маркетплейсів</b> (і ті, що додадуться згодом)</label>
