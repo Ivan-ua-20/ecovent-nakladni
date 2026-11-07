@@ -4,7 +4,8 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
-import { fpLayout, wireFp, fpGroup, fpBtn, fpKpi } from './b2b-shared.js';
+import { fpLayout, wireFp, fpGroup, fpBtn } from './b2b-shared.js';
+import { icon, iconize } from '../core/icons.js';
 
 const STATES = [
   ['active', 'Усі активні'], ['branch', 'Забрати з відділення'], ['overdue', 'Прострочено'], ['transit', 'В дорозі до нас'],
@@ -22,6 +23,7 @@ const telHref = (p) => { const d = String(p || '').replace(/\D/g, '').slice(-9);
 export function createReturnsPages() {
   const f = { st: 'active', src: '', to: '', reason: '', car: '', q: '', from: '', till: '' };
   let refreshing = false;
+  let pickOpen = null; // «Де забрати»: розгорнуто для «Забрати» / «Прострочено», далі — як залишив користувач
 
   const stateOf = (r) => (r.state === 'branch' && r.overdue ? 'overdue' : r.state);
   const match = (r, st) => (st === 'all' ? true : st === 'active' ? r.state !== 'got' && r.state !== 'stuck' : st === 'branch' ? r.state === 'branch' : st === 'overdue' ? r.state === 'branch' && r.overdue : r.state === st);
@@ -68,96 +70,104 @@ export function createReturnsPages() {
     if (r.reason === 'customer') return `<span class="badge">ЕН повернення ще немає</span><div><b>${daysWord(r.wait_days ?? 0)} з запиту</b></div><div class="small muted">${esc(r.ret_status || 'клієнт повертає')} · шукаємо посилку серед вхідних</div>`;
     return `<span class="badge">ЕН повернення ще немає</span><div><b>${daysWord(r.wait_days ?? 0)} з відмови</b></div><div class="small muted">НП ще не створила зворотну</div>`;
   }
+  // Кнопка «копіювати» біля значення (ТТН, № замовлення, прізвище, телефон) — одним кліком.
+  const cp = (v, what) => (v ? `<button type="button" class="ret-cp" data-cp="${esc(v)}" data-cpw="${esc(what)}" title="Копіювати ${esc(what)}" aria-label="Копіювати ${esc(what)}">${icon('copy')}</button>` : '');
+  const phone0 = (p) => { const d = String(p || '').replace(/\D/g, '').slice(-9); return d.length === 9 ? `0${d}` : ''; };
+  const surname = (n) => String(n || '').trim().split(/\s+/)[0] || '';
+  const ttnCell = (main, sub1, sub2) => `${main ? `<span class="ret-v"><b class="ret-ttn">${esc(main)}</b>${cp(main, 'ТТН')}</span>` : '<span class="muted">—</span>'}<div class="small muted">${sub1}</div>${sub2 ? `<div class="small muted ret-v">${sub2}</div>` : ''}`;
   const row = (r) => `<tr class="${r.reason === 'customer' ? 'ret-cust' : ''}">
     <td class="nowrap">${r.reason === 'customer' ? '<div><span class="badge ret-cust-b">↩ Від клієнта</span></div>' : ''}${r.carrier === 'np'
-      ? `${r.ret_ttn ? `<b class="ret-ttn">${esc(r.ret_ttn)}</b>` : '<span class="muted">—</span>'}<div class="small muted">Нова пошта</div><div class="small muted">з ${esc(r.orig_ttn)}</div>`
-      : r.carrier === 'rd' && r.ret_ttn ? `<b class="ret-ttn">${esc(r.ret_ttn)}</b><div class="small muted">Розетка Делівері · Міст</div><div class="small muted">з ${esc(r.orig_ttn)}</div>`
-      : r.carrier === 'rzr' ? `${r.ret_ttn ? `<b class="ret-ttn">${esc(r.ret_ttn)}</b>` : '<span class="muted">—</span>'}<div class="small muted">Заявка Розетки</div><div class="small muted">${esc(r.ext_id || '')}</div>`
-      : `<b class="ret-ttn">${esc(r.orig_ttn.includes(':') ? '—' : r.orig_ttn)}</b><div class="small muted">${esc(CAR[r.carrier])}</div><div class="small muted">ТТН відправлення</div>`}</td>
-    <td>${r.orders.length ? r.orders.map((o) => `<div><span class="badge ${SRC_CLS[o.src] || ''}">${esc(o.label)}</span> <span class="small">${esc(o.no)}</span></div>`).join('') : `<span class="small muted">${r.account ? `кабінет НП «${esc(r.account)}»` : '—'}</span>`}</td>
-    <td>${esc(r.customer || '—')}${r.phone ? `<div class="small muted">${phoneFmt(r.phone)}</div>` : ''}</td>
+      ? ttnCell(r.ret_ttn, 'Нова пошта', `з ${esc(r.orig_ttn)}${cp(r.orig_ttn, 'ТТН відправлення')}`)
+      : r.carrier === 'rd' && r.ret_ttn ? ttnCell(r.ret_ttn, 'Розетка Делівері · Міст', `з ${esc(r.orig_ttn)}${cp(r.orig_ttn, 'ТТН відправлення')}`)
+      : r.carrier === 'rzr' ? ttnCell(r.ret_ttn, 'Заявка Розетки', esc(r.ext_id || ''))
+      : ttnCell(r.orig_ttn.includes(':') ? '' : r.orig_ttn, esc(CAR[r.carrier]), 'ТТН відправлення')}</td>
+    <td>${r.orders.length ? r.orders.map((o) => `<div class="ret-v"><span class="badge ${SRC_CLS[o.src] || ''}">${esc(o.label)}</span> <span class="small">${esc(o.no)}</span>${cp(o.no, `№ замовлення ${o.label}`)}</div>`).join('') : `<span class="small muted">${r.account ? `кабінет НП «${esc(r.account)}»` : '—'}</span>`}</td>
+    <td>${r.customer ? `<div class="ret-v"><span class="ret-t">${esc(r.customer)}</span>${cp(surname(r.customer), 'прізвище')}</div>` : '—'}${r.phone ? `<div class="small muted ret-v"><span class="ret-nw">${phoneFmt(r.phone)}</span>${cp(phone0(r.phone), 'телефон')}</div>` : ''}</td>
     <td>${r.to ? `<b>${esc(r.to)}</b>` : '<span class="muted">—</span>'}${r.to_name && r.to_name !== r.to ? `<div class="small">${esc(r.to_name)}</div>` : ''}${r.to_phone ? `<div class="small muted">${phoneFmt(r.to_phone)}</div>` : ''}${r.warehouse ? `<div class="small muted">${esc([r.city, r.warehouse].filter(Boolean).join(', '))}</div>` : ''}</td>
     <td class="small">${esc(r.cargo || '—')}${r.cost ? `<div class="muted">${money(r.cost)} ₴${r.cod ? ` · післяплата ${money(r.cod)} ₴` : ''}</div>` : ''}</td>
     <td class="small">${esc(REASON[r.reason] || r.reason || '—')}${(() => { const t = r.carrier === 'rzr' ? r.note.split(' · ')[0] : (r.note || '').split(' · ').filter((x) => !x.startsWith('графік')).join(' · '); return t ? `<div class="muted">${esc(t)}</div>` : ''; })()}</td>
     <td style="min-width:170px">${waitCell(r)}</td>
   </tr>`;
 
+  // Стани зліва (з підписом-підказкою), служби доставки — вкладками зверху.
+  const ST_HINT = { active: 'усе, що ще не у нас', branch: 'у відділенні / точці видачі', overdue: '5+ днів або закінчується резерв', transit: 'їде назад', nottn: 'відмова є, зворотну ще не створили', stuck: 'понад 60 дн без руху', got: 'вже у нас', all: '' };
   async function viewReturns() {
     const d = await api('GET', '/api/returns');
     const all = d.rows;
-    const base = all.filter(inPeriod).filter((r) => !f.q || hay(r).includes(f.q.toLowerCase()));
-    const byFacet = (k) => base.filter((r) => match(r, f.st) && (k === 'src' || !f.src || r.src === f.src) && (k === 'to' || !f.to || r.to === f.to)
-      && (k === 'reason' || !f.reason || r.reason === f.reason) && (k === 'car' || !f.car || r.carrier === f.car));
-    // Спершу те, що треба забрати (найдовше у відділенні — вгорі), далі в дорозі, без ЕН, отримані — найновіші.
-    const PRI = { branch: 0, transit: 1, nottn: 2, stuck: 3, got: 4 };
-    const rows = byFacet('').sort((a, b) => PRI[a.state] - PRI[b.state] || (a.state === 'got' ? String(b.got_at).localeCompare(String(a.got_at)) : (b.branch_days ?? b.wait_days ?? 0) - (a.branch_days ?? a.wait_days ?? 0)));
-    const cnt = (list, key) => list.reduce((m, r) => { m[r[key]] = (m[r[key]] || 0) + 1; return m; }, {});
-    const facetSt = base.filter((r) => (!f.src || r.src === f.src) && (!f.to || r.to === f.to) && (!f.reason || r.reason === f.reason) && (!f.car || r.carrier === f.car));
-    const stN = Object.fromEntries(STATES.map(([k]) => [k, facetSt.filter((r) => match(r, k)).length]));
-    const srcN = cnt(byFacet('src'), 'src');
-    const toN = cnt(byFacet('to'), 'to');
-    const reN = cnt(byFacet('reason'), 'reason');
-    const carN = cnt(byFacet('car'), 'carrier');
     all.forEach((r) => { r.mp_close_days = d.mp_close_days; });
-    // Щоб забрати: кабінети НП з тим, що чекає (обраний отримувач — лише він).
-    const pick = (d.pickup || []).filter((p) => (f.to ? p.name === f.to : p.branch || p.transit));
-    const pickHtml = pick.length ? fpGroup('Щоб забрати (Нова пошта)', pick.map((p) => `<div class="ret-pick">
-        <b>${esc(p.name)}</b>${p.code ? `<div class="small muted">ЄДРПОУ / ІПН: <b>${esc(p.code)}</b></div>` : ''}
-        ${p.persons.map((x) => `<div class="small">${esc(x.name || '')}${x.phone ? ` · <a href="${telHref(x.phone)}">${phoneFmt(x.phone)}</a>` : ''}${x.contact ? ' <span class="muted">(контакт кабінету)</span>' : ''}</div>`).join('') || '<div class="small muted">Номер з’явиться після першого повернення або оновлення контактів</div>'}
-        ${p.branch ? `<div class="small" style="margin-top:4px"><b>Чекає у відділенні: ${p.branch}</b></div>${p.warehouses.map((w) => `<div class="small muted">${esc(w.w)}${w.n > 1 ? ` — ${w.n}` : ''}</div>`).join('')}` : ''}
-        ${p.transit ? `<div class="small muted">В дорозі: ${p.transit}</div>` : ''}</div>`).join('')) : '';
-    // Розетка Делівері: точки видачі, де чекають повернення (обраний отримувач — лише його магазин).
-    const pickRd = (d.pickup_rd || []).filter((p) => !f.to || p.shop === f.to);
-    const pickRdHtml = pickRd.length ? fpGroup('Щоб забрати (Розетка Делівері)', pickRd.map((p) => `<div class="ret-pick">
-        <b>${esc(p.shop)}</b><div class="small">${esc(p.address || '—')}</div>
-        ${p.name || p.phone ? `<div class="small">${esc(p.name || '')}${p.phone ? ` · <a href="${telHref(p.phone)}">${phoneFmt(p.phone)}</a>` : ''}</div>` : ''}
-        ${p.schedule ? `<div class="small muted">графік ${esc(p.schedule)}</div>` : ''}
-        <div class="small" style="margin-top:4px"><b>Чекає: ${p.n}</b>${p.oldest ? ` · найдовше ${p.oldest} дн` : ''}</div>
-        ${p.reserve ? `<div class="small" style="color:var(--bad)">закінчується резерв: ${p.reserve}</div>` : ''}</div>`).join('')) : '';
-    const act = all.filter((r) => r.state !== 'got' && r.state !== 'stuck');
-    const stuckN = all.filter((r) => r.state === 'stuck').length;
-    const branch = act.filter((r) => r.state === 'branch');
-    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
-    const got7 = all.filter((r) => r.state === 'got' && r.got_at >= weekAgo);
-    const avg = got7.filter((r) => r.wait_days !== null);
+    const base = all.filter(inPeriod).filter((r) => !f.q || hay(r).includes(f.q.toLowerCase()));
+    const ok = (r, skip) => (skip === 'st' || match(r, f.st)) && (skip === 'car' || !f.car || r.carrier === f.car) && (skip === 'src' || !f.src || r.src === f.src)
+      && (skip === 'to' || !f.to || r.to === f.to) && (skip === 'reason' || !f.reason || r.reason === f.reason);
+    const PRI = { branch: 0, transit: 1, nottn: 2, stuck: 3, got: 4 };
+    const rows = base.filter((r) => ok(r, '')).sort((a, b) => PRI[a.state] - PRI[b.state] || (a.state === 'got' ? String(b.got_at).localeCompare(String(a.got_at)) : (b.branch_days ?? b.wait_days ?? 0) - (a.branch_days ?? a.wait_days ?? 0)));
+    const cnt = (list, key) => list.reduce((m, r) => { m[r[key]] = (m[r[key]] || 0) + 1; return m; }, {});
+    const forSt = base.filter((r) => ok(r, 'st'));
+    const stN = Object.fromEntries(STATES.map(([k]) => [k, forSt.filter((r) => match(r, k)).length]));
+    const carN = cnt(base.filter((r) => ok(r, 'car')), 'carrier');
+    const srcN = cnt(base.filter((r) => ok(r, 'src')), 'src');
+    const toN = cnt(base.filter((r) => ok(r, 'to')), 'to');
+    const reN = cnt(base.filter((r) => ok(r, 'reason')), 'reason');
+    const carAll = Object.values(carN).reduce((s, n) => s + n, 0);
+    const opt = (map, val, names) => Object.keys(map).filter(Boolean).sort((a, b) => String(names?.[a] || a).localeCompare(String(names?.[b] || b), 'uk'))
+      .map((k) => `<option value="${esc(k)}" ${val === k ? 'selected' : ''}>${esc(names?.[k] || k)} (${map[k]})</option>`).join('');
+    // Щоб забрати — компактно, лише для обраної служби (НП — кабінети, Розетка Делівері — точки видачі).
+    const showPick = ['active', 'branch', 'overdue'].includes(f.st);
+    const pickNp = showPick && (!f.car || f.car === 'np') ? (d.pickup || []).filter((p) => (f.to ? p.name === f.to : p.branch)) : [];
+    const pickRd = showPick && (!f.car || f.car === 'rd') ? (d.pickup_rd || []).filter((p) => !f.to || p.shop === f.to) : [];
+    const pickHtml = pickNp.length || pickRd.length ? `<details class="card ret-picks" ${(pickOpen ?? ['branch', 'overdue'].includes(f.st)) ? 'open' : ''}><summary><b>Де забрати</b> <span class="small muted">${[...pickNp.map((p) => p.branch), ...pickRd.map((p) => p.n)].reduce((s, n) => s + n, 0)} посилок · ${pickNp.length + pickRd.length} ${pickNp.length + pickRd.length === 1 ? 'місце' : 'місць'}</span></summary><div class="ret-picks-grid">
+        ${pickNp.map((p) => `<div class="ret-pick"><div><span class="badge">Нова пошта</span> <b>${esc(p.name)}</b></div>${p.code ? `<div class="small muted">ЄДРПОУ / ІПН: <b>${esc(p.code)}</b></div>` : ''}
+          ${p.persons.slice(0, 2).map((x) => `<div class="small">${esc(x.name || '')}${x.phone ? ` · <a href="${telHref(x.phone)}">${phoneFmt(x.phone)}</a>` : ''}</div>`).join('')}
+          <div class="small"><b>Чекає: ${p.branch}</b>${p.warehouses[0] ? ` · ${esc(p.warehouses.map((w) => `${w.w}${w.n > 1 ? ` — ${w.n}` : ''}`).join('; '))}` : ''}</div></div>`).join('')}
+        ${pickRd.map((p) => `<div class="ret-pick"><div><span class="badge">Розетка Делівері</span> <b>${esc(p.address || '—')}</b></div><div class="small">${esc(p.shop)} · на ${esc(p.name || '—')}${p.phone ? ` · <a href="${telHref(p.phone)}">${phoneFmt(p.phone)}</a>` : ''}</div>
+          <div class="small"><b>Чекає: ${p.n}</b>${p.oldest ? ` · найдовше ${p.oldest} дн` : ''}${p.schedule ? ` · графік ${esc(p.schedule)}` : ''}${p.reserve ? ` · <span style="color:var(--bad)">резерв закінчується: ${p.reserve}</span>` : ''}</div></div>`).join('')}
+      </div></details>` : '';
     const cy = d.cycle || {};
     const next = cy.finished ? new Date(Date.parse(cy.started) + d.cycle_hours * 3600e3).toISOString() : '';
+    const sum = rows.filter((r) => r.state !== 'got' && r.state !== 'stuck').reduce((s, r) => s + (r.cost || 0), 0);
+    const tab = (k, label, n) => `<button type="button" class="ret-tab ${f.car === k ? 'on' : ''}" data-rcar="${k}">${esc(label)} <span class="ret-tab-n">${n || 0}</span></button>`;
     main.innerHTML = `
       <div class="head-row"><h2>Повернення</h2><div class="btn-row">
         <button class="btn" id="retRefresh">🔄 Оновити інформацію</button>
-        <button class="btn" id="retCopy">📋 Копіювати ТТН (${rows.filter((r) => r.ret_ttn || (r.carrier !== 'np' && !r.orig_ttn.includes(':'))).length})</button>
+        <button class="btn" id="retCopy">Копіювати всі ТТН (${rows.filter((r) => r.ret_ttn || (r.carrier !== 'np' && !r.orig_ttn.includes(':'))).length})</button>
         <button class="btn" id="retXls">⬇ Excel</button></div></div>
       <div class="small muted" style="margin-bottom:10px">Нова пошта: ${!cy.started ? 'ще не перевіряли' : !cy.done ? `перевірка триває${cy.pause_until && Date.parse(cy.pause_until) > Date.now() ? ` (Нова пошта просить зачекати до ${esc(fmtDateTime(cy.pause_until).slice(-5))})` : '…'}` : `перевірено ${esc(fmtDateTime(cy.finished))}${next ? ` · наступна перевірка ≈ ${esc(fmtDateTime(next))}` : ''}`}
         · кабінетів НП: ${d.accounts.length} · Розетка — модуль ROZETKA Delivery і заявки на повернення · Епіцентр — зі статусів замовлень</div>
       ${(d.rz_errors || []).length ? `<div class="alert warn small" style="margin-bottom:10px">Розетка: ${d.rz_errors.map((e) => `${esc(e.shop)} — ${esc(e.error)}`).join('; ')}. Дані цих магазинів можуть бути неповні.</div>` : ''}
       ${cy.error ? `<div class="alert warn small" style="margin-bottom:10px">Остання перевірка не вдалася: ${esc(cy.error)}. Натисніть «Оновити інформацію».</div>` : ''}
       ${!d.accounts.length ? '<div class="alert warn" style="margin-bottom:10px">Кабінети Нової пошти ще не додано: «Налаштування → Доставка: НП, Розетка, Prom, Епіцентр».</div>' : ''}
-      ${fpLayout(`${pickHtml}${pickRdHtml}${fpGroup('Пошук', `<input id="retQ" type="search" placeholder="ТТН, клієнт, телефон, № замовлення" value="${esc(f.q)}" aria-label="Пошук повернення">`)}
-        ${fpGroup('Стан', STATES.map(([k, v]) => fpBtn(`<span>${esc(v)}</span><span class="small">${stN[k] || ''}</span>`, f.st === k, `data-rst="${k}"`)).join(''))}
-        ${fpGroup('Джерело', [fpBtn('<span>Усі</span>', !f.src, 'data-rsrc=""'), ...Object.keys(SRC).filter((k) => srcN[k] || f.src === k).map((k) => fpBtn(`<span>${esc(SRC[k])}</span><span class="small">${srcN[k] || ''}</span>`, f.src === k, `data-rsrc="${k}"`))].join(''))}
-        ${fpGroup('Перевізник', [fpBtn('<span>Усі</span>', !f.car, 'data-rcar=""'), ...Object.keys(CAR).filter((k) => carN[k] || f.car === k).map((k) => fpBtn(`<span>${esc(CAR[k])}</span><span class="small">${carN[k] || ''}</span>`, f.car === k, `data-rcar="${k}"`))].join(''))}
-        ${Object.keys(toN).filter(Boolean).length ? fpGroup('Отримувач', [fpBtn('<span>Усі</span>', !f.to, 'data-rto=""'), ...Object.keys(toN).filter(Boolean).sort().map((k) => fpBtn(`<span>${esc(k)}</span><span class="small">${toN[k]}</span>`, f.to === k, `data-rto="${esc(k)}"`))].join('')) : ''}
-        ${fpGroup('Причина', [fpBtn('<span>Усі</span>', !f.reason, 'data-rre=""'), ...Object.keys(REASON).map((k) => fpBtn(`<span>${esc(REASON[k])}</span><span class="small">${reN[k] || ''}</span>`, f.reason === k, `data-rre="${k}"`))].join(''))}
-        ${fpGroup('Період (відмова)', `<div class="an7-dates ${f.from || f.till ? 'on' : ''}"><input id="retFrom" type="date" value="${esc(f.from)}" aria-label="З дати"><input id="retTill" type="date" value="${esc(f.till)}" aria-label="По дату"></div>`)}`,
-      `<div class="kpis">
-        ${fpKpi('Забрати з відділення', String(branch.length), branch.filter((r) => r.overdue).length ? `з них ${branch.filter((r) => r.overdue).length} — ${d.overdue_days}+ днів` : 'нічого не прострочено', branch.some((r) => r.overdue) ? 'kpi-bad' : '')}
-        ${fpKpi('В дорозі до нас', String(act.filter((r) => r.state === 'transit').length), act.filter((r) => r.state === 'transit').length ? `найдовше — ${Math.max(...act.filter((r) => r.state === 'transit').map((r) => r.wait_days || 0))} дн` : '')}
-        ${fpKpi('Від клієнтів після отримання', String(act.filter((r) => r.reason === 'customer').length), 'в дорозі або чекають', act.some((r) => r.reason === 'customer') ? 'kpi-cust' : '')}
-        ${fpKpi('Сума товару в поверненнях', `${money(act.reduce((s, r) => s + (r.cost || 0), 0)).replace(/,00$/, '')} ₴`, `${act.length} посилок${stuckN ? ` · ще ${stuckN} застрягло давно` : ''}`)}
-        ${fpKpi('Отримано за 7 днів', String(got7.length), avg.length ? `у середньому за ${(avg.reduce((s, r) => s + r.wait_days, 0) / avg.length).toFixed(1).replace('.', ',')} дн` : '')}
+      <div class="ret-tabs" role="tablist" aria-label="Служба доставки">${tab('', 'Усі', carAll)}${Object.keys(CAR).filter((k) => carN[k] || f.car === k).map((k) => tab(k, CAR[k], carN[k])).join('')}</div>
+      ${fpLayout(fpGroup('Стан', STATES.map(([k, v]) => fpBtn(`<span class="ret-st"><span>${esc(v)}</span>${ST_HINT[k] ? `<span class="small muted">${esc(ST_HINT[k])}</span>` : ''}</span><b class="small ${k === 'overdue' && stN[k] ? 'ret-bad' : ''}">${stN[k] || ''}</b>`, f.st === k, `data-rst="${k}"`)).join('')),
+      `<div class="card ret-bar">
+        <label class="ret-f ret-q"><span>Пошук</span><input id="retQ" type="search" placeholder="ТТН, № замовлення, прізвище, телефон" value="${esc(f.q)}"></label>
+        <label class="ret-f"><span>Звідки замовлення</span><select id="retSrc"><option value="">Усі</option>${opt(srcN, f.src, SRC)}</select></label>
+        <label class="ret-f"><span>На кого / магазин</span><select id="retTo"><option value="">Усі</option>${opt(toN, f.to)}</select></label>
+        <label class="ret-f"><span>Причина</span><select id="retRe"><option value="">Усі</option>${opt(reN, f.reason, REASON)}</select></label>
+        <label class="ret-f"><span>Відмова з</span><input id="retFrom" type="date" value="${esc(f.from)}"></label>
+        <label class="ret-f"><span>по</span><input id="retTill" type="date" value="${esc(f.till)}"></label>
+        ${f.q || f.src || f.to || f.reason || f.from || f.till ? '<button type="button" class="btn sm" id="retReset">Скинути</button>' : ''}
       </div>
+      ${pickHtml}
+      <div class="small muted">${rows.length} посилок${sum ? ` · товару в поверненнях на ${money(sum).replace(/,00$/, '')} ₴` : ''} · <span class="ret-cp-hint">${icon('copy')}</span> — копіювати значення одним кліком</div>
       ${rows.length ? `<div class="table-wrap"><table class="list"><thead><tr><th>Повернення</th><th>Звідки</th><th>Клієнт</th><th>На кого</th><th>Товар</th><th>Причина</th><th>Стан і очікування</th></tr></thead><tbody>
         ${rows.slice(0, 500).map(row).join('')}</tbody></table></div>${rows.length > 500 ? `<div class="small muted">Показано 500 з ${rows.length} — звузьте фільтр.</div>` : ''}`
         : `<div class="card empty"><div class="big">Повернень немає</div>${all.length ? 'Змініть фільтр або пошук.' : 'Щойно Нова пошта зафіксує відмову чи повернення в підключених кабінетах, вони з’являться тут.'}</div>`}`,
-      { summary: [STATES.find(([k]) => k === f.st)?.[1], SRC[f.src], f.to, REASON[f.reason], f.q].filter(Boolean).join(' · ') })}`;
+      { summary: [STATES.find(([k]) => k === f.st)?.[1], CAR[f.car]].filter(Boolean).join(' · ') })}`;
     wireFp();
-    $$('[data-rst]').forEach((b) => (b.onclick = () => { f.st = b.dataset.rst; viewReturns(); }));
-    $$('[data-rsrc]').forEach((b) => (b.onclick = () => { f.src = b.dataset.rsrc; viewReturns(); }));
-    $$('[data-rto]').forEach((b) => (b.onclick = () => { f.to = b.dataset.rto; viewReturns(); }));
-    $$('[data-rre]').forEach((b) => (b.onclick = () => { f.reason = b.dataset.rre; viewReturns(); }));
+    iconize(main);
+    $$('[data-rst]').forEach((b) => (b.onclick = () => { f.st = b.dataset.rst; pickOpen = null; viewReturns(); }));
     $$('[data-rcar]').forEach((b) => (b.onclick = () => { f.car = b.dataset.rcar; viewReturns(); }));
+    $('#retSrc').onchange = (e) => { f.src = e.target.value; viewReturns(); };
+    $('#retTo').onchange = (e) => { f.to = e.target.value; viewReturns(); };
+    $('#retRe').onchange = (e) => { f.reason = e.target.value; viewReturns(); };
     $('#retFrom').onchange = (e) => { f.from = e.target.value; viewReturns(); };
     $('#retTill').onchange = (e) => { f.till = e.target.value; viewReturns(); };
+    $('#retReset') && ($('#retReset').onclick = () => { Object.assign(f, { q: '', src: '', to: '', reason: '', from: '', till: '' }); viewReturns(); });
+    $('.ret-picks') && ($('.ret-picks').ontoggle = (e) => { pickOpen = e.target.open; });
+    $$('[data-cp]').forEach((b) => (b.onclick = async (e) => {
+      e.stopPropagation();
+      try { await navigator.clipboard.writeText(b.dataset.cp); toast(`Скопійовано ${b.dataset.cpw}: ${b.dataset.cp}`); b.classList.add('done'); setTimeout(() => b.classList.remove('done'), 1200); }
+      catch { toast('Не вдалося скопіювати', true); }
+    }));
     let qt;
     $('#retQ').oninput = (e) => { clearTimeout(qt); qt = setTimeout(async () => { f.q = e.target.value.trim(); await viewReturns(); const el = $('#retQ'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 300); };
     $('#retCopy').onclick = async () => {
