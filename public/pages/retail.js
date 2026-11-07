@@ -104,7 +104,7 @@ export function createRetailPages(ctx) {
           <td class="small hide-m">${o.products.map((p) => `${esc(p.name || p.supplierCode)} × ${p.quantity}`).join('<br>')}</td>
           <td class="r nowrap">${o.cod ? money(o.cod) : '—'}</td>
           <td><span class="badge ${ST_CLS[o.status] || ''}">${esc(o.status_name)}</span>${o.uzd_name ? `<div><span class="badge ${UZD_CLS[o.uzd_status] || ''}">${esc(o.uzd_name)}</span></div>` : ''}</td>
-          <td class="small nowrap">${o.ttn ? `<b>${esc(o.ttn)}</b>${o.tracking_status ? `<div class="muted">${esc(o.tracking_status)}</div>` : ''}` : '—'}${retTtn(o) || isRet(o) ? `<div class="badge ${o.ret_got_at ? 'ok' : 'bad'}">${o.ret_got_at ? '✅ повернення отримано' : '↩ повернення'}${retTtn(o) ? ` ${esc(retTtn(o))}` : ''}</div>${o.ret_status ? `<div class="muted">${esc(o.ret_status)}</div>` : ''}` : ''}</td>
+          <td class="small" style="min-width:170px;max-width:250px">${o.ttn ? `<b class="nowrap">${esc(o.ttn)}</b>${o.tracking_status ? `<div class="muted">${esc(o.tracking_status)}</div>` : ''}` : '—'}${retTtn(o) || isRet(o) ? `<div class="badge ${o.ret_got_at ? 'ok' : 'bad'}">${o.ret_got_at ? '✅ повернення отримано' : '↩ повернення'}${retTtn(o) ? ` ${esc(retTtn(o))}` : ''}</div>${o.ret_status ? `<div class="muted">${esc(o.ret_status)}</div>` : ''}` : ''}</td>
           <td class="small nowrap">${o.invoice_no ? `<b>${esc(o.invoice_no)}</b>` : '<span class="muted">—</span>'}</td>
           <td class="small" data-nosel>${o.document_link ? `<a class="badge ok" href="${esc(o.document_link)}" target="_blank" rel="noopener">📄 є</a>` : '<span class="muted">ще немає</span>'}
             ${o.docs_at ? `<div class="muted">${esc(fmtDateTime(o.docs_at))}</div>` : ''}</td>
