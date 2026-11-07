@@ -10,6 +10,7 @@ import { randomToken } from '../../core/auth.js';
 import { logAudit } from '../../core/requisites.js';
 import { addNewOrder, getOrdersBatch, getStatuses, phpSerialize, phpUrlencode } from '../../integrations/lpcrm.js';
 import { ttnOf } from '../analytics/index.js';
+import { npTracking } from '../../integrations/novaposhta.js';
 import { rzsOrdersPage, rzsOrder, rzsConfirm, rzsCreateTtn, rzsMarkings, rzsDateTime, parseRzsProductsCsv } from '../../integrations/rozetka-supplier.js';
 
 export const RZS_STATUS = {
@@ -31,6 +32,15 @@ const seatOf = (s) => ({ lengthCm: round2(Number(s.lengthCm)), widthCm: round2(N
 const userName = (u) => u?.name || u?.login || '';
 let lastTickTry = 0;
 const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Повернення: НП-коди відмови одержувача (оригінальна ЕН) і отримання (ЕН повернення); за скільки днів показуємо; скільки ЕН за раз.
+const NP_REFUSED = [102, 103, 108];
+const NP_RECEIVED = [9, 10, 11, 106];
+const RET_DAYS = 120;
+const RET_BATCH = 25;
+const RET_CALLS = 30;
+// «23.10.2026 14:05:11» (час НП) → ISO; інакше порожньо.
+const npDate = (v) => { const m = /^(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{2}):(\d{2}))?/.exec(String(v || '')); return m ? `${m[3]}-${m[2]}-${m[1]}T${m[4] || '12'}:${m[5] || '00'}:00` : ''; };
 
 export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}, onCron = () => {}, cronActive = async () => false }) {
   // ================================================================ кабінети
@@ -296,6 +306,74 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     return c.json({ ok: true, saved });
   });
 
+  // ================================================================ повернення
+  // Повернуте замовлення: Розетка дала ЕН повернення, статус «Відмова від отримання», або НП-код відмови в трекінгу;
+  // чи повернення вже отримали — за трекінгом НП ЕН повернення (раз на годину) або позначкою вручну.
+  const RET_VIEWS = ['ret_wait', 'ret_got', 'ret_all'];
+  const RET_SQL = (t) => `(${t}.return_ttn != '' OR ${t}.ret_ttn != '' OR ${t}.status = 'delivery_refused' OR CAST(${t}.tracking_code AS INTEGER) IN (${NP_REFUSED.join(', ')}))`;
+  const retSince = () => new Date(Date.now() - RET_DAYS * 86400000).toISOString().slice(0, 10);
+  async function npKey() {
+    const a = await db.get(`SELECT api_key FROM np_accounts WHERE active = 1 ORDER BY hits DESC, id LIMIT 1`).catch(() => null);
+    return a?.api_key || '';
+  }
+  // Перевірити в НП повернення, які ще не отримано (найдавніше перевірені — першими). limit — скільки ЕН за раз.
+  async function checkReturns({ limit = RET_BATCH, ids = null } = {}) {
+    const key = await npKey();
+    if (!key) return { skipped: 'немає активного кабінету Нової пошти (Маркування → кабінети НП)' };
+    const rows = await db.all(`SELECT id, ttn, return_ttn, ret_ttn, phone FROM rzs_orders o WHERE o.created_at >= ? AND ${RET_SQL('o')} AND o.ret_got_at = ''
+      ${ids ? 'AND o.id IN (SELECT value FROM json_each(?))' : ''} ORDER BY o.ret_checked_at, o.created_at LIMIT ?`, [retSince(), ...(ids ? [JSON.stringify(ids)] : []), limit]);
+    let got = 0, found = 0, failed = 0, calls = 0, checked = 0;
+    for (const r of rows) {
+      if (calls >= RET_CALLS) break; // ліміт підзапитів Cloudflare на один запит
+      checked++;
+      const now = nowIso();
+      try {
+        let rt = r.return_ttn || r.ret_ttn;
+        let tr = null;
+        if (!rt && r.ttn) {
+          // ЕН повернення ще невідома — шукаємо через оригінальну ЕН (НП створює зворотну ЕН «на основі» неї).
+          calls++;
+          const orig = await npTracking(fetchFn, key, r.ttn, r.phone);
+          if (orig.basis && (NP_REFUSED.includes(Number(orig.code)) || /return|повер/i.test(orig.basisType))) { rt = orig.basis; found++; }
+          else tr = { status: orig.status ? `ЕН повернення ще немає · ${orig.status}` : 'ЕН повернення ще немає', code: '' };
+        }
+        if (rt && !tr) { calls++; tr = await npTracking(fetchFn, key, rt, ''); }
+        if (!tr) tr = { status: 'немає ЕН для перевірки', code: '' };
+        const isGot = rt && NP_RECEIVED.includes(Number(tr.code));
+        if (isGot) got++;
+        await db.run(`UPDATE rzs_orders SET ret_ttn = CASE WHEN return_ttn = '' THEN ? ELSE ret_ttn END, ret_status = ?, ret_checked_at = ?, ret_got_at = ? WHERE id = ?`,
+          [rt || '', String(tr.status || '').slice(0, 200), now, isGot ? (npDate(tr.received) || now) : '', r.id]);
+      } catch (e) {
+        failed++;
+        await db.run(`UPDATE rzs_orders SET ret_checked_at = ? WHERE id = ?`, [now, r.id]).catch(() => 0);
+      }
+    }
+    return { checked, left: rows.length - checked, got, found, failed };
+  }
+  onCron('rzsret', 'Повернення Розетки: статус ЕН повернення в Новій пошті (раз на годину)', async () => {
+    const claim = await db.run(`INSERT INTO settings (key, value) VALUES ('rzs_ret_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
+      [nowIso(), new Date(Date.now() - 55 * 60e3).toISOString()]);
+    if (!claim.changes) return { fresh: true };
+    return checkReturns();
+  });
+  app.post('/api/rzs/returns/check', async (c) => {
+    need(c, 'retail.view');
+    const b = await c.req.json().catch(() => ({}));
+    const ids = Array.isArray(b.ids) ? b.ids.map(String).slice(0, RET_BATCH) : null;
+    return c.json({ ok: true, ...(await checkReturns({ ids })) });
+  });
+  // Позначити вручну: повернення отримано / ще ні (наприклад, НП не віддає статус).
+  app.post('/api/rzs/orders/:id/return-got', async (c) => {
+    need(c, 'retail.edit');
+    const b = await c.req.json().catch(() => ({}));
+    const r = await db.get(`SELECT id, order_num FROM rzs_orders o WHERE id = ? AND ${RET_SQL('o')}`, [c.req.param('id')]);
+    if (!r) throw fail(404, 'Це замовлення не позначене як повернення.');
+    const got = b.got !== false;
+    await db.run(`UPDATE rzs_orders SET ret_got_at = ?, ret_manual = ? WHERE id = ?`, [got ? nowIso() : '', got ? 1 : 0, r.id]);
+    await logAudit(db, { user: c.get('user'), kind: 'rzs', refId: r.id, action: got ? 'повернення позначено отриманим' : 'знято позначку «повернення отримано»', changes: [] }).catch(() => 0);
+    return c.json({ ok: true });
+  });
+
   // ================================================================ список і картка
   const publicOrder = (r, prods = new Map()) => {
     let products = [];
@@ -320,9 +398,11 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     const st = c.req.query('status') || '';
     const q = String(c.req.query('q') || '').trim().toLowerCase();
     const since = new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
+    const isRet = RET_VIEWS.includes(st);
     const where = ['o.created_at >= ?'];
-    const params = [since];
-    if (st === 'todo') where.push(`o.status IN ('new', 'updated')`);
+    const params = [isRet ? retSince() : since];
+    if (isRet) where.push(RET_SQL('o'), st === 'ret_got' ? `o.ret_got_at != ''` : st === 'ret_wait' ? `o.ret_got_at = ''` : '1 = 1');
+    else if (st === 'todo') where.push(`o.status IN ('new', 'updated')`);
     else if (st === 'nottn') where.push(`o.status IN ('confirmed', 'problem') AND o.ttn = ''`);
     else if (st === 'nocrm') where.push(`o.crm_id = '' AND o.crm_code = '' AND o.status NOT IN ('deleted', 'closed', 'delivery_refused')`);
     else if (st === 'docs') where.push(`o.document_link != ''`);
@@ -340,8 +420,9 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
       params.push(`%${raw}%`, `%${raw.toUpperCase()}%`, `%${q.replace(/\D/g, '') || q}%`, `%${q}%`, `%${raw}%`, ...vars);
     }
     const [rows, counts, accs] = await Promise.all([
-      db.all(`SELECT o.*, a.name AS account FROM rzs_orders o LEFT JOIN rzs_accounts a ON a.id = o.account_id WHERE ${where.join(' AND ')} ORDER BY o.created_at DESC LIMIT 300`, params),
-      db.all(`SELECT status, COUNT(*) AS n FROM rzs_orders WHERE created_at >= ? GROUP BY status UNION ALL SELECT 'crmnew', COUNT(*) FROM rzs_orders WHERE created_at >= ? AND crm_new = 1`, [since, since]),
+      db.all(`SELECT o.*, a.name AS account FROM rzs_orders o LEFT JOIN rzs_accounts a ON a.id = o.account_id WHERE ${where.join(' AND ')} ORDER BY o.created_at DESC LIMIT ${isRet ? 3000 : 300}`, params),
+      db.all(`SELECT status, COUNT(*) AS n FROM rzs_orders WHERE created_at >= ? GROUP BY status UNION ALL SELECT 'crmnew', COUNT(*) FROM rzs_orders WHERE created_at >= ? AND crm_new = 1
+        UNION ALL SELECT CASE WHEN ret_got_at != '' THEN 'ret_got' ELSE 'ret_wait' END, COUNT(*) FROM rzs_orders WHERE created_at >= ? AND ${RET_SQL('rzs_orders')} GROUP BY 1`, [since, since, retSince()]),
       db.all(`SELECT id, name, synced_at, hook_at, sync_error, sync_error_at FROM rzs_accounts WHERE active = 1`),
     ]);
     const pm = await prodMap(rows);
