@@ -13702,7 +13702,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     for (const r of todo) {
       let m = found.find((x) => String(x.article).trim() === r.code) || found.find((x) => String(x.product_id) === r.code);
       if (!m && /^\d{8,}$/.test(r.code)) {
-        const c = byTail.filter((x) => tail5(x.name) === r.code.slice(-5));
+        const c = byTail.filter((x) => tail5(x.name).slice(-4) === r.code.slice(-4));
         if (c.length === 1) m = c[0];
       }
       if (m) {
@@ -13730,7 +13730,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
   const tail5 = (name) => (/\[(\d{5})\]/.exec(String(name || "")) || [])[1] || "";
   const mapWarn = (code, crmName) => {
     const t = tail5(crmName);
-    return !!(t && /^\d{8,}$/.test(code) && !code.endsWith(t));
+    return !!(t && /^\d{8,}$/.test(code) && code.slice(-4) !== t.slice(-4));
   };
   async function syncAccount(a, { days = SYNC_DAYS } = {}) {
     const dateFrom = rzsDateTime(new Date(Date.now() - days * 864e5));
