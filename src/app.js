@@ -16,6 +16,7 @@ import { mountErrLog } from './modules/errlog/index.js';
 import { mountB2b } from './modules/b2b/index.js';
 import { mountMarking } from './modules/marking/index.js';
 import { mountRetail } from './modules/retail/index.js';
+import { mountReturns } from './modules/returns/index.js';
 import { mountOdb, ODB_BASE } from './modules/payments/index.js';
 import { mountHome } from './modules/home/index.js';
 import { mountCron } from './modules/cron/index.js';
@@ -97,6 +98,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   services.marking = mountMarking(app, ctx);
   services.retail = mountRetail(app, ctx);
   services.market = mountMarket(app, ctx);
+  services.returns = mountReturns(app, ctx);
   services.analytics = mountAnalytics(app, ctx);
   services.notify = mountTg(app, ctx);
   mountHome(app, ctx);

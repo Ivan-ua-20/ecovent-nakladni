@@ -84,3 +84,34 @@ export async function npMarkingPdf(fetchFn, apiKey, ttn) {
   const isPdf = buf.length > 4 && buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46; // %PDF
   return isPdf ? buf : null;
 }
+
+// Дата НП («2026-10-31 12:10:00» або «31.10.2026 12:10:00») → «2026-10-31T12:10:00»; інакше порожньо.
+export function npDateIso(v) {
+  const s = String(v || '').trim();
+  let m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/.exec(s);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}T${m[4] || '00'}:${m[5] || '00'}:00`;
+  m = /^(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{2}):(\d{2}))?/.exec(s);
+  return m ? `${m[3]}-${m[2]}-${m[1]}T${m[4] || '00'}:${m[5] || '00'}:00` : '';
+}
+// Відстеження до 100 ТТН одним запитом. docs: [{ ttn, phone }] (телефон відправника або отримувача дає повні дані).
+// Повертає Map ТТН → { code, status, city, warehouse, created, arrived, received, paidFrom, storage, basis, basisType, recipient, recipientPhone, cargo, cost, cod }.
+export async function npTrackMany(fetchFn, apiKey, docs) {
+  const list = await npCall(fetchFn, apiKey, 'TrackingDocument', 'getStatusDocuments', {
+    Documents: docs.slice(0, 100).map((d) => ({ DocumentNumber: d.ttn, Phone: d.phone ? (String(d.phone).length === 9 ? `380${d.phone}` : String(d.phone)) : '' })),
+  });
+  const s = (v, n = 200) => String(v ?? '').trim().slice(0, n);
+  const n = (v) => { const x = Number(String(v ?? '').replace(',', '.')); return Number.isFinite(x) && x > 0 ? x : 0; };
+  const out = new Map();
+  for (const d of list) {
+    const ttn = s(d.Number, 40);
+    if (!ttn) continue;
+    out.set(ttn, {
+      code: Number(d.StatusCode) || 0, status: s(d.Status), city: s(d.CityRecipient, 80), warehouse: s(d.WarehouseRecipient, 160),
+      created: npDateIso(d.DateCreated), arrived: npDateIso(d.ActualDeliveryDate), received: npDateIso(d.RecipientDateTime), paidFrom: npDateIso(d.DatePayedKeeping),
+      storage: n(d.StorageAmount), basis: s(d.LastCreatedOnTheBasisNumber, 40), basisType: s(d.LastCreatedOnTheBasisDocumentType, 40),
+      recipient: s(d.RecipientFullName || d.RecipientFullNameEW, 120), recipientPhone: s(d.PhoneRecipient, 20),
+      cargo: s(d.CargoDescriptionString, 200), cost: n(d.AnnouncedPrice), cod: n(d.AfterpaymentOnGoodsCost) || n(d.RedeliverySum),
+    });
+  }
+  return out;
+}

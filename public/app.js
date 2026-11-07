@@ -22,6 +22,7 @@ import { createB2bStats } from './pages/b2b-stats.js';
 import { createPriceLogPages } from './pages/b2b-pricelog.js';
 import { createClaimPages } from './pages/b2b-claims.js';
 import { createRetailPages } from './pages/retail.js';
+import { createReturnsPages } from './pages/returns.js';
 
 // ---------- стан ----------
 let boot = { fops: [], templates: [], offices: [], channels: [], invFops: [], settings: {}, user: null };
@@ -85,6 +86,7 @@ const SECTIONS = [
     { id: 'rzproducts', label: 'Розетка: товари й ціни', perm: 'refs.edit' },
     { id: 'rzpricelog', label: 'Журнал змін цін', perm: 'refs.edit' },
   ] },
+  { id: 'returns', label: 'Повернення', perm: 'returns.view', home: 'returns', tabs: [{ id: 'returns', label: 'Повернення' }] },
   // Усі налаштування — в одному розділі: щоденна робота — в інших, рідкісні налаштування — тут.
   { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [
     { id: 'settings', label: 'Загальні налаштування' },
@@ -296,6 +298,7 @@ const PRICELOG = createPriceLogPages();
 const CLAIMS = createClaimPages(ctx);
 ctx.openClaimForm = CLAIMS.openClaimForm;
 const RETAIL = createRetailPages(ctx);
+const RETURNS = createReturnsPages(ctx);
 const { viewPartners, viewCatalog, viewOrders: viewB2bOrders, viewClients: viewB2bClients, viewTrash: viewB2bTrash } = createB2bPages(ctx);
 const HOME = createHomePages(ctx);
 const { viewCouriers, viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients, viewTeam: viewPartnerTeam, viewSettings: viewPartnerSettings, viewTrash: viewPartnerTrash } = createPartnerPages(ctx);
@@ -354,6 +357,7 @@ const routes = {
   rzproducts: () => RETAIL.viewProducts(),
   rzsettings: () => RETAIL.viewSettings(),
   rzpricelog: () => RETAIL.viewPriceLog(),
+  returns: () => RETURNS.viewReturns(),
 };
 
 async function route() {

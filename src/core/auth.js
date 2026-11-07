@@ -26,7 +26,8 @@ export const ROLES = {
 //  b2b.view   — B2B лише перегляд (без змін)
 //  retail.view / retail.edit — «Рітейл»: перегляд / робота із замовленнями (підтвердити, ТТН, LP-CRM)
 //  market.view / market.edit — «Маркетплейси»: перегляд / робота (нагадування про відгуки, чат, оновити)
-const SECTION_ALL = ['b2b.admin', 'b2b.view', 'retail.view', 'retail.edit', 'market.view', 'market.edit'];
+//  returns.view — «Повернення»: перегляд (і кнопка «Оновити інформацію»)
+const SECTION_ALL = ['b2b.admin', 'b2b.view', 'retail.view', 'retail.edit', 'market.view', 'market.edit', 'returns.view'];
 const PERMS = {
   owner: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'people', 'analytics', 'an.view', ...SECTION_ALL],
   admin: ['docs.view', 'docs.edit', 'refs.edit', 'requisites', 'api', 'users', 'people', 'analytics', 'an.view', ...SECTION_ALL],
@@ -40,11 +41,11 @@ const PERMS = {
 //  b2b: none | view | full;  retail, market: none | view | work;  shops: null (усі магазини маркетплейсів, і нові) або ['rozetka:1', …];
 //  tg: розділи, сповіщення яких іде цьому користувачу в Telegram (як адмінам): ['b2b', 'retail'].
 // Роль «Перегляд» не отримує більше за «перегляд».
-export const SECTION_LEVELS = { b2b: ['none', 'view', 'full'], retail: ['none', 'view', 'work'], market: ['none', 'view', 'work'] };
+export const SECTION_LEVELS = { b2b: ['none', 'view', 'full'], retail: ['none', 'view', 'work'], market: ['none', 'view', 'work'], returns: ['none', 'view'] };
 export const ACCESS_ROLES = ['manager', 'viewer'];
 const ROLE_ACCESS = {
-  manager: { b2b: 'none', retail: 'work', market: 'work', shops: null, tg: [] },
-  viewer: { b2b: 'none', retail: 'view', market: 'view', shops: null, tg: [] },
+  manager: { b2b: 'none', retail: 'work', market: 'work', returns: 'view', shops: null, tg: [] },
+  viewer: { b2b: 'none', retail: 'view', market: 'view', returns: 'view', shops: null, tg: [] },
 };
 export function accessOf(u) {
   const def = ROLE_ACCESS[u?.role];
@@ -72,6 +73,7 @@ const sectionPerms = (a) => [
   ...(a.b2b === 'full' ? ['b2b.admin', 'b2b.view'] : a.b2b === 'view' ? ['b2b.view'] : []),
   ...(a.retail !== 'none' ? ['retail.view'] : []), ...(a.retail === 'work' ? ['retail.edit'] : []),
   ...(a.market !== 'none' ? ['market.view'] : []), ...(a.market === 'work' ? ['market.edit'] : []),
+  ...(a.returns !== 'none' ? ['returns.view'] : []),
 ];
 // Магазин маркетплейсу (mp — rozetka/prom/epicentr, id — акаунт) доступний користувачу?
 export const shopAllowed = (u, mp, id) => { const a = accessOf(u); return !a || !a.shops || a.shops.includes(`${mp}:${id}`); };

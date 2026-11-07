@@ -62,7 +62,7 @@ assert.equal((await call('POST', '/api/mp/review/ask', { account: 1, id: 'a1', v
 // власник бачить усе
 assert.equal((await call('GET', '/api/mp/orders?mp=rozetka', null, H)).j.rows.length, 2);
 const list = (await call('GET', '/api/users', null, H)).j.users.find((x) => x.login === 'man1');
-assert.deepEqual(list.access, { b2b: 'view', retail: 'none', market: 'work', shops: ['rozetka:1'], tg: ['b2b'] });
+assert.deepEqual(list.access, { b2b: 'view', retail: 'none', market: 'work', returns: 'none', shops: ['rozetka:1'], tg: ['b2b'] });
 // журнал: хто й що змінив
 const aud = await db.all(`SELECT * FROM audit_log WHERE kind = 'user' AND action LIKE 'доступ man1%'`);
 assert.equal(aud.length, 1);
