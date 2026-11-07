@@ -128,11 +128,14 @@ export function createReturnsPages() {
     const label = (t) => { const b = $('#retRefresh'); if (b) { b.disabled = true; b.innerHTML = `<span class="spinner"></span> ${t}`; } };
     try {
       let st;
-      for (let i = 0; i < 60; i++) {
+      const t0 = Date.now();
+      for (let i = 0; Date.now() - t0 < 6 * 60e3; i++) {
         label(i ? `Оновлюю… крок ${i + 1}` : 'Оновлюю…');
         st = await api('POST', '/api/returns/refresh', { start: i === 0 });
         if (st.skipped) { toast(st.skipped, true); break; }
         if (st.done) break;
+        // Нова пошта просить зачекати або крок уже йде у фоні — трохи чекаємо і продовжуємо.
+        if (st.wait || st.busy) { label(st.wait ? 'Нова пошта просить зачекати…' : 'Перевірка вже йде…'); await new Promise((r) => setTimeout(r, st.wait ? 8000 : 4000)); }
       }
       if (st && !st.done && !st.skipped) toast('Перевірка ще триває у фоні — дані з’являться трохи згодом');
       else if (st?.done) toast('Інформацію оновлено');
