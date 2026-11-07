@@ -8,12 +8,12 @@ import { fpLayout, wireFp, fpGroup, fpBtn, fpKpi } from './b2b-shared.js';
 
 const STATES = [
   ['active', 'Усі активні'], ['branch', 'Забрати з відділення'], ['overdue', 'Прострочено'], ['transit', 'В дорозі до нас'],
-  ['nottn', 'ЕН повернення ще немає'], ['got', 'Отримано'], ['all', 'Усі'],
+  ['nottn', 'ЕН повернення ще немає'], ['stuck', 'Застрягло (давно)'], ['got', 'Отримано'], ['all', 'Усі'],
 ];
 const SRC = { rzs: 'Розетка — постачальник', rozetka: 'Розетка', prom: 'Prom', epc: 'Епіцентр', crm: 'Сайт / LP-CRM', np: 'Лише Нова пошта', other: 'Інше' };
 const SRC_CLS = { rzs: 'ok', rozetka: 'ok', prom: 'info', epc: 'warn', crm: 'info' };
 const REASON = { refused: 'Відмова клієнта', storage: 'Закінчився строк зберігання', customer: 'Повернення після отримання' };
-const CAR = { np: 'Нова пошта', rd: 'Розетка Делівері', mp: 'Маркетплейс' };
+const CAR = { np: 'Нова пошта', rd: 'Розетка Делівері', rzr: 'Заявка Розетки', mp: 'Маркетплейс' };
 const phoneFmt = (p) => { const d = String(p || '').replace(/\D/g, '').slice(-9); return d.length === 9 ? `0${d.slice(0, 2)} ${d.slice(2, 5)} ${d.slice(5, 7)} ${d.slice(7)}` : esc(p || ''); };
 const dShort = (iso) => (iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}` : '');
 const daysWord = (n) => `${n} дн`;
@@ -24,12 +24,33 @@ export function createReturnsPages() {
   let refreshing = false;
 
   const stateOf = (r) => (r.state === 'branch' && r.overdue ? 'overdue' : r.state);
-  const match = (r, st) => (st === 'all' ? true : st === 'active' ? r.state !== 'got' : st === 'branch' ? r.state === 'branch' : st === 'overdue' ? r.state === 'branch' && r.overdue : r.state === st);
+  const match = (r, st) => (st === 'all' ? true : st === 'active' ? r.state !== 'got' && r.state !== 'stuck' : st === 'branch' ? r.state === 'branch' : st === 'overdue' ? r.state === 'branch' && r.overdue : r.state === st);
   const inPeriod = (r) => (!f.from || (r.refused_at || r.created_at).slice(0, 10) >= f.from) && (!f.till || (r.refused_at || r.created_at).slice(0, 10) <= f.till);
-  const hay = (r) => [r.orig_ttn, r.ret_ttn, r.customer, r.phone, r.to, r.cargo, ...r.orders.map((o) => o.no)].join(' ').toLowerCase();
+  const hay = (r) => [r.orig_ttn, r.ret_ttn, r.ext_id, r.customer, r.phone, r.to, r.cargo, ...r.orders.map((o) => o.no)].join(' ').toLowerCase();
 
   // Стан і скільки чекає: у відділенні — від прибуття (5+ дн — червоним), в дорозі — від створення ЕН повернення.
   function waitCell(r) {
+    const stuck = (what) => `<span class="badge bad">Застрягло</span><div><b>${esc(what)} з ${dShort(r.refused_at)}.${(r.refused_at || '').slice(0, 4)}</b></div>
+      <div class="small muted">${esc(r.ret_status || '')} · понад 60 дн без руху — уточніть у підтримці Розетки</div>`;
+    if (r.carrier === 'rd') {
+      // ROZETKA Delivery: стан посилки з модуля доставки Розетки.
+      if (r.state === 'got') return `<span class="badge ok">Повернено продавцю</span><div style="color:var(--ok)"><b>отримано${r.wait_days !== null ? ` за ${daysWord(r.wait_days)}` : ''}</b></div><div class="small muted">${esc(fmtDateTime(r.got_at))}</div>`;
+      if (r.state === 'stuck') return stuck(r.ret_code === 50020 ? 'у точці видачі' : 'без руху');
+      if (r.state === 'branch') {
+        const res = /резерв/.test(r.note || '');
+        return `<span class="badge ${r.overdue ? 'bad' : 'warn'}">${res ? 'Закінчується резерв' : r.overdue ? 'Прострочено' : 'Забрати з точки видачі'}</span>
+          <div style="font-weight:700;color:var(${r.overdue ? '--bad' : '--warn'})">${daysWord(r.branch_days ?? 0)} у точці видачі</div><div class="small muted">${esc(r.ret_status || '')}</div>`;
+      }
+      if (r.state === 'transit') return `<span class="badge info">В дорозі до нас</span><div><b>${daysWord(r.wait_days ?? 0)} в дорозі</b></div><div class="small muted">${esc(r.ret_status || '')}</div>`;
+      return `<span class="badge">Повернення ще не оформлене</span><div><b>${daysWord(r.wait_days ?? 0)} з відмови</b></div><div class="small muted">${esc(r.ret_status || '')}</div>`;
+    }
+    if (r.carrier === 'rzr') {
+      // Заявка покупця на повернення (посилка не Новою поштою або ТТН ще не вказана).
+      if (r.state === 'got') return `<span class="badge ok">Отримано від клієнта</span><div class="small muted">${esc(r.ret_status || '')}${r.got_at ? ` · ${esc(fmtDateTime(r.got_at))}` : ''}</div>`;
+      if (r.state === 'stuck') return stuck('заявка');
+      if (r.state === 'transit') return `<span class="badge info">В дорозі до нас</span><div><b>${daysWord(r.wait_days ?? 0)} з заявки</b></div><div class="small muted">${esc(r.ret_status || '')}</div>`;
+      return `<span class="badge">Клієнт ще не відправив</span><div><b>${daysWord(r.wait_days ?? 0)} з заявки</b></div><div class="small muted">${esc(r.ret_status || '')}</div>`;
+    }
     if (r.carrier !== 'np') {
       // Розетка Делівері / маркетплейс: про прибуття посилки назад не повідомляють — показуємо статус замовлення й скільки минуло.
       if (r.state === 'got') return `<span class="badge ok">Ймовірно повернулось</span><div class="small muted">минуло понад ${r.mp_close_days || 21} дн після «${esc(r.ret_status)}»</div>`;
@@ -50,12 +71,14 @@ export function createReturnsPages() {
   const row = (r) => `<tr class="${r.reason === 'customer' ? 'ret-cust' : ''}">
     <td class="nowrap">${r.reason === 'customer' ? '<div><span class="badge ret-cust-b">↩ Від клієнта</span></div>' : ''}${r.carrier === 'np'
       ? `${r.ret_ttn ? `<b class="ret-ttn">${esc(r.ret_ttn)}</b>` : '<span class="muted">—</span>'}<div class="small muted">Нова пошта</div><div class="small muted">з ${esc(r.orig_ttn)}</div>`
+      : r.carrier === 'rd' && r.ret_ttn ? `<b class="ret-ttn">${esc(r.ret_ttn)}</b><div class="small muted">Розетка Делівері · Міст</div><div class="small muted">з ${esc(r.orig_ttn)}</div>`
+      : r.carrier === 'rzr' ? `${r.ret_ttn ? `<b class="ret-ttn">${esc(r.ret_ttn)}</b>` : '<span class="muted">—</span>'}<div class="small muted">Заявка Розетки</div><div class="small muted">${esc(r.ext_id || '')}</div>`
       : `<b class="ret-ttn">${esc(r.orig_ttn.includes(':') ? '—' : r.orig_ttn)}</b><div class="small muted">${esc(CAR[r.carrier])}</div><div class="small muted">ТТН відправлення</div>`}</td>
     <td>${r.orders.length ? r.orders.map((o) => `<div><span class="badge ${SRC_CLS[o.src] || ''}">${esc(o.label)}</span> <span class="small">${esc(o.no)}</span></div>`).join('') : `<span class="small muted">${r.account ? `кабінет НП «${esc(r.account)}»` : '—'}</span>`}</td>
     <td>${esc(r.customer || '—')}${r.phone ? `<div class="small muted">${phoneFmt(r.phone)}</div>` : ''}</td>
     <td>${r.to ? `<b>${esc(r.to)}</b>` : '<span class="muted">—</span>'}${r.to_name && r.to_name !== r.to ? `<div class="small">${esc(r.to_name)}</div>` : ''}${r.to_phone ? `<div class="small muted">${phoneFmt(r.to_phone)}</div>` : ''}${r.warehouse ? `<div class="small muted">${esc([r.city, r.warehouse].filter(Boolean).join(', '))}</div>` : ''}</td>
     <td class="small">${esc(r.cargo || '—')}${r.cost ? `<div class="muted">${money(r.cost)} ₴${r.cod ? ` · післяплата ${money(r.cod)} ₴` : ''}</div>` : ''}</td>
-    <td class="small">${esc(REASON[r.reason] || r.reason || '—')}</td>
+    <td class="small">${esc(REASON[r.reason] || r.reason || '—')}${(() => { const t = r.carrier === 'rzr' ? r.note.split(' · ')[0] : (r.note || '').split(' · ').filter((x) => !x.startsWith('графік')).join(' · '); return t ? `<div class="muted">${esc(t)}</div>` : ''; })()}</td>
     <td style="min-width:170px">${waitCell(r)}</td>
   </tr>`;
 
@@ -66,7 +89,7 @@ export function createReturnsPages() {
     const byFacet = (k) => base.filter((r) => match(r, f.st) && (k === 'src' || !f.src || r.src === f.src) && (k === 'to' || !f.to || r.to === f.to)
       && (k === 'reason' || !f.reason || r.reason === f.reason) && (k === 'car' || !f.car || r.carrier === f.car));
     // Спершу те, що треба забрати (найдовше у відділенні — вгорі), далі в дорозі, без ЕН, отримані — найновіші.
-    const PRI = { branch: 0, transit: 1, nottn: 2, got: 3 };
+    const PRI = { branch: 0, transit: 1, nottn: 2, stuck: 3, got: 4 };
     const rows = byFacet('').sort((a, b) => PRI[a.state] - PRI[b.state] || (a.state === 'got' ? String(b.got_at).localeCompare(String(a.got_at)) : (b.branch_days ?? b.wait_days ?? 0) - (a.branch_days ?? a.wait_days ?? 0)));
     const cnt = (list, key) => list.reduce((m, r) => { m[r[key]] = (m[r[key]] || 0) + 1; return m; }, {});
     const facetSt = base.filter((r) => (!f.src || r.src === f.src) && (!f.to || r.to === f.to) && (!f.reason || r.reason === f.reason) && (!f.car || r.carrier === f.car));
@@ -83,7 +106,16 @@ export function createReturnsPages() {
         ${p.persons.map((x) => `<div class="small">${esc(x.name || '')}${x.phone ? ` · <a href="${telHref(x.phone)}">${phoneFmt(x.phone)}</a>` : ''}${x.contact ? ' <span class="muted">(контакт кабінету)</span>' : ''}</div>`).join('') || '<div class="small muted">Номер з’явиться після першого повернення або оновлення контактів</div>'}
         ${p.branch ? `<div class="small" style="margin-top:4px"><b>Чекає у відділенні: ${p.branch}</b></div>${p.warehouses.map((w) => `<div class="small muted">${esc(w.w)}${w.n > 1 ? ` — ${w.n}` : ''}</div>`).join('')}` : ''}
         ${p.transit ? `<div class="small muted">В дорозі: ${p.transit}</div>` : ''}</div>`).join('')) : '';
-    const act = all.filter((r) => r.state !== 'got');
+    // Розетка Делівері: точки видачі, де чекають повернення (обраний отримувач — лише його магазин).
+    const pickRd = (d.pickup_rd || []).filter((p) => !f.to || p.shop === f.to);
+    const pickRdHtml = pickRd.length ? fpGroup('Щоб забрати (Розетка Делівері)', pickRd.map((p) => `<div class="ret-pick">
+        <b>${esc(p.shop)}</b><div class="small">${esc(p.address || '—')}</div>
+        ${p.name || p.phone ? `<div class="small">${esc(p.name || '')}${p.phone ? ` · <a href="${telHref(p.phone)}">${phoneFmt(p.phone)}</a>` : ''}</div>` : ''}
+        ${p.schedule ? `<div class="small muted">графік ${esc(p.schedule)}</div>` : ''}
+        <div class="small" style="margin-top:4px"><b>Чекає: ${p.n}</b>${p.oldest ? ` · найдовше ${p.oldest} дн` : ''}</div>
+        ${p.reserve ? `<div class="small" style="color:var(--bad)">закінчується резерв: ${p.reserve}</div>` : ''}</div>`).join('')) : '';
+    const act = all.filter((r) => r.state !== 'got' && r.state !== 'stuck');
+    const stuckN = all.filter((r) => r.state === 'stuck').length;
     const branch = act.filter((r) => r.state === 'branch');
     const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
     const got7 = all.filter((r) => r.state === 'got' && r.got_at >= weekAgo);
@@ -96,10 +128,11 @@ export function createReturnsPages() {
         <button class="btn" id="retCopy">📋 Копіювати ТТН (${rows.filter((r) => r.ret_ttn || (r.carrier !== 'np' && !r.orig_ttn.includes(':'))).length})</button>
         <button class="btn" id="retXls">⬇ Excel</button></div></div>
       <div class="small muted" style="margin-bottom:10px">Нова пошта: ${!cy.started ? 'ще не перевіряли' : !cy.done ? `перевірка триває${cy.pause_until && Date.parse(cy.pause_until) > Date.now() ? ` (Нова пошта просить зачекати до ${esc(fmtDateTime(cy.pause_until).slice(-5))})` : '…'}` : `перевірено ${esc(fmtDateTime(cy.finished))}${next ? ` · наступна перевірка ≈ ${esc(fmtDateTime(next))}` : ''}`}
-        · кабінетів НП: ${d.accounts.length} · Розетка Делівері й маркетплейси — зі статусів замовлень · Міст Експрес — підключимо згодом</div>
+        · кабінетів НП: ${d.accounts.length} · Розетка — модуль ROZETKA Delivery і заявки на повернення · Епіцентр — зі статусів замовлень</div>
+      ${(d.rz_errors || []).length ? `<div class="alert warn small" style="margin-bottom:10px">Розетка: ${d.rz_errors.map((e) => `${esc(e.shop)} — ${esc(e.error)}`).join('; ')}. Дані цих магазинів можуть бути неповні.</div>` : ''}
       ${cy.error ? `<div class="alert warn small" style="margin-bottom:10px">Остання перевірка не вдалася: ${esc(cy.error)}. Натисніть «Оновити інформацію».</div>` : ''}
       ${!d.accounts.length ? '<div class="alert warn" style="margin-bottom:10px">Кабінети Нової пошти ще не додано: «Налаштування → Доставка: НП, Розетка, Prom, Епіцентр».</div>' : ''}
-      ${fpLayout(`${pickHtml}${fpGroup('Пошук', `<input id="retQ" type="search" placeholder="ТТН, клієнт, телефон, № замовлення" value="${esc(f.q)}" aria-label="Пошук повернення">`)}
+      ${fpLayout(`${pickHtml}${pickRdHtml}${fpGroup('Пошук', `<input id="retQ" type="search" placeholder="ТТН, клієнт, телефон, № замовлення" value="${esc(f.q)}" aria-label="Пошук повернення">`)}
         ${fpGroup('Стан', STATES.map(([k, v]) => fpBtn(`<span>${esc(v)}</span><span class="small">${stN[k] || ''}</span>`, f.st === k, `data-rst="${k}"`)).join(''))}
         ${fpGroup('Джерело', [fpBtn('<span>Усі</span>', !f.src, 'data-rsrc=""'), ...Object.keys(SRC).filter((k) => srcN[k] || f.src === k).map((k) => fpBtn(`<span>${esc(SRC[k])}</span><span class="small">${srcN[k] || ''}</span>`, f.src === k, `data-rsrc="${k}"`))].join(''))}
         ${fpGroup('Перевізник', [fpBtn('<span>Усі</span>', !f.car, 'data-rcar=""'), ...Object.keys(CAR).filter((k) => carN[k] || f.car === k).map((k) => fpBtn(`<span>${esc(CAR[k])}</span><span class="small">${carN[k] || ''}</span>`, f.car === k, `data-rcar="${k}"`))].join(''))}
@@ -110,7 +143,7 @@ export function createReturnsPages() {
         ${fpKpi('Забрати з відділення', String(branch.length), branch.filter((r) => r.overdue).length ? `з них ${branch.filter((r) => r.overdue).length} — ${d.overdue_days}+ днів` : 'нічого не прострочено', branch.some((r) => r.overdue) ? 'kpi-bad' : '')}
         ${fpKpi('В дорозі до нас', String(act.filter((r) => r.state === 'transit').length), act.filter((r) => r.state === 'transit').length ? `найдовше — ${Math.max(...act.filter((r) => r.state === 'transit').map((r) => r.wait_days || 0))} дн` : '')}
         ${fpKpi('Від клієнтів після отримання', String(act.filter((r) => r.reason === 'customer').length), 'в дорозі або чекають', act.some((r) => r.reason === 'customer') ? 'kpi-cust' : '')}
-        ${fpKpi('Сума товару в поверненнях', `${money(act.reduce((s, r) => s + (r.cost || 0), 0)).replace(/,00$/, '')} ₴`, `${act.length} посилок`)}
+        ${fpKpi('Сума товару в поверненнях', `${money(act.reduce((s, r) => s + (r.cost || 0), 0)).replace(/,00$/, '')} ₴`, `${act.length} посилок${stuckN ? ` · ще ${stuckN} застрягло давно` : ''}`)}
         ${fpKpi('Отримано за 7 днів', String(got7.length), avg.length ? `у середньому за ${(avg.reduce((s, r) => s + r.wait_days, 0) / avg.length).toFixed(1).replace('.', ',')} дн` : '')}
       </div>
       ${rows.length ? `<div class="table-wrap"><table class="list"><thead><tr><th>Повернення</th><th>Звідки</th><th>Клієнт</th><th>На кого</th><th>Товар</th><th>Причина</th><th>Стан і очікування</th></tr></thead><tbody>
@@ -134,10 +167,10 @@ export function createReturnsPages() {
     $('#retXls').onclick = () => {
       const cols = [{ title: 'ТТН повернення', width: 17 }, { title: 'Початкова ТТН', width: 17 }, { title: 'Звідки', width: 30 }, { title: 'Клієнт', width: 24 }, { title: 'Телефон клієнта', width: 15 },
         { title: 'На кого', width: 22 }, { title: 'Куди', width: 34 }, { title: 'Товар', width: 30 }, { title: 'Вартість', width: 11, fmt: 'money' }, { title: 'Причина', width: 22 },
-        { title: 'Стан', width: 20 }, { title: 'Днів у відділенні', width: 10 }, { title: 'Платне зберігання з', width: 14 }, { title: 'Отримано', width: 16 }];
-      const stName = { branch: 'У відділенні', transit: 'В дорозі', nottn: 'ЕН ще немає', got: 'Отримано' };
-      downloadXlsx(`povernennya-${new Date().toISOString().slice(0, 10)}.xlsx`, [{ name: 'Повернення', cols, rows: rows.map((r) => [r.ret_ttn || (r.carrier !== 'np' ? `${CAR[r.carrier]}: ${r.orig_ttn}` : ''), r.orig_ttn, r.orders.map((o) => `${o.label} ${o.no}`).join('; '), r.customer, r.phone ? `0${r.phone.slice(-9)}` : '',
-        r.to, [r.city, r.warehouse].filter(Boolean).join(', '), r.cargo, r.cost || '', REASON[r.reason] || r.reason, stName[r.state] || r.state, r.state === 'branch' ? r.branch_days : '', r.paid_from ? dShort(r.paid_from) : '', r.got_at ? fmtDateTime(r.got_at) : '']) }]);
+        { title: 'Стан', width: 20 }, { title: 'Днів у відділенні', width: 10 }, { title: 'Платне зберігання з', width: 14 }, { title: 'Отримано', width: 16 }, { title: 'Примітка', width: 34 }];
+      const stName = { branch: 'У відділенні', transit: 'В дорозі', nottn: 'ЕН ще немає', stuck: 'Застрягло', got: 'Отримано' };
+      downloadXlsx(`povernennya-${new Date().toISOString().slice(0, 10)}.xlsx`, [{ name: 'Повернення', cols, rows: rows.map((r) => [r.ret_ttn || (r.carrier !== 'np' && !r.orig_ttn.includes(':') ? `${CAR[r.carrier]}: ${r.orig_ttn}` : ''), r.orig_ttn, r.orders.map((o) => `${o.label} ${o.no}`).join('; '), r.customer, r.phone ? `0${r.phone.slice(-9)}` : '',
+        r.to, [r.city, r.warehouse].filter(Boolean).join(', '), r.cargo, r.cost || '', REASON[r.reason] || r.reason, stName[r.state] || r.state, r.state === 'branch' ? r.branch_days : '', r.paid_from ? dShort(r.paid_from) : '', r.got_at ? fmtDateTime(r.got_at) : '', [r.ret_status, r.note].filter(Boolean).join(' · ')]) }]);
     };
     $('#retRefresh').onclick = () => refresh();
     if (refreshing) { const b = $('#retRefresh'); b.disabled = true; b.innerHTML = '<span class="spinner"></span> Оновлюю…'; }
