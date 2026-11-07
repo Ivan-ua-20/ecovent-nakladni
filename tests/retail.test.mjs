@@ -222,7 +222,7 @@ assert.deepEqual([ir.total, ir.added, ir.updated, ir.skipped], [2, 1, 1, 1], 'н
 prods = await req('GET', '/api/rzs/products');
 const ev = prods.find((p) => p.code === 'EV-100');
 assert.equal(ev.product_id, 501, 'прив’язка до LP-CRM лишилась');
-assert.equal(ev.purchase_price, 5679.2, 'ціна закупівлі — найновіша з історії');
+assert.equal(ev.purchase_price, 5679.2, 'ціна закупівлі — «Ціна в прайсі»');
 assert.deepEqual([ev.rrp, ev.stock, ev.rz_status, ev.rz_code], [7099, 3, 'available', '625022078']);
 assert.ok(ev.seats.length === 0 || ev.seats, 'габарити не зачеплено');
 const nw = prods.find((p) => p.code === 'NEW-1');
@@ -231,6 +231,42 @@ assert.equal(nw.purchase_price, 3960, 'без історії — «Ціна в �
 assert.equal(nw.product_id, null, 'новий — без прив’язки, впишемо вручну');
 assert.equal(ir.unmapped, 2, 'не прив’язані: EV-200 і NEW-1');
 assert.match(await errOf(() => req('POST', '/api/rzs/products/import', { a: 1 })), /Артикул товару/, 'чужий файл — зрозуміла помилка');
+// Журнал: ручні зміни (ціна 7 200,50 → 5679,2 з файлу), додавання NEW-1.
+{
+  const lg = await req('GET', '/api/rzs/products/log');
+  const pr = lg.rows.find((x) => x.code === 'EV-100' && x.field === 'purchase_price' && x.source === 'import');
+  assert.deepEqual([pr.old_value, pr.new_value], ['7200.5', '5679.2'], 'журнал: стара й нова ціна з файлу');
+  assert.ok(lg.rows.some((x) => x.code === 'EV-100' && x.source === 'manual' && x.field === 'purchase_price' && x.new_value === '7200.5'), 'журнал: ручна зміна');
+  assert.ok(lg.rows.some((x) => x.code === 'NEW-1' && x.field === 'added'), 'журнал: новий товар');
+  assert.equal(lg.batches.length, 1);
+  assert.equal(ir.prices, 1);
+  assert.ok(lg.price_changed_at);
+  // Повторний той самий файл — змін немає, журнал не росте.
+  const n0 = lg.rows.length;
+  const again = await (await send('POST', '/api/rzs/products/import', CSV, { ...H, 'Content-Type': 'text/csv' })).json();
+  assert.deepEqual([again.changed, again.prices], [0, 0], 'той самий файл — без змін');
+  assert.equal((await req('GET', '/api/rzs/products/log')).rows.length, n0);
+  // Стара історія в «Ціні закупівлі» не перебиває поточну «Ціну в прайсі» (реальний випадок NovaDry 16: прайс 7519,2, історія — 7119,2).
+  const CSV2 = CSV.split('\n')[0] + '\n"NovaDry 16";625025120;"Е";634474731476;"О";evoair;"available - Є";Y;"2026-11-04";7519.2;9399;9399;0;"04/11/2026 17:03 - UAH 7,119.20 | 03/11/2026 16:47 - UAH 7,119.20 |";"М"\n'
+    + '"Без прайсу";1;"Е";HIST-1;"О";evoair;"available - Є";Y;"";;9399;9399;0;"12/10/2026 13:11 - UAH 2,924.25 | 30/10/2026 17:01 - UAH 3,119.20 |";"М"\n';
+  await send('POST', '/api/rzs/products/import', CSV2, { ...H, 'Content-Type': 'text/csv' });
+  const ps = await req('GET', '/api/rzs/products');
+  assert.equal(ps.find((x) => x.code === '634474731476').purchase_price, 7519.2, 'поточна ціна з прайсу');
+  assert.equal(ps.find((x) => x.code === 'HIST-1').purchase_price, 3119.2, 'без прайсу — найновіша дата з історії');
+  // Підозріла прив'язка: штрихкод не збігається з «[ххххх]» у назві товару LP-CRM.
+  await raw.run(`INSERT INTO b2b_catalog (product_id, name, article, rrp) VALUES (525, 'Очищувач Levoit Everest Air [70970]', 'X', 1), (515, 'Очищувач Levoit Vital 100S [79922]', 'Y', 1)`);
+  await req('PUT', '/api/rzs/products/634474731476', { product_id: 515 });
+  const w = (await req('GET', '/api/rzs/products')).find((x) => x.code === '634474731476');
+  assert.equal(w.crm_name, 'Очищувач Levoit Vital 100S [79922]');
+  assert.match(w.map_warn, /штрихкод/);
+  // Автоприв'язка за «[ххххх]» — лише однозначна.
+  await req('POST', '/api/rzs/products', { code: '810123670970' });
+  assert.equal((await req('GET', '/api/rzs/products')).find((x) => x.code === '810123670970').product_id, 525);
+  await raw.run(`DELETE FROM rzs_products WHERE code IN ('634474731476', 'HIST-1', '810123670970')`);
+  // Головна вкладка: коли востаннє оновлено ціни.
+  const od = await req('GET', '/api/rzs/orders');
+  assert.ok(od.prices.imported_at && od.prices.changed_at);
+}
 
 // ---------- 8б. Пошук у LP-CRM за ТТН і ручна прив'язка ----------
 const R3 = 'aaaaaaaa-bbbb-4ccc-8ddd-000000000003';

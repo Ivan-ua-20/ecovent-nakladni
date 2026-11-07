@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'retail',
-  version: 7,
+  version: 8,
   tables: [
   // Кабінети постачальника Розетки: токен (JWT) бачить лише сервер; прайс і параметри передачі замовлень у LP-CRM.
   `CREATE TABLE IF NOT EXISTS rzs_accounts (
@@ -59,6 +59,21 @@ export const schema = {
   `CREATE INDEX IF NOT EXISTS rzs_orders_status ON rzs_orders (status, created_at)`,
   // Товари Розетки (артикул постачальника): товар LP-CRM, ціна закупівлі для Розетки (вона ж — ціна в LP-CRM), РІЦ, залишок,
   // свої габарити місць (якщо в каталозі Розетки їх немає) — для ТТН.
+  // Журнал змін товарів Розетки: що змінилось (поле, було → стало), звідки (import — файл з Кабінету, manual — вручну), хто.
+  `CREATE TABLE IF NOT EXISTS rzs_price_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    batch TEXT DEFAULT '',
+    source TEXT DEFAULT '',
+    user_name TEXT DEFAULT '',
+    code TEXT NOT NULL,
+    name TEXT DEFAULT '',
+    field TEXT NOT NULL,
+    old_value TEXT DEFAULT '',
+    new_value TEXT DEFAULT ''
+  )`,
+  `CREATE INDEX IF NOT EXISTS rzs_price_log_at ON rzs_price_log (at)`,
+  `CREATE INDEX IF NOT EXISTS rzs_price_log_code ON rzs_price_log (code, at)`,
   `CREATE TABLE IF NOT EXISTS rzs_products (
     code TEXT PRIMARY KEY,
     rz_code TEXT DEFAULT '',

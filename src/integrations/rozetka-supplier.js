@@ -137,11 +137,14 @@ export function parseRzsProductsCsv(text) {
   for (const r of rows.slice(1)) {
     const code = get(r, 'code').slice(0, 60);
     if (!code) { skipped++; continue; }
-    const hist = /UAH\s*([\d.,\s]+)/.exec(get(r, 'buy'));
-    const buy = hist ? numOf(hist[1]) : numOf(get(r, 'buy'));
+    // Ціна закупівлі = «Ціна в прайсі» (поточна). Колонка «Ціна закупівлі» — історія «дата - UAH ціна | …», яка може відставати;
+    // з неї беремо найновіший запис, лише якщо «Ціни в прайсі» немає.
+    const hist = [...get(r, 'buy').matchAll(/(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?\s*-\s*UAH\s*([\d.,\s]+)/g)]
+      .map((m) => ({ at: `${m[3]}${m[2]}${m[1]}${m[4] || '00'}${m[5] || '00'}`, v: numOf(m[6]) })).filter((x) => x.v !== null).sort((a, b) => b.at.localeCompare(a.at));
+    const buy = numOf(get(r, 'list')) ?? hist[0]?.v ?? (/UAH/.test(get(r, 'buy')) ? null : numOf(get(r, 'buy')));
     out.push({
       code, rz_code: get(r, 'rz_code').replace(/\D/g, '').slice(0, 20), name: get(r, 'name').slice(0, 200),
-      rrp: numOf(get(r, 'rrp')), purchase_price: buy ?? numOf(get(r, 'list')), stock: idx.stock >= 0 && get(r, 'stock') !== '' ? Math.max(0, Math.round(numOf(get(r, 'stock')) || 0)) : null,
+      rrp: numOf(get(r, 'rrp')), purchase_price: buy, stock: idx.stock >= 0 && get(r, 'stock') !== '' ? Math.max(0, Math.round(numOf(get(r, 'stock')) || 0)) : null,
       status: get(r, 'status').split(' - ')[0].trim().slice(0, 30), brand: get(r, 'brand').slice(0, 60),
     });
   }

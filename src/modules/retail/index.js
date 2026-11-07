@@ -209,13 +209,40 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     if (!todo.length) return;
     const list = JSON.stringify(todo.map((r) => r.code));
     const found = await db.all(`SELECT product_id, name, article, rrp FROM b2b_catalog WHERE article IN (SELECT value FROM json_each(?)) OR CAST(product_id AS TEXT) IN (SELECT value FROM json_each(?))`, [list, list]).catch(() => []);
+    const byTail = todo.some((r) => /^\d{8,}$/.test(r.code)) ? await db.all(`SELECT product_id, name, rrp FROM b2b_catalog WHERE name LIKE '%[_____]%'`).catch(() => []) : [];
     const st = [];
+    const log = [];
     for (const r of todo) {
-      const m = found.find((x) => String(x.article) === r.code) || found.find((x) => String(x.product_id) === r.code);
-      if (m) st.push([`UPDATE rzs_products SET product_id = ?, name = CASE WHEN name = '' THEN ? ELSE name END, rrp = COALESCE(rrp, ?) WHERE code = ?`, [m.product_id, m.name || '', m.rrp || null, r.code]]);
+      let m = found.find((x) => String(x.article).trim() === r.code) || found.find((x) => String(x.product_id) === r.code);
+      if (!m && /^\d{8,}$/.test(r.code)) {
+        const c = byTail.filter((x) => tail5(x.name) === r.code.slice(-5));
+        if (c.length === 1) m = c[0]; // лише однозначний збіг
+      }
+      if (m) {
+        st.push([`UPDATE rzs_products SET product_id = ?, name = CASE WHEN name = '' THEN ? ELSE name END, rrp = COALESCE(rrp, ?) WHERE code = ?`, [m.product_id, m.name || '', m.rrp || null, r.code]]);
+        log.push({ code: r.code, name: m.name, field: 'product_id', old: '', new: String(m.product_id) });
+      }
     }
     if (st.length) await db.batch(st);
+    await logChanges(log, { source: 'auto' });
   }
+
+  // Журнал змін товарів: порівняти «було» і «стало» за полями й записати різницю.
+  const LOG_FIELDS = ['product_id', 'purchase_price', 'rrp', 'stock', 'rz_status', 'seats'];
+  const sv = (v) => (v === null || v === undefined ? '' : String(v));
+  function diffOf(old, next, name) {
+    return LOG_FIELDS.filter((f) => f in next && sv(old?.[f]) !== sv(next[f]) && !(f === 'rz_status' && !old)).map((f) => ({ code: next.code || old.code, name, field: f, old: sv(old?.[f]), new: sv(next[f]) }));
+  }
+  async function logChanges(list, { source, user = '', batch = '' }) {
+    if (!list.length) return;
+    const at = nowIso();
+    const st = list.map((x) => [`INSERT INTO rzs_price_log (at, batch, source, user_name, code, name, field, old_value, new_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [at, batch, source, user, x.code, String(x.name || '').slice(0, 200), x.field, x.old.slice(0, 500), x.new.slice(0, 500)]]);
+    for (let i = 0; i < st.length; i += 100) await db.batch(st.slice(i, i + 100));
+  }
+  // Каталог LP-CRM у назві тримає «[ххххх]» — останні 5 цифр штрихкоду. Артикул Розетки — штрихкод: якщо цифри не збігаються, прив'язка підозріла.
+  const tail5 = (name) => (/\[(\d{5})\]/.exec(String(name || '')) || [])[1] || '';
+  const mapWarn = (code, crmName) => { const t = tail5(crmName); return !!(t && /^\d{8,}$/.test(code) && !code.endsWith(t)); };
 
   // ================================================================ синхронізація
   async function syncAccount(a, { days = SYNC_DAYS } = {}) {
@@ -425,8 +452,9 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
         UNION ALL SELECT CASE WHEN ret_got_at != '' THEN 'ret_got' ELSE 'ret_wait' END, COUNT(*) FROM rzs_orders WHERE created_at >= ? AND ${RET_SQL('rzs_orders')} GROUP BY 1`, [since, since, retSince()]),
       db.all(`SELECT id, name, synced_at, hook_at, sync_error, sync_error_at FROM rzs_accounts WHERE active = 1`),
     ]);
+    const prices = await db.get(`SELECT (SELECT MAX(imported_at) FROM rzs_products) AS imported_at, (SELECT MAX(at) FROM rzs_price_log WHERE field = 'purchase_price') AS changed_at`).catch(() => null);
     const pm = await prodMap(rows);
-    return c.json({ rows: rows.map((r) => publicOrder(r, pm)), counts: Object.fromEntries(counts.map((r) => [r.status, r.n])), statuses: RZS_STATUS, accounts: accs });
+    return c.json({ rows: rows.map((r) => publicOrder(r, pm)), counts: Object.fromEntries(counts.map((r) => [r.status, r.n])), statuses: RZS_STATUS, accounts: accs, prices: { imported_at: prices?.imported_at || '', changed_at: prices?.changed_at || '' } });
   });
   const orderRow = async (id) => {
     const r = await db.get(`SELECT o.*, a.name AS account FROM rzs_orders o LEFT JOIN rzs_accounts a ON a.id = o.account_id WHERE o.id = ?`, [id]);
@@ -710,8 +738,31 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
   // ================================================================ товари
   app.get('/api/rzs/products', async (c) => {
     need(c, 'retail.view');
-    const rows = await db.all(`SELECT * FROM rzs_products ORDER BY (product_id IS NULL) DESC, (purchase_price IS NULL) DESC, name, code LIMIT 2000`);
-    return c.json(rows.map((p) => ({ ...p, seats: p.seats ? JSON.parse(p.seats) : [] })));
+    const rows = await db.all(`SELECT p.*, k.name AS crm_name FROM rzs_products p LEFT JOIN b2b_catalog k ON k.product_id = p.product_id
+      ORDER BY (p.product_id IS NULL) DESC, (p.purchase_price IS NULL) DESC, p.name, p.code LIMIT 2000`).catch(() => db.all(`SELECT * FROM rzs_products ORDER BY name, code LIMIT 2000`));
+    const dup = new Map();
+    rows.forEach((p) => { if (p.product_id) dup.set(p.product_id, (dup.get(p.product_id) || 0) + 1); });
+    return c.json(rows.map((p) => ({ ...p, seats: p.seats ? JSON.parse(p.seats) : [], crm_name: p.crm_name || '',
+      map_warn: p.product_id ? (mapWarn(p.code, p.crm_name) ? 'штрихкод не збігається з товаром LP-CRM' : dup.get(p.product_id) > 1 ? 'цей товар LP-CRM прив’язано до кількох артикулів' : '') : '' })));
+  });
+  // Журнал змін товарів: останні записи (фільтр за артикулом / завантаженням) і список завантажень файлів.
+  app.get('/api/rzs/products/log', async (c) => {
+    need(c, 'retail.view');
+    const code = String(c.req.query('code') || '').trim();
+    const batch = String(c.req.query('batch') || '').trim();
+    const field = String(c.req.query('field') || '').trim();
+    const where = ['1 = 1'];
+    const params = [];
+    if (code) { where.push('(code = ? OR name LIKE ?)'); params.push(code, `%${code}%`); }
+    if (batch) { where.push('batch = ?'); params.push(batch); }
+    if (field) { where.push('field = ?'); params.push(field); }
+    const [rows, batches, last] = await Promise.all([
+      db.all(`SELECT * FROM rzs_price_log WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT 1000`, params),
+      db.all(`SELECT batch, MIN(at) AS at, MAX(user_name) AS user_name, COUNT(*) AS n, COUNT(DISTINCT code) AS products,
+        SUM(CASE WHEN field = 'purchase_price' THEN 1 ELSE 0 END) AS prices FROM rzs_price_log WHERE batch != '' GROUP BY batch ORDER BY at DESC LIMIT 30`),
+      db.get(`SELECT (SELECT MAX(at) FROM rzs_price_log WHERE field = 'purchase_price') AS at, (SELECT MAX(imported_at) FROM rzs_products) AS imported_at`),
+    ]);
+    return c.json({ rows, batches, price_changed_at: last?.at || '', imported_at: last?.imported_at || '' });
   });
   app.post('/api/rzs/products', async (c) => {
     need(c, 'refs.edit');
@@ -745,6 +796,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     }
     await db.run(`UPDATE rzs_products SET product_id = ?, name = ?, purchase_price = ?, rrp = ?, stock = ?, seats = ?, updated_at = ? WHERE code = ?`,
       [pid, name || '', price ?? null, rrp ?? null, stock, seats, nowIso(), code]);
+    await logChanges(diffOf(cur, { code, product_id: pid, purchase_price: price ?? null, rrp: rrp ?? null, stock, seats }, name || cur.name), { source: 'manual', user: userName(c.get('user')) });
     return c.json({ ok: true });
   });
   // Імпорт вивантаження товарів з Кабінету постачальника (CSV): нові артикули додаються, наявні — оновлюються назва, код Розетки,
@@ -757,8 +809,16 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     if (!rows.length) throw fail(400, 'У файлі немає жодного товару з артикулом.');
     if (rows.length > 5000) throw fail(400, 'Не більше 5000 товарів за раз.');
     const uniq = [...new Map(rows.map((r) => [r.code, r])).values()];
-    const have = new Set((await db.all(`SELECT code FROM rzs_products WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(uniq.map((r) => r.code))])).map((r) => r.code));
+    const olds = new Map((await db.all(`SELECT * FROM rzs_products WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(uniq.map((r) => r.code))])).map((r) => [r.code, r]));
+    const have = new Set(olds.keys());
     const now = nowIso();
+    const batch = `imp-${Date.now()}`;
+    const changes = [];
+    for (const r of uniq) {
+      const o = olds.get(r.code);
+      if (!o) { changes.push({ code: r.code, name: r.name, field: 'added', old: '', new: [r.purchase_price, r.rrp].map(sv).join(' / ') }); continue; }
+      changes.push(...diffOf(o, { code: r.code, purchase_price: r.purchase_price ?? o.purchase_price, rrp: r.rrp ?? o.rrp, stock: r.stock ?? o.stock, rz_status: r.status }, r.name || o.name));
+    }
     const st = uniq.map((r) => [`INSERT INTO rzs_products (code, rz_code, name, purchase_price, rrp, stock, rz_status, brand, imported_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(code) DO UPDATE SET rz_code = CASE WHEN excluded.rz_code != '' THEN excluded.rz_code ELSE rzs_products.rz_code END,
         name = CASE WHEN excluded.name != '' THEN excluded.name ELSE rzs_products.name END,
@@ -766,10 +826,14 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
         stock = COALESCE(excluded.stock, rzs_products.stock), rz_status = excluded.rz_status, brand = excluded.brand, imported_at = excluded.imported_at, updated_at = excluded.updated_at`,
     [r.code, r.rz_code, r.name, r.purchase_price, r.rrp, r.stock, r.status, r.brand, now, now]]);
     for (let i = 0; i < st.length; i += 100) await db.batch(st.slice(i, i + 100));
+    await logChanges(changes, { source: 'import', user: userName(c.get('user')), batch });
     await autoMap(uniq.map((r) => r.code));
     const unmapped = (await db.get(`SELECT COUNT(*) AS n FROM rzs_products WHERE product_id IS NULL`))?.n || 0;
     await logAudit(db, { user: c.get('user'), kind: 'rzs', refId: 0, action: `імпорт товарів з Кабінету Розетки: ${uniq.length} (нових ${uniq.filter((r) => !have.has(r.code)).length})` }).catch(() => 0);
-    return c.json({ ok: true, total: uniq.length, added: uniq.filter((r) => !have.has(r.code)).length, updated: uniq.filter((r) => have.has(r.code)).length, skipped, unmapped });
+    const prices = changes.filter((x) => x.field === 'purchase_price');
+    return c.json({ ok: true, total: uniq.length, added: uniq.filter((r) => !have.has(r.code)).length, updated: uniq.filter((r) => have.has(r.code)).length, skipped, unmapped,
+      batch, changed: new Set(changes.filter((x) => x.field !== 'added').map((x) => x.code)).size, prices: prices.length,
+      price_list: prices.slice(0, 50).map((x) => ({ code: x.code, name: x.name, old: x.old, new: x.new })) });
   });
 
   // Для вкладки «Накладні»: чи замовлення LP-CRM — це замовлення Розетки (за прив'язкою № / кодом, «Rozetka …» у коментарі

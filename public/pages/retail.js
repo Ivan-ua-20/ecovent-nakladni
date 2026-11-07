@@ -77,9 +77,11 @@ export function createRetailPages(ctx) {
     const { rows, counts, statuses, accounts } = d;
     const lastSync = accounts.map((a) => a.synced_at).filter(Boolean).sort().pop();
     const lastHook = accounts.map((a) => a.hook_at).filter(Boolean).sort().pop();
+    const pr = d.prices || {};
     main.innerHTML = `
       <div class="head-row"><h2>Розетка — замовлення</h2><div class="btn-row">${can('retail.edit') ? '<button class="btn" id="rzFind" title="Знайти за ТТН замовлення, які вже є в LP-CRM, і прив’язати">🔗 Знайти в LP-CRM</button>' : ''}<button class="btn primary" id="rzSync">Оновити з Розетки</button></div></div>
-      ${accounts.length ? `<div class="small muted" style="margin-bottom:10px">${lastSync ? `Оновлено: ${esc(fmtDateTime(lastSync))}` : 'Ще не оновлювалось'}${lastHook ? ` · вебхук Розетки: ${esc(fmtDateTime(lastHook))}` : ' · вебхук ще не надходив'}</div>
+      ${accounts.length ? `<div class="small muted" style="margin-bottom:10px">${lastSync ? `Оновлено: ${esc(fmtDateTime(lastSync))}` : 'Ще не оновлювалось'}${lastHook ? ` · вебхук Розетки: ${esc(fmtDateTime(lastHook))}` : ' · вебхук ще не надходив'}
+        · ціни товарів: ${pr.imported_at ? `файл завантажено ${esc(fmtDateTime(pr.imported_at))}` : 'файл ще не завантажували'}${pr.changed_at ? `, остання зміна ціни ${esc(fmtDateTime(pr.changed_at))}` : ''}${can('refs.edit') ? ' (<a href="#/rzpricelog">журнал</a>)' : ''}</div>
         ${accounts.filter((a) => a.sync_error).map((a) => `<div class="alert warn small" style="margin-bottom:10px">⚠️ Останнє оновлення з Розетки${accounts.length > 1 ? ` («${esc(a.name)}»)` : ''} не вдалося${a.sync_error_at ? ` (${esc(fmtDateTime(a.sync_error_at))})` : ''}: ${esc(a.sync_error)}. Натисніть «Оновити з Розетки» ще раз.</div>`).join('')}`
         : `<div class="alert warn" style="margin-bottom:12px">Кабінет постачальника Розетки ще не підключено${can('api') ? ' — «Налаштування Розетки»' : ' — зверніться до адміністратора'}.</div>`}
       ${fpLayout(`${fpGroup('Пошук', `<input id="rzQ" type="search" placeholder="№ Розетки, клієнт, телефон, ТТН, рахунок" value="${esc(filter.q)}" aria-label="Пошук замовлення">`)}
@@ -363,7 +365,7 @@ export function createRetailPages(ctx) {
 
   // ---------------------------------------------------------------- товари й ціни
   const RZ_ST = { available: ['є на сайті', 'ok'], unavailable: ['немає в наявності', 'warn'], archive: ['архів', 'bad'] };
-  const PV = { '': 'Усі', nomap: 'Не прив’язані до LP-CRM', available: 'Є на сайті', noprice: 'Без ціни закупівлі' };
+  const PV = { '': 'Усі', nomap: 'Не прив’язані до LP-CRM', warn: 'Перевірити прив’язку', available: 'Є на сайті', noprice: 'Без ціни закупівлі' };
   const pf = { v: '', q: '', brand: '' };
   async function viewProducts() {
     const all = await api('GET', '/api/rzs/products');
@@ -371,13 +373,13 @@ export function createRetailPages(ctx) {
     const q = pf.q.trim().toLowerCase();
     const brands = [...new Set(all.map((p) => p.brand).filter(Boolean))].sort((x, y) => x.localeCompare(y, 'uk'));
     if (pf.brand && !brands.includes(pf.brand)) pf.brand = '';
-    const rows = all.filter((p) => (!pf.brand || p.brand === pf.brand) && (!pf.v || (pf.v === 'nomap' && !p.product_id) || (pf.v === 'available' && p.rz_status === 'available') || (pf.v === 'noprice' && !(p.purchase_price > 0)))
+    const rows = all.filter((p) => (!pf.brand || p.brand === pf.brand) && (!pf.v || (pf.v === 'nomap' && !p.product_id) || (pf.v === 'available' && p.rz_status === 'available') || (pf.v === 'noprice' && !(p.purchase_price > 0)) || (pf.v === 'warn' && p.map_warn))
       && (!q || [p.code, p.rz_code, p.name, p.brand, p.product_id].some((x) => String(x ?? '').toLowerCase().includes(q))));
-    const pvCount = (k) => (!k ? all.length : all.filter((p) => (k === 'nomap' && !p.product_id) || (k === 'available' && p.rz_status === 'available') || (k === 'noprice' && !(p.purchase_price > 0))).length);
+    const pvCount = (k) => (!k ? all.length : all.filter((p) => (k === 'nomap' && !p.product_id) || (k === 'available' && p.rz_status === 'available') || (k === 'noprice' && !(p.purchase_price > 0)) || (k === 'warn' && p.map_warn)).length);
     const lastImport = all.map((p) => p.imported_at).filter(Boolean).sort().pop();
     main.innerHTML = `
       <div class="head-row"><h2>Розетка — товари й ціни закупівлі</h2><div class="btn-row">
-        ${edit ? '<label class="btn primary">📥 Завантажити товари з Розетки (CSV)<input type="file" id="rpImp" accept=".csv,text/csv" hidden></label><button class="btn" id="rpAdd">+ Товар</button>' : ''}
+        ${edit ? '<label class="btn primary">📥 Завантажити товари з Розетки (CSV)<input type="file" id="rpImp" accept=".csv,text/csv" hidden></label><button class="btn" id="rpAdd">+ Товар</button>' : ''}<a class="btn" href="#/rzpricelog">🕘 Журнал змін</a>
 </div></div>
       <div class="alert info help" style="margin-bottom:12px"><b>Як оновити:</b> Кабінет постачальника Розетки → вивантажте товари в CSV → «📥 Завантажити товари з Розетки». Нові артикули додадуться,
         у наявних оновляться назва, код Розетки, РРЦ, ціна закупівлі, залишок і статус; прив’язка до LP-CRM і габарити лишаються.
@@ -390,12 +392,12 @@ export function createRetailPages(ctx) {
         ${fpKpi('Товарів', String(all.length), rows.length !== all.length ? `у списку ${rows.length}` : '')}
         ${fpKpi('Не прив’язані до LP-CRM', String(pvCount('nomap')), pvCount('nomap') ? 'такі замовлення не підуть у LP-CRM' : '', pvCount('nomap') ? 'kpi-bad' : '')}
         ${fpKpi('Без ціни закупівлі', String(pvCount('noprice')))}
-        ${fpKpi('Є на сайті', String(pvCount('available')))}
+        ${fpKpi('Перевірити прив’язку', String(pvCount('warn')), pvCount('warn') ? 'товар LP-CRM схожий на інший' : '', pvCount('warn') ? 'kpi-bad' : '')}
       </div>
       ${rows.length ? `<div class="table-wrap"><table class="list"><thead><tr><th>Артикул</th><th>Товар LP-CRM (ID)</th><th>Назва</th><th class="r">Ціна закупівлі</th><th class="r">РРЦ</th><th class="r">Залишок</th><th>Габарити (на 1 шт.)</th></tr></thead><tbody>
         ${rows.map((p) => `<tr data-code="${esc(p.code)}">
           <td><b>${esc(p.code)}</b>${p.rz_code ? `<div class="small muted">Розетка ${esc(p.rz_code)}</div>` : ''}${RZ_ST[p.rz_status] ? `<div><span class="badge ${RZ_ST[p.rz_status][1]}">${RZ_ST[p.rz_status][0]}</span></div>` : ''}</td>
-          <td><input data-f="product_id" value="${esc(p.product_id ?? '')}" inputmode="numeric" style="width:90px" ${edit ? '' : 'disabled'} class="${p.product_id ? '' : 'bad-input'}" aria-label="ID товару LP-CRM"></td>
+          <td><input data-f="product_id" value="${esc(p.product_id ?? '')}" inputmode="numeric" style="width:90px" ${edit ? '' : 'disabled'} class="${p.product_id ? '' : 'bad-input'}" aria-label="ID товару LP-CRM">${p.crm_name ? `<div class="small muted" style="max-width:220px">${esc(p.crm_name)}</div>` : ''}${p.map_warn ? `<div><span class="badge bad" title="${esc(p.map_warn)}">⚠ ${esc(p.map_warn)}</span></div>` : ''}</td>
           <td><input data-f="name" value="${esc(p.name || '')}" style="min-width:220px" ${edit ? '' : 'disabled'} aria-label="Назва">${p.brand ? `<div class="small muted">${esc(p.brand)}</div>` : ''}</td>
           <td class="r"><input data-f="purchase_price" value="${esc(p.purchase_price ?? '')}" inputmode="decimal" style="width:100px" ${edit ? '' : 'disabled'} aria-label="Ціна закупівлі"></td>
           <td class="r"><input data-f="rrp" value="${esc(p.rrp ?? '')}" inputmode="decimal" style="width:100px" ${edit ? '' : 'disabled'} aria-label="РРЦ"></td>
@@ -421,6 +423,9 @@ export function createRetailPages(ctx) {
         const r = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(r.error || 'Не вдалося завантажити файл.');
         modal('Товари завантажено', `<div class="form-stack"><div>✅ У файлі: <b>${r.total}</b> товарів — нових <b>${r.added}</b>, оновлено <b>${r.updated}</b>${r.skipped ? `, пропущено без артикула: ${r.skipped}` : ''}.</div>
+          ${r.updated ? `<div>${r.changed ? `Змінилось у <b>${r.changed}</b> товарах` : 'У наявних товарах змін порівняно з попереднім завантаженням немає'}${r.prices ? ` · цін закупівлі: <b>${r.prices}</b>` : ''}.</div>` : ''}
+          ${r.price_list?.length ? `<div class="table-wrap" style="max-height:260px;overflow:auto"><table class="list"><thead><tr><th>Товар</th><th class="r">Було</th><th class="r">Стало</th></tr></thead><tbody>${r.price_list.map((x) => `<tr><td class="small">${esc(x.name || x.code)}<div class="muted">${esc(x.code)}</div></td><td class="r nowrap">${x.old ? money(Number(x.old)) : '—'}</td><td class="r nowrap"><b>${x.new ? money(Number(x.new)) : '—'}</b></td></tr>`).join('')}</tbody></table></div>` : ''}
+          ${r.batch ? '<div class="small"><a href="#/rzpricelog" data-close>Усі зміни — у журналі змін цін →</a></div>' : ''}
           ${r.unmapped ? `<div class="alert warn small">Не прив’язано до товару LP-CRM: <b>${r.unmapped}</b> — впишіть ID у другій колонці (фільтр «Не прив’язані до LP-CRM»). Без цього такі замовлення не передадуться в LP-CRM.</div>` : '<div class="small">Усі товари прив’язані до LP-CRM.</div>'}</div>`,
         { footer: '<button class="btn primary" data-close>Зрозуміло</button>' });
         if (r.unmapped) pf.v = 'nomap';
@@ -526,5 +531,43 @@ export function createRetailPages(ctx) {
     $$('[data-ae]').forEach((b) => (b.onclick = () => form(rows.find((x) => String(x.id) === b.dataset.ae))));
   }
 
-  return { viewOrders, viewProducts, viewSettings };
+  // ---------------------------------------------------------------- журнал змін цін і товарів
+  const LOG_F = { purchase_price: 'Ціна закупівлі', rrp: 'РРЦ', stock: 'Залишок', rz_status: 'Статус на Розетці', product_id: 'Товар LP-CRM (ID)', seats: 'Габарити', added: 'Новий товар' };
+  const LOG_SRC = { import: ['Файл Розетки', 'info'], manual: ['Вручну', 'warn'], auto: ['Автоприв’язка', ''] };
+  const lf = { q: '', field: '', batch: '' };
+  const logVal = (f, v) => (v === '' ? '—' : ['purchase_price', 'rrp'].includes(f) ? money(Number(v)) : f === 'rz_status' ? (RZ_ST[v]?.[0] || v) : f === 'seats' ? (v ? 'задано' : '—') : esc(v));
+  async function viewPriceLog() {
+    const qs = new URLSearchParams(Object.entries({ code: lf.q, field: lf.field, batch: lf.batch }).filter(([, v]) => v)).toString();
+    const d = await api('GET', `/api/rzs/products/log${qs ? `?${qs}` : ''}`);
+    const lastBatch = d.batches[0];
+    main.innerHTML = `
+      <div class="head-row"><h2>Розетка — журнал змін цін і товарів</h2><div class="btn-row"><a class="btn" href="#/rzproducts">← Товари й ціни</a></div></div>
+      ${fpLayout(`${fpGroup('Пошук', `<input id="lgQ" type="search" placeholder="Артикул або назва" value="${esc(lf.q)}" aria-label="Пошук у журналі">`)}
+        ${fpGroup('Що змінилось', [['', 'Усі зміни'], ...Object.entries(LOG_F)].map(([k, v]) => fpBtn(`<span>${esc(v)}</span>`, lf.field === k, `data-lf="${k}"`)).join(''))}
+        ${fpGroup('Завантаження файлів', [fpBtn('<span>Усі</span>', !lf.batch, 'data-lb=""'), ...d.batches.map((b) => fpBtn(`<span>${esc(fmtDateTime(b.at))}${b.user_name ? `<div class="small muted">${esc(b.user_name)}</div>` : ''}</span><span class="small">${b.prices ? `${b.prices} цін` : `${b.products} тов.`}</span>`, lf.batch === b.batch, `data-lb="${esc(b.batch)}"`))].join(''))}`,
+      `<div class="kpis">
+        ${fpKpi('Остання зміна ціни', d.price_changed_at ? esc(fmtDateTime(d.price_changed_at)) : '—')}
+        ${fpKpi('Останнє завантаження файлу', d.imported_at ? esc(fmtDateTime(d.imported_at)) : '—', lastBatch && lastBatch.at.slice(0, 16) === String(d.imported_at).slice(0, 16) ? `змін у товарах: ${lastBatch.products}${lastBatch.prices ? `, цін: ${lastBatch.prices}` : ''}` : d.imported_at ? 'без змін' : '')}
+        ${fpKpi('Записів у списку', String(d.rows.length), d.rows.length >= 1000 ? 'показано останні 1000' : '')}
+      </div>
+      ${d.rows.length ? `<div class="table-wrap"><table class="list"><thead><tr><th>Коли</th><th>Звідки</th><th>Товар</th><th>Що</th><th class="r">Було</th><th class="r">Стало</th></tr></thead><tbody>
+        ${d.rows.map((x) => {
+          const delta = ['purchase_price', 'rrp'].includes(x.field) && x.old_value && x.new_value ? (Number(x.new_value) - Number(x.old_value)) / Number(x.old_value) * 100 : null;
+          return `<tr><td class="small nowrap">${esc(fmtDateTime(x.at))}</td>
+          <td class="small"><span class="badge ${LOG_SRC[x.source]?.[1] || ''}">${esc(LOG_SRC[x.source]?.[0] || x.source)}</span>${x.user_name ? `<div class="muted">${esc(x.user_name)}</div>` : ''}</td>
+          <td class="small">${esc(x.name || '')}<div class="muted">${esc(x.code)}</div></td>
+          <td class="small">${esc(LOG_F[x.field] || x.field)}</td>
+          <td class="r small nowrap">${x.field === 'added' ? '' : logVal(x.field, x.old_value)}</td>
+          <td class="r small nowrap"><b>${x.field === 'added' ? x.new_value.split(' / ').map((v, i) => (v ? `${i ? 'РРЦ' : 'закупівля'} ${money(v)}` : '')).filter(Boolean).join('<br>') : logVal(x.field, x.new_value)}</b>${delta !== null && Number.isFinite(delta) ? `<div class="${delta > 0 ? 'bad-t' : 'ok-t'}" style="color:${delta > 0 ? 'var(--bad, #b42318)' : 'var(--ok, #157f3b)'}">${delta > 0 ? '+' : ''}${delta.toFixed(1).replace('.', ',')}%</div>` : ''}</td></tr>`;
+        }).join('')}</tbody></table></div>`
+        : `<div class="card empty"><div class="big">Змін ще немає</div>${lf.q || lf.field || lf.batch ? 'Змініть фільтр або пошук.' : 'Журнал ведеться з цього оновлення: після наступного завантаження файлу з Розетки тут з’явиться, що змінилось.'}</div>`}`,
+      { summary: [LOG_F[lf.field] || 'Усі зміни', lf.q].filter(Boolean).join(' · ') })}`;
+    wireFp();
+    $$('[data-lf]').forEach((b) => (b.onclick = () => { lf.field = b.dataset.lf; viewPriceLog(); }));
+    $$('[data-lb]').forEach((b) => (b.onclick = () => { lf.batch = b.dataset.lb; viewPriceLog(); }));
+    let qt;
+    $('#lgQ').oninput = (e) => { clearTimeout(qt); qt = setTimeout(async () => { lf.q = e.target.value.trim(); await viewPriceLog(); const el = $('#lgQ'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 350); };
+  }
+
+  return { viewOrders, viewProducts, viewSettings, viewPriceLog };
 }
