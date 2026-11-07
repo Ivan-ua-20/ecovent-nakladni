@@ -39,10 +39,12 @@ const PERMS = {
 };
 // Доступ до розділів для менеджера й перегляду (users.access, JSON; порожньо — як у ролі).
 //  b2b: none | view | full;  retail, market: none | view | work;  shops: null (усі магазини маркетплейсів, і нові) або ['rozetka:1', …];
-//  tg: розділи, сповіщення яких іде цьому користувачу в Telegram (як адмінам): ['b2b', 'retail'].
+//  tg: розділи, сповіщення яких іде цьому користувачу в Telegram (як адмінам): ['b2b', 'retail'];
+//      'market' — нові повідомлення покупців Розетки в його магазинах (shops), у робочий час.
 // Роль «Перегляд» не отримує більше за «перегляд».
 export const SECTION_LEVELS = { b2b: ['none', 'view', 'full'], retail: ['none', 'view', 'work'], market: ['none', 'view', 'work'], returns: ['none', 'view'] };
 export const ACCESS_ROLES = ['manager', 'viewer'];
+const TG_SECTIONS = ['b2b', 'retail', 'market'];
 const ROLE_ACCESS = {
   manager: { b2b: 'none', retail: 'work', market: 'work', returns: 'view', shops: null, tg: [] },
   viewer: { b2b: 'none', retail: 'view', market: 'view', returns: 'view', shops: null, tg: [] },
@@ -55,7 +57,7 @@ export function accessOf(u) {
   const out = { ...def };
   for (const [k, lv] of Object.entries(SECTION_LEVELS)) if (lv.includes(a[k])) out[k] = a[k];
   if (Array.isArray(a.shops)) out.shops = [...new Set(a.shops.map(String).filter((x) => /^[a-z]+:\d+$/.test(x)))];
-  if (Array.isArray(a.tg)) out.tg = a.tg.filter((x) => ['b2b', 'retail'].includes(x));
+  if (Array.isArray(a.tg)) out.tg = a.tg.filter((x) => TG_SECTIONS.includes(x));
   if (u.role === 'viewer') for (const k of Object.keys(SECTION_LEVELS)) if (out[k] !== 'none') out[k] = 'view';
   out.tg = out.tg.filter((x) => out[x] && out[x] !== 'none');
   return out;
@@ -66,7 +68,7 @@ export function cleanAccess(b) {
   const a = {};
   for (const [k, lv] of Object.entries(SECTION_LEVELS)) a[k] = lv.includes(b[k]) ? b[k] : 'none';
   a.shops = Array.isArray(b.shops) ? [...new Set(b.shops.map(String).filter((x) => /^[a-z]+:\d+$/.test(x)))].slice(0, 100) : null;
-  a.tg = Array.isArray(b.tg) ? b.tg.filter((x) => ['b2b', 'retail'].includes(x)) : [];
+  a.tg = Array.isArray(b.tg) ? b.tg.filter((x) => TG_SECTIONS.includes(x)) : [];
   return a;
 }
 const sectionPerms = (a) => [
