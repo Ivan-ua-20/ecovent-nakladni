@@ -61,6 +61,9 @@ await db.run(`INSERT INTO an_orders (id, code, day, status, ttn) VALUES (71204, 
 await db.run(`INSERT INTO rzs_accounts (id, name, token) VALUES (1, 'Розетка', 't')`);
 await db.run(`INSERT INTO rzs_orders (id, account_id, order_num, status, created_at, customer, phone, ttn, return_ttn) VALUES ('r1', 1, 'РОЗ1', 'delivery_refused', ?, 'Ткаченко', '380661234567', '20400000000777', '59000000000777')`, [`${dayAgo(8)} 10:00:00`]);
 
+// Дві Розетка-посилки з однією ЕН повернення (одна зворотна на обидві) — одне повернення, без помилки унікальності.
+await db.run(`INSERT INTO rzs_orders (id, account_id, order_num, status, created_at, customer, phone, ttn, return_ttn) VALUES ('r2', 1, 'РОЗ2', 'delivery_refused', ?, 'Ткаченко', '380661234567', '20400000000778', '59000000000777')`, [`${dayAgo(8)} 11:00:00`]);
+TRACK['20400000000778'] = { StatusCode: '102', Status: 'Відмова від отримання' };
 // Цикл частинами: сторінка повторює, доки не done.
 let st;
 let n = 0;
