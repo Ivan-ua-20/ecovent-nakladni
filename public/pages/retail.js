@@ -2,10 +2,14 @@
 // у LP-CRM), товари й ціни закупівлі (завантаження з Кабінету, прайс на Розетку не відправляємо), налаштування кабінетів і вебхука.
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime, takeHashQuery } from '../core/ui.js';
+import { downloadXlsx } from '../core/xlsx.js';
 
 const ST_CLS = { new: 'warn', updated: 'warn', confirmed: 'info', shipping: 'info', problem: 'bad', closed: 'ok', delivery_refused: 'bad', deleted: 'bad', shipped_from_rozetka: 'ok' };
 const UZD_CLS = { verified: 'ok', skipped: 'ok', problem: 'bad', not_uploaded: '' };
-const VIEWS = { '': 'Усі', todo: 'До підтвердження', noinv: 'Чекає рахунок', ready: 'Можна створити ТТН', nottn: 'Без ТТН', nocrm: 'Не в LP-CRM', crmnew: 'В LP-CRM — Нове', docs: 'З документами' };
+const VIEWS = { '': 'Усі', todo: 'До підтвердження', noinv: 'Чекає рахунок', ready: 'Можна створити ТТН', nottn: 'Без ТТН', nocrm: 'Не в LP-CRM', crmnew: 'В LP-CRM — Нове', docs: 'З документами', ret_wait: 'Повернуто — очікуємо отримання', ret_got: 'Повернуто — отримано' };
+const RET_VIEWS = ['ret_wait', 'ret_got'];
+const isRet = (o) => !!(o.return_ttn || o.ret_ttn || o.status === 'delivery_refused' || [102, 103, 108].includes(Number(o.tracking_code)));
+const retTtn = (o) => o.return_ttn || o.ret_ttn || '';
 const GAP_MS = 2000; // пауза між замовленнями в групових діях
 const RETRY_MS = [5000, 10000, 20000]; // якщо Розетка все ж відповіла «забагато запитів»
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -25,6 +29,7 @@ function blockedWhy(o, k) {
   }
   if (k === 'mark') return o.ttn ? '' : 'ще немає ТТН';
   if (k === 'crm') return o.crm_id || o.crm_code ? 'уже в LP-CRM' : !o.ttn ? 'спершу створіть ТТН' : '';
+  if (k === 'retgot') return !isRet(o) ? 'не повернення' : o.ret_got_at ? 'вже позначено отриманим' : '';
   return '';
 }
 const stepsHtml = (o) => {
@@ -77,10 +82,12 @@ export function createRetailPages(ctx) {
         ${accounts.filter((a) => a.sync_error).map((a) => `<div class="alert warn small" style="margin-bottom:10px">⚠️ Останнє оновлення з Розетки${accounts.length > 1 ? ` («${esc(a.name)}»)` : ''} не вдалося${a.sync_error_at ? ` (${esc(fmtDateTime(a.sync_error_at))})` : ''}: ${esc(a.sync_error)}. Натисніть «Оновити з Розетки» ще раз.</div>`).join('')}`
         : `<div class="alert warn" style="margin-bottom:12px">Кабінет постачальника Розетки ще не підключено${can('api') ? ' — «Налаштування Розетки»' : ' — зверніться до адміністратора'}.</div>`}
       <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap">
-        ${Object.entries(VIEWS).map(([k, v]) => `<button class="chip ${filter.view === k ? 'on' : ''}" data-v="${k}">${esc(v)}${k === 'crmnew' && counts.crmnew ? ` · ${counts.crmnew}` : ''}</button>`).join('')}
+        ${Object.entries(VIEWS).map(([k, v]) => `<button class="chip ${filter.view === k ? 'on' : ''}" data-v="${k}">${esc(v)}${(k === 'crmnew' || RET_VIEWS.includes(k)) && counts[k] ? ` · ${counts[k]}` : ''}</button>`).join('')}
         ${Object.entries(statuses).filter(([k]) => counts[k]).map(([k, v]) => `<button class="chip ${filter.view === k ? 'on' : ''}" data-v="${k}">${esc(v)} · ${counts[k]}</button>`).join('')}
       </div>
-      <div class="btn-row" style="margin-bottom:10px"><input id="rzQ" placeholder="№ Розетки, клієнт, телефон, ТТН, рахунок" value="${esc(filter.q)}" style="max-width:320px"></div>
+      <div class="btn-row" style="margin-bottom:10px;flex-wrap:wrap"><input id="rzQ" placeholder="№ Розетки, клієнт, телефон, ТТН, рахунок" value="${esc(filter.q)}" style="max-width:320px">
+        ${RET_VIEWS.includes(filter.view) ? `<button class="btn" id="rzRetXls" title="Обидва статуси повернень — окремими аркушами">⬇ ТТН повернень (Excel)</button><button class="btn" id="rzRetCopy">📋 Копіювати ТТН (${rows.length})</button><button class="btn" id="rzRetCheck" title="Статус ЕН повернення в Новій пошті">🔄 Перевірити в НП</button>` : ''}</div>
+      ${RET_VIEWS.includes(filter.view) ? '<div class="small muted" style="margin-bottom:10px">Повернення — замовлення з ТТН повернення від Розетки, статусом «Відмова від отримання» або відмовою в трекінгу НП (за 120 днів). «Отримано» — за статусом ЕН повернення в Новій пошті (перевірка щогодини) або позначено вручну.</div>' : ''}
       <div id="rzBulk" class="btn-row card" hidden style="position:sticky;top:8px;z-index:5;margin-bottom:10px;padding:8px 12px;flex-wrap:wrap;align-items:center"></div>
       ${rows.length ? `<div class="table-wrap"><table class="list"><thead><tr><th style="width:34px"><input type="checkbox" id="rzAll" aria-label="Обрати всі"></th>
         <th>№ / дата</th><th>Клієнт</th><th class="hide-m">Товари</th><th class="r">Післяплата</th><th>Статус</th><th>ТТН</th><th>Рахунок (Вчасно)</th><th>Документи</th><th class="hide-m">LP-CRM</th></tr></thead><tbody>
@@ -91,7 +98,7 @@ export function createRetailPages(ctx) {
           <td class="small hide-m">${o.products.map((p) => `${esc(p.name || p.supplierCode)} × ${p.quantity}`).join('<br>')}</td>
           <td class="r nowrap">${o.cod ? money(o.cod) : '—'}</td>
           <td><span class="badge ${ST_CLS[o.status] || ''}">${esc(o.status_name)}</span>${o.uzd_name ? `<div><span class="badge ${UZD_CLS[o.uzd_status] || ''}">${esc(o.uzd_name)}</span></div>` : ''}</td>
-          <td class="small nowrap">${o.ttn ? `<b>${esc(o.ttn)}</b>${o.tracking_status ? `<div class="muted">${esc(o.tracking_status)}</div>` : ''}` : '—'}${o.return_ttn ? `<div class="badge bad">повернення ${esc(o.return_ttn)}</div>` : ''}</td>
+          <td class="small nowrap">${o.ttn ? `<b>${esc(o.ttn)}</b>${o.tracking_status ? `<div class="muted">${esc(o.tracking_status)}</div>` : ''}` : '—'}${retTtn(o) || isRet(o) ? `<div class="badge ${o.ret_got_at ? 'ok' : 'bad'}">${o.ret_got_at ? '✅ повернення отримано' : '↩ повернення'}${retTtn(o) ? ` ${esc(retTtn(o))}` : ''}</div>${o.ret_status ? `<div class="muted">${esc(o.ret_status)}</div>` : ''}` : ''}</td>
           <td class="small nowrap">${o.invoice_no ? `<b>${esc(o.invoice_no)}</b>` : '<span class="muted">—</span>'}</td>
           <td class="small" data-nosel>${o.document_link ? `<a class="badge ok" href="${esc(o.document_link)}" target="_blank" rel="noopener">📄 є</a>` : '<span class="muted">ще немає</span>'}
             ${o.docs_at ? `<div class="muted">${esc(fmtDateTime(o.docs_at))}</div>` : ''}</td>
@@ -107,9 +114,16 @@ export function createRetailPages(ctx) {
     $$('[data-v]').forEach((b) => (b.onclick = async () => {
       filter.view = b.dataset.v;
       if (filter.view === 'crmnew') { b.innerHTML = '<span class="spinner"></span> Перевіряю статуси в LP-CRM…'; await api('POST', '/api/rzs/crm-status', {}).catch((e) => toast(e.message, true)); }
-      viewOrders();
+      await viewOrders();
+      if (RET_VIEWS.includes(filter.view)) retCheck(true);
     }));
     $('#rzFind') && ($('#rzFind').onclick = () => findCrm(null));
+    $('#rzRetXls') && ($('#rzRetXls').onclick = () => retExport());
+    $('#rzRetCopy') && ($('#rzRetCopy').onclick = async () => {
+      const list = [...new Set(rows.flatMap((o) => [retTtn(o) || o.ttn]).filter(Boolean))];
+      try { await navigator.clipboard.writeText(list.join('\n')); toast(`Скопійовано ТТН: ${list.length}`); } catch { toast('Не вдалося скопіювати — скористайтесь вивантаженням в Excel', true); }
+    });
+    $('#rzRetCheck') && ($('#rzRetCheck').onclick = () => retCheck(false));
     let qt;
     $('#rzQ').oninput = (e) => { clearTimeout(qt); qt = setTimeout(async () => { filter.q = e.target.value; await viewOrders(); const el = $('#rzQ'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 350); };
     $$('[data-nosel]').forEach((td) => (td.onclick = (e) => e.stopPropagation()));
@@ -129,6 +143,7 @@ export function createRetailPages(ctx) {
         ${can('retail.edit') ? '<button class="btn sm" data-b="confirm">✅ Підтвердити</button><button class="btn sm" data-b="ttn">🚚 Створити ТТН</button>' : ''}
         <button class="btn sm" data-b="mark">🏷 Маркування (PDF)</button>
         ${can('retail.edit') ? '<button class="btn sm" data-b="crm">➕ У LP-CRM</button><button class="btn sm" data-b="find">🔗 Знайти в LP-CRM</button>' : ''}
+        ${can('retail.edit') && filter.view === 'ret_wait' ? '<button class="btn sm" data-b="retgot">📦 Повернення отримано</button>' : ''}
         <button class="btn sm" data-b="_clear">Зняти вибір</button>` : '';
       $$('[data-b]', bar).forEach((b) => (b.onclick = () => run(b.dataset.b)));
       const all = $('#rzAll');
@@ -140,6 +155,7 @@ export function createRetailPages(ctx) {
       confirm: { label: 'Підтвердити', run: (id) => api('POST', `/api/rzs/orders/${id}/confirm`, {}) },
       ttn: { label: 'Створити ТТН', run: (id) => api('POST', `/api/rzs/orders/${id}/ttn`, {}) },
       crm: { label: 'У LP-CRM', run: (id) => api('POST', `/api/rzs/orders/${id}/crm`, {}) },
+      retgot: { label: 'Повернення отримано', run: (id) => api('POST', `/api/rzs/orders/${id}/return-got`, { got: true }) },
     };
     async function run(k) {
       const ids = sel();
@@ -165,7 +181,7 @@ export function createRetailPages(ctx) {
       bar.querySelectorAll('button').forEach((b) => { b.disabled = true; });
       const label = (t) => { bar.querySelector('b').textContent = t; };
       for (const [i, id] of todo.entries()) {
-        if (i) await sleep(k === 'crm' ? 400 : GAP_MS); // Розетка блокує часті запити — пауза між замовленнями
+        if (i) await sleep(k === 'crm' ? 400 : k === 'retgot' ? 50 : GAP_MS); // Розетка блокує часті запити — пауза між замовленнями
         label(`${a.label}: ${i + 1} з ${todo.length}…`);
         for (let attempt = 0; ; attempt++) {
           try { const r = await a.run(id); ok++; if (r?.warnings?.length) fails.push(`${byId.get(id).order_num}: ⚠️ ${r.warnings.join('; ')}`); break; }
@@ -185,6 +201,41 @@ export function createRetailPages(ctx) {
       viewOrders();
     }
     draw();
+  }
+
+  // Повернення: перевірка ЕН повернення в НП (quiet — у фоні після відкриття вкладки, без повідомлень, якщо нічого нового).
+  let retBusy = false;
+  async function retCheck(quiet) {
+    if (retBusy) return;
+    retBusy = true;
+    const btn = $('#rzRetCheck');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Перевіряю в НП…'; }
+    try {
+      const r = await api('POST', '/api/rzs/returns/check', {});
+      if (r.skipped) { if (!quiet) toast(r.skipped, true); }
+      else if (!quiet || r.got || r.found) toast(`Перевірено в НП: ${r.checked}${r.got ? ` · отримано: ${r.got}` : ''}${r.found ? ` · знайдено ЕН повернення: ${r.found}` : ''}${r.left ? ` · ще ${r.left} — натисніть ще раз` : ''}${r.failed ? ` · помилок: ${r.failed}` : ''}`, !!r.failed);
+      if ((!quiet || r.got || r.found) && RET_VIEWS.includes(filter.view) && !busy && !$$('[data-sel]').some((x) => x.checked)) await viewOrders();
+    } catch (e) { if (!quiet) toast(e.message, true); }
+    retBusy = false;
+    const b2 = $('#rzRetCheck');
+    if (b2) { b2.disabled = false; b2.textContent = '🔄 Перевірити в НП'; }
+  }
+  // Excel: усі ТТН з обох статусів повернень — аркуш на статус (без урахування пошуку).
+  async function retExport() {
+    const d = await api('GET', '/api/rzs/orders?status=ret_all').catch((e) => { toast(e.message, true); return null; });
+    if (!d) return;
+    const cols = [
+      { title: '№ Розетки', width: 14 }, { title: 'Дата замовлення', width: 17 }, { title: 'Клієнт', width: 26 }, { title: 'Телефон', width: 15 }, { title: 'ТТН відправлення', width: 18 },
+      { title: 'ТТН повернення', width: 18 }, { title: 'Статус Розетки', width: 20 }, { title: 'Статус повернення (НП)', width: 34 }, { title: 'Отримано', width: 17 }, { title: 'Післяплата', width: 12, fmt: 'money' },
+    ];
+    const row = (o) => [o.order_num, fmtDateTime(o.created_at.replace(' ', 'T')), o.customer, o.phone, o.ttn, retTtn(o), o.status_name, o.ret_status,
+      o.ret_got_at ? `${fmtDateTime(o.ret_got_at)}${o.ret_manual ? ' (вручну)' : ''}` : '', o.cod || ''];
+    const wait = d.rows.filter((o) => !o.ret_got_at), got = d.rows.filter((o) => o.ret_got_at);
+    downloadXlsx(`rozetka-povernennya-${new Date().toISOString().slice(0, 10)}.xlsx`, [
+      { name: 'Очікуємо отримання', cols, rows: wait.map(row) },
+      { name: 'Отримано', cols, rows: got.map(row) },
+    ]);
+    toast(`Вивантажено: очікуємо ${wait.length} · отримано ${got.length}`);
   }
 
   async function markings(ids) {

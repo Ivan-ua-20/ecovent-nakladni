@@ -32,10 +32,23 @@ const tg = [];
 // Замовлення LP-CRM (код → номер, ТТН, телефон) — для пошуку прив'язки за ТТН.
 const CRM = new Map([['1761400000000111', { id: '70001', status: '1', ttn: '20400558101410', phone: '0971089181', bayer_name: 'Попелянська' }], ['1761400000000222', { id: '70002', status: '2', ttn: '', phone: '0508846132', bayer_name: 'Підопличко' }]]);
 const calls = { list: 0, confirm: [], ttn: [], print: [], price: [], crm: [] };
+// Нова пошта: оригінальні ЕН з відмовою (одна вже має зворотну ЕН «на основі»), ЕН повернень.
+const npCalls = [];
+const NP = {
+  '20450000000777': { Status: 'Відмова одержувача', StatusCode: '103', LastCreatedOnTheBasisNumber: '20450000000999', LastCreatedOnTheBasisDocumentType: 'Return' },
+  '20450000000999': { Status: 'Прямує до відділення', StatusCode: '5' },
+  '20450000000555': { Status: 'Відправлення отримано', StatusCode: '9', RecipientDateTime: '21.10.2026 14:05:11' },
+};
 const json = (o, status = 200) => new Response(JSON.stringify(o), { status });
 const fetchFn = async (url, opts = {}) => {
   const u = new URL(url);
   if (u.hostname === 'api.telegram.org') { tg.push(JSON.parse(opts.body)); return json({ ok: true, result: { message_id: 1 } }); }
+  if (u.hostname === 'api.novaposhta.ua') {
+    const b = JSON.parse(opts.body);
+    const n = b.methodProperties.Documents[0].DocumentNumber;
+    npCalls.push(n);
+    return json({ success: true, data: [NP[n] || { Status: 'Номер не знайдено', StatusCode: '3' }] });
+  }
   if (u.hostname.endsWith('lp-crm.biz')) {
     const method = u.pathname.match(/\/api\/(\w+)\.html/)[1];
     const p = Object.fromEntries(new URLSearchParams(opts.body));
@@ -327,6 +340,51 @@ assert.equal(await status(() => req('PUT', '/api/rzs/products/EV-200', { purchas
 assert.equal(await status(() => req('POST', '/api/rzs/crm-find', {}, VH)), 403);
 assert.equal(await status(() => req('PUT', `/api/rzs/orders/${R4}/crm-link`, { crm: '1' }, VH)), 403);
 assert.equal((await send('POST', '/api/rzs/products/import', CSV, { ...VH, 'Content-Type': 'text/csv' })).status, 403, 'імпорт — лише з правом довідників');
+
+// ---------- 9b. Повернення: очікуємо / отримано, перевірка в НП, позначка вручну, вивантаження ----------
+{
+  const mkO = (id, num, extra) => raw.run(`INSERT INTO rzs_orders (id, account_id, order_num, status, created_at, customer, ttn, return_ttn, tracking_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, acc.id, num, extra.status || 'shipping', `${now} 09:00:00`, 'Клієнт', extra.ttn || '', extra.return_ttn || '', extra.code ?? null]);
+  await mkO('ret-1', 'R1', { status: 'delivery_refused', ttn: '20450000000777' }); // ЕН повернення знайдемо через НП
+  await mkO('ret-2', 'R2', { ttn: '20450000000444', return_ttn: '20450000000555' }); // Розетка дала ЕН повернення, вже отримано
+  await mkO('ret-3', 'R3', { ttn: '20450000000666', code: 108 }); // відмова в трекінгу, ЕН повернення ще немає
+  await mkO('ret-4', 'R4x', { status: 'closed', ttn: '20450000000888', code: 9 }); // звичайне виконане — не повернення
+  let l = await req('GET', '/api/rzs/orders?status=ret_wait');
+  assert.deepEqual(l.rows.map((r) => r.id).sort(), ['ret-1', 'ret-2', 'ret-3']);
+  assert.equal(l.counts.ret_wait, 3);
+  assert.equal((await req('GET', '/api/rzs/orders?status=ret_got')).rows.length, 0);
+  // Без кабінету НП — пояснення, без запитів.
+  assert.match((await req('POST', '/api/rzs/returns/check', {})).skipped, /Нової пошти/);
+  await raw.run(`INSERT INTO np_accounts (name, api_key, active, created_at) VALUES ('Основний', 'npkey', 1, ?)`, [now]);
+  const ch = await req('POST', '/api/rzs/returns/check', {});
+  assert.deepEqual({ checked: ch.checked, got: ch.got, found: ch.found, failed: ch.failed }, { checked: 3, got: 1, found: 1, failed: 0 });
+  l = await req('GET', '/api/rzs/orders?status=ret_got');
+  assert.deepEqual(l.rows.map((r) => r.id), ['ret-2']);
+  assert.equal(l.rows[0].ret_got_at, '2026-10-21T14:05:00');
+  l = await req('GET', '/api/rzs/orders?status=ret_wait');
+  const r1 = l.rows.find((r) => r.id === 'ret-1');
+  assert.equal(r1.ret_ttn, '20450000000999');
+  assert.equal(r1.ret_status, 'Прямує до відділення');
+  assert.match(l.rows.find((r) => r.id === 'ret-3').ret_status, /ЕН повернення ще немає/);
+  assert.equal(l.counts.ret_got, 1);
+  assert.equal(l.counts.ret_wait, 2);
+  // Отримані більше не перевіряємо.
+  npCalls.length = 0;
+  await req('POST', '/api/rzs/returns/check', {});
+  assert.ok(!npCalls.includes('20450000000555'), 'отримане повернення не перевіряємо знову');
+  // Вручну: позначити отриманим і зняти позначку; не-повернення — 404.
+  await req('POST', '/api/rzs/orders/ret-3/return-got', { got: true });
+  assert.equal((await req('GET', '/api/rzs/orders?status=ret_got')).rows.length, 2);
+  await req('POST', '/api/rzs/orders/ret-3/return-got', { got: false });
+  assert.equal((await req('GET', '/api/rzs/orders?status=ret_got')).rows.length, 1);
+  assert.equal((await send('POST', '/api/rzs/orders/ret-4/return-got', { got: true })).status, 404);
+  // Обидва статуси разом — для вивантаження ТТН.
+  assert.equal((await req('GET', '/api/rzs/orders?status=ret_all')).rows.length, 3);
+  // Звичайні вкладки працюють як раніше.
+  assert.ok((await req('GET', '/api/rzs/orders')).rows.some((r) => r.id === 'ret-4'));
+  assert.equal(await status(() => req('POST', '/api/rzs/orders/ret-1/return-got', {}, VH)), 403, 'позначка вручну — лише з правом редагування');
+  await raw.run(`DELETE FROM rzs_orders WHERE id LIKE 'ret-%'`);
+}
 
 // ---------- 10. Новий пароль вебхука, видалення ----------
 await req('PUT', `/api/rzs/accounts/${acc.id}`, { new_hook_pass: true });

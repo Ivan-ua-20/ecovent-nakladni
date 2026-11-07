@@ -68,6 +68,9 @@ export async function npTracking(fetchFn, apiKey, ttn, phone = '') {
     warehouse: String(d.WarehouseRecipient || '').trim().slice(0, 160),
     scheduled: String(d.ScheduledDeliveryDate || '').trim().slice(0, 30),
     received: String(d.RecipientDateTime || '').trim().slice(0, 30),
+    // ЕН, створена на основі цієї (повернення, переадресація), і її тип.
+    basis: String(d.LastCreatedOnTheBasisNumber || '').trim().slice(0, 40),
+    basisType: String(d.LastCreatedOnTheBasisDocumentType || '').trim().slice(0, 40),
   };
 }
 // Адресний (кур'єрський) забір: відправлення забирає кур'єр НП з адреси відправника — тип доставки «Doors…».
