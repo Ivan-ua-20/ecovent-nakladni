@@ -10,8 +10,13 @@
 //  3) Цикл перевірки — раз на 12 год у фоні (і кнопкою «Оновити інформацію»), частинами: за один запит не більше
 //     CALLS звернень до НП (ліміт підзапитів Cloudflare). Новий кабінет НП → одразу дочитуємо його ТТН за BORDER_DAYS днів,
 //     тож усі повернення, що зараз очікують, з'являються після першого циклу.
+//  4) Повернення від клієнтів після отримання: ЕН «на основі» отриманої посилки з типом Return (стежимо 30 днів після
+//     отримання), вхідні посилки кабінетів від людей, яким ми відправляли (телефон або прізвище й ім'я), а також статуси
+//     маркетплейсів (Розетка «Замовлення повернено», Епіцентр «Запит на повернення»).
+//  5) Розетка Делівері (RMP-…): статуси замовлень Розетки (відмова / не прийшов / повернено) — без запитів назовні;
+//     про прибуття Розетка не повідомляє, тож через 21 день повернення вважаємо отриманим.
 import { need, nowIso, kyivDay } from '../../core/common.js';
-import { npDocumentsPage, npTrackMany } from '../../integrations/novaposhta.js';
+import { npDocumentsPage, npTrackMany, npContacts, npIncomingPage } from '../../integrations/novaposhta.js';
 
 const BORDER_DAYS = 45; // відправлення за останні 45 днів (повернення зазвичай приходять за 2–4 тижні)
 const SHOW_DAYS = 120; // отримані повернення показуємо 120 днів
@@ -23,6 +28,16 @@ const REFUSED = [102, 103, 105, 108];
 const RECEIVED = [9, 10, 11, 106];
 const BRANCH = [7, 8];
 const OVERDUE_DAYS = 5; // у відділенні 5+ днів — прострочено
+const WATCH_DAYS = 30; // отримані клієнтом відправлення ще 30 днів стежимо: чи не повертає (ЕН «на основі», тип Return)
+const MP_DAYS = 60; // маркетплейси: замовлення за 60 днів
+const MP_CLOSE_DAYS = 21; // Розетка Делівері / маркетплейс не повідомляє про прибуття — через 21 день вважаємо, що повернулось
+const CONTACTS_MS = 7 * 86400e3; // контакти кабінетів НП оновлюємо раз на тиждень
+// Статуси маркетплейсів, що означають повернення: Розетка 12 — відмова при отриманні, 11 — не прийшов, 19 — замовлення повернено
+// (клієнт повертає після отримання); Епіцентр — запит на повернення.
+const MP_RET = { rozetka: { 12: 'refused', 11: 'storage', 19: 'customer' }, epc: { return_requested: 'customer' } };
+const isReturnType = (t) => /return/i.test(t) && !/backward/i.test(t); // «CargoReturn» — так, «BackwardDelivery» (гроші) — ні
+const nameKey = (n) => String(n || '').toLowerCase().replace(/[^a-zа-яіїєґё'’\s-]/gi, ' ').split(/[\s-]+/).filter((w) => w.length > 1).slice(0, 2).sort().join(' ');
+const mpIso = (v) => String(v || '').replace(' ', 'T').slice(0, 19);
 const NP_TTN = (col) => `(length(${col}) BETWEEN 11 AND 20 AND ${col} NOT GLOB '*[^0-9]*')`;
 const addDays = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 const days = (from, to = Date.now()) => (from ? Math.max(0, Math.floor((to - Date.parse(from)) / 86400000)) : null);
@@ -34,6 +49,8 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
   };
   const setState = (st) => db.run(`INSERT INTO settings (key, value) VALUES ('ret_cycle', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(st)]);
   const accounts = () => db.all(`SELECT id, name, api_key, sender_name FROM np_accounts WHERE active = 1 ORDER BY id`).catch(() => []);
+  const getJson = async (key) => { try { return JSON.parse((await db.get(`SELECT value FROM settings WHERE key = ?`, [key]))?.value || '{}') || {}; } catch { return {}; } };
+  const setJson = (key, v) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, JSON.stringify(v)]);
 
   // Кабінет НП, ще не прочитаний за BORDER_DAYS днів (новий) — треба цикл одразу, не чекаючи 12 год.
   async function needsBackfill(accs) {
@@ -55,9 +72,9 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
     let calls = 0;
     const out = () => calls >= CALLS;
     // Звернення до НП з паузою; «забагато запитів» — зупиняємо крок (не помилка), продовжимо наступного разу.
-    const np = async (what, fn) => {
+    const np = async (what, fn, n = 1) => {
       if (calls) await new Promise((r) => setTimeout(r, GAP_MS));
-      calls++;
+      calls += n;
       try { return await fn(); } catch (e) {
         if (/many requests/i.test(e.message)) throw Object.assign(new Error(`Нова пошта просить зачекати (${what}, після ${calls - 1} запитів)`), { rate: true });
         throw e;
@@ -101,6 +118,61 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
         FROM (SELECT REPLACE(ttn, ' ', '') AS t, created_at, phone, customer FROM mp_orders WHERE created_at >= ?) WHERE ${NP_TTN('t')} ${up}`, [border]],
     ]);
 
+    // Отримані клієнтом за WATCH_DAYS днів — ще стежимо (повернення після отримання); старіші — остаточно.
+    await db.run(`UPDATE ret_ships SET final = 0 WHERE final = 1 AND code IN (9, 10, 11) AND day >= ? AND ttn NOT IN (SELECT orig_ttn FROM ret_items)`, [addDays(today, -WATCH_DAYS)]);
+
+    // 2а) Контакти кабінетів НП (хто й на який номер забирає повернення) — раз на тиждень.
+    const cont = await getJson('ret_contacts');
+    for (const a of accs) {
+      if (cont[a.id]?.at && Date.now() - Date.parse(cont[a.id].at) < CONTACTS_MS) continue;
+      if (out()) return { left: 'contacts' };
+      try { cont[a.id] = { at: nowIso(), ...(await np('контакти кабінету', () => npContacts(fetchFn, a.api_key), 2)) }; } catch (e) {
+        if (e.rate) throw e;
+        cont[a.id] = { at: nowIso(), code: '', persons: [], error: String(e.message || e).slice(0, 200) };
+      }
+      await setJson('ret_contacts', cont);
+    }
+
+    // 2б) Маркетплейси (без запитів назовні — з уже синхронізованих замовлень): Розетка Делівері (RMP-…) і повернення після
+    // отримання (Розетка «Замовлення повернено», Епіцентр «Запит на повернення»). Відмови з ТТН Нової пошти ловить відстеження НП.
+    {
+      const mpRows = await db.all(`SELECT mp, account_id, number, ttn, status, status_name, customer, phone, total, items, delivery, changed_at FROM mp_orders
+        WHERE created_at >= ? AND ((mp = 'rozetka' AND status IN ('11', '12', '19')) OR (mp = 'epc' AND status = 'return_requested'))`, [addDays(today, -MP_DAYS)]).catch(() => []);
+      const shops = new Map([...(await db.all(`SELECT id, name FROM rz_accounts`).catch(() => [])).map((x) => [`rozetka:${x.id}`, x.name]),
+        ...(await db.all(`SELECT id, name FROM epc_accounts`).catch(() => [])).map((x) => [`epc:${x.id}`, x.name])]);
+      const keep = [];
+      const stmts = [];
+      for (const o of mpRows) {
+        const reason = MP_RET[o.mp]?.[o.status];
+        if (!reason) continue;
+        const ttn = String(o.ttn || '').replace(/\s/g, '');
+        const isNp = /^\d{11,20}$/.test(ttn);
+        if (isNp && reason !== 'customer') continue; // відмову з ТТН НП бачить відстеження НП
+        const at = mpIso(o.changed_at);
+        const goods = (() => { try { return JSON.parse(o.items || '[]').map((i) => i.name).filter(Boolean).join('; ').slice(0, 200); } catch { return ''; } })();
+        const phone = String(o.phone || '').replace(/\D/g, '').slice(-9);
+        if (isNp) {
+          // Клієнт повертає посилку НП після отримання: ЕН повернення ще шукаємо (вхідні посилки) — поки «немає ЕН».
+          stmts.push([`INSERT INTO ret_items (orig_ttn, carrier, reason, state, customer, phone, cargo, cost, refused_at, ret_status, created_at)
+            VALUES (?, 'np', 'customer', 'nottn', ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(orig_ttn) DO NOTHING`, [ttn, o.customer || '', phone, goods, Number(o.total) || 0, at, o.status_name, nowIso()]]);
+          continue;
+        }
+        const key = ttn || `${o.mp}:${o.number}`;
+        keep.push(key);
+        const closed = at && Date.parse(at) < Date.now() - MP_CLOSE_DAYS * 86400e3;
+        const gotAt = closed ? new Date(Date.parse(at) + MP_CLOSE_DAYS * 86400e3).toISOString() : '';
+        stmts.push([`INSERT INTO ret_items (orig_ttn, carrier, reason, state, customer, phone, cargo, cost, refused_at, got_at, ret_status, to_name, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(orig_ttn) DO UPDATE SET reason = excluded.reason, state = excluded.state, got_at = excluded.got_at, ret_status = excluded.ret_status,
+            refused_at = excluded.refused_at, cargo = excluded.cargo, cost = excluded.cost, to_name = excluded.to_name`,
+        [key, /^RMP-/i.test(ttn) ? 'rd' : 'mp', reason, closed ? 'got' : 'transit', o.customer || '', phone, goods, Number(o.total) || 0, at, gotAt,
+          o.status_name || '', shops.get(`${o.mp}:${o.account_id}`) || '', nowIso()]]);
+      }
+      // Замовлення вийшло зі статусу повернення (клієнт усе ж забрав тощо) — прибираємо.
+      stmts.push([`DELETE FROM ret_items WHERE carrier IN ('rd', 'mp') AND refused_at >= ? AND orig_ttn NOT IN (SELECT value FROM json_each(?))`, [addDays(today, -MP_DAYS + 7), JSON.stringify(keep)]]);
+      for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
+    }
+
     // 3) Відстеження вихідних ТТН, які ще не отримано клієнтом, — пакетами по 100, ключем кабінету-відправника.
     for (;;) {
       if (out()) return { left: 'ships' };
@@ -119,7 +191,7 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
       const stmts = [];
       for (const r of batch) {
         const t = tr.get(r.ttn) || { code: 0, status: '' };
-        const basis = t.basis && /^\d{10,20}$/.test(t.basis) && (REFUSED.includes(t.code) || /return|повер/i.test(t.basisType)) ? t.basis : '';
+        const basis = t.basis && /^\d{10,20}$/.test(t.basis) && (REFUSED.includes(t.code) || isReturnType(t.basisType)) ? t.basis : '';
         let retTtn = basis || rz.get(r.ttn) || '';
         if (retTtn && owner.has(retTtn) && owner.get(retTtn) !== r.ttn) {
           stmts.push([`UPDATE ret_ships SET code = ?, status = ?, final = 1, checked_at = ? WHERE ttn = ?`, [t.code, t.status, now, r.ttn]]);
@@ -127,21 +199,73 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
         }
         if (retTtn) owner.set(retTtn, r.ttn);
         const isRet = REFUSED.includes(t.code) || !!retTtn;
-        const final = RECEIVED.includes(t.code) || t.code === 2 || (t.code === 3 && r.day < addDays(today, -5)) || (isRet && !!retTtn);
+        // Отримане клієнтом стежимо ще WATCH_DAYS днів (раптом поверне); далі — остаточно.
+        const final = (RECEIVED.includes(t.code) && r.day < addDays(today, -WATCH_DAYS)) || t.code === 2 || (t.code === 3 && r.day < addDays(today, -5)) || (isRet && !!retTtn);
+        const reason = RECEIVED.includes(t.code) ? 'customer' : t.code === 105 ? 'storage' : 'refused';
         stmts.push([`UPDATE ret_ships SET code = ?, status = ?, final = ?, checked_at = ? WHERE ttn = ?`, [t.code, t.status, final ? 1 : 0, now, r.ttn]]);
         if (isRet) {
           stmts.push([`INSERT INTO ret_items (orig_ttn, ret_ttn, reason, state, account_id, customer, phone, cargo, cost, cod, refused_at, created_at, checked_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')
             ON CONFLICT(orig_ttn) DO UPDATE SET ret_ttn = CASE WHEN ret_items.ret_ttn = '' THEN excluded.ret_ttn ELSE ret_items.ret_ttn END,
               state = CASE WHEN ret_items.state = 'nottn' AND excluded.ret_ttn != '' THEN 'transit' ELSE ret_items.state END,
-              reason = CASE WHEN ret_items.reason = '' THEN excluded.reason ELSE ret_items.reason END,
+              reason = CASE WHEN ret_items.reason = '' OR (ret_items.ret_ttn = '' AND excluded.ret_ttn != '') THEN excluded.reason ELSE ret_items.reason END,
               cargo = CASE WHEN excluded.cargo != '' THEN excluded.cargo ELSE ret_items.cargo END,
               cost = CASE WHEN excluded.cost > 0 THEN excluded.cost ELSE ret_items.cost END, cod = CASE WHEN excluded.cod > 0 THEN excluded.cod ELSE ret_items.cod END`,
-          [r.ttn, retTtn, t.code === 105 ? 'storage' : 'refused', retTtn ? 'transit' : 'nottn', r.account_id, r.customer || t.recipient || '', r.phone || '',
+          [r.ttn, retTtn, reason, retTtn ? 'transit' : 'nottn', r.account_id, r.customer || t.recipient || '', r.phone || '',
             t.cargo || '', t.cost || 0, t.cod || 0, now, now]]);
         }
       }
       for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
+    }
+
+    // 3б) Повернення від клієнтів: вхідні посилки кабінетів (ми — отримувач) від людей, яким ми відправляли за останні 60 днів
+    // (збіг за телефоном або прізвищем та ім'ям). Службові «плечі» НП (переадресація, повернення) пропускаємо — їх видно вище.
+    const inc = await getJson('ret_inc');
+    if (inc.started !== st.started) { inc.started = st.started; inc.done = []; }
+    let idx = null;
+    for (const a of accs) {
+      if (inc.done.includes(a.id)) continue;
+      if (!idx) {
+        // Кандидати — посилки, які клієнт отримав і по яких ще немає ЕН повернення; own — усі наші вихідні (їх не плутаємо з вхідними).
+        const ships = await db.all(`SELECT ttn, customer, phone, day, code FROM ret_ships WHERE day >= ? ORDER BY day DESC`, [addDays(today, -60)]);
+        const hasRet = new Set((await db.all(`SELECT orig_ttn FROM ret_items WHERE ret_ttn != ''`)).map((x) => x.orig_ttn));
+        idx = { byPhone: new Map(), byName: new Map(), own: new Set(ships.map((x) => x.ttn)) };
+        for (const x of ships.filter((y) => RECEIVED.includes(y.code) && !hasRet.has(y.ttn))) {
+          if (x.phone && !idx.byPhone.has(x.phone)) idx.byPhone.set(x.phone, x);
+          const k = nameKey(x.customer);
+          if (k.includes(' ') && !idx.byName.has(k)) idx.byName.set(k, x); // найновіше відправлення цій людині
+        }
+      }
+      for (let page = 1; page <= 10; page++) {
+        if (out()) return { left: 'incoming' };
+        let list;
+        try { list = await np('вхідні посилки', () => npIncomingPage(fetchFn, a.api_key, addDays(today, -30), addDays(today, 1), page)); } catch (e) {
+          if (e.rate) throw e;
+          inc.errors = { ...(inc.errors || {}), [a.id]: String(e.message || e).slice(0, 200) };
+          break;
+        }
+        const cand = list.filter((d) => !d.owner && !idx.own.has(d.ttn));
+        const taken = new Set((await db.all(`SELECT ret_ttn FROM ret_items WHERE ret_ttn IN (SELECT value FROM json_each(?))`, [JSON.stringify(cand.map((d) => d.ttn))])).map((x) => x.ret_ttn));
+        const stmts = [];
+        for (const d of cand) {
+          if (taken.has(d.ttn)) continue;
+          const ship = (d.phone && idx.byPhone.get(d.phone)) || idx.byName.get(nameKey(d.sender));
+          if (!ship) continue;
+          const state = RECEIVED.includes(d.code) ? 'got' : BRANCH.includes(d.code) ? 'branch' : 'transit';
+          stmts.push([`INSERT INTO ret_items (orig_ttn, ret_ttn, carrier, reason, state, account_id, customer, phone, cargo, refused_at, arrived_at, got_at, ret_code, ret_status, created_at, checked_at)
+            VALUES (?, ?, 'np', 'customer', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')
+            ON CONFLICT(orig_ttn) DO UPDATE SET ret_ttn = CASE WHEN ret_items.ret_ttn = '' THEN excluded.ret_ttn ELSE ret_items.ret_ttn END,
+              state = CASE WHEN ret_items.ret_ttn = '' THEN excluded.state ELSE ret_items.state END,
+              account_id = COALESCE(ret_items.account_id, excluded.account_id), checked_at = CASE WHEN ret_items.ret_ttn = '' THEN '' ELSE ret_items.checked_at END`,
+          [ship.ttn, d.ttn, state, a.id, ship.customer || d.sender, ship.phone || d.phone, d.cargo, d.created || nowIso(), BRANCH.includes(d.code) || state === 'got' ? (d.arrived || '') : '',
+            state === 'got' ? (d.received || nowIso()) : '', d.code, d.status, nowIso()]]);
+          taken.add(d.ttn);
+        }
+        if (stmts.length) await db.batch(stmts);
+        if (list.length < 100) break;
+      }
+      inc.done.push(a.id);
+      await setJson('ret_inc', inc);
     }
 
     // 4) Відстеження ЕН повернення, доки не отримано (телефон клієнта — відправника повернення — дає повні дані).
@@ -220,10 +344,10 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
   app.get('/api/returns', async (c) => {
     need(c, 'returns.view');
     const since = addDays(kyivDay(), -SHOW_DAYS);
-    const [rows, accs, st] = await Promise.all([
+    const [rows, accs, st, cont] = await Promise.all([
       db.all(`SELECT * FROM ret_items WHERE created_at >= ? OR state != 'got' ORDER BY created_at DESC LIMIT 3000`, [since]),
-      db.all(`SELECT id, name, sender_name, active FROM np_accounts ORDER BY id`).catch(() => []),
-      getState(),
+      db.all(`SELECT id, name, sender_name, sender_code, active FROM np_accounts ORDER BY id`).catch(() => []),
+      getState(), getJson('ret_contacts'),
     ]);
     const accName = new Map(accs.map((a) => [a.id, a.sender_name || a.name]));
     const refs = await refsOf([...new Set(rows.flatMap((r) => [r.orig_ttn, r.ret_ttn]).filter(Boolean))]);
@@ -235,11 +359,27 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
       return {
         ...r, orders, src: orders[0]?.src || (r.account_id ? 'np' : 'other'),
         account: accName.get(r.account_id) || '', to: accName.get(r.account_id) || r.to_name || '',
+        auto_closed: r.carrier !== 'np' && r.state === 'got',
         branch_days: inBranch, overdue: inBranch !== null && inBranch >= OVERDUE_DAYS,
         wait_days: r.state === 'got' ? days(r.refused_at, Date.parse(r.got_at) || now) : days(r.refused_at, now),
       };
     });
-    return c.json({ rows: out, overdue_days: OVERDUE_DAYS, cycle: st, accounts: accs.filter((a) => a.active).map((a) => ({ id: a.id, name: a.sender_name || a.name })), cycle_hours: CYCLE_MS / 3600e3 });
+    // Щоб забрати: по кожному кабінету НП — ЄДРПОУ/ІПН, на кого й на який номер приходять повернення (з самих ЕН повернення),
+    // контактні особи кабінету, у яких відділеннях що чекає.
+    const pickup = accs.filter((a) => a.active).map((a) => {
+      const mine = out.filter((r) => r.account_id === a.id && r.carrier === 'np');
+      const seen = new Map();
+      for (const r of mine) if (r.to_phone || r.to_name) { const k = `${r.to_name}|${String(r.to_phone).slice(-9)}`; seen.set(k, { name: r.to_name, phone: String(r.to_phone).slice(-9), n: (seen.get(k)?.n || 0) + 1 }); }
+      const persons = [...seen.values()].sort((x, y) => y.n - x.n).slice(0, 3);
+      for (const p of cont[a.id]?.persons || []) if (!persons.some((x) => (p.phone && x.phone === p.phone) || (p.name && x.name === p.name))) persons.push({ name: p.name, phone: p.phone, contact: true });
+      const wh = new Map();
+      for (const r of mine.filter((x) => x.state === 'branch')) { const k = [r.city, r.warehouse].filter(Boolean).join(', '); wh.set(k, (wh.get(k) || 0) + 1); }
+      return { id: a.id, name: a.sender_name || a.name, code: a.sender_code || cont[a.id]?.code || '', persons: persons.slice(0, 5),
+        branch: mine.filter((x) => x.state === 'branch').length, transit: mine.filter((x) => x.state === 'transit').length,
+        warehouses: [...wh].map(([w, n]) => ({ w, n })).sort((x, y) => y.n - x.n).slice(0, 6) };
+    });
+    return c.json({ rows: out, overdue_days: OVERDUE_DAYS, cycle: st, pickup, mp_close_days: MP_CLOSE_DAYS,
+      accounts: accs.filter((a) => a.active).map((a) => ({ id: a.id, name: a.sender_name || a.name })), cycle_hours: CYCLE_MS / 3600e3 });
   });
   // «Оновити інформацію»: запустити перевірку зараз і пройти крок; сторінка повторює, доки done = false.
   app.post('/api/returns/refresh', async (c) => {

@@ -786,3 +786,11 @@ main.ro input[data-ip], main.ro input[data-ir] { pointer-events: none; border-co
 .limit-bar > i.bad { background: var(--bad); }
 @media (max-width: 900px) { .home2 { grid-template-columns: minmax(0, 1fr); } }
 .kpi.kpi-bad .kpi-v { color: var(--bad); }
+/* Повернення: що чекає і на кого — у панелі фільтрів; повернення від клієнтів після отримання — виділені. */
+.ret-pick { padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfb; display: flex; flex-direction: column; gap: 2px; }
+.ret-pick a { white-space: nowrap; }
+tr.ret-cust > td { background: #f6f2ff; }
+tr.ret-cust > td:first-child { box-shadow: inset 4px 0 0 #6d28d9; }
+tr.ret-cust .ret-ttn { color: #5b21b6; }
+.badge.ret-cust-b { background: #ede5ff; color: #5b21b6; margin-bottom: 4px; }
+.kpi.kpi-cust .kpi-v { color: #5b21b6; }
