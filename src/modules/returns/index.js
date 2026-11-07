@@ -113,11 +113,19 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
       const now = nowIso();
       const rz = new Map((await db.all(`SELECT REPLACE(ttn, ' ', '') AS t, return_ttn FROM rzs_orders WHERE return_ttn != '' AND REPLACE(ttn, ' ', '') IN (SELECT value FROM json_each(?))`,
         [JSON.stringify(batch.map((r) => r.ttn))]).catch(() => [])).map((r) => [r.t, String(r.return_ttn).replace(/\D/g, '')]));
+      // ЕН повернення вже належить іншій посилці (одна зворотна на кілька відправлень, або та сама від Розетки) — не дублюємо.
+      const owner = new Map((await db.all(`SELECT ret_ttn, orig_ttn FROM ret_items WHERE ret_ttn != '' AND ret_ttn IN (SELECT value FROM json_each(?))`,
+        [JSON.stringify([...new Set(batch.map((r) => tr.get(r.ttn)?.basis).concat([...rz.values()]).filter(Boolean))])])).map((x) => [x.ret_ttn, x.orig_ttn]));
       const stmts = [];
       for (const r of batch) {
         const t = tr.get(r.ttn) || { code: 0, status: '' };
         const basis = t.basis && /^\d{10,20}$/.test(t.basis) && (REFUSED.includes(t.code) || /return|повер/i.test(t.basisType)) ? t.basis : '';
-        const retTtn = basis || rz.get(r.ttn) || '';
+        let retTtn = basis || rz.get(r.ttn) || '';
+        if (retTtn && owner.has(retTtn) && owner.get(retTtn) !== r.ttn) {
+          stmts.push([`UPDATE ret_ships SET code = ?, status = ?, final = 1, checked_at = ? WHERE ttn = ?`, [t.code, t.status, now, r.ttn]]);
+          continue;
+        }
+        if (retTtn) owner.set(retTtn, r.ttn);
         const isRet = REFUSED.includes(t.code) || !!retTtn;
         const final = RECEIVED.includes(t.code) || t.code === 2 || (t.code === 3 && r.day < addDays(today, -5)) || (isRet && !!retTtn);
         stmts.push([`UPDATE ret_ships SET code = ?, status = ?, final = ?, checked_at = ? WHERE ttn = ?`, [t.code, t.status, final ? 1 : 0, now, r.ttn]]);
