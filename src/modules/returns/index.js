@@ -147,7 +147,9 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
     // 4) Відстеження ЕН повернення, доки не отримано (телефон клієнта — відправника повернення — дає повні дані).
     for (;;) {
       if (out()) return { left: 'returns' };
-      const rows = await db.all(`SELECT orig_ttn, ret_ttn, phone FROM ret_items WHERE state != 'got' AND ret_ttn != '' AND checked_at < ? ORDER BY ret_ttn LIMIT 100`, [st.started]);
+      // Отримані — ще раз, лише якщо дата відмови пізніша за отримання (уточнюємо її за датою створення ЕН повернення).
+      const rows = await db.all(`SELECT orig_ttn, ret_ttn, phone FROM ret_items WHERE (state != 'got' OR (got_at != '' AND refused_at > got_at)) AND ret_ttn != '' AND checked_at < ?
+        ORDER BY ret_ttn LIMIT 100`, [st.started]);
       if (!rows.length || !key0) break;
       const tr = await np('відстеження повернень', () => npTrackMany(fetchFn, key0, rows.map((r) => ({ ttn: r.ret_ttn, phone: r.phone }))));
       const now = nowIso();

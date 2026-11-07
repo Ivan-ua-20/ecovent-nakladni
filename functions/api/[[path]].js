@@ -12602,7 +12602,7 @@ function npDateIso(v) {
   const s = String(v || "").trim();
   let m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/.exec(s);
   if (m) return `${m[1]}-${m[2]}-${m[3]}T${m[4] || "00"}:${m[5] || "00"}:00`;
-  m = /^(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{2}):(\d{2}))?/.exec(s);
+  m = /^(\d{2})[.-](\d{2})[.-](\d{4})(?:\s+(\d{2}):(\d{2}))?/.exec(s);
   return m ? `${m[3]}-${m[2]}-${m[1]}T${m[4] || "00"}:${m[5] || "00"}:00` : "";
 }
 async function npTrackMany(fetchFn, apiKey, docs) {
@@ -14636,7 +14636,8 @@ function mountReturns(app, { db, fetchFn, onCron }) {
     }
     for (; ; ) {
       if (out()) return { left: "returns" };
-      const rows = await db.all(`SELECT orig_ttn, ret_ttn, phone FROM ret_items WHERE state != 'got' AND ret_ttn != '' AND checked_at < ? ORDER BY ret_ttn LIMIT 100`, [st.started]);
+      const rows = await db.all(`SELECT orig_ttn, ret_ttn, phone FROM ret_items WHERE (state != 'got' OR (got_at != '' AND refused_at > got_at)) AND ret_ttn != '' AND checked_at < ?
+        ORDER BY ret_ttn LIMIT 100`, [st.started]);
       if (!rows.length || !key0) break;
       const tr = await np("\u0432\u0456\u0434\u0441\u0442\u0435\u0436\u0435\u043D\u043D\u044F \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u044C", () => npTrackMany(fetchFn, key0, rows.map((r) => ({ ttn: r.ret_ttn, phone: r.phone }))));
       const now = nowIso();

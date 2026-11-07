@@ -21,7 +21,7 @@ const TRACK = {
   20450000000009: { StatusCode: '105', Status: 'Припинено зберігання', LastCreatedOnTheBasisNumber: '20450000000109' },
   20450000000109: { StatusCode: '9', Status: 'Відправлення отримано', RecipientDateTime: `${dayAgo(3).split('-').reverse().join('.')} 15:20:00` },
   20400000000777: { StatusCode: '102', Status: 'Відмова від отримання' }, // Розетка-постачальник: ЕН повернення дала сама Розетка
-  59000000000777: { StatusCode: '5', Status: 'Прямує до відділення', DateCreated: `${dayAgo(2)} 09:00:00` },
+  59000000000777: { StatusCode: '5', Status: 'Прямує до відділення', DateCreated: `${dayAgo(2).split('-').reverse().join('-')} 09:00:00` }, // формат відстеження НП: «дд-мм-рррр»
 };
 let npCalls = 0;
 let tooMany = 0;
