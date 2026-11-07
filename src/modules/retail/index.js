@@ -215,7 +215,7 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
     for (const r of todo) {
       let m = found.find((x) => String(x.article).trim() === r.code) || found.find((x) => String(x.product_id) === r.code);
       if (!m && /^\d{8,}$/.test(r.code)) {
-        const c = byTail.filter((x) => tail5(x.name) === r.code.slice(-5));
+        const c = byTail.filter((x) => tail5(x.name).slice(-4) === r.code.slice(-4));
         if (c.length === 1) m = c[0]; // лише однозначний збіг
       }
       if (m) {
@@ -240,9 +240,10 @@ export function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {}
       [at, batch, source, user, x.code, String(x.name || '').slice(0, 200), x.field, x.old.slice(0, 500), x.new.slice(0, 500)]]);
     for (let i = 0; i < st.length; i += 100) await db.batch(st.slice(i, i + 100));
   }
-  // Каталог LP-CRM у назві тримає «[ххххх]» — останні 5 цифр штрихкоду. Артикул Розетки — штрихкод: якщо цифри не збігаються, прив'язка підозріла.
+  // Каталог LP-CRM у назві тримає «[ххххх]» — код, останні 4 цифри якого збігаються з кінцем штрихкоду (у Evoair перша з 5 цифр інша).
+  // Артикул Розетки — штрихкод: якщо останні 4 цифри не збігаються, прив'язка підозріла.
   const tail5 = (name) => (/\[(\d{5})\]/.exec(String(name || '')) || [])[1] || '';
-  const mapWarn = (code, crmName) => { const t = tail5(crmName); return !!(t && /^\d{8,}$/.test(code) && !code.endsWith(t)); };
+  const mapWarn = (code, crmName) => { const t = tail5(crmName); return !!(t && /^\d{8,}$/.test(code) && code.slice(-4) !== t.slice(-4)); };
 
   // ================================================================ синхронізація
   async function syncAccount(a, { days = SYNC_DAYS } = {}) {
