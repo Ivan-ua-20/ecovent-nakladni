@@ -13405,14 +13405,14 @@ function parseRzsProductsCsv(text) {
       skipped++;
       continue;
     }
-    const hist = /UAH\s*([\d.,\s]+)/.exec(get(r, "buy"));
-    const buy = hist ? numOf(hist[1]) : numOf(get(r, "buy"));
+    const hist = [...get(r, "buy").matchAll(/(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?\s*-\s*UAH\s*([\d.,\s]+)/g)].map((m) => ({ at: `${m[3]}${m[2]}${m[1]}${m[4] || "00"}${m[5] || "00"}`, v: numOf(m[6]) })).filter((x) => x.v !== null).sort((a, b) => b.at.localeCompare(a.at));
+    const buy = numOf(get(r, "list")) ?? hist[0]?.v ?? (/UAH/.test(get(r, "buy")) ? null : numOf(get(r, "buy")));
     out.push({
       code,
       rz_code: get(r, "rz_code").replace(/\D/g, "").slice(0, 20),
       name: get(r, "name").slice(0, 200),
       rrp: numOf(get(r, "rrp")),
-      purchase_price: buy ?? numOf(get(r, "list")),
+      purchase_price: buy,
       stock: idx.stock >= 0 && get(r, "stock") !== "" ? Math.max(0, Math.round(numOf(get(r, "stock")) || 0)) : null,
       status: get(r, "status").split(" - ")[0].trim().slice(0, 30),
       brand: get(r, "brand").slice(0, 60)
@@ -13696,13 +13696,42 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     if (!todo.length) return;
     const list = JSON.stringify(todo.map((r) => r.code));
     const found = await db.all(`SELECT product_id, name, article, rrp FROM b2b_catalog WHERE article IN (SELECT value FROM json_each(?)) OR CAST(product_id AS TEXT) IN (SELECT value FROM json_each(?))`, [list, list]).catch(() => []);
+    const byTail = todo.some((r) => /^\d{8,}$/.test(r.code)) ? await db.all(`SELECT product_id, name, rrp FROM b2b_catalog WHERE name LIKE '%[_____]%'`).catch(() => []) : [];
     const st = [];
+    const log = [];
     for (const r of todo) {
-      const m = found.find((x) => String(x.article) === r.code) || found.find((x) => String(x.product_id) === r.code);
-      if (m) st.push([`UPDATE rzs_products SET product_id = ?, name = CASE WHEN name = '' THEN ? ELSE name END, rrp = COALESCE(rrp, ?) WHERE code = ?`, [m.product_id, m.name || "", m.rrp || null, r.code]]);
+      let m = found.find((x) => String(x.article).trim() === r.code) || found.find((x) => String(x.product_id) === r.code);
+      if (!m && /^\d{8,}$/.test(r.code)) {
+        const c = byTail.filter((x) => tail5(x.name) === r.code.slice(-5));
+        if (c.length === 1) m = c[0];
+      }
+      if (m) {
+        st.push([`UPDATE rzs_products SET product_id = ?, name = CASE WHEN name = '' THEN ? ELSE name END, rrp = COALESCE(rrp, ?) WHERE code = ?`, [m.product_id, m.name || "", m.rrp || null, r.code]]);
+        log.push({ code: r.code, name: m.name, field: "product_id", old: "", new: String(m.product_id) });
+      }
     }
     if (st.length) await db.batch(st);
+    await logChanges(log, { source: "auto" });
   }
+  const LOG_FIELDS = ["product_id", "purchase_price", "rrp", "stock", "rz_status", "seats"];
+  const sv = (v) => v === null || v === void 0 ? "" : String(v);
+  function diffOf(old, next, name) {
+    return LOG_FIELDS.filter((f) => f in next && sv(old?.[f]) !== sv(next[f]) && !(f === "rz_status" && !old)).map((f) => ({ code: next.code || old.code, name, field: f, old: sv(old?.[f]), new: sv(next[f]) }));
+  }
+  async function logChanges(list, { source, user = "", batch = "" }) {
+    if (!list.length) return;
+    const at = nowIso();
+    const st = list.map((x) => [
+      `INSERT INTO rzs_price_log (at, batch, source, user_name, code, name, field, old_value, new_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [at, batch, source, user, x.code, String(x.name || "").slice(0, 200), x.field, x.old.slice(0, 500), x.new.slice(0, 500)]
+    ]);
+    for (let i = 0; i < st.length; i += 100) await db.batch(st.slice(i, i + 100));
+  }
+  const tail5 = (name) => (/\[(\d{5})\]/.exec(String(name || "")) || [])[1] || "";
+  const mapWarn = (code, crmName) => {
+    const t = tail5(crmName);
+    return !!(t && /^\d{8,}$/.test(code) && !code.endsWith(t));
+  };
   async function syncAccount(a, { days = SYNC_DAYS } = {}) {
     const dateFrom = rzsDateTime(new Date(Date.now() - days * 864e5));
     let saved = 0;
@@ -13945,8 +13974,9 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
         UNION ALL SELECT CASE WHEN ret_got_at != '' THEN 'ret_got' ELSE 'ret_wait' END, COUNT(*) FROM rzs_orders WHERE created_at >= ? AND ${RET_SQL("rzs_orders")} GROUP BY 1`, [since, since, retSince()]),
       db.all(`SELECT id, name, synced_at, hook_at, sync_error, sync_error_at FROM rzs_accounts WHERE active = 1`)
     ]);
+    const prices = await db.get(`SELECT (SELECT MAX(imported_at) FROM rzs_products) AS imported_at, (SELECT MAX(at) FROM rzs_price_log WHERE field = 'purchase_price') AS changed_at`).catch(() => null);
     const pm = await prodMap(rows);
-    return c.json({ rows: rows.map((r) => publicOrder(r, pm)), counts: Object.fromEntries(counts.map((r) => [r.status, r.n])), statuses: RZS_STATUS, accounts: accs });
+    return c.json({ rows: rows.map((r) => publicOrder(r, pm)), counts: Object.fromEntries(counts.map((r) => [r.status, r.n])), statuses: RZS_STATUS, accounts: accs, prices: { imported_at: prices?.imported_at || "", changed_at: prices?.changed_at || "" } });
   });
   const orderRow = async (id) => {
     const r = await db.get(`SELECT o.*, a.name AS account FROM rzs_orders o LEFT JOIN rzs_accounts a ON a.id = o.account_id WHERE o.id = ?`, [id]);
@@ -14240,8 +14270,45 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
   });
   app.get("/api/rzs/products", async (c) => {
     need(c, "retail.view");
-    const rows = await db.all(`SELECT * FROM rzs_products ORDER BY (product_id IS NULL) DESC, (purchase_price IS NULL) DESC, name, code LIMIT 2000`);
-    return c.json(rows.map((p) => ({ ...p, seats: p.seats ? JSON.parse(p.seats) : [] })));
+    const rows = await db.all(`SELECT p.*, k.name AS crm_name FROM rzs_products p LEFT JOIN b2b_catalog k ON k.product_id = p.product_id
+      ORDER BY (p.product_id IS NULL) DESC, (p.purchase_price IS NULL) DESC, p.name, p.code LIMIT 2000`).catch(() => db.all(`SELECT * FROM rzs_products ORDER BY name, code LIMIT 2000`));
+    const dup = /* @__PURE__ */ new Map();
+    rows.forEach((p) => {
+      if (p.product_id) dup.set(p.product_id, (dup.get(p.product_id) || 0) + 1);
+    });
+    return c.json(rows.map((p) => ({
+      ...p,
+      seats: p.seats ? JSON.parse(p.seats) : [],
+      crm_name: p.crm_name || "",
+      map_warn: p.product_id ? mapWarn(p.code, p.crm_name) ? "\u0448\u0442\u0440\u0438\u0445\u043A\u043E\u0434 \u043D\u0435 \u0437\u0431\u0456\u0433\u0430\u0454\u0442\u044C\u0441\u044F \u0437 \u0442\u043E\u0432\u0430\u0440\u043E\u043C LP-CRM" : dup.get(p.product_id) > 1 ? "\u0446\u0435\u0439 \u0442\u043E\u0432\u0430\u0440 LP-CRM \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u043E \u0434\u043E \u043A\u0456\u043B\u044C\u043A\u043E\u0445 \u0430\u0440\u0442\u0438\u043A\u0443\u043B\u0456\u0432" : "" : ""
+    })));
+  });
+  app.get("/api/rzs/products/log", async (c) => {
+    need(c, "retail.view");
+    const code = String(c.req.query("code") || "").trim();
+    const batch = String(c.req.query("batch") || "").trim();
+    const field = String(c.req.query("field") || "").trim();
+    const where = ["1 = 1"];
+    const params = [];
+    if (code) {
+      where.push("(code = ? OR name LIKE ?)");
+      params.push(code, `%${code}%`);
+    }
+    if (batch) {
+      where.push("batch = ?");
+      params.push(batch);
+    }
+    if (field) {
+      where.push("field = ?");
+      params.push(field);
+    }
+    const [rows, batches, last] = await Promise.all([
+      db.all(`SELECT * FROM rzs_price_log WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT 1000`, params),
+      db.all(`SELECT batch, MIN(at) AS at, MAX(user_name) AS user_name, COUNT(*) AS n, COUNT(DISTINCT code) AS products,
+        SUM(CASE WHEN field = 'purchase_price' THEN 1 ELSE 0 END) AS prices FROM rzs_price_log WHERE batch != '' GROUP BY batch ORDER BY at DESC LIMIT 30`),
+      db.get(`SELECT (SELECT MAX(at) FROM rzs_price_log WHERE field = 'purchase_price') AS at, (SELECT MAX(imported_at) FROM rzs_products) AS imported_at`)
+    ]);
+    return c.json({ rows, batches, price_changed_at: last?.at || "", imported_at: last?.imported_at || "" });
   });
   app.post("/api/rzs/products", async (c) => {
     need(c, "refs.edit");
@@ -14277,6 +14344,7 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
       `UPDATE rzs_products SET product_id = ?, name = ?, purchase_price = ?, rrp = ?, stock = ?, seats = ?, updated_at = ? WHERE code = ?`,
       [pid, name || "", price ?? null, rrp ?? null, stock, seats, nowIso(), code]
     );
+    await logChanges(diffOf(cur, { code, product_id: pid, purchase_price: price ?? null, rrp: rrp ?? null, stock, seats }, name || cur.name), { source: "manual", user: userName7(c.get("user")) });
     return c.json({ ok: true });
   });
   app.post("/api/rzs/products/import", async (c) => {
@@ -14287,8 +14355,19 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     if (!rows.length) throw fail(400, "\u0423 \u0444\u0430\u0439\u043B\u0456 \u043D\u0435\u043C\u0430\u0454 \u0436\u043E\u0434\u043D\u043E\u0433\u043E \u0442\u043E\u0432\u0430\u0440\u0443 \u0437 \u0430\u0440\u0442\u0438\u043A\u0443\u043B\u043E\u043C.");
     if (rows.length > 5e3) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 5000 \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0437\u0430 \u0440\u0430\u0437.");
     const uniq = [...new Map(rows.map((r) => [r.code, r])).values()];
-    const have = new Set((await db.all(`SELECT code FROM rzs_products WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(uniq.map((r) => r.code))])).map((r) => r.code));
+    const olds = new Map((await db.all(`SELECT * FROM rzs_products WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(uniq.map((r) => r.code))])).map((r) => [r.code, r]));
+    const have = new Set(olds.keys());
     const now = nowIso();
+    const batch = `imp-${Date.now()}`;
+    const changes = [];
+    for (const r of uniq) {
+      const o = olds.get(r.code);
+      if (!o) {
+        changes.push({ code: r.code, name: r.name, field: "added", old: "", new: [r.purchase_price, r.rrp].map(sv).join(" / ") });
+        continue;
+      }
+      changes.push(...diffOf(o, { code: r.code, purchase_price: r.purchase_price ?? o.purchase_price, rrp: r.rrp ?? o.rrp, stock: r.stock ?? o.stock, rz_status: r.status }, r.name || o.name));
+    }
     const st = uniq.map((r) => [
       `INSERT INTO rzs_products (code, rz_code, name, purchase_price, rrp, stock, rz_status, brand, imported_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(code) DO UPDATE SET rz_code = CASE WHEN excluded.rz_code != '' THEN excluded.rz_code ELSE rzs_products.rz_code END,
@@ -14298,10 +14377,23 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
       [r.code, r.rz_code, r.name, r.purchase_price, r.rrp, r.stock, r.status, r.brand, now, now]
     ]);
     for (let i = 0; i < st.length; i += 100) await db.batch(st.slice(i, i + 100));
+    await logChanges(changes, { source: "import", user: userName7(c.get("user")), batch });
     await autoMap(uniq.map((r) => r.code));
     const unmapped = (await db.get(`SELECT COUNT(*) AS n FROM rzs_products WHERE product_id IS NULL`))?.n || 0;
     await logAudit(db, { user: c.get("user"), kind: "rzs", refId: 0, action: `\u0456\u043C\u043F\u043E\u0440\u0442 \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u0437 \u041A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u0420\u043E\u0437\u0435\u0442\u043A\u0438: ${uniq.length} (\u043D\u043E\u0432\u0438\u0445 ${uniq.filter((r) => !have.has(r.code)).length})` }).catch(() => 0);
-    return c.json({ ok: true, total: uniq.length, added: uniq.filter((r) => !have.has(r.code)).length, updated: uniq.filter((r) => have.has(r.code)).length, skipped, unmapped });
+    const prices = changes.filter((x) => x.field === "purchase_price");
+    return c.json({
+      ok: true,
+      total: uniq.length,
+      added: uniq.filter((r) => !have.has(r.code)).length,
+      updated: uniq.filter((r) => have.has(r.code)).length,
+      skipped,
+      unmapped,
+      batch,
+      changed: new Set(changes.filter((x) => x.field !== "added").map((x) => x.code)).size,
+      prices: prices.length,
+      price_list: prices.slice(0, 50).map((x) => ({ code: x.code, name: x.name, old: x.old, new: x.new }))
+    });
   });
   async function orderInfo({ ids = [], comment = "", ttn = "" } = {}) {
     const list = [...new Set(ids.map((x) => String(x ?? "").trim()).filter((x) => /^\d+$/.test(x)))];
@@ -17234,7 +17326,7 @@ var schema12 = {
 // src/modules/retail/schema.js
 var schema13 = {
   name: "retail",
-  version: 7,
+  version: 8,
   tables: [
     // Кабінети постачальника Розетки: токен (JWT) бачить лише сервер; прайс і параметри передачі замовлень у LP-CRM.
     `CREATE TABLE IF NOT EXISTS rzs_accounts (
@@ -17290,6 +17382,21 @@ var schema13 = {
     `CREATE INDEX IF NOT EXISTS rzs_orders_status ON rzs_orders (status, created_at)`,
     // Товари Розетки (артикул постачальника): товар LP-CRM, ціна закупівлі для Розетки (вона ж — ціна в LP-CRM), РІЦ, залишок,
     // свої габарити місць (якщо в каталозі Розетки їх немає) — для ТТН.
+    // Журнал змін товарів Розетки: що змінилось (поле, було → стало), звідки (import — файл з Кабінету, manual — вручну), хто.
+    `CREATE TABLE IF NOT EXISTS rzs_price_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    batch TEXT DEFAULT '',
+    source TEXT DEFAULT '',
+    user_name TEXT DEFAULT '',
+    code TEXT NOT NULL,
+    name TEXT DEFAULT '',
+    field TEXT NOT NULL,
+    old_value TEXT DEFAULT '',
+    new_value TEXT DEFAULT ''
+  )`,
+    `CREATE INDEX IF NOT EXISTS rzs_price_log_at ON rzs_price_log (at)`,
+    `CREATE INDEX IF NOT EXISTS rzs_price_log_code ON rzs_price_log (code, at)`,
     `CREATE TABLE IF NOT EXISTS rzs_products (
     code TEXT PRIMARY KEY,
     rz_code TEXT DEFAULT '',

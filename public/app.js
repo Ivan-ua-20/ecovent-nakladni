@@ -83,6 +83,7 @@ const SECTIONS = [
   { id: 'retail', label: 'Рітейл', perm: 'retail.view', home: 'rzorders', tabs: [
     { id: 'rzorders', label: 'Розетка' },
     { id: 'rzproducts', label: 'Розетка: товари й ціни', perm: 'refs.edit' },
+    { id: 'rzpricelog', label: 'Журнал змін цін', perm: 'refs.edit' },
   ] },
   // Усі налаштування — в одному розділі: щоденна робота — в інших, рідкісні налаштування — тут.
   { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [
@@ -352,6 +353,7 @@ const routes = {
   rzorders: () => RETAIL.viewOrders(),
   rzproducts: () => RETAIL.viewProducts(),
   rzsettings: () => RETAIL.viewSettings(),
+  rzpricelog: () => RETAIL.viewPriceLog(),
 };
 
 async function route() {
