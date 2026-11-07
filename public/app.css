@@ -820,4 +820,4 @@ div.ret-v { display: flex; }
 .ret-cp.done { color: var(--ok); border-color: var(--ok); }
 .ret-cp .ic, .ret-cp-hint .ic { width: 15px; height: 15px; }
 .ret-cp-hint { display: inline-flex; vertical-align: middle; }
-@media (max-width: 900px) { .ret-f select, .ret-f input, .ret-q input, .ret-f input[type=date] { width: 100%; } .ret-f { flex: 1 1 140px; } .ret-tabs { flex-wrap: nowrap; overflow-x: auto; } .ret-tab { white-space: nowrap; } }
+@media (max-width: 900px) { .ret-f select, .ret-f input, .ret-q input, .ret-f input[type=date] { width: 100%; } .ret-f { flex: 1 1 140px; } .ret-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; } .ret-tabs::-webkit-scrollbar { display: none; } .ret-tab { white-space: nowrap; } }

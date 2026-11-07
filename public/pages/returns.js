@@ -14,7 +14,7 @@ const STATES = [
 const SRC = { rzs: 'Розетка — постачальник', rozetka: 'Розетка', prom: 'Prom', epc: 'Епіцентр', crm: 'Сайт / LP-CRM', np: 'Лише Нова пошта', other: 'Інше' };
 const SRC_CLS = { rzs: 'ok', rozetka: 'ok', prom: 'info', epc: 'warn', crm: 'info' };
 const REASON = { refused: 'Відмова клієнта', storage: 'Закінчився строк зберігання', customer: 'Повернення після отримання' };
-const CAR = { np: 'Нова пошта', rd: 'Розетка Делівері', rzr: 'Заявка Розетки', mp: 'Маркетплейс' };
+const CAR = { np: 'Нова пошта', rd: 'Розетка Делівері', rzr: 'Заявки Розетки', mp: 'Епіцентр' };
 const phoneFmt = (p) => { const d = String(p || '').replace(/\D/g, '').slice(-9); return d.length === 9 ? `0${d.slice(0, 2)} ${d.slice(2, 5)} ${d.slice(5, 7)} ${d.slice(7)}` : esc(p || ''); };
 const dShort = (iso) => (iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}` : '');
 const daysWord = (n) => `${n} дн`;
