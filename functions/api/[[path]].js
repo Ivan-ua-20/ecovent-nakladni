@@ -12639,6 +12639,37 @@ async function npTrackMany(fetchFn, apiKey, docs) {
   }
   return out;
 }
+async function npContacts(fetchFn, apiKey) {
+  const cp = (await npCall(fetchFn, apiKey, "Counterparty", "getCounterparties", { CounterpartyProperty: "Sender", Page: "1" }))[0] || {};
+  if (!cp.Ref) return { code: "", persons: [] };
+  const list = await npCall(fetchFn, apiKey, "Counterparty", "getCounterpartyContactPersons", { Ref: cp.Ref, Page: "1" });
+  return {
+    code: String(cp.EDRPOU || "").trim(),
+    persons: list.map((p) => ({ name: String(p.Description || [p.LastName, p.FirstName, p.MiddleName].filter(Boolean).join(" ")).trim().slice(0, 120), phone: phone9(p.Phones || "") })).filter((p) => p.name || p.phone).slice(0, 10)
+  };
+}
+async function npIncomingPage(fetchFn, apiKey, fromDay, toDay, page) {
+  const data = await npCall(fetchFn, apiKey, "InternetDocument", "getIncomingDocumentsByPhone", {
+    DateTimeFrom: npDate(fromDay),
+    DateTimeTo: npDate(toDay),
+    Page: String(page)
+  });
+  const rows = Array.isArray(data[0]?.result) ? data[0].result : Array.isArray(data) && data[0]?.Number ? data : [];
+  const s = (v, n = 200) => String(v ?? "").trim().slice(0, n);
+  return rows.map((d) => ({
+    ttn: s(d.Number, 40),
+    code: Number(d.TrackingStatusCode) || 0,
+    status: s(d.TrackingStatusName),
+    owner: s(d.OwnerDocumentType, 40),
+    sender: s(d.SenderName || d.CounterpartySenderDescription, 120),
+    senderOrg: s(d.CounterpartySenderDescription, 120),
+    phone: phone9(d.PhoneSender || d.SenderPhone || d.SendersPhone || d.CounterpartySenderPhone || ""),
+    cargo: s(d.CargoDescription || d.CargoDescriptionString),
+    created: npDateIso(d.DateTime || d.CreateTime || d.DateCreated),
+    arrived: npDateIso(d.ArrivalDateTime),
+    received: npDateIso(d.ReceivingDateTime)
+  })).filter((d) => /^\d{10,20}$/.test(d.ttn));
+}
 
 // src/integrations/rozetka.js
 var RZ_API = "https://api-seller.rozetka.com.ua";
@@ -14502,6 +14533,14 @@ var REFUSED = [102, 103, 105, 108];
 var RECEIVED = [9, 10, 11, 106];
 var BRANCH = [7, 8];
 var OVERDUE_DAYS = 5;
+var WATCH_DAYS = 30;
+var MP_DAYS = 60;
+var MP_CLOSE_DAYS = 21;
+var CONTACTS_MS = 7 * 864e5;
+var MP_RET = { rozetka: { 12: "refused", 11: "storage", 19: "customer" }, epc: { return_requested: "customer" } };
+var isReturnType = (t) => /return/i.test(t) && !/backward/i.test(t);
+var nameKey2 = (n) => String(n || "").toLowerCase().replace(/[^a-zа-яіїєґё'’\s-]/gi, " ").split(/[\s-]+/).filter((w) => w.length > 1).slice(0, 2).sort().join(" ");
+var mpIso = (v) => String(v || "").replace(" ", "T").slice(0, 19);
 var NP_TTN = (col) => `(length(${col}) BETWEEN 11 AND 20 AND ${col} NOT GLOB '*[^0-9]*')`;
 var addDays5 = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 var days = (from, to = Date.now()) => from ? Math.max(0, Math.floor((to - Date.parse(from)) / 864e5)) : null;
@@ -14516,6 +14555,14 @@ function mountReturns(app, { db, fetchFn, onCron }) {
   };
   const setState = (st) => db.run(`INSERT INTO settings (key, value) VALUES ('ret_cycle', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(st)]);
   const accounts = () => db.all(`SELECT id, name, api_key, sender_name FROM np_accounts WHERE active = 1 ORDER BY id`).catch(() => []);
+  const getJson = async (key) => {
+    try {
+      return JSON.parse((await db.get(`SELECT value FROM settings WHERE key = ?`, [key]))?.value || "{}") || {};
+    } catch {
+      return {};
+    }
+  };
+  const setJson = (key, v) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, JSON.stringify(v)]);
   async function needsBackfill(accs) {
     if (!accs.length) return false;
     const today3 = kyivDay();
@@ -14531,9 +14578,9 @@ function mountReturns(app, { db, fetchFn, onCron }) {
     const border = addDays5(today3, -BORDER_DAYS);
     let calls = 0;
     const out = () => calls >= CALLS;
-    const np = async (what, fn) => {
+    const np = async (what, fn, n = 1) => {
       if (calls) await new Promise((r) => setTimeout(r, GAP_MS));
-      calls++;
+      calls += n;
       try {
         return await fn();
       } catch (e) {
@@ -14576,6 +14623,77 @@ function mountReturns(app, { db, fetchFn, onCron }) {
       [`INSERT INTO ret_ships (ttn, account_id, day, phone, customer) SELECT t, NULL, substr(created_at, 1, 10), substr(phone, -9), customer
         FROM (SELECT REPLACE(ttn, ' ', '') AS t, created_at, phone, customer FROM mp_orders WHERE created_at >= ?) WHERE ${NP_TTN("t")} ${up}`, [border]]
     ]);
+    await db.run(`UPDATE ret_ships SET final = 0 WHERE final = 1 AND code IN (9, 10, 11) AND day >= ? AND ttn NOT IN (SELECT orig_ttn FROM ret_items)`, [addDays5(today3, -WATCH_DAYS)]);
+    const cont = await getJson("ret_contacts");
+    for (const a of accs) {
+      if (cont[a.id]?.at && Date.now() - Date.parse(cont[a.id].at) < CONTACTS_MS) continue;
+      if (out()) return { left: "contacts" };
+      try {
+        cont[a.id] = { at: nowIso(), ...await np("\u043A\u043E\u043D\u0442\u0430\u043A\u0442\u0438 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0443", () => npContacts(fetchFn, a.api_key), 2) };
+      } catch (e) {
+        if (e.rate) throw e;
+        cont[a.id] = { at: nowIso(), code: "", persons: [], error: String(e.message || e).slice(0, 200) };
+      }
+      await setJson("ret_contacts", cont);
+    }
+    {
+      const mpRows = await db.all(`SELECT mp, account_id, number, ttn, status, status_name, customer, phone, total, items, delivery, changed_at FROM mp_orders
+        WHERE created_at >= ? AND ((mp = 'rozetka' AND status IN ('11', '12', '19')) OR (mp = 'epc' AND status = 'return_requested'))`, [addDays5(today3, -MP_DAYS)]).catch(() => []);
+      const shops = new Map([
+        ...(await db.all(`SELECT id, name FROM rz_accounts`).catch(() => [])).map((x) => [`rozetka:${x.id}`, x.name]),
+        ...(await db.all(`SELECT id, name FROM epc_accounts`).catch(() => [])).map((x) => [`epc:${x.id}`, x.name])
+      ]);
+      const keep = [];
+      const stmts = [];
+      for (const o of mpRows) {
+        const reason = MP_RET[o.mp]?.[o.status];
+        if (!reason) continue;
+        const ttn = String(o.ttn || "").replace(/\s/g, "");
+        const isNp = /^\d{11,20}$/.test(ttn);
+        if (isNp && reason !== "customer") continue;
+        const at = mpIso(o.changed_at);
+        const goods = (() => {
+          try {
+            return JSON.parse(o.items || "[]").map((i) => i.name).filter(Boolean).join("; ").slice(0, 200);
+          } catch {
+            return "";
+          }
+        })();
+        const phone = String(o.phone || "").replace(/\D/g, "").slice(-9);
+        if (isNp) {
+          stmts.push([`INSERT INTO ret_items (orig_ttn, carrier, reason, state, customer, phone, cargo, cost, refused_at, ret_status, created_at)
+            VALUES (?, 'np', 'customer', 'nottn', ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(orig_ttn) DO NOTHING`, [ttn, o.customer || "", phone, goods, Number(o.total) || 0, at, o.status_name, nowIso()]]);
+          continue;
+        }
+        const key = ttn || `${o.mp}:${o.number}`;
+        keep.push(key);
+        const closed = at && Date.parse(at) < Date.now() - MP_CLOSE_DAYS * 864e5;
+        const gotAt = closed ? new Date(Date.parse(at) + MP_CLOSE_DAYS * 864e5).toISOString() : "";
+        stmts.push([
+          `INSERT INTO ret_items (orig_ttn, carrier, reason, state, customer, phone, cargo, cost, refused_at, got_at, ret_status, to_name, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(orig_ttn) DO UPDATE SET reason = excluded.reason, state = excluded.state, got_at = excluded.got_at, ret_status = excluded.ret_status,
+            refused_at = excluded.refused_at, cargo = excluded.cargo, cost = excluded.cost, to_name = excluded.to_name`,
+          [
+            key,
+            /^RMP-/i.test(ttn) ? "rd" : "mp",
+            reason,
+            closed ? "got" : "transit",
+            o.customer || "",
+            phone,
+            goods,
+            Number(o.total) || 0,
+            at,
+            gotAt,
+            o.status_name || "",
+            shops.get(`${o.mp}:${o.account_id}`) || "",
+            nowIso()
+          ]
+        ]);
+      }
+      stmts.push([`DELETE FROM ret_items WHERE carrier IN ('rd', 'mp') AND refused_at >= ? AND orig_ttn NOT IN (SELECT value FROM json_each(?))`, [addDays5(today3, -MP_DAYS + 7), JSON.stringify(keep)]]);
+      for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
+    }
     for (; ; ) {
       if (out()) return { left: "ships" };
       const rows = await db.all(`SELECT ttn, account_id, day, phone, customer FROM ret_ships WHERE final = 0 AND day >= ? AND checked_at < ? ORDER BY account_id, ttn LIMIT 100`, [border, st.started]);
@@ -14596,7 +14714,7 @@ function mountReturns(app, { db, fetchFn, onCron }) {
       const stmts = [];
       for (const r of batch) {
         const t = tr.get(r.ttn) || { code: 0, status: "" };
-        const basis = t.basis && /^\d{10,20}$/.test(t.basis) && (REFUSED.includes(t.code) || /return|повер/i.test(t.basisType)) ? t.basis : "";
+        const basis = t.basis && /^\d{10,20}$/.test(t.basis) && (REFUSED.includes(t.code) || isReturnType(t.basisType)) ? t.basis : "";
         let retTtn = basis || rz.get(r.ttn) || "";
         if (retTtn && owner.has(retTtn) && owner.get(retTtn) !== r.ttn) {
           stmts.push([`UPDATE ret_ships SET code = ?, status = ?, final = 1, checked_at = ? WHERE ttn = ?`, [t.code, t.status, now, r.ttn]]);
@@ -14604,7 +14722,8 @@ function mountReturns(app, { db, fetchFn, onCron }) {
         }
         if (retTtn) owner.set(retTtn, r.ttn);
         const isRet = REFUSED.includes(t.code) || !!retTtn;
-        const final = RECEIVED.includes(t.code) || t.code === 2 || t.code === 3 && r.day < addDays5(today3, -5) || isRet && !!retTtn;
+        const final = RECEIVED.includes(t.code) && r.day < addDays5(today3, -WATCH_DAYS) || t.code === 2 || t.code === 3 && r.day < addDays5(today3, -5) || isRet && !!retTtn;
+        const reason = RECEIVED.includes(t.code) ? "customer" : t.code === 105 ? "storage" : "refused";
         stmts.push([`UPDATE ret_ships SET code = ?, status = ?, final = ?, checked_at = ? WHERE ttn = ?`, [t.code, t.status, final ? 1 : 0, now, r.ttn]]);
         if (isRet) {
           stmts.push([
@@ -14612,13 +14731,13 @@ function mountReturns(app, { db, fetchFn, onCron }) {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')
             ON CONFLICT(orig_ttn) DO UPDATE SET ret_ttn = CASE WHEN ret_items.ret_ttn = '' THEN excluded.ret_ttn ELSE ret_items.ret_ttn END,
               state = CASE WHEN ret_items.state = 'nottn' AND excluded.ret_ttn != '' THEN 'transit' ELSE ret_items.state END,
-              reason = CASE WHEN ret_items.reason = '' THEN excluded.reason ELSE ret_items.reason END,
+              reason = CASE WHEN ret_items.reason = '' OR (ret_items.ret_ttn = '' AND excluded.ret_ttn != '') THEN excluded.reason ELSE ret_items.reason END,
               cargo = CASE WHEN excluded.cargo != '' THEN excluded.cargo ELSE ret_items.cargo END,
               cost = CASE WHEN excluded.cost > 0 THEN excluded.cost ELSE ret_items.cost END, cod = CASE WHEN excluded.cod > 0 THEN excluded.cod ELSE ret_items.cod END`,
             [
               r.ttn,
               retTtn,
-              t.code === 105 ? "storage" : "refused",
+              reason,
               retTtn ? "transit" : "nottn",
               r.account_id,
               r.customer || t.recipient || "",
@@ -14633,6 +14752,72 @@ function mountReturns(app, { db, fetchFn, onCron }) {
         }
       }
       for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
+    }
+    const inc = await getJson("ret_inc");
+    if (inc.started !== st.started) {
+      inc.started = st.started;
+      inc.done = [];
+    }
+    let idx = null;
+    for (const a of accs) {
+      if (inc.done.includes(a.id)) continue;
+      if (!idx) {
+        const ships = await db.all(`SELECT ttn, customer, phone, day, code FROM ret_ships WHERE day >= ? ORDER BY day DESC`, [addDays5(today3, -60)]);
+        const hasRet = new Set((await db.all(`SELECT orig_ttn FROM ret_items WHERE ret_ttn != ''`)).map((x) => x.orig_ttn));
+        idx = { byPhone: /* @__PURE__ */ new Map(), byName: /* @__PURE__ */ new Map(), own: new Set(ships.map((x) => x.ttn)) };
+        for (const x of ships.filter((y) => RECEIVED.includes(y.code) && !hasRet.has(y.ttn))) {
+          if (x.phone && !idx.byPhone.has(x.phone)) idx.byPhone.set(x.phone, x);
+          const k = nameKey2(x.customer);
+          if (k.includes(" ") && !idx.byName.has(k)) idx.byName.set(k, x);
+        }
+      }
+      for (let page = 1; page <= 10; page++) {
+        if (out()) return { left: "incoming" };
+        let list;
+        try {
+          list = await np("\u0432\u0445\u0456\u0434\u043D\u0456 \u043F\u043E\u0441\u0438\u043B\u043A\u0438", () => npIncomingPage(fetchFn, a.api_key, addDays5(today3, -30), addDays5(today3, 1), page));
+        } catch (e) {
+          if (e.rate) throw e;
+          inc.errors = { ...inc.errors || {}, [a.id]: String(e.message || e).slice(0, 200) };
+          break;
+        }
+        const cand = list.filter((d) => !d.owner && !idx.own.has(d.ttn));
+        const taken = new Set((await db.all(`SELECT ret_ttn FROM ret_items WHERE ret_ttn IN (SELECT value FROM json_each(?))`, [JSON.stringify(cand.map((d) => d.ttn))])).map((x) => x.ret_ttn));
+        const stmts = [];
+        for (const d of cand) {
+          if (taken.has(d.ttn)) continue;
+          const ship = d.phone && idx.byPhone.get(d.phone) || idx.byName.get(nameKey2(d.sender));
+          if (!ship) continue;
+          const state = RECEIVED.includes(d.code) ? "got" : BRANCH.includes(d.code) ? "branch" : "transit";
+          stmts.push([
+            `INSERT INTO ret_items (orig_ttn, ret_ttn, carrier, reason, state, account_id, customer, phone, cargo, refused_at, arrived_at, got_at, ret_code, ret_status, created_at, checked_at)
+            VALUES (?, ?, 'np', 'customer', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')
+            ON CONFLICT(orig_ttn) DO UPDATE SET ret_ttn = CASE WHEN ret_items.ret_ttn = '' THEN excluded.ret_ttn ELSE ret_items.ret_ttn END,
+              state = CASE WHEN ret_items.ret_ttn = '' THEN excluded.state ELSE ret_items.state END,
+              account_id = COALESCE(ret_items.account_id, excluded.account_id), checked_at = CASE WHEN ret_items.ret_ttn = '' THEN '' ELSE ret_items.checked_at END`,
+            [
+              ship.ttn,
+              d.ttn,
+              state,
+              a.id,
+              ship.customer || d.sender,
+              ship.phone || d.phone,
+              d.cargo,
+              d.created || nowIso(),
+              BRANCH.includes(d.code) || state === "got" ? d.arrived || "" : "",
+              state === "got" ? d.received || nowIso() : "",
+              d.code,
+              d.status,
+              nowIso()
+            ]
+          ]);
+          taken.add(d.ttn);
+        }
+        if (stmts.length) await db.batch(stmts);
+        if (list.length < 100) break;
+      }
+      inc.done.push(a.id);
+      await setJson("ret_inc", inc);
     }
     for (; ; ) {
       if (out()) return { left: "returns" };
@@ -14738,10 +14923,11 @@ function mountReturns(app, { db, fetchFn, onCron }) {
   app.get("/api/returns", async (c) => {
     need(c, "returns.view");
     const since = addDays5(kyivDay(), -SHOW_DAYS);
-    const [rows, accs, st] = await Promise.all([
+    const [rows, accs, st, cont] = await Promise.all([
       db.all(`SELECT * FROM ret_items WHERE created_at >= ? OR state != 'got' ORDER BY created_at DESC LIMIT 3000`, [since]),
-      db.all(`SELECT id, name, sender_name, active FROM np_accounts ORDER BY id`).catch(() => []),
-      getState()
+      db.all(`SELECT id, name, sender_name, sender_code, active FROM np_accounts ORDER BY id`).catch(() => []),
+      getState(),
+      getJson("ret_contacts")
     ]);
     const accName = new Map(accs.map((a) => [a.id, a.sender_name || a.name]));
     const refs = await refsOf([...new Set(rows.flatMap((r) => [r.orig_ttn, r.ret_ttn]).filter(Boolean))]);
@@ -14755,12 +14941,45 @@ function mountReturns(app, { db, fetchFn, onCron }) {
         src: orders[0]?.src || (r.account_id ? "np" : "other"),
         account: accName.get(r.account_id) || "",
         to: accName.get(r.account_id) || r.to_name || "",
+        auto_closed: r.carrier !== "np" && r.state === "got",
         branch_days: inBranch,
         overdue: inBranch !== null && inBranch >= OVERDUE_DAYS,
         wait_days: r.state === "got" ? days(r.refused_at, Date.parse(r.got_at) || now) : days(r.refused_at, now)
       };
     });
-    return c.json({ rows: out, overdue_days: OVERDUE_DAYS, cycle: st, accounts: accs.filter((a) => a.active).map((a) => ({ id: a.id, name: a.sender_name || a.name })), cycle_hours: CYCLE_MS / 36e5 });
+    const pickup = accs.filter((a) => a.active).map((a) => {
+      const mine = out.filter((r) => r.account_id === a.id && r.carrier === "np");
+      const seen = /* @__PURE__ */ new Map();
+      for (const r of mine) if (r.to_phone || r.to_name) {
+        const k = `${r.to_name}|${String(r.to_phone).slice(-9)}`;
+        seen.set(k, { name: r.to_name, phone: String(r.to_phone).slice(-9), n: (seen.get(k)?.n || 0) + 1 });
+      }
+      const persons = [...seen.values()].sort((x, y) => y.n - x.n).slice(0, 3);
+      for (const p of cont[a.id]?.persons || []) if (!persons.some((x) => p.phone && x.phone === p.phone || p.name && x.name === p.name)) persons.push({ name: p.name, phone: p.phone, contact: true });
+      const wh = /* @__PURE__ */ new Map();
+      for (const r of mine.filter((x) => x.state === "branch")) {
+        const k = [r.city, r.warehouse].filter(Boolean).join(", ");
+        wh.set(k, (wh.get(k) || 0) + 1);
+      }
+      return {
+        id: a.id,
+        name: a.sender_name || a.name,
+        code: a.sender_code || cont[a.id]?.code || "",
+        persons: persons.slice(0, 5),
+        branch: mine.filter((x) => x.state === "branch").length,
+        transit: mine.filter((x) => x.state === "transit").length,
+        warehouses: [...wh].map(([w, n]) => ({ w, n })).sort((x, y) => y.n - x.n).slice(0, 6)
+      };
+    });
+    return c.json({
+      rows: out,
+      overdue_days: OVERDUE_DAYS,
+      cycle: st,
+      pickup,
+      mp_close_days: MP_CLOSE_DAYS,
+      accounts: accs.filter((a) => a.active).map((a) => ({ id: a.id, name: a.sender_name || a.name })),
+      cycle_hours: CYCLE_MS / 36e5
+    });
   });
   app.post("/api/returns/refresh", async (c) => {
     need(c, "returns.view");

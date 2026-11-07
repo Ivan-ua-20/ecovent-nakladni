@@ -115,3 +115,30 @@ export async function npTrackMany(fetchFn, apiKey, docs) {
   }
   return out;
 }
+
+// Контактні особи кабінету (відправника): хто й на який номер може забрати повернення. Два запити.
+export async function npContacts(fetchFn, apiKey) {
+  const cp = (await npCall(fetchFn, apiKey, 'Counterparty', 'getCounterparties', { CounterpartyProperty: 'Sender', Page: '1' }))[0] || {};
+  if (!cp.Ref) return { code: '', persons: [] };
+  const list = await npCall(fetchFn, apiKey, 'Counterparty', 'getCounterpartyContactPersons', { Ref: cp.Ref, Page: '1' });
+  return {
+    code: String(cp.EDRPOU || '').trim(),
+    persons: list.map((p) => ({ name: String(p.Description || [p.LastName, p.FirstName, p.MiddleName].filter(Boolean).join(' ')).trim().slice(0, 120), phone: phone9(p.Phones || '') }))
+      .filter((p) => p.name || p.phone).slice(0, 10),
+  };
+}
+// Вхідні посилки кабінету (ми — отримувач) за період, сторінка до 100. Службові «плечі» (переадресація, повернення НП)
+// мають непорожній owner (OwnerDocumentType). Повертає [] на порожній сторінці.
+export async function npIncomingPage(fetchFn, apiKey, fromDay, toDay, page) {
+  const data = await npCall(fetchFn, apiKey, 'InternetDocument', 'getIncomingDocumentsByPhone', {
+    DateTimeFrom: npDate(fromDay), DateTimeTo: npDate(toDay), Page: String(page),
+  });
+  const rows = Array.isArray(data[0]?.result) ? data[0].result : Array.isArray(data) && data[0]?.Number ? data : [];
+  const s = (v, n = 200) => String(v ?? '').trim().slice(0, n);
+  return rows.map((d) => ({
+    ttn: s(d.Number, 40), code: Number(d.TrackingStatusCode) || 0, status: s(d.TrackingStatusName), owner: s(d.OwnerDocumentType, 40),
+    sender: s(d.SenderName || d.CounterpartySenderDescription, 120), senderOrg: s(d.CounterpartySenderDescription, 120),
+    phone: phone9(d.PhoneSender || d.SenderPhone || d.SendersPhone || d.CounterpartySenderPhone || ''), cargo: s(d.CargoDescription || d.CargoDescriptionString),
+    created: npDateIso(d.DateTime || d.CreateTime || d.DateCreated), arrived: npDateIso(d.ArrivalDateTime), received: npDateIso(d.ReceivingDateTime),
+  })).filter((d) => /^\d{10,20}$/.test(d.ttn));
+}
