@@ -103,11 +103,14 @@ export function createReturnsPages() {
     const cnt = (list, key) => list.reduce((m, r) => { m[r[key]] = (m[r[key]] || 0) + 1; return m; }, {});
     const forSt = base.filter((r) => ok(r, 'st'));
     const stN = Object.fromEntries(STATES.map(([k]) => [k, forSt.filter((r) => match(r, k)).length]));
-    const carN = cnt(base.filter((r) => ok(r, 'car')), 'carrier');
+    // Вкладки служб доставки — верхній рівень: їх не змінюють ні стани зліва, ні фільтри над таблицею (кількість — активні повернення служби).
+    const carN = cnt(all.filter((r) => r.state !== 'got' && r.state !== 'stuck'), 'carrier');
+    const carHas = new Set(all.map((r) => r.carrier));
     const srcN = cnt(base.filter((r) => ok(r, 'src')), 'src');
     const toN = cnt(base.filter((r) => ok(r, 'to')), 'to');
     const reN = cnt(base.filter((r) => ok(r, 'reason')), 'reason');
     const carAll = Object.values(carN).reduce((s, n) => s + n, 0);
+    const tabTitle = 'активних повернень (без отриманих і застряглих)';
     const opt = (map, val, names) => Object.keys(map).filter(Boolean).sort((a, b) => String(names?.[a] || a).localeCompare(String(names?.[b] || b), 'uk'))
       .map((k) => `<option value="${esc(k)}" ${val === k ? 'selected' : ''}>${esc(names?.[k] || k)} (${map[k]})</option>`).join('');
     // Щоб забрати — компактно, лише для обраної служби (НП — кабінети, Розетка Делівері — точки видачі).
@@ -124,7 +127,7 @@ export function createReturnsPages() {
     const cy = d.cycle || {};
     const next = cy.finished ? new Date(Date.parse(cy.started) + d.cycle_hours * 3600e3).toISOString() : '';
     const sum = rows.filter((r) => r.state !== 'got' && r.state !== 'stuck').reduce((s, r) => s + (r.cost || 0), 0);
-    const tab = (k, label, n) => `<button type="button" class="ret-tab ${f.car === k ? 'on' : ''}" data-rcar="${k}">${esc(label)} <span class="ret-tab-n">${n || 0}</span></button>`;
+    const tab = (k, label, n) => `<button type="button" class="ret-tab ${f.car === k ? 'on' : ''}" data-rcar="${k}" title="${n || 0} ${tabTitle}">${esc(label)} <span class="ret-tab-n">${n || 0}</span></button>`;
     main.innerHTML = `
       <div class="head-row"><h2>Повернення</h2><div class="btn-row">
         <button class="btn" id="retRefresh">🔄 Оновити інформацію</button>
@@ -135,7 +138,7 @@ export function createReturnsPages() {
       ${(d.rz_errors || []).length ? `<div class="alert warn small" style="margin-bottom:10px">Розетка: ${d.rz_errors.map((e) => `${esc(e.shop)} — ${esc(e.error)}`).join('; ')}. Дані цих магазинів можуть бути неповні.</div>` : ''}
       ${cy.error ? `<div class="alert warn small" style="margin-bottom:10px">Остання перевірка не вдалася: ${esc(cy.error)}. Натисніть «Оновити інформацію».</div>` : ''}
       ${!d.accounts.length ? '<div class="alert warn" style="margin-bottom:10px">Кабінети Нової пошти ще не додано: «Налаштування → Доставка: НП, Розетка, Prom, Епіцентр».</div>' : ''}
-      <div class="ret-tabs" role="tablist" aria-label="Служба доставки">${tab('', 'Усі', carAll)}${Object.keys(CAR).filter((k) => carN[k] || f.car === k).map((k) => tab(k, CAR[k], carN[k])).join('')}</div>
+      <div class="ret-tabs" role="tablist" aria-label="Служба доставки">${tab('', 'Усі', carAll)}${Object.keys(CAR).filter((k) => carHas.has(k) || f.car === k).map((k) => tab(k, CAR[k], carN[k])).join('')}</div>
       ${fpLayout(fpGroup('Стан', STATES.map(([k, v]) => fpBtn(`<span class="ret-st"><span>${esc(v)}</span>${ST_HINT[k] ? `<span class="small muted">${esc(ST_HINT[k])}</span>` : ''}</span><b class="small ${k === 'overdue' && stN[k] ? 'ret-bad' : ''}">${stN[k] || ''}</b>`, f.st === k, `data-rst="${k}"`)).join('')),
       `<div class="card ret-bar">
         <label class="ret-f ret-q"><span>Пошук</span><input id="retQ" type="search" placeholder="ТТН, № замовлення, прізвище, телефон" value="${esc(f.q)}"></label>
@@ -155,7 +158,8 @@ export function createReturnsPages() {
     wireFp();
     iconize(main);
     $$('[data-rst]').forEach((b) => (b.onclick = () => { f.st = b.dataset.rst; pickOpen = null; viewReturns(); }));
-    $$('[data-rcar]').forEach((b) => (b.onclick = () => { f.car = b.dataset.rcar; viewReturns(); }));
+    // Інша служба — отримувач/магазин з попередньої не підходить, скидаємо його.
+    $$('[data-rcar]').forEach((b) => (b.onclick = () => { if (f.car !== b.dataset.rcar) f.to = ''; f.car = b.dataset.rcar; viewReturns(); }));
     $('#retSrc').onchange = (e) => { f.src = e.target.value; viewReturns(); };
     $('#retTo').onchange = (e) => { f.to = e.target.value; viewReturns(); };
     $('#retRe').onchange = (e) => { f.reason = e.target.value; viewReturns(); };
