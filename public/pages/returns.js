@@ -74,7 +74,7 @@ export function createReturnsPages() {
         <button class="btn" id="retRefresh">🔄 Оновити інформацію</button>
         <button class="btn" id="retCopy">📋 Копіювати ТТН (${rows.filter((r) => r.ret_ttn).length})</button>
         <button class="btn" id="retXls">⬇ Excel</button></div></div>
-      <div class="small muted" style="margin-bottom:10px">Нова пошта: ${!cy.started ? 'ще не перевіряли' : !cy.done ? 'перевірка триває…' : `перевірено ${esc(fmtDateTime(cy.finished))}${next ? ` · наступна перевірка ≈ ${esc(fmtDateTime(next))}` : ''}`}
+      <div class="small muted" style="margin-bottom:10px">Нова пошта: ${!cy.started ? 'ще не перевіряли' : !cy.done ? `перевірка триває${cy.pause_until && Date.parse(cy.pause_until) > Date.now() ? ` (Нова пошта просить зачекати до ${esc(fmtDateTime(cy.pause_until).slice(-5))})` : '…'}` : `перевірено ${esc(fmtDateTime(cy.finished))}${next ? ` · наступна перевірка ≈ ${esc(fmtDateTime(next))}` : ''}`}
         · кабінетів НП: ${d.accounts.length} · Розетка Делівері, Міст Експрес — підключимо згодом</div>
       ${cy.error ? `<div class="alert warn small" style="margin-bottom:10px">Остання перевірка не вдалася: ${esc(cy.error)}. Натисніть «Оновити інформацію».</div>` : ''}
       ${!d.accounts.length ? '<div class="alert warn" style="margin-bottom:10px">Кабінети Нової пошти ще не додано: «Налаштування → Доставка: НП, Розетка, Prom, Епіцентр».</div>' : ''}
@@ -135,9 +135,10 @@ export function createReturnsPages() {
         if (st.skipped) { toast(st.skipped, true); break; }
         if (st.done) break;
         // Нова пошта просить зачекати або крок уже йде у фоні — трохи чекаємо і продовжуємо.
-        if (st.wait || st.busy) { label(st.wait ? 'Нова пошта просить зачекати…' : 'Перевірка вже йде…'); await new Promise((r) => setTimeout(r, st.wait ? 8000 : 4000)); }
+        if (st.wait) { toast(`Нова пошта просить зачекати — перевірка продовжиться у фоні${st.pause_until ? ` після ${fmtDateTime(st.pause_until).slice(-5)}` : ''}`); break; }
+        if (st.busy) { label('Перевірка вже йде…'); await new Promise((r) => setTimeout(r, 4000)); }
       }
-      if (st && !st.done && !st.skipped) toast('Перевірка ще триває у фоні — дані з’являться трохи згодом');
+      if (st && !st.done && !st.skipped && !st.wait) toast('Перевірка ще триває у фоні — дані з’являться трохи згодом');
       else if (st?.done) toast('Інформацію оновлено');
     } catch (e) { toast(e.message, true); }
     refreshing = false;

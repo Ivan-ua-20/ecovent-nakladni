@@ -67,7 +67,8 @@ let n = 0;
 // «To many requests» від НП — не помилка: крок зупиняється, далі продовжуємо.
 tooMany = 1;
 st = (await call('POST', '/api/returns/refresh', { start: true }, H)).j;
-assert.ok(st.wait && !st.error && !st.done, 'НП просить зачекати — чекаємо, без помилки');
+assert.ok(st.wait && !st.error && !st.done && st.pause_until, 'НП просить зачекати — пауза 10 хв, без помилки');
+await db.run(`UPDATE settings SET value = json_set(value, '$.pause_until', '') WHERE key = 'ret_cycle'`);
 n = 1;
 do { st = (await call('POST', '/api/returns/refresh', { start: n === 0 }, H)).j; n++; } while (!st.done && n < 20);
 assert.ok(st.done && n > 1, 'цикл завершився за кілька кроків (дні кабінету читаються частинами)');
