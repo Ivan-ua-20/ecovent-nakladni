@@ -12,46 +12,52 @@ const TOKEN_SHOPS = [
   { key: 'epc', api: '/api/epc/accounts', title: 'Магазини Епіцентру', label: 'Епіцентр', namePh: 'напр. Епіцентр Ecovent',
     help: `Підключення кабінету продавця Епіцентр Маркету за токеном API. «Маркування» друкує накладні Укрпошти, Meest, центрів видачі й поштоматів Епіцентру
       (Нова пошта — з кабінетів НП вище). Токен: кабінет продавця → <b>Налаштування компанії → API</b> → згенеруйте токен. Кожен магазин — свій токен.` },
+  { key: 'meest', api: '/api/meest/accounts', title: 'Договори Meest (Міст)', label: 'Meest', namePh: 'напр. ТОВ Ековент · Rozetka; порожня — номер договору', noun: 'договір', empty: 'Договорів Meest ще немає',
+    extra: { name: 'contract_id', label: 'ContractID', ph: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' },
+    help: `Відстеження посилок Meest (Міст) для розділу «Повернення». Кабінет Meest → <b>Налаштування → API інтеграції</b>: скопіюйте
+      <b>API токен</b> і <b>ContractID</b> договору. Кожен договір — окремо (свій токен). Токен діє рік — після продовження в кабінеті вставте новий тут.` },
 ];
 const shopsHtml = (s, rows) => `
-  <div class="head-row" style="margin-top:28px"><h2>${s.title}</h2><button class="btn primary" id="${s.key}New">+ Додати магазин</button></div>
+  <div class="head-row" style="margin-top:28px"><h2>${s.title}</h2><button class="btn primary" id="${s.key}New">+ Додати ${s.noun || 'магазин'}</button></div>
   <div class="alert info help" style="margin-bottom:14px">${s.help}</div>
-  ${rows.length ? `<table class="list"><thead><tr><th>Назва</th><th>Токен</th><th>Перевірено</th><th>Стан</th><th></th></tr></thead><tbody>
+  ${rows.length ? `<table class="list"><thead><tr><th>Назва</th>${s.extra ? `<th>${esc(s.extra.label)}</th>` : ''}<th>Токен</th><th>Перевірено</th><th>Стан</th><th></th></tr></thead><tbody>
     ${rows.map((a) => `<tr>
-      <td><b>${esc(a.name)}</b></td>
+      <td><b>${esc(a.name)}</b></td>${s.extra ? `<td class="small muted">${esc(a[s.extra.name] || '—')}</td>` : ''}
       <td class="small muted">${esc(a.token)}</td>
       <td class="small muted">${a.checked_at ? esc(fmtDateTime(a.checked_at)) : '—'}</td>
       <td>${a.active ? '<span class="badge ok">увімкнено</span>' : '<span class="badge bad">вимкнено</span>'}</td>
       <td style="text-align:right;white-space:nowrap"><button class="btn sm" data-${s.key}check="${a.id}">Перевірити</button> <button class="btn sm" data-${s.key}edit="${a.id}">Змінити</button></td>
     </tr>`).join('')}</tbody></table>`
-    : `<div class="card empty"><div class="big">Магазинів ${s.label} ще немає</div>Додайте токен API кабінету.</div>`}`;
+    : `<div class="card empty"><div class="big">${s.empty || `Магазинів ${s.label} ще немає`}</div>Додайте токен API кабінету.</div>`}`;
 function wireShops(s, rows, reload) {
-  const ordersModal = (name, orders) => modal(`${s.label} · ${name}: останні замовлення`, orders.length
+  const ordersModal = (name, orders) => modal(`${s.label} · ${name}: ${s.extra ? 'останні посилки' : 'останні замовлення'}`, orders.length
     ? `<table class="list"><thead><tr><th>Замовлення</th><th>Статус</th><th>Доставка</th><th>Накладна / ТТН</th></tr></thead><tbody>
       ${orders.map((o) => `<tr><td><b>${esc(o.id)}</b><div class="small muted">${esc(fmtDateTime(o.date))}</div></td><td class="small">${esc(o.status)}</td>
         <td class="small">${esc(o.option || o.provider || '—')}${o.option && o.provider ? `<div class="muted">${esc(o.provider)}</div>` : ''}</td><td class="small">${esc(o.ttn || '—')}${o.ttn_status ? `<div class="muted">${esc(o.ttn_status)}</div>` : ''}</td></tr>`).join('')}</tbody></table>`
-    : '<div class="card empty">Токен працює, але замовлень ще немає.</div>', { footer: '<button class="btn primary" data-close>Готово</button>' });
+    : `<div class="card empty">Токен працює, але ${s.extra ? 'посилок за останній тиждень немає' : 'замовлень ще немає'}.</div>`, { footer: '<button class="btn primary" data-close>Готово</button>' });
   const form = (a) => {
     const isNew = !a;
-    const m = modal(isNew ? `Новий магазин: ${s.label}` : `Магазин «${a.name}»`, `<form id="shopF" class="form-stack">
+    const m = modal(isNew ? `Новий ${s.noun || 'магазин'}: ${s.label}` : `${s.noun ? 'Договір' : 'Магазин'} «${a.name}»`, `<form id="shopF" class="form-stack">
         <label class="f"><span>Назва (${s.namePh})</span><input name="name" value="${esc(a?.name || '')}" autocomplete="off" ${isNew ? 'required' : ''}></label>
         <label class="f"><span>${isNew ? 'Токен API' : 'Новий токен API (залиште порожнім, щоб не міняти)'}</span><input name="token" autocomplete="off" spellcheck="false" placeholder="${isNew ? '' : esc(a.token)}" ${isNew ? 'required' : ''}></label>
+        ${s.extra ? `<label class="f"><span>${esc(s.extra.label)}</span><input name="${s.extra.name}" value="${esc(a?.[s.extra.name] || '')}" autocomplete="off" spellcheck="false" placeholder="${esc(s.extra.ph)}" required></label>` : ''}
         ${isNew ? '' : `<label class="check"><input type="checkbox" name="active" ${a.active ? 'checked' : ''}> Увімкнено</label>`}
       </form>`, { footer: `${isNew ? '' : '<button class="btn danger" id="shopDel" style="margin-right:auto">Видалити</button>'}<button class="btn" data-close>Скасувати</button><button class="btn primary" id="shopSave">${isNew ? 'Додати і перевірити' : 'Зберегти'}</button>` });
     $('#shopSave', m.el).onclick = async () => {
       const f = $('#shopF', m.el);
       const d = { name: f.name.value.trim(), token: f.token.value.trim() };
+      if (s.extra) d[s.extra.name] = f[s.extra.name].value.trim();
       if (f.active) d.active = f.active.checked;
       if (!isNew && !d.token) delete d.token;
       $('#shopSave', m.el).disabled = true;
       try {
         const r = isNew ? await api('POST', s.api, d) : await api('PUT', `${s.api}/${a.id}`, d);
-        m.close(); toast(isNew ? `Магазин ${s.label} підключено` : 'Збережено'); await reload();
+        m.close(); toast(isNew ? `${s.noun ? 'Договір' : 'Магазин'} ${s.label} підключено` : 'Збережено'); await reload();
         if (r.orders) ordersModal(d.name || a?.name || s.label, r.orders);
       } catch (e) { toast(e.message, true); $('#shopSave', m.el).disabled = false; }
     };
     $('#shopDel', m.el) && ($('#shopDel', m.el).onclick = async () => {
-      if (!(await confirmDanger(`Видалити магазин «${a.name}»?`, `Замовлення цього магазину ${s.label} більше не читатимуться, доки не додасте токен знову.`, 'Видалити магазин'))) return;
+      if (!(await confirmDanger(`Видалити ${s.noun || 'магазин'} «${a.name}»?`, s.extra ? 'Посилки цього договору Meest більше не відстежуватимуться, доки не додасте токен знову.' : `Замовлення цього магазину ${s.label} більше не читатимуться, доки не додасте токен знову.`, `Видалити ${s.noun || 'магазин'}`))) return;
       try { await api('DELETE', `${s.api}/${a.id}`); m.close(); toast('Видалено'); reload(); } catch (e) { toast(e.message, true); }
     });
   };
