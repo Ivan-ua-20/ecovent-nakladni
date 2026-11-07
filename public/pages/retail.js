@@ -3,6 +3,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime, takeHashQuery } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
+import { fpLayout, wireFp, fpGroup, fpBtn, fpKpi } from './b2b-shared.js';
 
 const ST_CLS = { new: 'warn', updated: 'warn', confirmed: 'info', shipping: 'info', problem: 'bad', closed: 'ok', delivery_refused: 'bad', deleted: 'bad', shipped_from_rozetka: 'ok' };
 const UZD_CLS = { verified: 'ok', skipped: 'ok', problem: 'bad', not_uploaded: '' };
@@ -81,13 +82,18 @@ export function createRetailPages(ctx) {
       ${accounts.length ? `<div class="small muted" style="margin-bottom:10px">${lastSync ? `Оновлено: ${esc(fmtDateTime(lastSync))}` : 'Ще не оновлювалось'}${lastHook ? ` · вебхук Розетки: ${esc(fmtDateTime(lastHook))}` : ' · вебхук ще не надходив'}</div>
         ${accounts.filter((a) => a.sync_error).map((a) => `<div class="alert warn small" style="margin-bottom:10px">⚠️ Останнє оновлення з Розетки${accounts.length > 1 ? ` («${esc(a.name)}»)` : ''} не вдалося${a.sync_error_at ? ` (${esc(fmtDateTime(a.sync_error_at))})` : ''}: ${esc(a.sync_error)}. Натисніть «Оновити з Розетки» ще раз.</div>`).join('')}`
         : `<div class="alert warn" style="margin-bottom:12px">Кабінет постачальника Розетки ще не підключено${can('api') ? ' — «Налаштування Розетки»' : ' — зверніться до адміністратора'}.</div>`}
-      <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap">
-        ${Object.entries(VIEWS).map(([k, v]) => `<button class="chip ${filter.view === k ? 'on' : ''}" data-v="${k}">${esc(v)}${(k === 'crmnew' || RET_VIEWS.includes(k)) && counts[k] ? ` · ${counts[k]}` : ''}</button>`).join('')}
-        ${Object.entries(statuses).filter(([k]) => counts[k]).map(([k, v]) => `<button class="chip ${filter.view === k ? 'on' : ''}" data-v="${k}">${esc(v)} · ${counts[k]}</button>`).join('')}
+      ${fpLayout(`${fpGroup('Пошук', `<input id="rzQ" type="search" placeholder="№ Розетки, клієнт, телефон, ТТН, рахунок" value="${esc(filter.q)}" aria-label="Пошук замовлення">`)}
+        ${fpGroup('Етапи', Object.entries(VIEWS).filter(([k]) => !RET_VIEWS.includes(k)).map(([k, v]) => fpBtn(`<span>${esc(v)}</span><span class="small">${k === 'crmnew' && counts.crmnew ? counts.crmnew : ''}</span>`, filter.view === k, `data-v="${k}"`)).join(''))}
+        ${fpGroup('Повернення', RET_VIEWS.map((k) => fpBtn(`<span>${esc(VIEWS[k])}</span><span class="small">${counts[k] || ''}</span>`, filter.view === k, `data-v="${k}"`)).join(''))}
+        ${fpGroup('Статус Розетки', Object.entries(statuses).filter(([k]) => counts[k]).map(([k, v]) => fpBtn(`<span>${esc(v)}</span><span class="small">${counts[k]}</span>`, filter.view === k, `data-v="${k}"`)).join(''))}`,
+      `<div class="kpis">
+        ${fpKpi('До підтвердження', String((counts.new || 0) + (counts.updated || 0)), 'нові й змінені')}
+        ${fpKpi('Відправляються', String(counts.shipping || 0))}
+        ${fpKpi('Повернення — чекаємо', String(counts.ret_wait || 0), 'за 120 днів', counts.ret_wait ? 'kpi-bad' : '')}
+        ${fpKpi('Повернення — отримано', String(counts.ret_got || 0), 'за 120 днів')}
       </div>
-      <div class="btn-row" style="margin-bottom:10px;flex-wrap:wrap"><input id="rzQ" placeholder="№ Розетки, клієнт, телефон, ТТН, рахунок" value="${esc(filter.q)}" style="max-width:320px">
-        ${RET_VIEWS.includes(filter.view) ? `<button class="btn" id="rzRetXls" title="Обидва статуси повернень — окремими аркушами">⬇ ТТН повернень (Excel)</button><button class="btn" id="rzRetCopy">📋 Копіювати ТТН (${rows.length})</button><button class="btn" id="rzRetCheck" title="Статус ЕН повернення в Новій пошті">🔄 Перевірити в НП</button>` : ''}</div>
-      ${RET_VIEWS.includes(filter.view) ? '<div class="small muted" style="margin-bottom:10px">Повернення — замовлення з ТТН повернення від Розетки, статусом «Відмова від отримання» або відмовою в трекінгу НП (за 120 днів). «Отримано» — за статусом ЕН повернення в Новій пошті (перевірка щогодини) або позначено вручну.</div>' : ''}
+      ${RET_VIEWS.includes(filter.view) ? `<div class="card btn-row" style="flex-wrap:wrap;align-items:center;padding:10px 12px"><b style="margin-right:auto">${esc(VIEWS[filter.view])} · ${rows.length}</b><button class="btn" id="rzRetXls" title="Обидва статуси повернень — окремими аркушами">⬇ ТТН повернень (Excel)</button><button class="btn" id="rzRetCopy">📋 Копіювати ТТН (${rows.length})</button><button class="btn" id="rzRetCheck" title="Статус ЕН повернення в Новій пошті">🔄 Перевірити в НП</button>
+        <div class="small muted" style="flex-basis:100%">Повернення — замовлення з ТТН повернення від Розетки, статусом «Відмова від отримання» або відмовою в трекінгу НП (за 120 днів). «Отримано» — за статусом ЕН повернення в Новій пошті (перевірка щогодини) або позначено вручну.</div></div>` : ''}
       <div id="rzBulk" class="btn-row card" hidden style="position:sticky;top:8px;z-index:5;margin-bottom:10px;padding:8px 12px;flex-wrap:wrap;align-items:center"></div>
       ${rows.length ? `<div class="table-wrap"><table class="list"><thead><tr><th style="width:34px"><input type="checkbox" id="rzAll" aria-label="Обрати всі"></th>
         <th>№ / дата</th><th>Клієнт</th><th class="hide-m">Товари</th><th class="r">Післяплата</th><th>Статус</th><th>ТТН</th><th>Рахунок (Вчасно)</th><th>Документи</th><th class="hide-m">LP-CRM</th></tr></thead><tbody>
@@ -104,7 +110,8 @@ export function createRetailPages(ctx) {
             ${o.docs_at ? `<div class="muted">${esc(fmtDateTime(o.docs_at))}</div>` : ''}</td>
           <td class="small hide-m">${o.crm_id ? `№ <b>${esc(o.crm_id)}</b>` : o.crm_code ? 'передано' : '—'}${o.crm_status ? `<div><span class="badge ${o.crm_new ? 'warn' : 'info'}">${esc(o.crm_status)}</span></div>` : ''}</td>
         </tr>`).join('')}</tbody></table></div>`
-        : '<div class="card empty"><div class="big">Замовлень немає</div>Нові замовлення Розетки з’являються тут автоматично (вебхук) або кнопкою «Оновити з Розетки».</div>'}`;
+        : `<div class="card empty"><div class="big">Замовлень немає</div>${filter.view || filter.q ? 'Змініть фільтр або пошук.' : 'Нові замовлення Розетки з’являються тут автоматично (вебхук) або кнопкою «Оновити з Розетки».'}</div>`}`, { summary: [VIEWS[filter.view] || statuses[filter.view] || 'Усі', filter.q].filter(Boolean).join(' · ') })}`;
+    wireFp();
     $('#rzSync').onclick = async (e) => {
       e.currentTarget.disabled = true;
       e.currentTarget.innerHTML = '<span class="spinner"></span> Оновлюю…';
@@ -357,13 +364,16 @@ export function createRetailPages(ctx) {
   // ---------------------------------------------------------------- товари й ціни
   const RZ_ST = { available: ['є на сайті', 'ok'], unavailable: ['немає в наявності', 'warn'], archive: ['архів', 'bad'] };
   const PV = { '': 'Усі', nomap: 'Не прив’язані до LP-CRM', available: 'Є на сайті', noprice: 'Без ціни закупівлі' };
-  const pf = { v: '', q: '' };
+  const pf = { v: '', q: '', brand: '' };
   async function viewProducts() {
     const all = await api('GET', '/api/rzs/products');
     const edit = can('refs.edit');
     const q = pf.q.trim().toLowerCase();
-    const rows = all.filter((p) => (!pf.v || (pf.v === 'nomap' && !p.product_id) || (pf.v === 'available' && p.rz_status === 'available') || (pf.v === 'noprice' && !(p.purchase_price > 0)))
+    const brands = [...new Set(all.map((p) => p.brand).filter(Boolean))].sort((x, y) => x.localeCompare(y, 'uk'));
+    if (pf.brand && !brands.includes(pf.brand)) pf.brand = '';
+    const rows = all.filter((p) => (!pf.brand || p.brand === pf.brand) && (!pf.v || (pf.v === 'nomap' && !p.product_id) || (pf.v === 'available' && p.rz_status === 'available') || (pf.v === 'noprice' && !(p.purchase_price > 0)))
       && (!q || [p.code, p.rz_code, p.name, p.brand, p.product_id].some((x) => String(x ?? '').toLowerCase().includes(q))));
+    const pvCount = (k) => (!k ? all.length : all.filter((p) => (k === 'nomap' && !p.product_id) || (k === 'available' && p.rz_status === 'available') || (k === 'noprice' && !(p.purchase_price > 0))).length);
     const lastImport = all.map((p) => p.imported_at).filter(Boolean).sort().pop();
     main.innerHTML = `
       <div class="head-row"><h2>Розетка — товари й ціни закупівлі</h2><div class="btn-row">
@@ -373,8 +383,15 @@ export function createRetailPages(ctx) {
         у наявних оновляться назва, код Розетки, РРЦ, ціна закупівлі, залишок і статус; прив’язка до LP-CRM і габарити лишаються.
         <b>Ціна закупівлі</b> йде в LP-CRM у замовлення Розетки (не роздрібна). <b>Товар LP-CRM (ID)</b> підставляється сам, якщо артикул збігається з артикулом у каталозі, інакше — впишіть ID товару з LP-CRM.
         ${lastImport ? `<div class="small" style="margin-top:4px">Останнє завантаження: ${esc(fmtDateTime(lastImport))}</div>` : ''}</div>
-      <div class="btn-row" style="margin-bottom:8px;flex-wrap:wrap">${Object.entries(PV).map(([k, v]) => `<button class="chip ${pf.v === k ? 'on' : ''}" data-pv="${k}">${esc(v)}${k === 'nomap' ? ` · ${all.filter((p) => !p.product_id).length}` : ''}</button>`).join('')}
-        <input id="rpQ" placeholder="Артикул, код Розетки, назва, бренд" value="${esc(pf.q)}" style="max-width:300px" aria-label="Пошук товару"></div>
+      ${fpLayout(`${fpGroup('Пошук', `<input id="rpQ" type="search" placeholder="Артикул, код Розетки, назва, бренд" value="${esc(pf.q)}" aria-label="Пошук товару">`)}
+        ${fpGroup('Показати', Object.entries(PV).map(([k, v]) => fpBtn(`<span>${esc(v)}</span><span class="small">${pvCount(k) || ''}</span>`, pf.v === k, `data-pv="${k}"`)).join(''))}
+        ${brands.length > 1 ? fpGroup('Бренд', [['', 'Усі бренди'], ...brands.map((b) => [b, b])].map(([k, v]) => fpBtn(`<span>${esc(v)}</span><span class="small">${k ? all.filter((p) => p.brand === k).length : ''}</span>`, pf.brand === k, `data-pb="${esc(k)}"`)).join('')) : ''}`,
+      `<div class="kpis">
+        ${fpKpi('Товарів', String(all.length), rows.length !== all.length ? `у списку ${rows.length}` : '')}
+        ${fpKpi('Не прив’язані до LP-CRM', String(pvCount('nomap')), pvCount('nomap') ? 'такі замовлення не підуть у LP-CRM' : '', pvCount('nomap') ? 'kpi-bad' : '')}
+        ${fpKpi('Без ціни закупівлі', String(pvCount('noprice')))}
+        ${fpKpi('Є на сайті', String(pvCount('available')))}
+      </div>
       ${rows.length ? `<div class="table-wrap"><table class="list"><thead><tr><th>Артикул</th><th>Товар LP-CRM (ID)</th><th>Назва</th><th class="r">Ціна закупівлі</th><th class="r">РРЦ</th><th class="r">Залишок</th><th>Габарити (на 1 шт.)</th></tr></thead><tbody>
         ${rows.map((p) => `<tr data-code="${esc(p.code)}">
           <td><b>${esc(p.code)}</b>${p.rz_code ? `<div class="small muted">Розетка ${esc(p.rz_code)}</div>` : ''}${RZ_ST[p.rz_status] ? `<div><span class="badge ${RZ_ST[p.rz_status][1]}">${RZ_ST[p.rz_status][0]}</span></div>` : ''}</td>
@@ -387,7 +404,9 @@ export function createRetailPages(ctx) {
             ${edit ? `<button class="btn sm" data-seats="${esc(p.code)}" aria-label="Габарити">✎</button>` : ''}</td>
         </tr>`).join('')}</tbody></table></div>`
         : all.length ? '<div class="card empty"><div class="big">Нічого не знайдено</div>Змініть фільтр або пошук.</div>'
-          : '<div class="card empty"><div class="big">Товарів ще немає</div>Завантажте вивантаження товарів з Кабінету постачальника (CSV) — або вони з’являться з першими замовленнями.</div>'}`;
+          : '<div class="card empty"><div class="big">Товарів ще немає</div>Завантажте вивантаження товарів з Кабінету постачальника (CSV) — або вони з’являться з першими замовленнями.</div>'}`, { summary: [PV[pf.v] || 'Усі', pf.brand, pf.q].filter(Boolean).join(' · ') })}`;
+    wireFp();
+    $$('[data-pb]').forEach((b) => (b.onclick = () => { pf.brand = b.dataset.pb; viewProducts(); }));
     $$('[data-pv]').forEach((b) => (b.onclick = () => { pf.v = b.dataset.pv; viewProducts(); }));
     let qt;
     $('#rpQ').oninput = (e) => { clearTimeout(qt); qt = setTimeout(async () => { pf.q = e.target.value; await viewProducts(); const el = $('#rpQ'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 300); };
@@ -442,21 +461,31 @@ export function createRetailPages(ctx) {
   }
 
   // ---------------------------------------------------------------- налаштування кабінетів
+  let accSel = null; // обраний кабінет у налаштуваннях
   async function viewSettings() {
     const rows = await api('GET', '/api/rzs/accounts');
+    const cur = rows.find((a) => a.id === accSel) || rows[0];
     main.innerHTML = `
       <div class="head-row"><h2>Розетка — кабінети постачальника</h2><button class="btn primary" id="raNew">+ Підключити кабінет</button></div>
       <div class="alert info help" style="margin-bottom:14px">Токен: Кабінет постачальника Розетки → <b>Налаштування → Токени</b> → «Згенерувати токен».
         Після підключення вставте адресу, логін і пароль вебхука в Кабінеті Розетки (<b>Налаштування → Вебхуки</b>), позначте «Дропшипінг» (додавання, зміна, видалення) — замовлення з’являтимуться тут одразу.</div>
-      ${rows.length ? rows.map((a) => `<div class="card form-stack" style="max-width:900px;margin-bottom:12px">
+      ${rows.length ? `<div class="fp"><div class="card an7-f" style="padding:8px;gap:4px">${fpGroup('Кабінети', rows.map((a) => fpBtn(`<span>${esc(a.name)}</span><span class="small">${a.active ? (a.sync_error ? '⚠️' : '') : 'вимк.'}</span>`, a.id === cur.id, `data-acc="${a.id}"`)).join(''))}</div>
+        <div class="fp-main">${[cur].map((a) => `<div class="card form-stack" style="margin:0">
           <div class="head-row" style="margin:0"><h3 style="margin:0">${esc(a.name)} ${a.active ? '' : '<span class="badge bad">вимкнено</span>'}</h3><button class="btn sm" data-ae="${a.id}">Змінити</button></div>
-          <div class="small">Токен ${esc(a.token)} · відділ LP-CRM ${esc(a.crm_office || '<не вказано>')} · доставка LP-CRM ${esc(a.crm_delivery || '—')}
-            · оновлено ${a.synced_at ? esc(fmtDateTime(a.synced_at)) : '—'} · вебхук ${a.hook_at ? esc(fmtDateTime(a.hook_at)) : 'ще не надходив'}</div>
-          <div class="small">🔔 Telegram: ${[a.notify_inv ? 'з’явився рахунок' : '', a.notify_ttn ? 'можна створити ТТН' : ''].filter(Boolean).join(', ') || 'вимкнено'}${(a.notify_inv || a.notify_ttn) ? ` → ${a.notify_users.length ? `${a.notify_users.length} корист.` : 'власник і адміністратори'}` : ''}</div>
+          <div class="form-stack" style="gap:6px;max-width:640px">${[
+            ['Токен', esc(a.token)],
+            ['Відділ LP-CRM', esc(a.crm_office || '<не вказано>')],
+            ['Доставка LP-CRM', esc(a.crm_delivery || '—')],
+            ['Оновлено з Розетки', a.synced_at ? esc(fmtDateTime(a.synced_at)) : '—'],
+            ['Вебхук', a.hook_at ? esc(fmtDateTime(a.hook_at)) : 'ще не надходив'],
+            ['🔔 Telegram', `${[a.notify_inv ? 'з’явився рахунок' : '', a.notify_ttn ? 'можна створити ТТН' : ''].filter(Boolean).join(', ') || 'вимкнено'}${(a.notify_inv || a.notify_ttn) ? ` → ${a.notify_users.length ? `${a.notify_users.length} корист.` : 'власник і адміністратори'}` : ''}`],
+          ].map(([k, v]) => `<div class="an7-kv small"><span>${k}</span><b>${v}</b></div>`).join('')}</div>
           <div class="f"><span>Вебхук для Кабінету Розетки (Налаштування → Вебхуки)</span>
             <div class="grid2"><div class="pl-url"><input readonly value="${esc(a.hook.url)}" aria-label="URL вебхука"><button type="button" class="btn sm" data-cp="${esc(a.hook.url)}">Копіювати</button></div>
               <div class="pl-url"><input readonly value="${esc(a.hook.user)}" aria-label="Логін"><button type="button" class="btn sm" data-cp="${esc(a.hook.user)}">Логін</button><input readonly value="${esc(a.hook.pass)}" aria-label="Пароль"><button type="button" class="btn sm" data-cp="${esc(a.hook.pass)}">Пароль</button></div></div></div>
-        </div>`).join('') : '<div class="card empty"><div class="big">Кабінет ще не підключено</div>Натисніть «Підключити кабінет» і вставте токен.</div>'}`;
+        </div>`).join('')}</div></div>`
+        : '<div class="card empty"><div class="big">Кабінет ще не підключено</div>Натисніть «Підключити кабінет» і вставте токен.</div>'}`;
+    $$('[data-acc]').forEach((b) => (b.onclick = () => { accSel = Number(b.dataset.acc); viewSettings(); }));
     $$('[data-cp]').forEach((b) => (b.onclick = async () => { try { await navigator.clipboard.writeText(b.dataset.cp); toast('Скопійовано'); } catch { toast('Не вдалося скопіювати', true); } }));
     const form = async (a) => {
       const users = await api('GET', '/api/rzs/notify-users').catch(() => []);
