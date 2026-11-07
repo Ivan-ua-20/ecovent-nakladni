@@ -24,10 +24,12 @@ const TRACK = {
   59000000000777: { StatusCode: '5', Status: 'Прямує до відділення', DateCreated: `${dayAgo(2)} 09:00:00` },
 };
 let npCalls = 0;
+let tooMany = 0;
 const fetchFn = async (url, opts = {}) => {
   const b = JSON.parse(opts.body || '{}');
   if (!String(url).includes('novaposhta')) return new Response('{"ok":true,"result":{}}');
   npCalls++;
+  if (tooMany > 0) { tooMany--; return new Response(JSON.stringify({ success: false, errors: ['To many requests'] })); }
   if (b.calledMethod === 'getDocumentList') {
     const day = b.methodProperties.DateTimeFrom.split('.').reverse().join('-');
     const list = (DOCS[b.apiKey]?.[day] || []).map(([n, p, r]) => ({ IntDocNumber: n, RecipientsPhone: `380${p}`, RecipientContactPerson: r }));
@@ -62,6 +64,11 @@ await db.run(`INSERT INTO rzs_orders (id, account_id, order_num, status, created
 // Цикл частинами: сторінка повторює, доки не done.
 let st;
 let n = 0;
+// «To many requests» від НП — не помилка: крок зупиняється, далі продовжуємо.
+tooMany = 1;
+st = (await call('POST', '/api/returns/refresh', { start: true }, H)).j;
+assert.ok(st.wait && !st.error && !st.done, 'НП просить зачекати — чекаємо, без помилки');
+n = 1;
 do { st = (await call('POST', '/api/returns/refresh', { start: n === 0 }, H)).j; n++; } while (!st.done && n < 20);
 assert.ok(st.done && n > 1, 'цикл завершився за кілька кроків (дні кабінету читаються частинами)');
 

@@ -17,6 +17,7 @@ const BORDER_DAYS = 45; // відправлення за останні 45 дн�
 const SHOW_DAYS = 120; // отримані повернення показуємо 120 днів
 const CYCLE_MS = 12 * 3600e3;
 const CALLS = 28; // звернень до НП за один запит
+const GAP_MS = 400; // пауза між зверненнями: НП відповідає «To many requests» на часті запити
 const REFUSED = [102, 103, 105, 108];
 const RECEIVED = [9, 10, 11, 106];
 const BRANCH = [7, 8];
@@ -52,6 +53,15 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
     const border = addDays(today, -BORDER_DAYS);
     let calls = 0;
     const out = () => calls >= CALLS;
+    // Звернення до НП з паузою; «забагато запитів» — зупиняємо крок (не помилка), продовжимо наступного разу.
+    const np = async (fn) => {
+      if (calls) await new Promise((r) => setTimeout(r, GAP_MS));
+      calls++;
+      try { return await fn(); } catch (e) {
+        if (/many requests/i.test(e.message)) throw Object.assign(new Error('Нова пошта просить зачекати'), { rate: true });
+        throw e;
+      }
+    };
 
     // 1) ТТН кабінетів НП за дні, яких ще немає (минулі — один раз; останні 3 дні — раз за цикл). Спільний індекс з «Маркуванням».
     const seen = new Map((await db.all(`SELECT account_id, day, next_page, done, at FROM np_days WHERE day >= ?`, [border])).map((r) => [`${r.account_id}|${r.day}`, r]));
@@ -62,8 +72,7 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
         let page = s && !s.done ? s.next_page : 1;
         for (;;) {
           if (out()) return { left: 'days' };
-          calls++;
-          const docs = await npDocumentsPage(fetchFn, a.api_key, d, page);
+          const docs = await np(() => npDocumentsPage(fetchFn, a.api_key, d, page));
           const done = docs.length < 100;
           await db.batch([
             ...docs.map((x) => [`INSERT INTO np_docs (ttn, account_id, day, phone, order_ref, recipient, service) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -99,8 +108,7 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
       const key = keyOf.get(rows[0].account_id) || key0;
       if (!key) break;
       const batch = rows.filter((r) => (keyOf.get(r.account_id) || key0) === key);
-      calls++;
-      const tr = await npTrackMany(fetchFn, key, batch.map((r) => ({ ttn: r.ttn, phone: r.phone })));
+      const tr = await np(() => npTrackMany(fetchFn, key, batch.map((r) => ({ ttn: r.ttn, phone: r.phone }))));
       const now = nowIso();
       const rz = new Map((await db.all(`SELECT REPLACE(ttn, ' ', '') AS t, return_ttn FROM rzs_orders WHERE return_ttn != '' AND REPLACE(ttn, ' ', '') IN (SELECT value FROM json_each(?))`,
         [JSON.stringify(batch.map((r) => r.ttn))]).catch(() => [])).map((r) => [r.t, String(r.return_ttn).replace(/\D/g, '')]));
@@ -132,8 +140,7 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
       if (out()) return { left: 'returns' };
       const rows = await db.all(`SELECT orig_ttn, ret_ttn, phone FROM ret_items WHERE state != 'got' AND ret_ttn != '' AND checked_at < ? ORDER BY ret_ttn LIMIT 100`, [st.started]);
       if (!rows.length || !key0) break;
-      calls++;
-      const tr = await npTrackMany(fetchFn, key0, rows.map((r) => ({ ttn: r.ret_ttn, phone: r.phone })));
+      const tr = await np(() => npTrackMany(fetchFn, key0, rows.map((r) => ({ ttn: r.ret_ttn, phone: r.phone }))));
       const now = nowIso();
       const stmts = rows.map((r) => {
         const t = tr.get(r.ret_ttn);
@@ -164,8 +171,16 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
       if (!force || !st.finished || Date.now() - Date.parse(st.finished) > 60e3) { st = { started: nowIso(), finished: '', done: false }; await setState(st); }
     }
     if (st.done) return st;
+    // Один крок за раз (фонова задача і кнопка не мають іти паралельно — інакше подвійні запити до НП).
+    const lock = await db.run(`INSERT INTO settings (key, value) VALUES ('ret_lock', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
+      [nowIso(), new Date(Date.now() - 90e3).toISOString()]);
+    if (!lock.changes) return { ...st, busy: true };
     let r;
-    try { r = await step(st); } catch (e) { if (e.pending) throw e; await setState({ ...st, error: String(e.message || e).slice(0, 300), error_at: nowIso() }); throw e; }
+    try { r = await step(st); } catch (e) {
+      if (e.rate) { st = { ...st, wait: true }; await setState({ ...st, wait: false }); return st; }
+      if (!e.pending) await setState({ ...st, error: String(e.message || e).slice(0, 300), error_at: nowIso() });
+      throw e;
+    } finally { await db.run(`UPDATE settings SET value = '' WHERE key = 'ret_lock'`).catch(() => 0); }
     st = r.left ? { ...st, left: r.left, error: '' } : { ...st, left: '', done: true, finished: nowIso(), error: '' };
     await setState(st);
     return st;

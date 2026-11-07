@@ -14496,6 +14496,7 @@ var BORDER_DAYS = 45;
 var SHOW_DAYS = 120;
 var CYCLE_MS = 12 * 36e5;
 var CALLS = 28;
+var GAP_MS = 400;
 var REFUSED = [102, 103, 105, 108];
 var RECEIVED = [9, 10, 11, 106];
 var BRANCH = [7, 8];
@@ -14529,6 +14530,16 @@ function mountReturns(app, { db, fetchFn, onCron }) {
     const border = addDays5(today3, -BORDER_DAYS);
     let calls = 0;
     const out = () => calls >= CALLS;
+    const np = async (fn) => {
+      if (calls) await new Promise((r) => setTimeout(r, GAP_MS));
+      calls++;
+      try {
+        return await fn();
+      } catch (e) {
+        if (/many requests/i.test(e.message)) throw Object.assign(new Error("\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430 \u043F\u0440\u043E\u0441\u0438\u0442\u044C \u0437\u0430\u0447\u0435\u043A\u0430\u0442\u0438"), { rate: true });
+        throw e;
+      }
+    };
     const seen = new Map((await db.all(`SELECT account_id, day, next_page, done, at FROM np_days WHERE day >= ?`, [border])).map((r) => [`${r.account_id}|${r.day}`, r]));
     for (const a of accs) {
       for (let d = today3; d >= border; d = addDays5(d, -1)) {
@@ -14537,8 +14548,7 @@ function mountReturns(app, { db, fetchFn, onCron }) {
         let page = s && !s.done ? s.next_page : 1;
         for (; ; ) {
           if (out()) return { left: "days" };
-          calls++;
-          const docs = await npDocumentsPage(fetchFn, a.api_key, d, page);
+          const docs = await np(() => npDocumentsPage(fetchFn, a.api_key, d, page));
           const done = docs.length < 100;
           await db.batch([
             ...docs.map((x) => [
@@ -14572,8 +14582,7 @@ function mountReturns(app, { db, fetchFn, onCron }) {
       const key = keyOf.get(rows[0].account_id) || key0;
       if (!key) break;
       const batch = rows.filter((r) => (keyOf.get(r.account_id) || key0) === key);
-      calls++;
-      const tr = await npTrackMany(fetchFn, key, batch.map((r) => ({ ttn: r.ttn, phone: r.phone })));
+      const tr = await np(() => npTrackMany(fetchFn, key, batch.map((r) => ({ ttn: r.ttn, phone: r.phone }))));
       const now = nowIso();
       const rz = new Map((await db.all(
         `SELECT REPLACE(ttn, ' ', '') AS t, return_ttn FROM rzs_orders WHERE return_ttn != '' AND REPLACE(ttn, ' ', '') IN (SELECT value FROM json_each(?))`,
@@ -14619,8 +14628,7 @@ function mountReturns(app, { db, fetchFn, onCron }) {
       if (out()) return { left: "returns" };
       const rows = await db.all(`SELECT orig_ttn, ret_ttn, phone FROM ret_items WHERE state != 'got' AND ret_ttn != '' AND checked_at < ? ORDER BY ret_ttn LIMIT 100`, [st.started]);
       if (!rows.length || !key0) break;
-      calls++;
-      const tr = await npTrackMany(fetchFn, key0, rows.map((r) => ({ ttn: r.ret_ttn, phone: r.phone })));
+      const tr = await np(() => npTrackMany(fetchFn, key0, rows.map((r) => ({ ttn: r.ret_ttn, phone: r.phone }))));
       const now = nowIso();
       const stmts = rows.map((r) => {
         const t = tr.get(r.ret_ttn);
@@ -14673,13 +14681,24 @@ function mountReturns(app, { db, fetchFn, onCron }) {
       }
     }
     if (st.done) return st;
+    const lock = await db.run(
+      `INSERT INTO settings (key, value) VALUES ('ret_lock', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
+      [nowIso(), new Date(Date.now() - 9e4).toISOString()]
+    );
+    if (!lock.changes) return { ...st, busy: true };
     let r;
     try {
       r = await step(st);
     } catch (e) {
-      if (e.pending) throw e;
-      await setState({ ...st, error: String(e.message || e).slice(0, 300), error_at: nowIso() });
+      if (e.rate) {
+        st = { ...st, wait: true };
+        await setState({ ...st, wait: false });
+        return st;
+      }
+      if (!e.pending) await setState({ ...st, error: String(e.message || e).slice(0, 300), error_at: nowIso() });
       throw e;
+    } finally {
+      await db.run(`UPDATE settings SET value = '' WHERE key = 'ret_lock'`).catch(() => 0);
     }
     st = r.left ? { ...st, left: r.left, error: "" } : { ...st, left: "", done: true, finished: nowIso(), error: "" };
     await setState(st);
