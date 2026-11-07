@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'returns',
-  version: 1,
+  version: 2,
   tables: [
   // Вихідні відправлення (поки Нова пошта): з кабінетів НП, Розетки-постачальника, маркетплейсів, LP-CRM — за номером ТТН без дублів.
   // final = 1 — далі не відстежуємо (отримано клієнтом, видалено або вже знайдено ЕН повернення).
@@ -49,6 +49,13 @@ export const schema = {
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS ret_items_ret ON ret_items (ret_ttn) WHERE ret_ttn != ''`,
   `CREATE INDEX IF NOT EXISTS ret_items_state ON ret_items (state, created_at)`,
+  // v2: Розетка Делівері тепер — з модуля доставки Розетки; старі рядки (зі статусів замовлень) прибираємо, цикл заповнить заново.
+  `DELETE FROM ret_items WHERE carrier = 'rd'`,
   ],
-  columns: [],
+  columns: [
+    // Кабінет маркетплейсу (rz_accounts для Розетки), id заявки на повернення, примітка (резерв, графік точки, причина заявки).
+    ['ret_items', 'shop_id', 'INTEGER'],
+    ['ret_items', 'ext_id', "TEXT DEFAULT ''"],
+    ['ret_items', 'note', "TEXT DEFAULT ''"],
+  ],
 };

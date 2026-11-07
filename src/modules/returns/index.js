@@ -13,10 +13,11 @@
 //  4) Повернення від клієнтів після отримання: ЕН «на основі» отриманої посилки з типом Return (стежимо 30 днів після
 //     отримання), вхідні посилки кабінетів від людей, яким ми відправляли (телефон або прізвище й ім'я), а також статуси
 //     маркетплейсів (Розетка «Замовлення повернено», Епіцентр «Запит на повернення»).
-//  5) Розетка Делівері (RMP-…): статуси замовлень Розетки (відмова / не прийшов / повернено) — без запитів назовні;
-//     про прибуття Розетка не повідомляє, тож через 21 день повернення вважаємо отриманим.
+//  5) Розетка (усі активні кабінети): модуль ROZETKA Delivery — посилки RMP-…, від яких відмовились / не забрали, повернення
+//     в дорозі (номер Міст Експрес), очікує в точці видачі, повернено продавцю; і заявки покупців на повернення.
 import { need, nowIso, kyivDay } from '../../core/common.js';
 import { npDocumentsPage, npTrackMany, npContacts, npIncomingPage } from '../../integrations/novaposhta.js';
+import { rzDeliveryList, rzRefunds, rzRefundDetail, RD_RETURN_STATUSES } from '../../integrations/rozetka.js';
 
 const BORDER_DAYS = 45; // відправлення за останні 45 днів (повернення зазвичай приходять за 2–4 тижні)
 const SHOW_DAYS = 120; // отримані повернення показуємо 120 днів
@@ -34,7 +35,11 @@ const MP_CLOSE_DAYS = 21; // Розетка Делівері / маркетпл�
 const CONTACTS_MS = 7 * 86400e3; // контакти кабінетів НП оновлюємо раз на тиждень
 // Статуси маркетплейсів, що означають повернення: Розетка 12 — відмова при отриманні, 11 — не прийшов, 19 — замовлення повернено
 // (клієнт повертає після отримання); Епіцентр — запит на повернення.
-const MP_RET = { rozetka: { 12: 'refused', 11: 'storage', 19: 'customer' }, epc: { return_requested: 'customer' } };
+const MP_RET = { epc: { return_requested: 'customer' } };
+const STUCK_DAYS = 60; // Розетка: відмова без оформленого повернення / заявка без посилки довше 60 днів — «застрягло»
+const RZ_MAX = 35; // запитів до Розетки за один крок (кабінет)
+const RD_STATE = (st) => (st === '50020' ? 'branch' : st.startsWith('500') ? 'transit' : 'nottn');
+const REFUND_GOT = [1, 2, 4, 13, 16]; // отримано від клієнта і далі (СЦ, повернення коштів, відправлено покупцю)
 const isReturnType = (t) => /return/i.test(t) && !/backward/i.test(t); // «CargoReturn» — так, «BackwardDelivery» (гроші) — ні
 const nameKey = (n) => String(n || '').toLowerCase().replace(/[^a-zа-яіїєґё'’\s-]/gi, ' ').split(/[\s-]+/).filter((w) => w.length > 1).slice(0, 2).sort().join(' ');
 const mpIso = (v) => String(v || '').replace(' ', 'T').slice(0, 19);
@@ -42,7 +47,7 @@ const NP_TTN = (col) => `(length(${col}) BETWEEN 11 AND 20 AND ${col} NOT GLOB '
 const addDays = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 const days = (from, to = Date.now()) => (from ? Math.max(0, Math.floor((to - Date.parse(from)) / 86400000)) : null);
 
-export function mountReturns(app, { db, fetchFn, onCron }) {
+export function mountReturns(app, { db, fetchFn, onCron, services = {} }) {
   const getState = async () => {
     const r = await db.get(`SELECT value FROM settings WHERE key = 'ret_cycle'`);
     try { return { started: '', finished: '', done: true, ...(r ? JSON.parse(r.value) : {}) }; } catch { return { started: '', finished: '', done: true }; }
@@ -60,6 +65,111 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
     const have = new Map((await db.all(`SELECT account_id, COUNT(*) AS n FROM np_days WHERE done = 1 AND day >= ? AND day < ? GROUP BY account_id`, [border, addDays(today, -2)]))
       .map((r) => [r.account_id, r.n]));
     return accs.some((a) => (have.get(a.id) || 0) < BORDER_DAYS - 3);
+  }
+
+  // Розетка, один кабінет: ROZETKA Delivery і заявки на повернення. Запити — з паузою, не більше RZ_MAX.
+  async function syncRozetka(a) {
+    let n = 0;
+    const call = async (fn) => {
+      if (n >= RZ_MAX) throw Object.assign(new Error('ліміт запитів за крок'), { more: true });
+      if (n) await new Promise((r) => setTimeout(r, 300));
+      n++;
+      try { return await fn(await services.marking.rozetkaToken(a)); } catch (e) {
+        if (!e.rzAuth) throw e;
+        n++;
+        return fn(await services.marking.rozetkaToken(a, true));
+      }
+    };
+    const now = nowIso();
+    const today = kyivDay();
+    const stuckBorder = new Date(Date.now() - STUCK_DAYS * 86400e3).toISOString();
+    const p9 = (p) => String(p || '').replace(/\D/g, '').slice(-9);
+
+    // ROZETKA Delivery: усі посилки, що повертаються або мають повернутись (зазвичай кілька десятків).
+    const seen = new Set();
+    const stmts = [];
+    // ЕН повернення унікальна: якщо номер уже в іншого повернення (той самий трек в іншому кабінеті) — не дублюємо.
+    const owners = new Map((await db.all(`SELECT ret_ttn, orig_ttn FROM ret_items WHERE ret_ttn != ''`)).map((x) => [x.ret_ttn, x.orig_ttn]));
+    for (let page = 1, pages = 1; page <= pages && page <= 5; page++) {
+      const r = await call((t) => rzDeliveryList(fetchFn, t, { statuses: RD_RETURN_STATUSES, page }));
+      pages = r.pageCount;
+      for (const x of r.rows) {
+        seen.add(x.ttn);
+        if (x.retTrack && owners.has(x.retTrack) && owners.get(x.retTrack) !== x.ttn) x.retTrack = '';
+        if (x.retTrack) owners.set(x.retTrack, x.ttn);
+        let state = RD_STATE(x.status);
+        // Відмова без оформленого повернення або повернення в точці видачі понад 60 днів — «застрягло» (уточнювати в підтримці Розетки).
+        if (state !== 'transit' && x.updated && x.updated < stuckBorder) state = 'stuck';
+        const note = [x.status === '50021' ? 'невірна локація повернення' : '', x.reserveEnding ? 'закінчується резерв' : '', x.toSchedule ? `графік ${x.toSchedule}` : ''].filter(Boolean).join(' · ');
+        stmts.push([`INSERT INTO ret_items (orig_ttn, ret_ttn, carrier, reason, state, shop_id, ext_id, customer, phone, cargo, cost, cod, refused_at, arrived_at, ret_code, ret_status,
+            to_name, to_phone, warehouse, note, created_at, checked_at)
+          VALUES (?, ?, 'rd', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(orig_ttn) DO UPDATE SET ret_ttn = CASE WHEN excluded.ret_ttn != '' THEN excluded.ret_ttn ELSE ret_items.ret_ttn END, carrier = 'rd', state = excluded.state,
+            reason = CASE WHEN ret_items.reason IN ('refused', 'storage') AND excluded.reason = 'refused' THEN ret_items.reason ELSE excluded.reason END,
+            shop_id = excluded.shop_id, ext_id = excluded.ext_id, arrived_at = CASE WHEN excluded.state = 'branch' THEN excluded.arrived_at ELSE '' END, ret_code = excluded.ret_code,
+            ret_status = excluded.ret_status, to_name = excluded.to_name, to_phone = excluded.to_phone, warehouse = excluded.warehouse, note = excluded.note,
+            got_at = '', checked_at = excluded.checked_at`,
+        [x.ttn, x.retTrack, x.status === '40070' ? 'storage' : 'refused', state, a.id, x.orderId, x.customer, p9(x.phone), x.cargo, x.cost, x.cod, x.updated || now,
+          state === 'branch' ? x.updated : '', Number(x.status) || 0, x.statusTitle, x.to, p9(x.toPhone), x.toAddress, note, now, now]]);
+      }
+    }
+    for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
+    // Ті, що зникли зі списку: дивимось кінцевий стан за ТТН (повернено продавцю — отримано; видано клієнту / скасовано — не повернення).
+    const gone = (await db.all(`SELECT orig_ttn FROM ret_items WHERE carrier = 'rd' AND shop_id = ? AND state != 'got'`, [a.id])).map((x) => x.orig_ttn).filter((t) => !seen.has(t));
+    for (const ttn of gone.slice(0, 15)) {
+      if (n >= RZ_MAX - 10) break;
+      const x = (await call((t) => rzDeliveryList(fetchFn, t, { ttn }))).rows[0];
+      if (!x) continue;
+      if (x.status === '60040') await db.run(`UPDATE ret_items SET state = 'got', got_at = ?, ret_code = 60040, ret_status = ?, note = '', checked_at = ? WHERE orig_ttn = ?`, [x.updated || now, x.statusTitle, now, ttn]);
+      else if (!RD_RETURN_STATUSES.includes(x.status)) await db.run(`DELETE FROM ret_items WHERE orig_ttn = ? AND carrier = 'rd'`, [ttn]);
+    }
+
+    // Заявки покупців на повернення (за 120 днів): статус, причина, товар; ТТН посилки клієнта — з картки заявки (для відкритих).
+    const border = addDays(today, -SHOW_DAYS);
+    const list = [];
+    for (let page = 1, pages = 1; page <= pages && page <= 8; page++) {
+      const r = await call((t) => rzRefunds(fetchFn, t, page));
+      pages = r.pageCount;
+      let old = false;
+      for (const x of r.rows) { if (String(x.datetime || '').slice(0, 10) < border) { old = true; break; } list.push(x); }
+      if (old) break;
+    }
+    const orders = new Map((await db.all(`SELECT number, REPLACE(ttn, ' ', '') AS ttn FROM mp_orders WHERE mp = 'rozetka' AND number IN (SELECT value FROM json_each(?))`,
+      [JSON.stringify(list.map((x) => String(x.order_id)))]).catch(() => [])).map((x) => [x.number, x.ttn]));
+    const known = new Map((await db.all(`SELECT ext_id, orig_ttn, ret_ttn, state, got_at FROM ret_items WHERE ext_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(list.map((x) => x.id))])).map((x) => [x.ext_id, x]));
+    // Та сама посилка вже є (НП знайшла вхідну від клієнта або повернення «на основі») — доповнюємо її, а не дублюємо.
+    const rstmts = [];
+    for (const x of list) {
+      const code = Number(x.status_code);
+      const prev = known.get(x.id);
+      if (code === 14) { if (prev) rstmts.push([`DELETE FROM ret_items WHERE ext_id = ?`, [x.id]]); continue; } // відмова в поверненні
+      const got = REFUND_GOT.includes(code);
+      let retTtn = prev?.ret_ttn || '';
+      if (!got && !retTtn && n < RZ_MAX - 2) {
+        const d = await call((t) => rzRefundDetail(fetchFn, t, x.id)).catch(() => null);
+        retTtn = String(d?.ttn || '').replace(/\s/g, '').slice(0, 40);
+      }
+      const isNp = /^\d{11,20}$/.test(retTtn);
+      const at = mpIso(x.datetime);
+      const state = got ? 'got' : retTtn ? 'transit' : at < stuckBorder.slice(0, 19) ? 'stuck' : 'nottn';
+      // Ключ — посилка замовлення (ТТН відправлення; якщо вона вже є серед повернень — доповнюємо той рядок), інакше сама заявка.
+      const key = prev?.orig_ttn || (retTtn && owners.get(retTtn)) || orders.get(String(x.order_id)) || `rzref:${x.id}`;
+      if (retTtn && owners.has(retTtn) && owners.get(retTtn) !== key) retTtn = ''; // ЕН уже в іншого повернення
+      owners.set(retTtn, key);
+      rstmts.push([`INSERT INTO ret_items (orig_ttn, ret_ttn, carrier, reason, state, shop_id, ext_id, customer, phone, cargo, refused_at, got_at, ret_status, note, created_at, checked_at)
+        VALUES (?, ?, ?, 'customer', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')
+        ON CONFLICT(orig_ttn) DO UPDATE SET ret_ttn = CASE WHEN excluded.ret_ttn != '' THEN excluded.ret_ttn ELSE ret_items.ret_ttn END,
+          carrier = CASE WHEN ret_items.carrier = 'np' THEN 'np' ELSE excluded.carrier END, ext_id = excluded.ext_id,
+          state = CASE WHEN ret_items.carrier = 'np' AND ret_items.ret_ttn != '' THEN ret_items.state ELSE excluded.state END,
+          got_at = CASE WHEN excluded.state = 'got' AND ret_items.got_at = '' THEN excluded.got_at ELSE ret_items.got_at END,
+          ret_status = CASE WHEN ret_items.carrier = 'np' AND ret_items.ret_code > 0 THEN ret_items.ret_status ELSE excluded.ret_status END, note = excluded.note, shop_id = excluded.shop_id,
+          checked_at = CASE WHEN ret_items.ret_ttn = '' AND excluded.ret_ttn != '' THEN '' ELSE ret_items.checked_at END`,
+      [key, retTtn, isNp ? 'np' : 'rzr', state, a.id, x.id, [x.buyer_surname, x.buyer_name].filter(Boolean).join(' ').slice(0, 120), p9(x.buyer_phone),
+        String(x.item_name || '').slice(0, 200), at, got ? (prev?.got_at || (prev ? now : at)) : '', String(x.status_title || ''),
+        `${x.reason_title || 'Повернення'} · заявка ${x.id} · замовлення ${x.order_id}${orders.get(String(x.order_id)) ? ` · ТТН ${orders.get(String(x.order_id))}` : ''}`, now]]);
+    }
+    for (let i = 0; i < rstmts.length; i += 100) await db.batch(rstmts.slice(i, i + 100));
+    return { calls: n };
   }
 
   // Один крок циклу: дочитати дні кабінетів → оновити реєстр → відстежити відправлення → відстежити повернення.
@@ -133,11 +243,10 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
       await setJson('ret_contacts', cont);
     }
 
-    // 2б) Маркетплейси (без запитів назовні — з уже синхронізованих замовлень): Розетка Делівері (RMP-…) і повернення після
-    // отримання (Розетка «Замовлення повернено», Епіцентр «Запит на повернення»). Відмови з ТТН Нової пошти ловить відстеження НП.
+    // 2б) Епіцентр (без запитів назовні — з уже синхронізованих замовлень): «Запит на повернення». Розетка — нижче, з її модулів.
     {
       const mpRows = await db.all(`SELECT mp, account_id, number, ttn, status, status_name, customer, phone, total, items, delivery, changed_at FROM mp_orders
-        WHERE created_at >= ? AND ((mp = 'rozetka' AND status IN ('11', '12', '19')) OR (mp = 'epc' AND status = 'return_requested'))`, [addDays(today, -MP_DAYS)]).catch(() => []);
+        WHERE created_at >= ? AND mp = 'epc' AND status = 'return_requested'`, [addDays(today, -MP_DAYS)]).catch(() => []);
       const shops = new Map([...(await db.all(`SELECT id, name FROM rz_accounts`).catch(() => [])).map((x) => [`rozetka:${x.id}`, x.name]),
         ...(await db.all(`SELECT id, name FROM epc_accounts`).catch(() => [])).map((x) => [`epc:${x.id}`, x.name])]);
       const keep = [];
@@ -165,12 +274,31 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(orig_ttn) DO UPDATE SET reason = excluded.reason, state = excluded.state, got_at = excluded.got_at, ret_status = excluded.ret_status,
             refused_at = excluded.refused_at, cargo = excluded.cargo, cost = excluded.cost, to_name = excluded.to_name`,
-        [key, /^RMP-/i.test(ttn) ? 'rd' : 'mp', reason, closed ? 'got' : 'transit', o.customer || '', phone, goods, Number(o.total) || 0, at, gotAt,
+        [key, 'mp', reason, closed ? 'got' : 'transit', o.customer || '', phone, goods, Number(o.total) || 0, at, gotAt,
           o.status_name || '', shops.get(`${o.mp}:${o.account_id}`) || '', nowIso()]]);
       }
       // Замовлення вийшло зі статусу повернення (клієнт усе ж забрав тощо) — прибираємо.
-      stmts.push([`DELETE FROM ret_items WHERE carrier IN ('rd', 'mp') AND refused_at >= ? AND orig_ttn NOT IN (SELECT value FROM json_each(?))`, [addDays(today, -MP_DAYS + 7), JSON.stringify(keep)]]);
+      stmts.push([`DELETE FROM ret_items WHERE carrier = 'mp' AND refused_at >= ? AND orig_ttn NOT IN (SELECT value FROM json_each(?))`, [addDays(today, -MP_DAYS + 7), JSON.stringify(keep)]]);
       for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
+    }
+
+    // 2в) Розетка — по кожному кабінету окремим кроком (ліміт запитів): модуль ROZETKA Delivery (стан посилки RMP-…:
+    // повертається, чекає в точці видачі, повернено продавцю) і заявки покупців на повернення.
+    const rzAccs = await db.all(`SELECT * FROM rz_accounts WHERE active = 1 ORDER BY id`).catch(() => []);
+    if (rzAccs.length && services.marking?.rozetkaToken) {
+      const rzst = await getJson('ret_rz');
+      if (rzst.started !== st.started) { rzst.started = st.started; rzst.done = []; rzst.errors = {}; }
+      for (const a of rzAccs) {
+        if (rzst.done.includes(a.id)) continue;
+        if (calls) return { left: 'rozetka' }; // Розетку — у кроці без запитів до НП
+        try { await syncRozetka(a); delete rzst.errors[a.id]; } catch (e) {
+          if (e.pending) throw e;
+          rzst.errors = { ...(rzst.errors || {}), [a.id]: String(e.message || e).slice(0, 200) };
+        }
+        rzst.done.push(a.id);
+        await setJson('ret_rz', rzst);
+        return { left: 'rozetka' };
+      }
     }
 
     // 3) Відстеження вихідних ТТН, які ще не отримано клієнтом, — пакетами по 100, ключем кабінету-відправника.
@@ -284,7 +412,7 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
     for (;;) {
       if (out()) return { left: 'returns' };
       // Отримані — ще раз, лише якщо дата відмови пізніша за отримання (уточнюємо її за датою створення ЕН повернення).
-      const rows = await db.all(`SELECT orig_ttn, ret_ttn, phone FROM ret_items WHERE (state != 'got' OR (got_at != '' AND refused_at > got_at)) AND ret_ttn != '' AND checked_at < ?
+      const rows = await db.all(`SELECT orig_ttn, ret_ttn, phone FROM ret_items WHERE (state != 'got' OR (got_at != '' AND refused_at > got_at)) AND ret_ttn != '' AND carrier = 'np' AND checked_at < ?
         ORDER BY ret_ttn LIMIT 100`, [st.started]);
       if (!rows.length || !key0) break;
       const tr = await np('відстеження повернень', () => npTrackMany(fetchFn, key0, rows.map((r) => ({ ttn: r.ret_ttn, phone: r.phone }))));
@@ -362,17 +490,21 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
       getState(), getJson('ret_contacts'),
     ]);
     const accName = new Map(accs.map((a) => [a.id, a.sender_name || a.name]));
+    const shopName = new Map((await db.all(`SELECT id, name FROM rz_accounts`).catch(() => [])).map((x) => [x.id, x.name]));
+    const rzErr = (await getJson('ret_rz')).errors || {};
     const refs = await refsOf([...new Set(rows.flatMap((r) => [r.orig_ttn, r.ret_ttn]).filter(Boolean))]);
     const now = Date.now();
     const out = rows.map((r) => {
-      const orders = [...(refs.get(r.orig_ttn) || []), ...(refs.get(r.ret_ttn) || [])].filter((x, i, a) => a.findIndex((y) => y.src === x.src && y.no === x.no) === i)
+      // Номер замовлення Розетки: Делівері — з модуля доставки, заявка — з примітки (якщо замовлення ще не синхронізоване).
+      const rzOrder = r.carrier === 'rd' ? r.ext_id : r.carrier === 'rzr' ? (/замовлення ([\w-]+)/.exec(r.note || '') || [])[1] : '';
+      const orders = [...(refs.get(r.orig_ttn) || []), ...(refs.get(r.ret_ttn) || []), ...(rzOrder ? [{ src: 'rozetka', label: 'Розетка', no: rzOrder }] : [])].filter((x, i, a) => a.findIndex((y) => y.src === x.src && y.no === x.no) === i)
         .sort((a, b) => SRC_ORDER.indexOf(a.src) - SRC_ORDER.indexOf(b.src));
       const inBranch = r.state === 'branch' ? days(r.arrived_at, now) : null;
       return {
-        ...r, orders, src: orders[0]?.src || (r.account_id ? 'np' : 'other'),
-        account: accName.get(r.account_id) || '', to: accName.get(r.account_id) || r.to_name || '',
-        auto_closed: r.carrier !== 'np' && r.state === 'got',
-        branch_days: inBranch, overdue: inBranch !== null && inBranch >= OVERDUE_DAYS,
+        ...r, orders, src: orders[0]?.src || (r.carrier === 'rd' || r.carrier === 'rzr' ? 'rozetka' : r.account_id ? 'np' : 'other'),
+        account: accName.get(r.account_id) || '', shop: shopName.get(r.shop_id) || '',
+        to: r.carrier === 'rd' || r.carrier === 'rzr' ? (shopName.get(r.shop_id) || r.to_name || '') : accName.get(r.account_id) || r.to_name || '',
+        branch_days: inBranch, overdue: inBranch !== null && (inBranch >= OVERDUE_DAYS || /резерв/.test(r.note || '')),
         wait_days: r.state === 'got' ? days(r.refused_at, Date.parse(r.got_at) || now) : days(r.refused_at, now),
       };
     });
@@ -390,7 +522,17 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
         branch: mine.filter((x) => x.state === 'branch').length, transit: mine.filter((x) => x.state === 'transit').length,
         warehouses: [...wh].map(([w, n]) => ({ w, n })).sort((x, y) => y.n - x.n).slice(0, 6) };
     });
-    return c.json({ rows: out, overdue_days: OVERDUE_DAYS, cycle: st, pickup, mp_close_days: MP_CLOSE_DAYS,
+    // Розетка Делівері: у яких точках видачі чекають повернення, на чиє ім'я й телефон, графік.
+    const pts = new Map();
+    for (const r of out.filter((x) => x.carrier === 'rd' && x.state === 'branch')) {
+      const k = `${r.shop_id}|${r.warehouse}`;
+      const p = pts.get(k) || { shop: r.shop, address: r.warehouse, name: r.to_name, phone: r.to_phone, schedule: (/графік ([^·]+)/.exec(r.note || '') || [])[1]?.trim() || '', n: 0, reserve: 0, oldest: 0 };
+      p.n++; if (/резерв/.test(r.note || '')) p.reserve++; p.oldest = Math.max(p.oldest, r.branch_days || 0);
+      pts.set(k, p);
+    }
+    const pickupRd = [...pts.values()].sort((x, y) => y.n - x.n);
+    return c.json({ rows: out, overdue_days: OVERDUE_DAYS, cycle: st, pickup, pickup_rd: pickupRd, mp_close_days: MP_CLOSE_DAYS,
+      rz_errors: Object.entries(rzErr).map(([id, e]) => ({ shop: shopName.get(Number(id)) || id, error: e })),
       accounts: accs.filter((a) => a.active).map((a) => ({ id: a.id, name: a.sender_name || a.name })), cycle_hours: CYCLE_MS / 3600e3 });
   });
   // «Оновити інформацію»: запустити перевірку зараз і пройти крок; сторінка повторює, доки done = false.

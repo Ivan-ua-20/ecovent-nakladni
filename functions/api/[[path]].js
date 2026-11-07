@@ -4708,7 +4708,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [key, value]
   );
-  const getJson = async (key) => {
+  const getJson2 = async (key) => {
     const r = await db.get(`SELECT value FROM settings WHERE key = ?`, [key]);
     try {
       return r?.value ? JSON.parse(r.value) : null;
@@ -4755,7 +4755,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     return data;
   }
   async function mergeTodayValues(day) {
-    const cur = await getJson("an_values");
+    const cur = await getJson2("an_values");
     if (!cur) return computeValues();
     const r = await idRange(db, day, day);
     if (!r) return cur;
@@ -4818,7 +4818,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const dups = [...by].filter(([, list]) => new Set(list.map((r) => r.code)).size > 1);
     if (!dups.length) return 0;
     const sent = new Map((await db.all(`SELECT ttn, codes FROM an_ttn_dups WHERE ttn IN (SELECT value FROM json_each(?))`, [JSON.stringify(dups.map(([t]) => t))])).map((r) => [r.ttn, r.codes]));
-    const names = await getJson("an_status_names") || {};
+    const names = await getJson2("an_status_names") || {};
     const users = await db.all(`SELECT tg_chat_id, crm_logins FROM users WHERE active = 1 AND tg_chat_id != '' AND crm_logins != ''`);
     const esc2 = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     let n = 0;
@@ -4935,13 +4935,13 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       db.all(`SELECT login, name, dept_id, depts FROM an_managers ORDER BY name, login`),
       db.all(`SELECT id, name, keywords, sort FROM an_brands ORDER BY sort, id`),
       db.all(`SELECT office_id, name FROM offices ORDER BY CAST(office_id AS INTEGER)`),
-      getJson("an_status_names"),
+      getJson2("an_status_names"),
       db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`),
-      getJson("an_sync"),
+      getJson2("an_sync"),
       db.all(`SELECT id, name, parent_id FROM an_categories ORDER BY name`)
     ]);
     const ttnSeen = (await db.get(`SELECT value FROM settings WHERE key = 'an_ttn_seen'`))?.value || "";
-    const ttnLast = await getJson("an_ttn_last");
+    const ttnLast = await getJson2("an_ttn_last");
     const cronOn = await cronActive();
     return c.json({
       categories,
@@ -4959,18 +4959,18 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       ttnSeen,
       ttnLast,
       cronOn,
-      check: await getJson("an_check"),
+      check: await getJson2("an_check"),
       sync: sync ? { phase: sync.phase, startedAt: sync.startedAt, mode: sync.mode, error: sync.error || "" } : null
     });
   });
   app.get("/api/an/values", async (c) => {
-    const v = await getJson("an_values") || await computeValues();
+    const v = await getJson2("an_values") || await computeValues();
     return c.json({ values: v.values, users: v.users, offices: v.offices, at: v.at });
   });
-  const ignored = async () => ({ users: [], values: [], offices: [], ...await getJson("an_ignored") || {} });
+  const ignored = async () => ({ users: [], values: [], offices: [], ...await getJson2("an_ignored") || {} });
   app.get("/api/an/attention", async (c) => {
     const [v0, ig, smap, mgrs, omap, prod] = await Promise.all([
-      getJson("an_values"),
+      getJson2("an_values"),
       ignored(),
       db.all(`SELECT value FROM an_source_map`),
       db.all(`SELECT login FROM an_managers`),
@@ -5007,7 +5007,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const [rows, cats, v] = await Promise.all([
       db.all(`SELECT product_id AS id, name, category_id, cat_manual, brand_id, brand_manual, seen FROM an_products ORDER BY seen, name`),
       db.all(`SELECT id, name, parent_id FROM an_categories ORDER BY name`),
-      getJson("an_values")
+      getJson2("an_values")
     ]);
     const sold = v?.sold || {};
     return c.json({ products: rows.map((r) => ({ ...r, sold: sold[r.id] || 0 })), categories: cats });
@@ -5178,7 +5178,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
   });
   app.get("/api/an/sync", async (c) => {
     const [state, last, daily] = await Promise.all([
-      getJson("an_sync"),
+      getJson2("an_sync"),
       db.get(`SELECT value FROM settings WHERE key = 'an_last_sync'`),
       db.get(`SELECT value FROM settings WHERE key = 'an_last_daily'`)
     ]);
@@ -5190,7 +5190,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
   async function refreshInfo(st, lastSync) {
     const perDay = Number(st.refreshPerDay ?? AN_DEFAULTS.refreshPerDay) || 0;
     const gapMin = Number(st.refreshGapMin ?? AN_DEFAULTS.refreshGapMin) || 0;
-    const cnt = await getJson("an_today_cnt");
+    const cnt = await getJson2("an_today_cnt");
     const used = cnt?.day === kyivDay() ? cnt.n || 0 : 0;
     const nextAt2 = gapMin && lastSync ? new Date(Date.parse(lastSync) + gapMin * 6e4).toISOString() : "";
     return { perDay, gapMin, used, left: perDay ? Math.max(0, perDay - used) : null, nextAt: nextAt2 && Date.parse(nextAt2) > Date.now() ? nextAt2 : "" };
@@ -5220,7 +5220,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const b = await c.req.json().catch(() => ({}));
     const mode = ["today", "full", "reset"].includes(b.mode) ? b.mode : "daily";
     if (c.get("anOwn") && mode !== "daily") throw fail(403, "\u041E\u043D\u043E\u0432\u043B\u044E\u0432\u0430\u0442\u0438 \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0443 \u0432\u0440\u0443\u0447\u043D\u0443 \u043C\u043E\u0436\u0443\u0442\u044C \u043B\u0438\u0448\u0435 \u0430\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0438.");
-    const cur = await getJson("an_sync");
+    const cur = await getJson2("an_sync");
     if (cur && cur.phase !== "done" && !cur.error && !b.force) return c.json({ state: summary(cur), already: true });
     if (c.get("anOwn")) {
       const lastDaily = (await db.get(`SELECT value FROM settings WHERE key = 'an_last_daily'`))?.value || "";
@@ -5306,7 +5306,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     return res;
   }
   async function syncStep() {
-    const state = await getJson("an_sync");
+    const state = await getJson2("an_sync");
     if (!state) return { state: null };
     if (state.phase === "done" || state.error) return { state: summary(state), idle: true };
     if (state.lockUntil && state.lockUntil > Date.now()) return { state: summary(state), busy: true };
@@ -5391,7 +5391,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
           continue;
         }
         if (state.phase === "deliv") {
-          const fill = await getJson("an_deliv_fill") || {};
+          const fill = await getJson2("an_deliv_fill") || {};
           const today3 = kyivDay();
           if (fill.day !== today3) {
             fill.day = today3;
@@ -5493,7 +5493,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
   }
   app.post("/api/an/sync/step", async (c) => c.json(await syncStep()));
   onCron("analytics", "\u0429\u043E\u0434\u0435\u043D\u043D\u0435 \u043E\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0430\u043D\u0430\u043B\u0456\u0442\u0438\u043A\u0438 (\u0432\u043D\u043E\u0447\u0456)", async () => {
-    const cur = await getJson("an_sync");
+    const cur = await getJson2("an_sync");
     if (cur && cur.phase !== "done" && !cur.error) {
       const r = await syncStep();
       return { step: r.state?.text || "", pct: r.state?.pct ?? null, ...r.busy ? { busy: true } : {} };
@@ -5509,7 +5509,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     return { fresh: true };
   });
   app.post("/api/an/sync/cancel", async (c) => {
-    const s = await getJson("an_sync");
+    const s = await getJson2("an_sync");
     if (s && s.phase !== "done") {
       s.error = "\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E";
       s.lockUntil = 0;
@@ -5669,7 +5669,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       f.brands.length ? db.all(`SELECT DISTINCT COALESCE(cat_manual, category_id, 0) AS id FROM an_products WHERE brand_id IN (${ph(f.brands)})`, f.brands) : db.all(`SELECT DISTINCT COALESCE(cat_manual, category_id, 0) AS id FROM an_products`)
     ]);
     const sumRows = (rows) => rows.reduce((a, r) => ({ rev: a.rev + (r.rev || 0), net: a.net + (r.net || 0), cnt: a.cnt + (r.cnt || 0), rcnt: a.rcnt + (r.rcnt || 0) }), { rev: 0, net: 0, cnt: 0, rcnt: 0 });
-    const statusNames0 = await getJson("an_status_names") || {};
+    const statusNames0 = await getJson2("an_status_names") || {};
     const done = (Array.isArray(st.doneStatuses) && st.doneStatuses.length ? st.doneStatuses.map(Number) : ok.filter((id) => /заверш|выполн|викон/i.test(statusNames0[id] || ""))).filter((id) => ok.includes(id));
     const doneIds = done.length ? done : ok.filter((id) => id === 18);
     const statusNamesG = statusNames0;
@@ -5800,7 +5800,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       dept_id: mgrNames.get(login)?.dept_id || null,
       ...row(mCur, prev && mPrev, login)
     })).sort((a, b2) => b2.rev - a.rev);
-    const statusNames = await getJson("an_status_names") || {};
+    const statusNames = await getJson2("an_status_names") || {};
     const byStatus = tracked.map((id) => ({ id, name: statusNames[id] || `\u0421\u0442\u0430\u0442\u0443\u0441 ${id}`, refuse: rf.includes(id), ...row(stCur, null, id) }));
     const stPrev = prev ? group(prev, "status") : null;
     const groupRow = (id, name, ids) => {
@@ -12788,6 +12788,49 @@ async function rzOrderChat(fetchFn, token, orderId) {
 async function rzSendMessage(fetchFn, token, { chatId, receiverId, body }) {
   return getContent(fetchFn, token, "/messages/create", { method: "POST", body: { chat_id: chatId, receiver_id: receiverId, body, sendEmailUser: 1 } });
 }
+async function getJson(fetchFn, token, path) {
+  const res = await send(fetchFn, path, { token });
+  const j = await res.json().catch(() => null);
+  if (!j?.success) throw rzError(j || { errors: { message: res.status === 429 ? "\u0437\u0430\u0431\u0430\u0433\u0430\u0442\u043E \u0437\u0430\u043F\u0438\u0442\u0456\u0432" : `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${res.status}` } });
+  return j.content || {};
+}
+var RD_RETURN_STATUSES = ["40050", "40070", "50010", "50011", "50012", "50013", "50015", "50020", "50021"];
+async function rzDeliveryList(fetchFn, token, { statuses = [], ttn = "", page = 1 } = {}) {
+  const q = new URLSearchParams({ expand: "delivery_status_title,is_reserve_ending", page: String(page), pageSize: "100" });
+  if (statuses.length) q.set("delivery_status_id", statuses.join(","));
+  if (ttn) q.set("ttn", ttn);
+  const c = await getJson(fetchFn, token, `/delivery-rozetka/ttn-list?${q}`);
+  const s = (v, n = 200) => String(v ?? "").trim().slice(0, n);
+  return {
+    pageCount: Number(c._meta?.pageCount) || 1,
+    rows: (Array.isArray(c.models) ? c.models : []).map((m) => ({
+      ttn: s(m.ttn, 40),
+      orderId: s(m.order_id, 20),
+      status: s(m.delivery_status_id, 10),
+      statusTitle: s(m.delivery_status_title, 120),
+      updated: s(m.status_updated_at, 19).replace(" ", "T"),
+      created: s(m.created_at, 19).replace(" ", "T"),
+      retTrack: s(m.carrier_return_track_num, 40),
+      reserveEnding: !!m.is_reserve_ending,
+      cargo: s(m.comment),
+      cost: Number(m.declared_price) || 0,
+      cod: Number(m.cod_amount) || 0,
+      customer: s(m.recipient?.name || m.receiver_fio, 120),
+      phone: s((m.recipient?.phones || [])[0] || "", 20),
+      to: s(m.sender?.name, 120),
+      toPhone: s((m.sender?.phones || [])[0] || "", 20),
+      toAddress: s(m.sender?.address, 160),
+      toSchedule: m.sender?.department_schedule && typeof m.sender.department_schedule === "object" ? s(Object.values(m.sender.department_schedule).map((d) => d?.from ? `${d.from}\u2013${d.to}` : "").filter(Boolean)[1] || "", 30) : ""
+    })).filter((r) => r.ttn)
+  };
+}
+async function rzRefunds(fetchFn, token, page = 1) {
+  const c = await getJson(fetchFn, token, `/order-refund/search?page=${page}&sort=-id&pageSize=20`);
+  return { pageCount: Number(c._meta?.pageCount) || 1, rows: Array.isArray(c.orderRefunds) ? c.orderRefunds : [] };
+}
+async function rzRefundDetail(fetchFn, token, id) {
+  return getJson(fetchFn, token, `/order-refund/detail/${encodeURIComponent(id)}`);
+}
 
 // src/integrations/prom.js
 var PROM_API = "https://my.prom.ua/api/v1";
@@ -14537,14 +14580,18 @@ var WATCH_DAYS = 30;
 var MP_DAYS = 60;
 var MP_CLOSE_DAYS = 21;
 var CONTACTS_MS = 7 * 864e5;
-var MP_RET = { rozetka: { 12: "refused", 11: "storage", 19: "customer" }, epc: { return_requested: "customer" } };
+var MP_RET = { epc: { return_requested: "customer" } };
+var STUCK_DAYS = 60;
+var RZ_MAX = 35;
+var RD_STATE = (st) => st === "50020" ? "branch" : st.startsWith("500") ? "transit" : "nottn";
+var REFUND_GOT = [1, 2, 4, 13, 16];
 var isReturnType = (t) => /return/i.test(t) && !/backward/i.test(t);
 var nameKey2 = (n) => String(n || "").toLowerCase().replace(/[^a-zа-яіїєґё'’\s-]/gi, " ").split(/[\s-]+/).filter((w) => w.length > 1).slice(0, 2).sort().join(" ");
 var mpIso = (v) => String(v || "").replace(" ", "T").slice(0, 19);
 var NP_TTN = (col) => `(length(${col}) BETWEEN 11 AND 20 AND ${col} NOT GLOB '*[^0-9]*')`;
 var addDays5 = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 var days = (from, to = Date.now()) => from ? Math.max(0, Math.floor((to - Date.parse(from)) / 864e5)) : null;
-function mountReturns(app, { db, fetchFn, onCron }) {
+function mountReturns(app, { db, fetchFn, onCron, services = {} }) {
   const getState = async () => {
     const r = await db.get(`SELECT value FROM settings WHERE key = 'ret_cycle'`);
     try {
@@ -14555,7 +14602,7 @@ function mountReturns(app, { db, fetchFn, onCron }) {
   };
   const setState = (st) => db.run(`INSERT INTO settings (key, value) VALUES ('ret_cycle', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(st)]);
   const accounts = () => db.all(`SELECT id, name, api_key, sender_name FROM np_accounts WHERE active = 1 ORDER BY id`).catch(() => []);
-  const getJson = async (key) => {
+  const getJson2 = async (key) => {
     try {
       return JSON.parse((await db.get(`SELECT value FROM settings WHERE key = ?`, [key]))?.value || "{}") || {};
     } catch {
@@ -14569,6 +14616,151 @@ function mountReturns(app, { db, fetchFn, onCron }) {
     const border = addDays5(today3, -BORDER_DAYS);
     const have = new Map((await db.all(`SELECT account_id, COUNT(*) AS n FROM np_days WHERE done = 1 AND day >= ? AND day < ? GROUP BY account_id`, [border, addDays5(today3, -2)])).map((r) => [r.account_id, r.n]));
     return accs.some((a) => (have.get(a.id) || 0) < BORDER_DAYS - 3);
+  }
+  async function syncRozetka(a) {
+    let n = 0;
+    const call2 = async (fn) => {
+      if (n >= RZ_MAX) throw Object.assign(new Error("\u043B\u0456\u043C\u0456\u0442 \u0437\u0430\u043F\u0438\u0442\u0456\u0432 \u0437\u0430 \u043A\u0440\u043E\u043A"), { more: true });
+      if (n) await new Promise((r) => setTimeout(r, 300));
+      n++;
+      try {
+        return await fn(await services.marking.rozetkaToken(a));
+      } catch (e) {
+        if (!e.rzAuth) throw e;
+        n++;
+        return fn(await services.marking.rozetkaToken(a, true));
+      }
+    };
+    const now = nowIso();
+    const today3 = kyivDay();
+    const stuckBorder = new Date(Date.now() - STUCK_DAYS * 864e5).toISOString();
+    const p9 = (p) => String(p || "").replace(/\D/g, "").slice(-9);
+    const seen = /* @__PURE__ */ new Set();
+    const stmts = [];
+    const owners = new Map((await db.all(`SELECT ret_ttn, orig_ttn FROM ret_items WHERE ret_ttn != ''`)).map((x) => [x.ret_ttn, x.orig_ttn]));
+    for (let page = 1, pages = 1; page <= pages && page <= 5; page++) {
+      const r = await call2((t) => rzDeliveryList(fetchFn, t, { statuses: RD_RETURN_STATUSES, page }));
+      pages = r.pageCount;
+      for (const x of r.rows) {
+        seen.add(x.ttn);
+        if (x.retTrack && owners.has(x.retTrack) && owners.get(x.retTrack) !== x.ttn) x.retTrack = "";
+        if (x.retTrack) owners.set(x.retTrack, x.ttn);
+        let state = RD_STATE(x.status);
+        if (state !== "transit" && x.updated && x.updated < stuckBorder) state = "stuck";
+        const note = [x.status === "50021" ? "\u043D\u0435\u0432\u0456\u0440\u043D\u0430 \u043B\u043E\u043A\u0430\u0446\u0456\u044F \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F" : "", x.reserveEnding ? "\u0437\u0430\u043A\u0456\u043D\u0447\u0443\u0454\u0442\u044C\u0441\u044F \u0440\u0435\u0437\u0435\u0440\u0432" : "", x.toSchedule ? `\u0433\u0440\u0430\u0444\u0456\u043A ${x.toSchedule}` : ""].filter(Boolean).join(" \xB7 ");
+        stmts.push([
+          `INSERT INTO ret_items (orig_ttn, ret_ttn, carrier, reason, state, shop_id, ext_id, customer, phone, cargo, cost, cod, refused_at, arrived_at, ret_code, ret_status,
+            to_name, to_phone, warehouse, note, created_at, checked_at)
+          VALUES (?, ?, 'rd', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(orig_ttn) DO UPDATE SET ret_ttn = CASE WHEN excluded.ret_ttn != '' THEN excluded.ret_ttn ELSE ret_items.ret_ttn END, carrier = 'rd', state = excluded.state,
+            reason = CASE WHEN ret_items.reason IN ('refused', 'storage') AND excluded.reason = 'refused' THEN ret_items.reason ELSE excluded.reason END,
+            shop_id = excluded.shop_id, ext_id = excluded.ext_id, arrived_at = CASE WHEN excluded.state = 'branch' THEN excluded.arrived_at ELSE '' END, ret_code = excluded.ret_code,
+            ret_status = excluded.ret_status, to_name = excluded.to_name, to_phone = excluded.to_phone, warehouse = excluded.warehouse, note = excluded.note,
+            got_at = '', checked_at = excluded.checked_at`,
+          [
+            x.ttn,
+            x.retTrack,
+            x.status === "40070" ? "storage" : "refused",
+            state,
+            a.id,
+            x.orderId,
+            x.customer,
+            p9(x.phone),
+            x.cargo,
+            x.cost,
+            x.cod,
+            x.updated || now,
+            state === "branch" ? x.updated : "",
+            Number(x.status) || 0,
+            x.statusTitle,
+            x.to,
+            p9(x.toPhone),
+            x.toAddress,
+            note,
+            now,
+            now
+          ]
+        ]);
+      }
+    }
+    for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
+    const gone = (await db.all(`SELECT orig_ttn FROM ret_items WHERE carrier = 'rd' AND shop_id = ? AND state != 'got'`, [a.id])).map((x) => x.orig_ttn).filter((t) => !seen.has(t));
+    for (const ttn of gone.slice(0, 15)) {
+      if (n >= RZ_MAX - 10) break;
+      const x = (await call2((t) => rzDeliveryList(fetchFn, t, { ttn }))).rows[0];
+      if (!x) continue;
+      if (x.status === "60040") await db.run(`UPDATE ret_items SET state = 'got', got_at = ?, ret_code = 60040, ret_status = ?, note = '', checked_at = ? WHERE orig_ttn = ?`, [x.updated || now, x.statusTitle, now, ttn]);
+      else if (!RD_RETURN_STATUSES.includes(x.status)) await db.run(`DELETE FROM ret_items WHERE orig_ttn = ? AND carrier = 'rd'`, [ttn]);
+    }
+    const border = addDays5(today3, -SHOW_DAYS);
+    const list = [];
+    for (let page = 1, pages = 1; page <= pages && page <= 8; page++) {
+      const r = await call2((t) => rzRefunds(fetchFn, t, page));
+      pages = r.pageCount;
+      let old = false;
+      for (const x of r.rows) {
+        if (String(x.datetime || "").slice(0, 10) < border) {
+          old = true;
+          break;
+        }
+        list.push(x);
+      }
+      if (old) break;
+    }
+    const orders = new Map((await db.all(
+      `SELECT number, REPLACE(ttn, ' ', '') AS ttn FROM mp_orders WHERE mp = 'rozetka' AND number IN (SELECT value FROM json_each(?))`,
+      [JSON.stringify(list.map((x) => String(x.order_id)))]
+    ).catch(() => [])).map((x) => [x.number, x.ttn]));
+    const known = new Map((await db.all(`SELECT ext_id, orig_ttn, ret_ttn, state, got_at FROM ret_items WHERE ext_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(list.map((x) => x.id))])).map((x) => [x.ext_id, x]));
+    const rstmts = [];
+    for (const x of list) {
+      const code = Number(x.status_code);
+      const prev = known.get(x.id);
+      if (code === 14) {
+        if (prev) rstmts.push([`DELETE FROM ret_items WHERE ext_id = ?`, [x.id]]);
+        continue;
+      }
+      const got = REFUND_GOT.includes(code);
+      let retTtn = prev?.ret_ttn || "";
+      if (!got && !retTtn && n < RZ_MAX - 2) {
+        const d = await call2((t) => rzRefundDetail(fetchFn, t, x.id)).catch(() => null);
+        retTtn = String(d?.ttn || "").replace(/\s/g, "").slice(0, 40);
+      }
+      const isNp = /^\d{11,20}$/.test(retTtn);
+      const at = mpIso(x.datetime);
+      const state = got ? "got" : retTtn ? "transit" : at < stuckBorder.slice(0, 19) ? "stuck" : "nottn";
+      const key = prev?.orig_ttn || retTtn && owners.get(retTtn) || orders.get(String(x.order_id)) || `rzref:${x.id}`;
+      if (retTtn && owners.has(retTtn) && owners.get(retTtn) !== key) retTtn = "";
+      owners.set(retTtn, key);
+      rstmts.push([
+        `INSERT INTO ret_items (orig_ttn, ret_ttn, carrier, reason, state, shop_id, ext_id, customer, phone, cargo, refused_at, got_at, ret_status, note, created_at, checked_at)
+        VALUES (?, ?, ?, 'customer', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')
+        ON CONFLICT(orig_ttn) DO UPDATE SET ret_ttn = CASE WHEN excluded.ret_ttn != '' THEN excluded.ret_ttn ELSE ret_items.ret_ttn END,
+          carrier = CASE WHEN ret_items.carrier = 'np' THEN 'np' ELSE excluded.carrier END, ext_id = excluded.ext_id,
+          state = CASE WHEN ret_items.carrier = 'np' AND ret_items.ret_ttn != '' THEN ret_items.state ELSE excluded.state END,
+          got_at = CASE WHEN excluded.state = 'got' AND ret_items.got_at = '' THEN excluded.got_at ELSE ret_items.got_at END,
+          ret_status = CASE WHEN ret_items.carrier = 'np' AND ret_items.ret_code > 0 THEN ret_items.ret_status ELSE excluded.ret_status END, note = excluded.note, shop_id = excluded.shop_id,
+          checked_at = CASE WHEN ret_items.ret_ttn = '' AND excluded.ret_ttn != '' THEN '' ELSE ret_items.checked_at END`,
+        [
+          key,
+          retTtn,
+          isNp ? "np" : "rzr",
+          state,
+          a.id,
+          x.id,
+          [x.buyer_surname, x.buyer_name].filter(Boolean).join(" ").slice(0, 120),
+          p9(x.buyer_phone),
+          String(x.item_name || "").slice(0, 200),
+          at,
+          got ? prev?.got_at || (prev ? now : at) : "",
+          String(x.status_title || ""),
+          `${x.reason_title || "\u041F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F"} \xB7 \u0437\u0430\u044F\u0432\u043A\u0430 ${x.id} \xB7 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${x.order_id}${orders.get(String(x.order_id)) ? ` \xB7 \u0422\u0422\u041D ${orders.get(String(x.order_id))}` : ""}`,
+          now
+        ]
+      ]);
+    }
+    for (let i = 0; i < rstmts.length; i += 100) await db.batch(rstmts.slice(i, i + 100));
+    return { calls: n };
   }
   async function step(st) {
     const accs = await accounts();
@@ -14624,7 +14816,7 @@ function mountReturns(app, { db, fetchFn, onCron }) {
         FROM (SELECT REPLACE(ttn, ' ', '') AS t, created_at, phone, customer FROM mp_orders WHERE created_at >= ?) WHERE ${NP_TTN("t")} ${up}`, [border]]
     ]);
     await db.run(`UPDATE ret_ships SET final = 0 WHERE final = 1 AND code IN (9, 10, 11) AND day >= ? AND ttn NOT IN (SELECT orig_ttn FROM ret_items)`, [addDays5(today3, -WATCH_DAYS)]);
-    const cont = await getJson("ret_contacts");
+    const cont = await getJson2("ret_contacts");
     for (const a of accs) {
       if (cont[a.id]?.at && Date.now() - Date.parse(cont[a.id].at) < CONTACTS_MS) continue;
       if (out()) return { left: "contacts" };
@@ -14638,7 +14830,7 @@ function mountReturns(app, { db, fetchFn, onCron }) {
     }
     {
       const mpRows = await db.all(`SELECT mp, account_id, number, ttn, status, status_name, customer, phone, total, items, delivery, changed_at FROM mp_orders
-        WHERE created_at >= ? AND ((mp = 'rozetka' AND status IN ('11', '12', '19')) OR (mp = 'epc' AND status = 'return_requested'))`, [addDays5(today3, -MP_DAYS)]).catch(() => []);
+        WHERE created_at >= ? AND mp = 'epc' AND status = 'return_requested'`, [addDays5(today3, -MP_DAYS)]).catch(() => []);
       const shops = new Map([
         ...(await db.all(`SELECT id, name FROM rz_accounts`).catch(() => [])).map((x) => [`rozetka:${x.id}`, x.name]),
         ...(await db.all(`SELECT id, name FROM epc_accounts`).catch(() => [])).map((x) => [`epc:${x.id}`, x.name])
@@ -14676,7 +14868,7 @@ function mountReturns(app, { db, fetchFn, onCron }) {
             refused_at = excluded.refused_at, cargo = excluded.cargo, cost = excluded.cost, to_name = excluded.to_name`,
           [
             key,
-            /^RMP-/i.test(ttn) ? "rd" : "mp",
+            "mp",
             reason,
             closed ? "got" : "transit",
             o.customer || "",
@@ -14691,8 +14883,31 @@ function mountReturns(app, { db, fetchFn, onCron }) {
           ]
         ]);
       }
-      stmts.push([`DELETE FROM ret_items WHERE carrier IN ('rd', 'mp') AND refused_at >= ? AND orig_ttn NOT IN (SELECT value FROM json_each(?))`, [addDays5(today3, -MP_DAYS + 7), JSON.stringify(keep)]]);
+      stmts.push([`DELETE FROM ret_items WHERE carrier = 'mp' AND refused_at >= ? AND orig_ttn NOT IN (SELECT value FROM json_each(?))`, [addDays5(today3, -MP_DAYS + 7), JSON.stringify(keep)]]);
       for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
+    }
+    const rzAccs = await db.all(`SELECT * FROM rz_accounts WHERE active = 1 ORDER BY id`).catch(() => []);
+    if (rzAccs.length && services.marking?.rozetkaToken) {
+      const rzst = await getJson2("ret_rz");
+      if (rzst.started !== st.started) {
+        rzst.started = st.started;
+        rzst.done = [];
+        rzst.errors = {};
+      }
+      for (const a of rzAccs) {
+        if (rzst.done.includes(a.id)) continue;
+        if (calls) return { left: "rozetka" };
+        try {
+          await syncRozetka(a);
+          delete rzst.errors[a.id];
+        } catch (e) {
+          if (e.pending) throw e;
+          rzst.errors = { ...rzst.errors || {}, [a.id]: String(e.message || e).slice(0, 200) };
+        }
+        rzst.done.push(a.id);
+        await setJson("ret_rz", rzst);
+        return { left: "rozetka" };
+      }
     }
     for (; ; ) {
       if (out()) return { left: "ships" };
@@ -14753,7 +14968,7 @@ function mountReturns(app, { db, fetchFn, onCron }) {
       }
       for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
     }
-    const inc = await getJson("ret_inc");
+    const inc = await getJson2("ret_inc");
     if (inc.started !== st.started) {
       inc.started = st.started;
       inc.done = [];
@@ -14831,7 +15046,7 @@ function mountReturns(app, { db, fetchFn, onCron }) {
     }
     for (; ; ) {
       if (out()) return { left: "returns" };
-      const rows = await db.all(`SELECT orig_ttn, ret_ttn, phone FROM ret_items WHERE (state != 'got' OR (got_at != '' AND refused_at > got_at)) AND ret_ttn != '' AND checked_at < ?
+      const rows = await db.all(`SELECT orig_ttn, ret_ttn, phone FROM ret_items WHERE (state != 'got' OR (got_at != '' AND refused_at > got_at)) AND ret_ttn != '' AND carrier = 'np' AND checked_at < ?
         ORDER BY ret_ttn LIMIT 100`, [st.started]);
       if (!rows.length || !key0) break;
       const tr = await np("\u0432\u0456\u0434\u0441\u0442\u0435\u0436\u0435\u043D\u043D\u044F \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u044C", () => npTrackMany(fetchFn, key0, rows.map((r) => ({ ttn: r.ret_ttn, phone: r.phone }))));
@@ -14937,23 +15152,26 @@ function mountReturns(app, { db, fetchFn, onCron }) {
       db.all(`SELECT * FROM ret_items WHERE created_at >= ? OR state != 'got' ORDER BY created_at DESC LIMIT 3000`, [since]),
       db.all(`SELECT id, name, sender_name, sender_code, active FROM np_accounts ORDER BY id`).catch(() => []),
       getState(),
-      getJson("ret_contacts")
+      getJson2("ret_contacts")
     ]);
     const accName = new Map(accs.map((a) => [a.id, a.sender_name || a.name]));
+    const shopName = new Map((await db.all(`SELECT id, name FROM rz_accounts`).catch(() => [])).map((x) => [x.id, x.name]));
+    const rzErr = (await getJson2("ret_rz")).errors || {};
     const refs = await refsOf([...new Set(rows.flatMap((r) => [r.orig_ttn, r.ret_ttn]).filter(Boolean))]);
     const now = Date.now();
     const out = rows.map((r) => {
-      const orders = [...refs.get(r.orig_ttn) || [], ...refs.get(r.ret_ttn) || []].filter((x, i, a) => a.findIndex((y) => y.src === x.src && y.no === x.no) === i).sort((a, b) => SRC_ORDER.indexOf(a.src) - SRC_ORDER.indexOf(b.src));
+      const rzOrder = r.carrier === "rd" ? r.ext_id : r.carrier === "rzr" ? (/замовлення ([\w-]+)/.exec(r.note || "") || [])[1] : "";
+      const orders = [...refs.get(r.orig_ttn) || [], ...refs.get(r.ret_ttn) || [], ...rzOrder ? [{ src: "rozetka", label: "\u0420\u043E\u0437\u0435\u0442\u043A\u0430", no: rzOrder }] : []].filter((x, i, a) => a.findIndex((y) => y.src === x.src && y.no === x.no) === i).sort((a, b) => SRC_ORDER.indexOf(a.src) - SRC_ORDER.indexOf(b.src));
       const inBranch = r.state === "branch" ? days(r.arrived_at, now) : null;
       return {
         ...r,
         orders,
-        src: orders[0]?.src || (r.account_id ? "np" : "other"),
+        src: orders[0]?.src || (r.carrier === "rd" || r.carrier === "rzr" ? "rozetka" : r.account_id ? "np" : "other"),
         account: accName.get(r.account_id) || "",
-        to: accName.get(r.account_id) || r.to_name || "",
-        auto_closed: r.carrier !== "np" && r.state === "got",
+        shop: shopName.get(r.shop_id) || "",
+        to: r.carrier === "rd" || r.carrier === "rzr" ? shopName.get(r.shop_id) || r.to_name || "" : accName.get(r.account_id) || r.to_name || "",
         branch_days: inBranch,
-        overdue: inBranch !== null && inBranch >= OVERDUE_DAYS,
+        overdue: inBranch !== null && (inBranch >= OVERDUE_DAYS || /резерв/.test(r.note || "")),
         wait_days: r.state === "got" ? days(r.refused_at, Date.parse(r.got_at) || now) : days(r.refused_at, now)
       };
     });
@@ -14981,12 +15199,24 @@ function mountReturns(app, { db, fetchFn, onCron }) {
         warehouses: [...wh].map(([w, n]) => ({ w, n })).sort((x, y) => y.n - x.n).slice(0, 6)
       };
     });
+    const pts = /* @__PURE__ */ new Map();
+    for (const r of out.filter((x) => x.carrier === "rd" && x.state === "branch")) {
+      const k = `${r.shop_id}|${r.warehouse}`;
+      const p = pts.get(k) || { shop: r.shop, address: r.warehouse, name: r.to_name, phone: r.to_phone, schedule: (/графік ([^·]+)/.exec(r.note || "") || [])[1]?.trim() || "", n: 0, reserve: 0, oldest: 0 };
+      p.n++;
+      if (/резерв/.test(r.note || "")) p.reserve++;
+      p.oldest = Math.max(p.oldest, r.branch_days || 0);
+      pts.set(k, p);
+    }
+    const pickupRd = [...pts.values()].sort((x, y) => y.n - x.n);
     return c.json({
       rows: out,
       overdue_days: OVERDUE_DAYS,
       cycle: st,
       pickup,
+      pickup_rd: pickupRd,
       mp_close_days: MP_CLOSE_DAYS,
+      rz_errors: Object.entries(rzErr).map(([id, e]) => ({ shop: shopName.get(Number(id)) || id, error: e })),
       accounts: accs.filter((a) => a.active).map((a) => ({ id: a.id, name: a.sender_name || a.name })),
       cycle_hours: CYCLE_MS / 36e5
     });
@@ -18090,7 +18320,7 @@ var schema14 = {
 // src/modules/returns/schema.js
 var schema15 = {
   name: "returns",
-  version: 1,
+  version: 2,
   tables: [
     // Вихідні відправлення (поки Нова пошта): з кабінетів НП, Розетки-постачальника, маркетплейсів, LP-CRM — за номером ТТН без дублів.
     // final = 1 — далі не відстежуємо (отримано клієнтом, видалено або вже знайдено ЕН повернення).
@@ -18135,9 +18365,16 @@ var schema15 = {
     checked_at TEXT DEFAULT ''
   )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS ret_items_ret ON ret_items (ret_ttn) WHERE ret_ttn != ''`,
-    `CREATE INDEX IF NOT EXISTS ret_items_state ON ret_items (state, created_at)`
+    `CREATE INDEX IF NOT EXISTS ret_items_state ON ret_items (state, created_at)`,
+    // v2: Розетка Делівері тепер — з модуля доставки Розетки; старі рядки (зі статусів замовлень) прибираємо, цикл заповнить заново.
+    `DELETE FROM ret_items WHERE carrier = 'rd'`
   ],
-  columns: []
+  columns: [
+    // Кабінет маркетплейсу (rz_accounts для Розетки), id заявки на повернення, примітка (резерв, графік точки, причина заявки).
+    ["ret_items", "shop_id", "INTEGER"],
+    ["ret_items", "ext_id", "TEXT DEFAULT ''"],
+    ["ret_items", "note", "TEXT DEFAULT ''"]
+  ]
 };
 
 // src/migrate.js

@@ -128,3 +128,43 @@ export async function rzOrderChat(fetchFn, token, orderId) {
 export async function rzSendMessage(fetchFn, token, { chatId, receiverId, body }) {
   return getContent(fetchFn, token, '/messages/create', { method: 'POST', body: { chat_id: chatId, receiver_id: receiverId, body, sendEmailUser: 1 } });
 }
+
+// ---------------------------------------------------------------- повернення
+async function getJson(fetchFn, token, path) {
+  const res = await send(fetchFn, path, { token });
+  const j = await res.json().catch(() => null);
+  if (!j?.success) throw rzError(j || { errors: { message: res.status === 429 ? 'забагато запитів' : `помилка ${res.status}` } });
+  return j.content || {};
+}
+// Статуси посилки модуля ROZETKA Delivery, коли вона повертається до продавця (або ще має повернутись).
+// 40050 — клієнт відмовився на точці, 40070 — вийшов термін зберігання, 500xx — повернення в дорозі,
+// 50020 — чекає відправника в точці видачі, 50021 — невірна локація. Кінцеві: 60040 — повернено продавцю, 60030 — видано отримувачу.
+export const RD_RETURN_STATUSES = ['40050', '40070', '50010', '50011', '50012', '50013', '50015', '50020', '50021'];
+// Сторінка ТТН ROZETKA Delivery (до 100): за статусами або за однією ТТН. Повертає { rows, pageCount }.
+export async function rzDeliveryList(fetchFn, token, { statuses = [], ttn = '', page = 1 } = {}) {
+  const q = new URLSearchParams({ expand: 'delivery_status_title,is_reserve_ending', page: String(page), pageSize: '100' });
+  if (statuses.length) q.set('delivery_status_id', statuses.join(','));
+  if (ttn) q.set('ttn', ttn);
+  const c = await getJson(fetchFn, token, `/delivery-rozetka/ttn-list?${q}`);
+  const s = (v, n = 200) => String(v ?? '').trim().slice(0, n);
+  return {
+    pageCount: Number(c._meta?.pageCount) || 1,
+    rows: (Array.isArray(c.models) ? c.models : []).map((m) => ({
+      ttn: s(m.ttn, 40), orderId: s(m.order_id, 20), status: s(m.delivery_status_id, 10), statusTitle: s(m.delivery_status_title, 120),
+      updated: s(m.status_updated_at, 19).replace(' ', 'T'), created: s(m.created_at, 19).replace(' ', 'T'), retTrack: s(m.carrier_return_track_num, 40),
+      reserveEnding: !!m.is_reserve_ending, cargo: s(m.comment), cost: Number(m.declared_price) || 0, cod: Number(m.cod_amount) || 0,
+      customer: s(m.recipient?.name || m.receiver_fio, 120), phone: s((m.recipient?.phones || [])[0] || '', 20),
+      to: s(m.sender?.name, 120), toPhone: s((m.sender?.phones || [])[0] || '', 20), toAddress: s(m.sender?.address, 160),
+      toSchedule: m.sender?.department_schedule && typeof m.sender.department_schedule === 'object'
+        ? s(Object.values(m.sender.department_schedule).map((d) => (d?.from ? `${d.from}–${d.to}` : '')).filter(Boolean)[1] || '', 30) : '',
+    })).filter((r) => r.ttn),
+  };
+}
+// Заявки покупців на повернення (розділ «Заявки на повернення»): сторінка по 20, найновіші першими.
+export async function rzRefunds(fetchFn, token, page = 1) {
+  const c = await getJson(fetchFn, token, `/order-refund/search?page=${page}&sort=-id&pageSize=20`);
+  return { pageCount: Number(c._meta?.pageCount) || 1, rows: Array.isArray(c.orderRefunds) ? c.orderRefunds : [] };
+}
+export async function rzRefundDetail(fetchFn, token, id) {
+  return getJson(fetchFn, token, `/order-refund/detail/${encodeURIComponent(id)}`);
+}
