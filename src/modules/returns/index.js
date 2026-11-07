@@ -223,6 +223,18 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
     const inc = await getJson('ret_inc');
     if (inc.started !== st.started) { inc.started = st.started; inc.done = []; }
     let idx = null;
+    // Наші люди (на них приходять повернення, контактні особи кабінетів): посилки між ними — внутрішні переміщення, не повернення.
+    const staffRows = await db.all(`SELECT DISTINCT to_name, to_phone FROM ret_items WHERE carrier = 'np' AND (to_name != '' OR to_phone != '')`);
+    const staff = { names: new Set(), phones: new Set() };
+    for (const x of [...staffRows.map((r) => ({ name: r.to_name, phone: String(r.to_phone || '').slice(-9) })), ...Object.values(cont).flatMap((c0) => c0.persons || [])]) {
+      const k = nameKey(x.name);
+      if (k.includes(' ')) staff.names.add(k);
+      if (x.phone && String(x.phone).length >= 9) staff.phones.add(String(x.phone).slice(-9));
+    }
+    const isStaff = (name, phone) => staff.names.has(nameKey(name)) || (!!phone && staff.phones.has(String(phone).slice(-9)));
+    // Раніше помилково зараховані (посилки від наших людей) — прибираємо.
+    const wrong = (await db.all(`SELECT orig_ttn, customer, phone FROM ret_items WHERE carrier = 'np' AND reason = 'customer' AND ret_ttn != ''`)).filter((r) => isStaff(r.customer, r.phone));
+    if (wrong.length) await db.run(`DELETE FROM ret_items WHERE orig_ttn IN (SELECT value FROM json_each(?))`, [JSON.stringify(wrong.map((r) => r.orig_ttn))]);
     for (const a of accs) {
       if (inc.done.includes(a.id)) continue;
       if (!idx) {
@@ -230,7 +242,7 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
         const ships = await db.all(`SELECT ttn, customer, phone, day, code FROM ret_ships WHERE day >= ? ORDER BY day DESC`, [addDays(today, -60)]);
         const hasRet = new Set((await db.all(`SELECT orig_ttn FROM ret_items WHERE ret_ttn != ''`)).map((x) => x.orig_ttn));
         idx = { byPhone: new Map(), byName: new Map(), own: new Set(ships.map((x) => x.ttn)) };
-        for (const x of ships.filter((y) => RECEIVED.includes(y.code) && !hasRet.has(y.ttn))) {
+        for (const x of ships.filter((y) => RECEIVED.includes(y.code) && !hasRet.has(y.ttn) && !isStaff(y.customer, y.phone))) {
           if (x.phone && !idx.byPhone.has(x.phone)) idx.byPhone.set(x.phone, x);
           const k = nameKey(x.customer);
           if (k.includes(' ') && !idx.byName.has(k)) idx.byName.set(k, x); // найновіше відправлення цій людині
@@ -248,7 +260,7 @@ export function mountReturns(app, { db, fetchFn, onCron }) {
         const taken = new Set((await db.all(`SELECT ret_ttn FROM ret_items WHERE ret_ttn IN (SELECT value FROM json_each(?))`, [JSON.stringify(cand.map((d) => d.ttn))])).map((x) => x.ret_ttn));
         const stmts = [];
         for (const d of cand) {
-          if (taken.has(d.ttn)) continue;
+          if (taken.has(d.ttn) || isStaff(d.sender, d.phone)) continue;
           const ship = (d.phone && idx.byPhone.get(d.phone)) || idx.byName.get(nameKey(d.sender));
           if (!ship) continue;
           const state = RECEIVED.includes(d.code) ? 'got' : BRANCH.includes(d.code) ? 'branch' : 'transit';

@@ -12,7 +12,7 @@ const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv' }).form
 const dayAgo = (n) => new Date(Date.parse(`${today}T00:00:00Z`) - n * 86400000).toISOString().slice(0, 10);
 
 // Кабінети НП: документи за днями; відстеження.
-const DOCS = { k1: { [dayAgo(10)]: [['20450000000001', '501112233', 'Петренко Іван'], ['20450000000002', '671234567', 'Коваль Ольга'], ['20450000000003', '931112233', 'Шевчук'], ['20450000000004', '501231231', 'Шевченко Марія'], ['20450000000005', '501231299', 'Лисенко Петро']] }, k2: { [dayAgo(20)]: [['20450000000009', '661112233', 'Бондар']] } };
+const DOCS = { k1: { [dayAgo(10)]: [['20450000000001', '501112233', 'Петренко Іван'], ['20450000000002', '671234567', 'Коваль Ольга'], ['20450000000003', '931112233', 'Шевчук'], ['20450000000007', '441112233', 'Склад Ековент'], ['20450000000004', '501231231', 'Шевченко Марія'], ['20450000000005', '501231299', 'Лисенко Петро']] }, k2: { [dayAgo(20)]: [['20450000000009', '661112233', 'Бондар']] } };
 const TRACK = {
   20450000000001: { StatusCode: '103', Status: 'Відмова одержувача', LastCreatedOnTheBasisNumber: '20450000000101', LastCreatedOnTheBasisDocumentType: 'Return', CargoDescriptionString: 'Осушувач Dryora 10', AnnouncedPrice: '7058' },
   20450000000101: { StatusCode: '7', Status: 'Прибув у відділення', CityRecipient: 'Київ', WarehouseRecipient: 'Відділення №25', ActualDeliveryDate: `${dayAgo(6)} 12:10:00`, DatePayedKeeping: `${dayAgo(1)} 00:00:00`, DateCreated: `${dayAgo(9)} 10:00:00`, RecipientFullName: 'Нестерюк Іван', PhoneRecipient: '380971112233' },
@@ -21,6 +21,7 @@ const TRACK = {
   20450000000009: { StatusCode: '105', Status: 'Припинено зберігання', LastCreatedOnTheBasisNumber: '20450000000109' },
   20450000000109: { StatusCode: '9', Status: 'Відправлення отримано', RecipientDateTime: `${dayAgo(3).split('-').reverse().join('.')} 15:20:00` },
   20400000000777: { StatusCode: '102', Status: 'Відмова від отримання' }, // Розетка-постачальник: ЕН повернення дала сама Розетка
+  20450000000007: { StatusCode: '9', Status: 'Відправлення отримано' }, // посилка нашій людині (внутрішнє переміщення)
   20450000000004: { StatusCode: '9', Status: 'Відправлення отримано', LastCreatedOnTheBasisNumber: '20450000000104', LastCreatedOnTheBasisDocumentType: 'CargoReturn' }, // клієнт повернув через НП
   20450000000104: { StatusCode: '6', Status: 'У місті одержувача', DateCreated: `${dayAgo(1).split('-').reverse().join('-')} 09:00:00` },
   20450000000005: { StatusCode: '106', Status: 'Одержано і створено ЄН зворотньої доставки', LastCreatedOnTheBasisNumber: '20450000000105', LastCreatedOnTheBasisDocumentType: 'BackwardDelivery' }, // гроші — не повернення
@@ -50,6 +51,7 @@ const fetchFn = async (url, opts = {}) => {
     const rows = b.apiKey === 'k1' && b.methodProperties.Page === '1' ? [
       { Number: '20459999990002', TrackingStatusCode: '7', TrackingStatusName: 'Прибув у відділення', SenderName: 'Коваль Ольга Петрівна', CounterpartySenderDescription: 'Приватна особа', CargoDescription: 'Зволожувач', ArrivalDateTime: `${dayAgo(1)} 10:00:00`, OwnerDocumentType: '' },
       { Number: '20459999990003', TrackingStatusCode: '5', SenderName: 'Іваненко Степан', CounterpartySenderDescription: 'ТОВ Постачальник', OwnerDocumentType: '' },
+      { Number: '20459999990004', TrackingStatusCode: '5', SenderName: 'Склад Ековент', OwnerDocumentType: '' }, // наша людина (контакт кабінету) — не повернення
       { Number: '20450000000101', TrackingStatusCode: '7', SenderName: 'Петренко Іван', OwnerDocumentType: 'CargoReturn' },
     ] : [];
     return new Response(JSON.stringify({ success: true, data: [{ result: rows }] }));
@@ -105,6 +107,7 @@ assert.equal(l.rows.length, 9, 'відмова з ЕН, без ЕН, Розет�
 const c2 = by['20450000000002'];
 assert.deepEqual([c2.ret_ttn, c2.reason, c2.state, c2.carrier, c2.customer, c2.to], ['20459999990002', 'customer', 'branch', 'np', 'Коваль Ольга', 'ФОП Нестерюк І.']);
 assert.ok(!l.rows.some((r) => r.ret_ttn === '20459999990003'), 'посилка постачальника — не повернення');
+assert.ok(!l.rows.some((r) => r.ret_ttn === '20459999990004' || r.orig_ttn === '20450000000007'), 'посилка від нашої людини (внутрішнє переміщення) — не повернення');
 const c4 = by['20450000000004'];
 assert.deepEqual([c4.ret_ttn, c4.reason, c4.state], ['20450000000104', 'customer', 'transit'], 'клієнт повернув через НП («на основі», CargoReturn)');
 assert.ok(!by['20450000000005'], 'зворотна доставка грошей — не повернення');
