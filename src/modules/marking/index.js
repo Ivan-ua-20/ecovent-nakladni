@@ -18,6 +18,7 @@ import { npSender, npDocumentsPage, npMarkingPdf, npServiceType, npTracking, isD
 import { rzLogin, rzTtnPdf } from '../../integrations/rozetka.js';
 import { promOrders, promDelivery } from '../../integrations/prom.js';
 import { epcOrders, epcDelivery, epcLabelPdf, EPC_LABEL_PROVIDERS } from '../../integrations/epicentr.js';
+import { meestGet, meestParcelsList, meestContract, MEEST_PROBES } from '../../integrations/meest.js';
 
 const PAGES_PER_CALL = 12;
 const TODAY_REFRESH_MS = 5 * 60 * 1000;
@@ -433,6 +434,95 @@ export function mountMarking(app, { db, fetchFn, onCleanup }) {
     await logAudit(db, { user: c.get('user'), kind: 'epc', refId: cur.id, action: 'видалено магазин Епіцентру', changes: [{ field: 'name', from: cur.name, to: '' }] });
     return c.json({ ok: true });
   });
+  // ---------------------------------------------------------------- договори Meest (Міст)
+  // Токен API з кабінету Meest (на кожен договір свій) + ContractID. «Перевірити» — дані договору й посилки за останній тиждень.
+  const MEEST_TOKEN_RE = /^[\w.\-+/=]{16,4000}$/;
+  const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const publicMeest = (a) => ({ id: a.id, name: a.name, token: keyHint(a.token), contract_id: a.contract_id, active: a.active, checked_at: a.checked_at || '' });
+  // Перевірка: договір (якщо Міст віддає) і посилки за 7 днів (до 10) — у вигляді «замовлень» для вікна перевірки.
+  async function meestCheck(token, contractId) {
+    let contract = null;
+    try { contract = await meestContract(fetchFn, token, contractId); } catch (e) { if (e.status === 400 && /токен/.test(e.message)) throw e; }
+    const orders = [];
+    let ok = !!contract;
+    for (let i = 0; i < 7 && orders.length < 10; i++) {
+      const day = addDays(kyivDay(), -i);
+      let list;
+      try { list = await meestParcelsList(fetchFn, token, day); } catch (e) { if (contract && !e.pending) break; throw e; }
+      ok = true;
+      for (const p of list.slice(0, 10 - orders.length)) {
+        const bar = String(p.barCode || p['вarCode'] || ''); // у документації Міст поле подекуди з кириличною «в»
+        orders.push({ id: String(p.parcelNumber || bar), date: day, status: p.registerType || '', provider: 'Meest', ttn: bar });
+      }
+    }
+    if (!ok) throw fail(400, 'Міст не підтвердив токен.');
+    const c = Array.isArray(contract) ? contract[0] : contract;
+    return { orders, contract: c ? String(c.contractNumber || c.contractDescr || c.number || c.name || '') : '' };
+  }
+  app.get('/api/meest/accounts', async (c) => {
+    need(c, 'api');
+    return c.json((await db.all(`SELECT * FROM meest_accounts ORDER BY active DESC, name`)).map(publicMeest));
+  });
+  app.post('/api/meest/accounts', async (c) => {
+    need(c, 'api');
+    const b = await c.req.json();
+    const token = String(b.token || '').trim();
+    const contractId = String(b.contract_id || '').trim();
+    if (!MEEST_TOKEN_RE.test(token)) throw fail(400, 'Вставте API токен з кабінету Meest (Налаштування → API інтеграції).');
+    if (!GUID_RE.test(contractId)) throw fail(400, 'Вставте ContractID з того самого розділу кабінету Meest (вигляд: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).');
+    if (await db.get(`SELECT id FROM meest_accounts WHERE token = ? OR contract_id = ?`, [token, contractId])) throw fail(400, 'Цей договір або токен уже додано.');
+    const r0 = await meestCheck(token, contractId);
+    const name = String(b.name || '').trim().slice(0, 100) || r0.contract || 'Договір Meest';
+    const now = new Date().toISOString();
+    const r = await db.run(`INSERT INTO meest_accounts (name, token, contract_id, active, checked_at, created_at) VALUES (?, ?, ?, 1, ?, ?)`, [name, token, contractId, now, now]);
+    await logAudit(db, { user: c.get('user'), kind: 'meest', refId: r.lastId, action: 'додано договір Meest', changes: [{ field: 'name', from: '', to: name }] });
+    return c.json({ id: r.lastId, orders: r0.orders });
+  });
+  app.put('/api/meest/accounts/:id', async (c) => {
+    need(c, 'api');
+    const b = await c.req.json();
+    const cur = await db.get(`SELECT * FROM meest_accounts WHERE id = ?`, [c.req.param('id')]);
+    if (!cur) throw fail(404, 'Договір не знайдено.');
+    const next = { ...cur };
+    if (b.name !== undefined) next.name = String(b.name).trim().slice(0, 100) || cur.name;
+    if (b.active !== undefined) next.active = b.active ? 1 : 0;
+    const cid = String(b.contract_id ?? '').trim();
+    if (cid && cid !== cur.contract_id) {
+      if (!GUID_RE.test(cid)) throw fail(400, 'ContractID має вигляд xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.');
+      next.contract_id = cid;
+    }
+    const t = String(b.token ?? '').trim();
+    const tokenChanged = t && !t.startsWith(MASK) && t !== cur.token;
+    if (tokenChanged && !MEEST_TOKEN_RE.test(t)) throw fail(400, 'Вставте API токен з кабінету Meest (Налаштування → API інтеграції).');
+    let orders = null;
+    if (tokenChanged || b.check || next.contract_id !== cur.contract_id) {
+      orders = (await meestCheck(tokenChanged ? t : cur.token, next.contract_id)).orders;
+      next.checked_at = new Date().toISOString();
+      if (tokenChanged) next.token = t;
+    }
+    await db.run(`UPDATE meest_accounts SET name = ?, token = ?, contract_id = ?, active = ?, checked_at = ? WHERE id = ?`, [next.name, next.token, next.contract_id, next.active, next.checked_at, cur.id]);
+    if (tokenChanged) await logAudit(db, { user: c.get('user'), kind: 'meest', refId: cur.id, action: 'змінено токен Meest', changes: [{ field: 'token', from: keyHint(cur.token), to: keyHint(t) }] });
+    return c.json({ ...publicMeest(next), ...(orders ? { orders } : {}) });
+  });
+  app.delete('/api/meest/accounts/:id', async (c) => {
+    need(c, 'api');
+    const cur = await db.get(`SELECT * FROM meest_accounts WHERE id = ?`, [c.req.param('id')]);
+    if (!cur) throw fail(404, 'Договір не знайдено.');
+    await db.run(`DELETE FROM meest_accounts WHERE id = ?`, [cur.id]);
+    await logAudit(db, { user: c.get('user'), kind: 'meest', refId: cur.id, action: 'видалено договір Meest', changes: [{ field: 'name', from: cur.name, to: '' }] });
+    return c.json({ ok: true });
+  });
+  // Що віддає API Міст (для налаштування інтеграції): лише читання, методи й формати параметрів — з білого списку, токен не повертається.
+  app.get('/api/meest/accounts/:id/probe', async (c) => {
+    need(c, 'api');
+    const cur = await db.get(`SELECT * FROM meest_accounts WHERE id = ?`, [c.req.param('id')]);
+    if (!cur) throw fail(404, 'Договір не знайдено.');
+    const fn = MEEST_PROBES[c.req.query('m') || ''];
+    const path = fn && fn(String(c.req.query('v') || '').trim());
+    if (!path) throw fail(400, `Метод: ${Object.keys(MEEST_PROBES).join(', ')}.`);
+    return c.json({ path, result: await meestGet(fetchFn, cur.token, path) });
+  });
+
   // PDF накладної Епіцентру: провайдер — з параметра (якщо відомий), інакше по черзі всі, що друкуються; магазини — від того,
   // з якого друкували найчастіше.
   app.get('/api/epc/marking/:ttn', async (c) => {

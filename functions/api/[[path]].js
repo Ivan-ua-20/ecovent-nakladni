@@ -938,12 +938,12 @@ var compose = (middleware, onError, onNotFound) => {
       } else handler = i === middleware.length && next || void 0;
       if (handler) try {
         res = await handler(context, () => dispatch(i + 1));
-      } catch (err) {
-        if (err instanceof Error && onError) {
-          context.error = err;
-          res = await onError(err, context);
+      } catch (err2) {
+        if (err2 instanceof Error && onError) {
+          context.error = err2;
+          res = await onError(err2, context);
           isError = true;
-        } else throw err;
+        } else throw err2;
       }
       else if (context.finalized === false && onNotFound) res = await onNotFound(context);
       if (res && (context.finalized === false || isError)) context.res = res;
@@ -973,12 +973,12 @@ var COMPOSED_HANDLER = "__COMPOSED_HANDLER";
 var notFoundHandler = (c) => {
   return c.text("404 Not Found", 404);
 };
-var errorHandler = (err, c) => {
-  if ("getResponse" in err) {
-    const res = err.getResponse();
+var errorHandler = (err2, c) => {
+  if ("getResponse" in err2) {
+    const res = err2.getResponse();
     return c.newResponse(res.body, res);
   }
-  console.error(err);
+  console.error(err2);
   return c.text("Internal Server Error", 500);
 };
 var Hono = class Hono2 {
@@ -1218,9 +1218,9 @@ var Hono = class Hono2 {
     this.router.add(method, path, [handler, r]);
     this.routes.push(r);
   }
-  #handleError(err, c) {
-    if (err instanceof Error) return this.errorHandler(err, c);
-    throw err;
+  #handleError(err2, c) {
+    if (err2 instanceof Error) return this.errorHandler(err2, c);
+    throw err2;
   }
   #dispatch(request, executionCtx, env, method) {
     if (method === "HEAD") return (async () => new Response(null, await this.#dispatch(request, executionCtx, env, "GET")))();
@@ -1239,10 +1239,10 @@ var Hono = class Hono2 {
         res = matchResult[0][0][0][0](c, async () => {
           c.res = await this.#notFoundHandler(c);
         });
-      } catch (err) {
-        return this.#handleError(err, c);
+      } catch (err2) {
+        return this.#handleError(err2, c);
       }
-      return res instanceof Promise ? res.then((resolved) => resolved || (c.finalized ? c.res : this.#notFoundHandler(c))).catch((err) => this.#handleError(err, c)) : res ?? this.#notFoundHandler(c);
+      return res instanceof Promise ? res.then((resolved) => resolved || (c.finalized ? c.res : this.#notFoundHandler(c))).catch((err2) => this.#handleError(err2, c)) : res ?? this.#notFoundHandler(c);
     }
     const composed = compose(matchResult[0], this.errorHandler, this.#notFoundHandler);
     return (async () => {
@@ -1250,8 +1250,8 @@ var Hono = class Hono2 {
         const context = await composed(c);
         if (!context.finalized) throw new Error("Context is not finalized. Did you forget to return a Response object or `await next()`?");
         return context.res;
-      } catch (err) {
-        return this.#handleError(err, c);
+      } catch (err2) {
+        return this.#handleError(err2, c);
       }
     })();
   }
@@ -2359,9 +2359,9 @@ async function req(fetchFn, path, { method = "GET", token, license, body } = {})
   }
   if (!res.ok) {
     const msg = json?.message || json?.detail || text.slice(0, 200);
-    const err = new Error(`Checkbox ${res.status}: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
-    err.status = res.status;
-    throw err;
+    const err2 = new Error(`Checkbox ${res.status}: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
+    err2.status = res.status;
+    throw err2;
   }
   return json;
 }
@@ -6276,9 +6276,9 @@ function mountErrLog(app, { db, fetchFn, onCleanup, shared: shared2 = {} }) {
       }
     }
   }
-  async function log(err, { path = "", user = "", source = "" } = {}) {
+  async function log(err2, { path = "", user = "", source = "" } = {}) {
     try {
-      const message = String(err?.message || err || "").slice(0, 1e3);
+      const message = String(err2?.message || err2 || "").slice(0, 1e3);
       const src = source || errSource(message, path);
       try {
         await db.run(
@@ -12740,9 +12740,9 @@ async function rzTtnPdf(fetchFn, token, ttn, why = () => {
     return null;
   }
   if (!j?.success) {
-    const err = rzError(j);
-    if (err.rzAuth) throw err;
-    why(err.message);
+    const err2 = rzError(j);
+    if (err2.rzAuth) throw err2;
+    why(err2.message);
     return null;
   }
   const c = j.content;
@@ -12927,6 +12927,43 @@ async function epcLabelPdf(fetchFn, token, provider, number, why = () => {
   why("\u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440 \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u0432 \u0444\u0430\u0439\u043B \u043D\u0435 \u0443 \u0444\u043E\u0440\u043C\u0430\u0442\u0456 PDF");
   return null;
 }
+
+// src/integrations/meest.js
+var MEEST_API = "https://api.meest.com/v3.0/openAPI";
+var err = (msg, status = 502) => Object.assign(new Error(`\u041C\u0456\u0441\u0442: ${msg}`), { status });
+async function meestGet(fetchFn, token, path) {
+  let res;
+  try {
+    res = await fetchFn(`${MEEST_API}${path}`, { headers: { token, "Content-Type": "application/json", Accept: "application/json" } });
+  } catch (e) {
+    if (e.pending) throw e;
+    throw err("\u0441\u0435\u0440\u0432\u0435\u0440 \u043D\u0435 \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0430\u0454. \u0421\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0449\u0435 \u0440\u0430\u0437 \u0437\u0430 \u0445\u0432\u0438\u043B\u0438\u043D\u0443.");
+  }
+  const j = await res.json().catch(() => null);
+  if (res.status === 401 || res.status === 403) throw err("\u0442\u043E\u043A\u0435\u043D \u043D\u0435\u0434\u0456\u0439\u0441\u043D\u0438\u0439 \u0430\u0431\u043E \u0437\u0430\u043A\u0456\u043D\u0447\u0438\u0432\u0441\u044F (\u043A\u0430\u0431\u0456\u043D\u0435\u0442 Meest \u2192 \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 API \u0456\u043D\u0442\u0435\u0433\u0440\u0430\u0446\u0456\u0457).", 400);
+  if (res.status === 429) throw Object.assign(err("\u0437\u0430\u0431\u0430\u0433\u0430\u0442\u043E \u0437\u0430\u043F\u0438\u0442\u0456\u0432, \u0437\u0430\u0447\u0435\u043A\u0430\u0439\u0442\u0435 \u0445\u0432\u0438\u043B\u0438\u043D\u0443."), { rate: true });
+  if (!j || String(j.status).toLowerCase() !== "ok") {
+    const i = j?.info || {};
+    throw err([i.message, i.messageDetails].filter(Boolean).join(" \u2014 ") || `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${res.status}`, res.status === 404 ? 404 : 400);
+  }
+  return j.result ?? null;
+}
+var dmy = (iso) => iso.split("-").reverse().join(".");
+var meestParcelsList = (fetchFn, token, day) => meestGet(fetchFn, token, `/parcelsList/${dmy(day)}`).then((r) => Array.isArray(r) ? r : []);
+var meestContract = (fetchFn, token, contractId) => meestGet(fetchFn, token, `/contractClientInfo/${encodeURIComponent(contractId)}`);
+var MEEST_PROBES = {
+  parcelsList: (v) => /^\d{4}-\d{2}-\d{2}$/.test(v) && `/parcelsList/${dmy(v)}`,
+  trackingByDate: (v) => /^\d{4}-\d{2}-\d{2}$/.test(v) && `/trackingByDate/${v}`,
+  trackingByPeriod: (v) => /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(v) && `/trackingByPeriod/${v.split("|").map(encodeURIComponent).join("/")}`,
+  tracking: (v) => /^[\w-]{4,40}$/.test(v) && `/tracking/${encodeURIComponent(v)}`,
+  parcelStatus: (v) => /^[\w-]{4,40}$/.test(v) && `/parcelStatus/${encodeURIComponent(v)}`,
+  parcelStatusDetails: (v) => /^[\w-]{4,40}$/.test(v) && `/parcelStatusDetails/${encodeURIComponent(v)}`,
+  parcelInfoTracking: (v) => /^[\w-]{4,40}$/.test(v) && `/parcelInfoTracking/${encodeURIComponent(v)}`,
+  getParcel: (v) => /^[\w-]{4,40}\/(parcelID|barCode|parcelNumber)$/.test(v) && `/getParcel/${v}/objectData`,
+  contractClientInfo: (v) => /^[\w-]{8,40}$/.test(v) && `/contractClientInfo/${encodeURIComponent(v)}`,
+  trackingDelivered: (v) => /^\d{4}-\d{2}-\d{2}\|\d{4}-\d{2}-\d{2}\|\d{1,3}$/.test(v) && `/trackingDelivered/${encodeURIComponent(`${v.split("|")[0]} 00:00:00`)}/${encodeURIComponent(`${v.split("|")[1]} 23:59:59`)}/${v.split("|")[2]}`,
+  parcelReturnReasons: () => "/parcelReturnReasons"
+};
 
 // src/modules/marking/index.js
 var PAGES_PER_CALL = 12;
@@ -13326,6 +13363,99 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
     await db.run(`DELETE FROM epc_accounts WHERE id = ?`, [cur.id]);
     await logAudit(db, { user: c.get("user"), kind: "epc", refId: cur.id, action: "\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D \u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440\u0443", changes: [{ field: "name", from: cur.name, to: "" }] });
     return c.json({ ok: true });
+  });
+  const MEEST_TOKEN_RE = /^[\w.\-+/=]{16,4000}$/;
+  const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const publicMeest = (a) => ({ id: a.id, name: a.name, token: keyHint(a.token), contract_id: a.contract_id, active: a.active, checked_at: a.checked_at || "" });
+  async function meestCheck(token, contractId) {
+    let contract = null;
+    try {
+      contract = await meestContract(fetchFn, token, contractId);
+    } catch (e) {
+      if (e.status === 400 && /токен/.test(e.message)) throw e;
+    }
+    const orders = [];
+    let ok = !!contract;
+    for (let i = 0; i < 7 && orders.length < 10; i++) {
+      const day = addDays4(kyivDay(), -i);
+      let list;
+      try {
+        list = await meestParcelsList(fetchFn, token, day);
+      } catch (e) {
+        if (contract && !e.pending) break;
+        throw e;
+      }
+      ok = true;
+      for (const p of list.slice(0, 10 - orders.length)) {
+        const bar = String(p.barCode || p["\u0432arCode"] || "");
+        orders.push({ id: String(p.parcelNumber || bar), date: day, status: p.registerType || "", provider: "Meest", ttn: bar });
+      }
+    }
+    if (!ok) throw fail(400, "\u041C\u0456\u0441\u0442 \u043D\u0435 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432 \u0442\u043E\u043A\u0435\u043D.");
+    const c = Array.isArray(contract) ? contract[0] : contract;
+    return { orders, contract: c ? String(c.contractNumber || c.contractDescr || c.number || c.name || "") : "" };
+  }
+  app.get("/api/meest/accounts", async (c) => {
+    need(c, "api");
+    return c.json((await db.all(`SELECT * FROM meest_accounts ORDER BY active DESC, name`)).map(publicMeest));
+  });
+  app.post("/api/meest/accounts", async (c) => {
+    need(c, "api");
+    const b = await c.req.json();
+    const token = String(b.token || "").trim();
+    const contractId = String(b.contract_id || "").trim();
+    if (!MEEST_TOKEN_RE.test(token)) throw fail(400, "\u0412\u0441\u0442\u0430\u0432\u0442\u0435 API \u0442\u043E\u043A\u0435\u043D \u0437 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 Meest (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 API \u0456\u043D\u0442\u0435\u0433\u0440\u0430\u0446\u0456\u0457).");
+    if (!GUID_RE.test(contractId)) throw fail(400, "\u0412\u0441\u0442\u0430\u0432\u0442\u0435 ContractID \u0437 \u0442\u043E\u0433\u043E \u0441\u0430\u043C\u043E\u0433\u043E \u0440\u043E\u0437\u0434\u0456\u043B\u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 Meest (\u0432\u0438\u0433\u043B\u044F\u0434: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).");
+    if (await db.get(`SELECT id FROM meest_accounts WHERE token = ? OR contract_id = ?`, [token, contractId])) throw fail(400, "\u0426\u0435\u0439 \u0434\u043E\u0433\u043E\u0432\u0456\u0440 \u0430\u0431\u043E \u0442\u043E\u043A\u0435\u043D \u0443\u0436\u0435 \u0434\u043E\u0434\u0430\u043D\u043E.");
+    const r0 = await meestCheck(token, contractId);
+    const name = String(b.name || "").trim().slice(0, 100) || r0.contract || "\u0414\u043E\u0433\u043E\u0432\u0456\u0440 Meest";
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const r = await db.run(`INSERT INTO meest_accounts (name, token, contract_id, active, checked_at, created_at) VALUES (?, ?, ?, 1, ?, ?)`, [name, token, contractId, now, now]);
+    await logAudit(db, { user: c.get("user"), kind: "meest", refId: r.lastId, action: "\u0434\u043E\u0434\u0430\u043D\u043E \u0434\u043E\u0433\u043E\u0432\u0456\u0440 Meest", changes: [{ field: "name", from: "", to: name }] });
+    return c.json({ id: r.lastId, orders: r0.orders });
+  });
+  app.put("/api/meest/accounts/:id", async (c) => {
+    need(c, "api");
+    const b = await c.req.json();
+    const cur = await db.get(`SELECT * FROM meest_accounts WHERE id = ?`, [c.req.param("id")]);
+    if (!cur) throw fail(404, "\u0414\u043E\u0433\u043E\u0432\u0456\u0440 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const next = { ...cur };
+    if (b.name !== void 0) next.name = String(b.name).trim().slice(0, 100) || cur.name;
+    if (b.active !== void 0) next.active = b.active ? 1 : 0;
+    const cid = String(b.contract_id ?? "").trim();
+    if (cid && cid !== cur.contract_id) {
+      if (!GUID_RE.test(cid)) throw fail(400, "ContractID \u043C\u0430\u0454 \u0432\u0438\u0433\u043B\u044F\u0434 xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.");
+      next.contract_id = cid;
+    }
+    const t = String(b.token ?? "").trim();
+    const tokenChanged = t && !t.startsWith(MASK) && t !== cur.token;
+    if (tokenChanged && !MEEST_TOKEN_RE.test(t)) throw fail(400, "\u0412\u0441\u0442\u0430\u0432\u0442\u0435 API \u0442\u043E\u043A\u0435\u043D \u0437 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 Meest (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 API \u0456\u043D\u0442\u0435\u0433\u0440\u0430\u0446\u0456\u0457).");
+    let orders = null;
+    if (tokenChanged || b.check || next.contract_id !== cur.contract_id) {
+      orders = (await meestCheck(tokenChanged ? t : cur.token, next.contract_id)).orders;
+      next.checked_at = (/* @__PURE__ */ new Date()).toISOString();
+      if (tokenChanged) next.token = t;
+    }
+    await db.run(`UPDATE meest_accounts SET name = ?, token = ?, contract_id = ?, active = ?, checked_at = ? WHERE id = ?`, [next.name, next.token, next.contract_id, next.active, next.checked_at, cur.id]);
+    if (tokenChanged) await logAudit(db, { user: c.get("user"), kind: "meest", refId: cur.id, action: "\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0442\u043E\u043A\u0435\u043D Meest", changes: [{ field: "token", from: keyHint(cur.token), to: keyHint(t) }] });
+    return c.json({ ...publicMeest(next), ...orders ? { orders } : {} });
+  });
+  app.delete("/api/meest/accounts/:id", async (c) => {
+    need(c, "api");
+    const cur = await db.get(`SELECT * FROM meest_accounts WHERE id = ?`, [c.req.param("id")]);
+    if (!cur) throw fail(404, "\u0414\u043E\u0433\u043E\u0432\u0456\u0440 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    await db.run(`DELETE FROM meest_accounts WHERE id = ?`, [cur.id]);
+    await logAudit(db, { user: c.get("user"), kind: "meest", refId: cur.id, action: "\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u0434\u043E\u0433\u043E\u0432\u0456\u0440 Meest", changes: [{ field: "name", from: cur.name, to: "" }] });
+    return c.json({ ok: true });
+  });
+  app.get("/api/meest/accounts/:id/probe", async (c) => {
+    need(c, "api");
+    const cur = await db.get(`SELECT * FROM meest_accounts WHERE id = ?`, [c.req.param("id")]);
+    if (!cur) throw fail(404, "\u0414\u043E\u0433\u043E\u0432\u0456\u0440 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const fn = MEEST_PROBES[c.req.query("m") || ""];
+    const path = fn && fn(String(c.req.query("v") || "").trim());
+    if (!path) throw fail(400, `\u041C\u0435\u0442\u043E\u0434: ${Object.keys(MEEST_PROBES).join(", ")}.`);
+    return c.json({ path, result: await meestGet(fetchFn, cur.token, path) });
   });
   app.get("/api/epc/marking/:ttn", async (c) => {
     need(c, "docs.view");
@@ -16749,14 +16879,14 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     }
     return rawFetch(...args);
   };
-  app.onError(async (err, c) => {
-    if (err.pending) return c.json({ pending: true, message: err.message }, 202);
-    if (!err.status) console.error(err);
-    if (!err.status || err.status >= 500) {
+  app.onError(async (err2, c) => {
+    if (err2.pending) return c.json({ pending: true, message: err2.message }, 202);
+    if (!err2.status) console.error(err2);
+    if (!err2.status || err2.status >= 500) {
       const u = c.get("user");
-      await services.errlog?.log(err, { path: c.req.path, user: u?.name || u?.login || "" });
+      await services.errlog?.log(err2, { path: c.req.path, user: u?.name || u?.login || "" });
     }
-    return c.json({ error: err.message || String(err), ...err.extra || {} }, err.status || 500);
+    return c.json({ error: err2.message || String(err2), ...err2.extra || {} }, err2.status || 500);
   });
   const cleanupTasks = [];
   const onCleanup = (fn) => cleanupTasks.push(fn);
@@ -18020,7 +18150,7 @@ var schema11 = {
 // src/modules/marking/schema.js
 var schema12 = {
   name: "marking",
-  version: 5,
+  version: 6,
   tables: [
     // Кабінети НП (ФОП або ТОВ): ключ API бачить лише сервер.
     `CREATE TABLE IF NOT EXISTS np_accounts (
@@ -18090,6 +18220,16 @@ var schema12 = {
     token TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
     hits INTEGER NOT NULL DEFAULT 0,
+    checked_at TEXT DEFAULT '',
+    created_at TEXT
+  )`,
+    // Договори Meest (Міст): токен API з кабінету (окремий на кожен договір) і ContractID — токен бачить лише сервер.
+    `CREATE TABLE IF NOT EXISTS meest_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL DEFAULT '',
+    token TEXT NOT NULL,
+    contract_id TEXT NOT NULL DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
     checked_at TEXT DEFAULT '',
     created_at TEXT
   )`,
