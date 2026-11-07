@@ -13,6 +13,7 @@ async function viewUsers() {
     { k: 'b2b', label: 'B2B партнери', lv: [['view', 'перегляд'], ['full', 'повний — зміни, ціни, оплати, партнери']], tg: true },
     { k: 'retail', label: 'Рітейл', lv: [['view', 'перегляд'], ['work', 'робота — підтвердити, ТТН, LP-CRM']], tg: true },
     { k: 'market', label: 'Маркетплейси', lv: [['view', 'перегляд'], ['work', 'робота — нагадування про відгуки, чат, оновити']] },
+    { k: 'returns', label: 'Повернення', lv: [['view', 'перегляд і «Оновити інформацію»']] },
   ];
   const LVN = { view: 'перегляд', work: 'робота', full: 'повний' };
   const shopName = new Map(markets.flatMap((m) => m.shops.map((x) => [`${m.key}:${x.id}`, `${m.title || m.key} · ${x.name}`])));
