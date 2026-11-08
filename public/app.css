@@ -821,3 +821,24 @@ div.ret-v { display: flex; }
 .ret-cp .ic, .ret-cp-hint .ic { width: 15px; height: 15px; }
 .ret-cp-hint { display: inline-flex; vertical-align: middle; }
 @media (max-width: 900px) { .ret-f select, .ret-f input, .ret-q input, .ret-f input[type=date] { width: 100%; } .ret-f { flex: 1 1 140px; } .ret-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; } .ret-tabs::-webkit-scrollbar { display: none; } .ret-tab { white-space: nowrap; } }
+
+/* Пошук товару у формах партнера (закупівля, замовлення клієнта): рядок над списком, липкий при прокрутці. */
+.ps-card { padding: 0; overflow: clip; }
+.ps-card > div:last-child > table.list { margin: 0; }
+.ps-bar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 12px 14px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.ps-field { position: relative; flex: 1 1 260px; display: flex; align-items: center; }
+.ps-ic { position: absolute; left: 12px; width: 18px; height: 18px; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; pointer-events: none; }
+.ps-q { width: 100%; font: inherit; font-size: 15px; padding: 10px 38px 10px 40px; min-height: 44px; border: 1px solid var(--line); border-radius: 10px; background: #f7f9f8; color: var(--ink); transition: border-color .15s, box-shadow .15s, background .15s; }
+.ps-q::placeholder { color: #7a8783; }
+.ps-q:focus { outline: none; background: #fff; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(15, 118, 110, .15); }
+.ps-q::-webkit-search-cancel-button { display: none; }
+.ps-x { position: absolute; right: 6px; width: 32px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 14px; cursor: pointer; }
+.ps-x:hover { background: #eef2f1; color: var(--ink); }
+.ps-sel { white-space: nowrap; }
+.ps-sel b { margin-left: 2px; }
+.ps-count { margin-left: auto; white-space: nowrap; }
+.ps-hl { background: #fde68a; color: inherit; padding: 0 1px; border-radius: 3px; }
+tr.ps-on > td { background: #f0faf7; }
+.ps-empty { padding: 28px 16px; text-align: center; display: flex; flex-direction: column; gap: 6px; align-items: center; }
+.ps-empty .btn { margin-top: 6px; }
+@media (max-width: 700px) { .ps-count { margin-left: 0; } .ps-field { flex-basis: 100%; } }
