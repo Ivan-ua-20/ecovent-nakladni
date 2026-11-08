@@ -8106,7 +8106,7 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     if (!name) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u041F\u0406\u0411 \u043A\u043B\u0456\u0454\u043D\u0442\u0430.");
     if (!/^380\d{9}$/.test(phone)) throw fail(400, "\u0422\u0435\u043B\u0435\u0444\u043E\u043D \u043A\u043B\u0456\u0454\u043D\u0442\u0430: 0XXXXXXXXX \u0430\u0431\u043E 380XXXXXXXXX.");
     if (ttn && !/^[0-9A-Z-]{6,40}$/.test(ttn)) throw fail(400, "\u0422\u0422\u041D \u2014 \u043B\u0438\u0448\u0435 \u0446\u0438\u0444\u0440\u0438 \u0439 \u043B\u0430\u0442\u0438\u043D\u0441\u044C\u043A\u0456 \u043B\u0456\u0442\u0435\u0440\u0438 (6\u201340 \u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432).");
-    return { client_name: name, client_phone: phone, ttn, comment: String(b.comment ?? "").trim().slice(0, 500) };
+    return { client_name: name, client_phone: phone, ttn, comment: String(b.comment ?? "").trim().slice(0, 500), urgent: b.urgent ? 1 : 0 };
   }
   async function supplyItems(p, supplyId, items, exceptId = 0) {
     const s = await db.get(`SELECT * FROM b2b_orders WHERE id = ? AND partner_id = ? AND kind = 'supply'`, [supplyId, p.id]);
@@ -8354,7 +8354,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
   }
   async function crmComment(o, partnerName) {
     const pay = await payText(o, partnerName);
-    const comment = [`${orderNo(o.id)} \xB7 B2B \xAB${partnerName}\xBB`, o.ttn ? `\u0422\u0422\u041D \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430: ${o.ttn}` : "", pay.text, o.comment || ""].filter(Boolean).join("\n");
+    const comment = [o.urgent ? "\u{1F525} \u0422\u0415\u0420\u041C\u0406\u041D\u041E\u0412\u041E" : "", `${orderNo(o.id)} \xB7 B2B \xAB${partnerName}\xBB`, o.ttn ? `\u0422\u0422\u041D \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430: ${o.ttn}` : "", pay.text, o.comment || ""].filter(Boolean).join("\n");
     return { paid: pay.paid, comment };
   }
   hooks.crmPaid = async (supplyId, base = "") => {
@@ -8370,7 +8370,7 @@ ${link(base, `b2bclients/${o.id}`)}` : ""}`);
   };
   const tgNew = async (c, p, id, f, it, verb = "\u041D\u043E\u0432\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430") => {
     const lines = it.items.slice(0, 60).map((i) => `${h8(i.name)} \u2014 ${i.qty} \u0448\u0442 \u2014 ${uah4(i.price)}`).join("\n");
-    const text = `\u{1F4E6} <b>${verb} ${orderNo(id)}</b> \u0432\u0456\u0434 \xAB${h8(p.name)}\xBB
+    const text = `${f.urgent ? "\u{1F525} <b>\u0422\u0415\u0420\u041C\u0406\u041D\u041E\u0412\u041E</b>\n" : ""}\u{1F4E6} <b>${verb} ${orderNo(id)}</b> \u0432\u0456\u0434 \xAB${h8(p.name)}\xBB
 
 <b>\u041A\u043B\u0456\u0454\u043D\u0442:</b> ${h8(f.client_name)}, ${h8(f.client_phone)}${f.ttn ? `
 <b>\u0422\u0422\u041D:</b> ${h8(f.ttn)}` : ""}
@@ -8434,7 +8434,7 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
       f.where.push(`o.status = 'crm' AND o.crm_status = ?`);
       f.params.push(cs);
     }
-    const rows = await db.all(`${SELECT} WHERE o.partner_id = ? AND o.kind = 'client' ${f.where.map((w) => `AND ${w}`).join(" ")} ORDER BY o.id DESC LIMIT 300`, [p.id, ...f.params]);
+    const rows = await db.all(`${SELECT} WHERE o.partner_id = ? AND o.kind = 'client' ${f.where.map((w) => `AND ${w}`).join(" ")} ORDER BY (o.urgent = 1 AND o.status = 'new') DESC, o.id DESC LIMIT 300`, [p.id, ...f.params]);
     return c.json({ rows: rows.map(publicOrder), statuses: CLIENT_STATUS, crm_statuses: await crmStatuses(p.id) });
   });
   async function myClientOrder(c, p) {
@@ -8495,13 +8495,13 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     const now = nowIso();
     const u = c.get("user");
     const r = await db.run(
-      `INSERT INTO b2b_orders (partner_id, kind, status, supply_id, client_name, client_phone, ttn, total, comment, created_by, created_at, updated_at)
-       VALUES (?, 'client', 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [p.id, it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, userName8(u), now, now]
+      `INSERT INTO b2b_orders (partner_id, kind, status, supply_id, client_name, client_phone, ttn, total, comment, urgent, created_by, created_at, updated_at)
+       VALUES (?, 'client', 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [p.id, it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, f.urgent, userName8(u), now, now]
     );
     await db.batch([...itemRows(r.lastId, it.items), [
       `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-      [r.lastId, now, userName8(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah4(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : it.draftId ? ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u2014 \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}: ${itemsTxt(it.items)}`.slice(0, 2e3)]
+      [r.lastId, now, userName8(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah4(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : it.draftId ? ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u2014 \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}${f.urgent ? " \xB7 \u{1F525} \u0442\u0435\u0440\u043C\u0456\u043D\u043E\u0432\u043E" : ""}: ${itemsTxt(it.items)}`.slice(0, 2e3)]
     ]]);
     if (it.draftId) {
       await draftAdjust(it.draftId, it.items);
@@ -8532,8 +8532,8 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, it.items),
       [
-        `UPDATE b2b_orders SET supply_id = ?, client_name = ?, client_phone = ?, ttn = ?, total = ?, comment = ?, updated_at = ? WHERE id = ?`,
-        [it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, nowIso(), o.id]
+        `UPDATE b2b_orders SET supply_id = ?, client_name = ?, client_phone = ?, ttn = ?, total = ?, comment = ?, urgent = ?, updated_at = ? WHERE id = ?`,
+        [it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, f.urgent, nowIso(), o.id]
       ]
     ]);
     const diff = itemsDiff(oldItems, it.items);
@@ -8546,9 +8546,35 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     await moveDraftItems(curDraft, curDraft || it.draftId ? oldItems : [], it.draftId, it.items);
     if (it.openId) await rebuildOpen(it.openId);
     if (cur?.status === "open" && cur.id !== it.openId) await rebuildOpen(cur.id);
-    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430: ${diff} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah4(it.total)}${it.draftId ? ` (\u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u0446\u0456 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)})` : ""}`);
+    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430: ${diff} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah4(it.total)}${it.draftId ? ` (\u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u0446\u0456 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)})` : ""}${f.urgent !== (o.urgent ? 1 : 0) ? f.urgent ? " \xB7 \u{1F525} \u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u0422\u0435\u0440\u043C\u0456\u043D\u043E\u0432\u043E\xBB" : " \xB7 \u0437\u043D\u044F\u0442\u043E \xAB\u0422\u0435\u0440\u043C\u0456\u043D\u043E\u0432\u043E\xBB" : ""}`);
     await tgNew(c, p, o.id, f, it, "\u0417\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430");
     return c.json({ ok: true, total: it.total });
+  });
+  async function setUrgent(c, o, partnerName, by) {
+    const on = (await c.req.json().catch(() => ({}))).urgent ? 1 : 0;
+    if (o.status === "cancelled") throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u0435.");
+    if (o.status === "crm" && /відправл|отправл|виконан|выполн|отриман|получ|завершен|доставлен|повернут|возврат|відмов|отказ/i.test(o.crm_status || "")) throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0435 \u2014 \u043F\u043E\u0437\u043D\u0430\u0447\u043A\u0430 \u043D\u0456\u0447\u043E\u0433\u043E \u043D\u0435 \u0437\u043C\u0456\u043D\u0438\u0442\u044C.");
+    if ((o.urgent ? 1 : 0) === on) return { ok: true, urgent: on };
+    await db.run(`UPDATE b2b_orders SET urgent = ?, updated_at = ? WHERE id = ?`, [on, nowIso(), o.id]);
+    await log(o.id, c.get("user"), on ? "\u{1F525} \u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u0422\u0435\u0440\u043C\u0456\u043D\u043E\u0432\u043E\xBB" : "\u0437\u043D\u044F\u0442\u043E \u043F\u043E\u0437\u043D\u0430\u0447\u043A\u0443 \xAB\u0422\u0435\u0440\u043C\u0456\u043D\u043E\u0432\u043E\xBB");
+    if (on && by === "partner") {
+      await tgAdmins(`\u{1F525} <b>\u0422\u0415\u0420\u041C\u0406\u041D\u041E\u0412\u041E: ${orderNo(o.id)}</b> \u0432\u0456\u0434 \xAB${h8(partnerName)}\xBB
+${h8(o.client_name)}, ${h8(o.client_phone)}` + (o.status === "crm" ? `
+\u0423\u0436\u0435 \u0432 LP-CRM${o.crm_id ? ` \u2116 <b>${h8(o.crm_id)}</b>` : ""} \u2014 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u0442\u0435 \u0441\u043A\u043B\u0430\u0434.` : "\n\u0429\u0435 \u043D\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u0435 \u0432 LP-CRM.") + `
+
+${link(c, `b2bclients/${o.id}`)}`);
+    }
+    return { ok: true, urgent: on };
+  }
+  app.post("/api/b2b/p/clients/:id/urgent", async (c) => {
+    const p = await myPartner(c);
+    return c.json(await setUrgent(c, await myClientOrder(c, p), p.name, "partner"));
+  });
+  app.post("/api/b2b/clients/:id/urgent", async (c) => {
+    need(c, "b2b.admin");
+    const o = await orderOf(c.req.param("id"));
+    if (o.kind !== "client") throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return c.json(await setUrgent(c, o, "", "admin"));
   });
   app.get("/api/b2b/clients/:id/edit-options", async (c) => {
     need(c, "b2b.admin");
@@ -8825,7 +8851,8 @@ ${link(c, `b2bclients/${o.id}`)}`);
     new: `o.status = 'new'`,
     crm: `o.status = 'crm'`,
     nosupply: `(o.supply_id IS NULL OR s.status = 'open') AND o.status != 'cancelled'`,
-    cancelled: `o.status = 'cancelled'`
+    cancelled: `o.status = 'cancelled'`,
+    urgent: `o.urgent = 1 AND o.status != 'cancelled'`
   };
   app.get("/api/b2b/clients", async (c) => {
     need(c, "b2b.admin");
@@ -8848,11 +8875,11 @@ ${link(c, `b2bclients/${o.id}`)}`);
     const rows = await db.all(
       `SELECT o.*, s.status AS supply_status, p.name AS partner, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files
        FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id JOIN b2b_partners p ON p.id = o.partner_id
-       WHERE ${where.join(" AND ")} ORDER BY o.id DESC LIMIT 300`,
+       WHERE ${where.join(" AND ")} ORDER BY (o.urgent = 1 AND o.status = 'new') DESC, o.id DESC LIMIT 300`,
       params
     );
     const cnt = await db.get(`SELECT SUM(o.status = 'new') AS new, SUM(o.status = 'crm') AS crm, SUM((o.supply_id IS NULL OR s.status = 'open') AND o.status != 'cancelled') AS nosupply,
-      SUM(o.status = 'cancelled') AS cancelled FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id WHERE o.kind = 'client'`);
+      SUM(o.status = 'cancelled') AS cancelled, SUM(o.urgent = 1 AND o.status != 'cancelled') AS urgent FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id WHERE o.kind = 'client'`);
     return c.json({ rows: rows.map(publicOrder), counts: cnt || {}, crm: (await crmConfig()).on, crm_statuses: await crmStatuses(pid || null) });
   });
   async function clientOrder(c) {
@@ -17846,7 +17873,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 35,
+  version: 36,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18163,6 +18190,8 @@ var schema11 = {
     ["b2b_orders", "crm_checked_at", "TEXT DEFAULT ''"],
     ["b2b_orders", "crm_sent_at", "TEXT DEFAULT ''"],
     ["b2b_orders", "crm_ext", "TEXT DEFAULT ''"],
+    // «Терміново» — партнер (або наш менеджер) позначає замовлення клієнта, щоб його виділити й зібрати першим.
+    ["b2b_orders", "urgent", "INTEGER NOT NULL DEFAULT 0"],
     // етап 3а: команда партнера (роль у команді, хто додав) і видалені партнери (з замовленнями — в архіві)
     ["users", "partner_role", "TEXT DEFAULT ''"],
     ["users", "added_by", "TEXT DEFAULT ''"],

@@ -2,7 +2,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi, psBar, wirePsBar, psMatch, psHl, psEmpty } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi, psBar, wirePsBar, psMatch, psHl, psEmpty, urgentBadge, urgentRow } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
@@ -539,8 +539,8 @@ export function createPartnerPages(ctx = {}) {
         ${Object.entries(statuses).map(([k, v]) => fpBtn(`<span>${esc(v)}</span>`, cliFilter.status === k, `data-pst="${k}"`)).join('')}`)}
       ${crmSel ? fpGroup('Статус у LP-CRM', crmSel) : ''}`;
     const table = rows.length ? `<table class="list"><thead><tr><th>№</th><th>Клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th>Статус відправлення</th></tr></thead><tbody>
-        ${rows.map((o) => `<tr class="click ${o.pending ? 'row-info' : o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''}" data-o="${o.id}">
-          <td><b>${esc(o.number)}</b><div>${supplyMark(o)}</div>${o.pending ? '<div><span class="badge info">🔵 зміни менеджера — підтвердіть</span></div>' : ''}<div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
+        ${rows.map((o) => `<tr class="click ${o.pending ? 'row-info' : o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''} ${urgentRow(o)}" data-o="${o.id}">
+          <td><b>${esc(o.number)}</b>${o.urgent && o.status !== 'cancelled' ? `<div>${urgentBadge(o)}</div>` : ''}<div>${supplyMark(o)}</div>${o.pending ? '<div><span class="badge info">🔵 зміни менеджера — підтвердіть</span></div>' : ''}<div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
           <td>${esc(o.client_name)}<div class="small muted">${esc(phoneFmt(o.client_phone))}${o.ttn ? ` · ТТН ${esc(o.ttn)}` : ''}</div></td>
           <td class="r"><b>${uah(o.total)}</b></td>
           <td>${statusBadge(o)}</td>
@@ -571,8 +571,9 @@ export function createPartnerPages(ctx = {}) {
     const [{ order: o, items, files, history, missing = [] }, docTypes] = await Promise.all([api('GET', `/api/b2b/p/clients/${id}`), api('GET', '/api/b2b/p/doc-types').catch(() => [])]);
     const editable = o.status === 'new' && canEdit() && !o.pending;
     main.innerHTML = `
-      <div class="head-row"><h2>Замовлення ${esc(o.number)} ${statusBadge(o)} ${payBadge(o)}</h2>
+      <div class="head-row"><h2>Замовлення ${esc(o.number)} ${statusBadge(o)} ${payBadge(o)} ${urgentBadge(o)}</h2>
         <div class="btn-row"><a class="btn" href="#/pclients">← До списку</a>
+          ${canEdit() && o.status !== 'cancelled' ? `<button class="btn ${o.urgent ? '' : 'urgent-btn'}" id="cUrgent" aria-pressed="${o.urgent ? 'true' : 'false'}">${o.urgent ? 'Зняти «Терміново»' : '🔥 Терміново'}</button>` : ''}
           ${o.status === 'crm' && canEdit() ? '<button class="btn" id="cClaim">🛠 Брак / обмін</button>' : ''}
           ${editable ? `<a class="btn" href="#/pclients/${o.id}/edit">Змінити</a><button class="btn danger" id="cCancel">Скасувати</button>` : ''}</div></div>
       ${o.pending ? `<div class="card form-stack card-info" style="margin-bottom:12px">
@@ -625,6 +626,13 @@ export function createPartnerPages(ctx = {}) {
       try { await api('POST', `/api/b2b/p/clients/${o.id}/reject`); toast('Зміни відхилено — повернуто як було'); viewClient(o.id); } catch (e) { toast(e.message, true); }
     });
     if ($('#cClaim')) $('#cClaim').onclick = () => ctx.openClaimForm(o.id).catch((e) => toast(e.message, true));
+    $('#cUrgent') && ($('#cUrgent').onclick = async () => {
+      try {
+        await api('POST', `/api/b2b/p/clients/${o.id}/urgent`, { urgent: !o.urgent });
+        toast(o.urgent ? 'Позначку «Терміново» знято' : 'Позначено «Терміново» — менеджер отримав сповіщення');
+        viewClient(o.id);
+      } catch (er) { toast(er.message, true); }
+    });
     $('#cCancel') && ($('#cCancel').onclick = async () => {
       // замовлення в чернетці — його товари приберуться з чернетки (сервер вимагає підтвердження)
       const txt = o.draft_supply ? `Товари цього замовлення буде <b>прибрано з чернетки закупівлі ${esc(o.supply_number)}</b>.` : 'Товари повернуться в залишок закупівлі.';
@@ -725,6 +733,8 @@ export function createPartnerPages(ctx = {}) {
             <label class="f"><span>Телефон *</span><input name="client_phone" value="${esc(o.client_phone || '')}" inputmode="tel" placeholder="0XXXXXXXXX" required></label>
             <label class="f"><span>ТТН (ваша)</span><input name="ttn" value="${esc(o.ttn || '')}" inputmode="numeric" placeholder="20450000000000"></label>
             <label class="f"><span>Коментар</span><textarea name="comment" rows="2">${esc(o.comment || '')}</textarea></label>
+            <label class="urgent-check"><input type="checkbox" name="urgent" ${o.urgent ? 'checked' : ''}>
+              <span><b>🔥 Терміново</b><span class="small muted">Замовлення виділимо в списку й зберемо першим. Позначку можна зняти пізніше.</span></span></label>
             <div class="f"><span>Маркування (етикетка ТТН) *</span>
               <div class="drop-zone" id="cfDrop">
                 <div id="cfFileList" class="form-stack" style="gap:6px"></div>
@@ -878,7 +888,7 @@ export function createPartnerPages(ctx = {}) {
       const allowed = new Set(lines().map((l) => l.product_id));
       const items = [...qty].filter(([pid, q]) => q > 0 && allowed.has(pid)).map(([product_id, q]) => ({ product_id, qty: q }));
       if (!items.length) { toast('Вкажіть кількість хоча б одного товару', true); return; }
-      const body = { ...Object.fromEntries(new FormData(e.target)), supply_id: source ? Number(source) : null, items, ...(source ? {} : { into }) };
+      const body = { ...Object.fromEntries(new FormData(e.target)), urgent: e.target.urgent.checked, supply_id: source ? Number(source) : null, items, ...(source ? {} : { into }) };
       const files = pending.map((x) => x.file);
       // Обов'язкові: маркування завжди, документи з позначкою «обов'язковий».
       const lack = [...(saved.length + pending.length ? [] : ['маркування']), ...docTypes.filter((t) => t.required && !docSaved.get(t.id).length && !docPend.get(t.id).length).map((t) => t.name)];

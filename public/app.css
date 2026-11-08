@@ -529,6 +529,17 @@ table.list tr.click:focus-visible td { background: #f6f8f7; }
 tr.row-bad td { background: var(--bad-soft); }
 tr.row-bad td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
 /* замовлення змінив менеджер — чекає підтвердження партнера */
+/* «Терміново» (замовлення клієнтів партнерів): помаранчевий — окремо від червоного «без закупівлі». */
+.badge.urgent { background: #c2410c; color: #fff; font-weight: 700; }
+tr.row-urgent td:first-child { box-shadow: inset 4px 0 0 #ea580c; }
+tr.row-urgent:not(.row-bad):not(.row-info) td { background: #fff4e8; }
+.btn.urgent-btn { border-color: #fdba74; color: #9a3412; background: #fff7ed; }
+.btn.urgent-btn:hover { background: #ffedd5; }
+.chip.chip-urgent:not(.on) { border-color: #fdba74; color: #9a3412; background: #fff7ed; }
+.urgent-check { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid #fed7aa; border-radius: 10px; background: #fff7ed; cursor: pointer; }
+.urgent-check input { margin-top: 3px; width: 18px; height: 18px; accent-color: #c2410c; flex: none; }
+.urgent-check > span { display: flex; flex-direction: column; gap: 2px; }
+.urgent-check:has(input:checked) { border-color: #ea580c; box-shadow: 0 0 0 2px rgba(234, 88, 12, .15); }
 tr.row-info td { background: var(--info-soft); }
 tr.row-info td:first-child { box-shadow: inset 3px 0 0 var(--info); }
 .card.card-info { border-color: var(--info); box-shadow: inset 3px 0 0 var(--info); }
@@ -593,6 +604,8 @@ table.list tr.grp td { background: var(--accent-soft); padding-top: 7px; padding
   table.list:not(.an-table):not(.no-cards) tr.click:hover td { background: none; }
   table.list:not(.an-table):not(.no-cards) tr.row-bad { background: var(--bad-soft); border-color: var(--bad); }
   table.list:not(.an-table):not(.no-cards) tr.row-bad td { background: none; box-shadow: none; }
+  table.list:not(.an-table):not(.no-cards) tr.row-urgent { border-color: #ea580c; border-left-width: 4px; }
+  table.list:not(.an-table):not(.no-cards) tr.row-urgent td { box-shadow: none; }
 }
 
 /* Довгі таблиці: сховані рядки і кнопка «Показати ще» */

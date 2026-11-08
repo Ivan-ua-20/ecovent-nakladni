@@ -202,7 +202,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     if (!name) throw fail(400, 'Вкажіть ПІБ клієнта.');
     if (!/^380\d{9}$/.test(phone)) throw fail(400, 'Телефон клієнта: 0XXXXXXXXX або 380XXXXXXXXX.');
     if (ttn && !/^[0-9A-Z-]{6,40}$/.test(ttn)) throw fail(400, 'ТТН — лише цифри й латинські літери (6–40 символів).');
-    return { client_name: name, client_phone: phone, ttn, comment: String(b.comment ?? '').trim().slice(0, 500) };
+    return { client_name: name, client_phone: phone, ttn, comment: String(b.comment ?? '').trim().slice(0, 500), urgent: b.urgent ? 1 : 0 };
   }
 
   // Позиції з закупівлі: ціна — та, за якою закупили; кількість — не більше залишку.
@@ -464,7 +464,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
   }
   async function crmComment(o, partnerName) {
     const pay = await payText(o, partnerName);
-    const comment = [`${orderNo(o.id)} · B2B «${partnerName}»`, o.ttn ? `ТТН партнера: ${o.ttn}` : '', pay.text, o.comment || ''].filter(Boolean).join('\n');
+    const comment = [o.urgent ? '🔥 ТЕРМІНОВО' : '', `${orderNo(o.id)} · B2B «${partnerName}»`, o.ttn ? `ТТН партнера: ${o.ttn}` : '', pay.text, o.comment || ''].filter(Boolean).join('\n');
     return { paid: pay.paid, comment };
   }
   // Закупівлю оплачено, а замовлення з неї вже в CRM без позначки оплати — LP-CRM не дає змінити замовлення через API,
@@ -480,7 +480,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
   };
   const tgNew = async (c, p, id, f, it, verb = 'Нове замовлення клієнта') => {
     const lines = it.items.slice(0, 60).map((i) => `${h(i.name)} — ${i.qty} шт — ${uah(i.price)}`).join('\n');
-    const text = `📦 <b>${verb} ${orderNo(id)}</b> від «${h(p.name)}»\n\n<b>Клієнт:</b> ${h(f.client_name)}, ${h(f.client_phone)}${f.ttn ? `\n<b>ТТН:</b> ${h(f.ttn)}` : ''}\n`
+    const text = `${f.urgent ? '🔥 <b>ТЕРМІНОВО</b>\n' : ''}📦 <b>${verb} ${orderNo(id)}</b> від «${h(p.name)}»\n\n<b>Клієнт:</b> ${h(f.client_name)}, ${h(f.client_phone)}${f.ttn ? `\n<b>ТТН:</b> ${h(f.ttn)}` : ''}\n`
       + `${it.supplyId ? `Із закупівлі ${orderNo(it.supplyId)}` : it.draftId ? `Без закупівлі — у чернетку закупівлі ${orderNo(it.draftId)}` : `🔴 <b>Без закупівлі</b> — у відкриту закупівлю ${orderNo(it.openId)}`}\n\n<b>Товари:</b>\n${lines}\n\n<b>Разом: ${uah(it.total)}</b>`;
     await tgAdmins(`${text}\n\n${link(c, `b2bclients/${id}`)}`);
   };
@@ -529,7 +529,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     if (st && CLIENT_STATUS[st]) { f.where.push('o.status = ?'); f.params.push(st); }
     const cs = String(c.req.query('crm_status') || '');
     if (cs) { f.where.push(`o.status = 'crm' AND o.crm_status = ?`); f.params.push(cs); }
-    const rows = await db.all(`${SELECT} WHERE o.partner_id = ? AND o.kind = 'client' ${f.where.map((w) => `AND ${w}`).join(' ')} ORDER BY o.id DESC LIMIT 300`, [p.id, ...f.params]);
+    const rows = await db.all(`${SELECT} WHERE o.partner_id = ? AND o.kind = 'client' ${f.where.map((w) => `AND ${w}`).join(' ')} ORDER BY (o.urgent = 1 AND o.status = 'new') DESC, o.id DESC LIMIT 300`, [p.id, ...f.params]);
     return c.json({ rows: rows.map(publicOrder), statuses: CLIENT_STATUS, crm_statuses: await crmStatuses(p.id) });
   });
 
@@ -595,13 +595,13 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     const now = nowIso();
     const u = c.get('user');
     const r = await db.run(
-      `INSERT INTO b2b_orders (partner_id, kind, status, supply_id, client_name, client_phone, ttn, total, comment, created_by, created_at, updated_at)
-       VALUES (?, 'client', 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [p.id, it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, userName(u), now, now],
+      `INSERT INTO b2b_orders (partner_id, kind, status, supply_id, client_name, client_phone, ttn, total, comment, urgent, created_by, created_at, updated_at)
+       VALUES (?, 'client', 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [p.id, it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, f.urgent, userName(u), now, now],
     );
     await db.batch([...itemRows(r.lastId, it.items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
       [r.lastId, now, userName(u), `оформлено замовлення клієнта на ${uah(it.total)}${it.supplyId ? ` із закупівлі ${orderNo(it.supplyId)}`
-        : it.draftId ? ` без закупівлі — у чернетку закупівлі ${orderNo(it.draftId)}` : ` без закупівлі (відкрита закупівля ${orderNo(it.openId)})`}: ${itemsTxt(it.items)}`.slice(0, 2000)]]]);
+        : it.draftId ? ` без закупівлі — у чернетку закупівлі ${orderNo(it.draftId)}` : ` без закупівлі (відкрита закупівля ${orderNo(it.openId)})`}${f.urgent ? ' · 🔥 терміново' : ''}: ${itemsTxt(it.items)}`.slice(0, 2000)]]]);
     if (it.draftId) {
       await draftAdjust(it.draftId, it.items);
       await log(it.draftId, u, `додано замовлення клієнта ${orderNo(r.lastId)} (${f.client_name}): ${itemsTxt(it.items)} — ${uah(it.total)}`);
@@ -629,8 +629,8 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, it.items),
-      [`UPDATE b2b_orders SET supply_id = ?, client_name = ?, client_phone = ?, ttn = ?, total = ?, comment = ?, updated_at = ? WHERE id = ?`,
-        [it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, nowIso(), o.id]],
+      [`UPDATE b2b_orders SET supply_id = ?, client_name = ?, client_phone = ?, ttn = ?, total = ?, comment = ?, urgent = ?, updated_at = ? WHERE id = ?`,
+        [it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, f.urgent, nowIso(), o.id]],
     ]);
     const diff = itemsDiff(oldItems, it.items);
     if (curDraft && curDraft === it.draftId) { if (diff !== 'склад без змін') await log(curDraft, c.get('user'), `змінено замовлення клієнта ${orderNo(o.id)} (${f.client_name}): ${diff}`); }
@@ -641,9 +641,36 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     await moveDraftItems(curDraft, curDraft || it.draftId ? oldItems : [], it.draftId, it.items);
     if (it.openId) await rebuildOpen(it.openId);
     if (cur?.status === 'open' && cur.id !== it.openId) await rebuildOpen(cur.id);
-    await log(o.id, c.get('user'), `змінено замовлення клієнта: ${diff} — разом ${uah(it.total)}${it.draftId ? ` (у чернетці закупівлі ${orderNo(it.draftId)})` : ''}`);
+    await log(o.id, c.get('user'), `змінено замовлення клієнта: ${diff} — разом ${uah(it.total)}${it.draftId ? ` (у чернетці закупівлі ${orderNo(it.draftId)})` : ''}${f.urgent !== (o.urgent ? 1 : 0) ? (f.urgent ? ' · 🔥 позначено «Терміново»' : ' · знято «Терміново»') : ''}`);
     await tgNew(c, p, o.id, f, it, 'Змінено замовлення клієнта');
     return c.json({ ok: true, total: it.total });
+  });
+
+  // ---------- «Терміново»: партнер (і наш менеджер) позначає / знімає, доки замовлення не скасоване й не відправлене.
+  // Позначили — адмінам у Telegram; уже в LP-CRM — з номером, щоб передати складу (змінити створене замовлення API не дає).
+  async function setUrgent(c, o, partnerName, by) {
+    const on = (await c.req.json().catch(() => ({}))).urgent ? 1 : 0;
+    if (o.status === 'cancelled') throw fail(400, 'Замовлення скасоване.');
+    if (o.status === 'crm' && /відправл|отправл|виконан|выполн|отриман|получ|завершен|доставлен|повернут|возврат|відмов|отказ/i.test(o.crm_status || '')) throw fail(400, 'Замовлення вже відправлене — позначка нічого не змінить.');
+    if ((o.urgent ? 1 : 0) === on) return { ok: true, urgent: on };
+    await db.run(`UPDATE b2b_orders SET urgent = ?, updated_at = ? WHERE id = ?`, [on, nowIso(), o.id]);
+    await log(o.id, c.get('user'), on ? '🔥 позначено «Терміново»' : 'знято позначку «Терміново»');
+    if (on && by === 'partner') {
+      await tgAdmins(`🔥 <b>ТЕРМІНОВО: ${orderNo(o.id)}</b> від «${h(partnerName)}»\n${h(o.client_name)}, ${h(o.client_phone)}`
+        + (o.status === 'crm' ? `\nУже в LP-CRM${o.crm_id ? ` № <b>${h(o.crm_id)}</b>` : ''} — повідомте склад.` : '\nЩе не передане в LP-CRM.')
+        + `\n\n${link(c, `b2bclients/${o.id}`)}`);
+    }
+    return { ok: true, urgent: on };
+  }
+  app.post('/api/b2b/p/clients/:id/urgent', async (c) => {
+    const p = await myPartner(c);
+    return c.json(await setUrgent(c, await myClientOrder(c, p), p.name, 'partner'));
+  });
+  app.post('/api/b2b/clients/:id/urgent', async (c) => {
+    need(c, 'b2b.admin');
+    const o = await orderOf(c.req.param('id'));
+    if (o.kind !== 'client') throw fail(404, 'Замовлення не знайдено.');
+    return c.json(await setUrgent(c, o, '', 'admin'));
   });
 
   // ---------- правка замовлення клієнта нашим адміном: усе (клієнт, ТТН, коментар, закупівля-джерело, товари),
@@ -906,6 +933,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     crm: `o.status = 'crm'`,
     nosupply: `(o.supply_id IS NULL OR s.status = 'open') AND o.status != 'cancelled'`,
     cancelled: `o.status = 'cancelled'`,
+    urgent: `o.urgent = 1 AND o.status != 'cancelled'`,
   };
   app.get('/api/b2b/clients', async (c) => {
     need(c, 'b2b.admin');
@@ -922,10 +950,10 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     const rows = await db.all(
       `SELECT o.*, s.status AS supply_status, p.name AS partner, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files
        FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id JOIN b2b_partners p ON p.id = o.partner_id
-       WHERE ${where.join(' AND ')} ORDER BY o.id DESC LIMIT 300`, params,
+       WHERE ${where.join(' AND ')} ORDER BY (o.urgent = 1 AND o.status = 'new') DESC, o.id DESC LIMIT 300`, params,
     );
     const cnt = await db.get(`SELECT SUM(o.status = 'new') AS new, SUM(o.status = 'crm') AS crm, SUM((o.supply_id IS NULL OR s.status = 'open') AND o.status != 'cancelled') AS nosupply,
-      SUM(o.status = 'cancelled') AS cancelled FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id WHERE o.kind = 'client'`);
+      SUM(o.status = 'cancelled') AS cancelled, SUM(o.urgent = 1 AND o.status != 'cancelled') AS urgent FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id WHERE o.kind = 'client'`);
     return c.json({ rows: rows.map(publicOrder), counts: cnt || {}, crm: (await crmConfig()).on, crm_statuses: await crmStatuses(pid || null) });
   });
 

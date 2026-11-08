@@ -261,4 +261,43 @@ await req('POST', `/api/b2b/p/clients/${c4.id}/cancel`, {}, A);
 assert.equal((await req('GET', `/api/b2b/p/clients/${c4.id}`, null, A)).order.status, 'cancelled');
 assert.equal(await status(() => req('GET', '/api/b2b/clients', null, A)), 403, 'список адміна — не для партнера');
 
+// ---------- 8. «Терміново» ----------
+{
+  tg.length = 0;
+  const u1 = await req('POST', '/api/b2b/p/clients', { ...client, ttn: '20450000000021', supply_id: sup.id, items: [{ product_id: 11, qty: 1 }], urgent: true }, A);
+  assert.match(tg.find((m) => String(m.chat_id) === '100').text, /🔥 <b>ТЕРМІНОВО<\/b>\n📦 <b>Нове замовлення клієнта/, 'адмінам — із позначкою');
+  const u2 = await req('POST', '/api/b2b/p/clients', { ...client, ttn: '20450000000022', supply_id: sup.id, items: [{ product_id: 12, qty: 1 }] }, A);
+  let pl = (await req('GET', '/api/b2b/p/clients', null, A)).rows;
+  assert.deepEqual([pl[0].id, pl[0].urgent], [u1.id, 1], 'термінові нові — першими (хоч новіше u2)');
+  assert.equal(pl.find((r) => r.id === u2.id).urgent, 0);
+  // позначити пізніше — адмінам сповіщення; повторно — без змін і без сповіщення
+  tg.length = 0;
+  assert.deepEqual(await req('POST', `/api/b2b/p/clients/${u2.id}/urgent`, { urgent: true }, A), { ok: true, urgent: 1 });
+  assert.equal(tg.filter((m) => /ТЕРМІНОВО: B2B-/.test(m.text)).length, 1);
+  assert.match(tg[0].text, /Ще не передане в LP-CRM/);
+  await req('POST', `/api/b2b/p/clients/${u2.id}/urgent`, { urgent: true }, A);
+  assert.equal(tg.length, 1, 'повторно — нічого');
+  assert.equal(await status(() => req('POST', `/api/b2b/p/clients/${u2.id}/urgent`, { urgent: true }, B)), 404, 'чуже замовлення');
+  // адмін: вкладка «Термінові», у CRM — «ТЕРМІНОВО» в коментарі
+  const al = await req('GET', '/api/b2b/clients?view=urgent');
+  assert.deepEqual(al.rows.map((r) => r.id).sort(), [u1.id, u2.id].sort());
+  assert.equal(al.counts.urgent, 2);
+  await fakeLabel(u1.id);
+  crm.length = 0; addReply = null; crmStatus = '1'; // у CRM ще «Новий»
+  await req('POST', `/api/b2b/clients/${u1.id}/crm`);
+  assert.match(crm.find((x) => x.method === 'addNewOrder').p.comment, /^🔥 ТЕРМІНОВО\nB2B-/);
+  // зміна партнером зберігає/знімає позначку; адмін може зняти; скасоване — ні
+  await req('PUT', `/api/b2b/p/clients/${u2.id}`, { ...client, ttn: '20450000000022', supply_id: sup.id, items: [{ product_id: 12, qty: 1 }], urgent: false }, A);
+  assert.equal((await req('GET', `/api/b2b/p/clients/${u2.id}`, null, A)).order.urgent, 0);
+  await req('POST', `/api/b2b/clients/${u1.id}/urgent`, { urgent: false });
+  assert.equal((await req('GET', `/api/b2b/orders/${u1.id}`)).order.urgent, 0);
+  assert.ok((await req('GET', `/api/b2b/orders/${u1.id}`)).history.some((h) => /знято позначку «Терміново»/.test(h.action)));
+  await req('POST', `/api/b2b/p/clients/${u2.id}/cancel`, {}, A);
+  assert.match(await errOf(() => req('POST', `/api/b2b/p/clients/${u2.id}/urgent`, { urgent: true }, A)), /скасоване/);
+  // уже відправлене — позначка нічого не змінить
+  crmStatus = '4'; await db.run(`UPDATE b2b_orders SET crm_checked_at = '' WHERE id = ?`, [u1.id]);
+  await req('GET', `/api/b2b/p/clients/${u1.id}`, null, A);
+  assert.match(await errOf(() => req('POST', `/api/b2b/p/clients/${u1.id}/urgent`, { urgent: true }, A)), /вже відправлене/);
+}
+
 console.log('OK — B2B: замовлення клієнтів, залишок закупівлі, маркування, LP-CRM (вимкнено / вручну / addNewOrder), оплата');
