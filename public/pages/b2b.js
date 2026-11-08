@@ -4,7 +4,7 @@ import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
 import { viewAdminSupplyForm } from './b2b-supply.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard, urgentBadge, urgentRow } from './b2b-shared.js';
 
 const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
 
@@ -1132,7 +1132,7 @@ export function createB2bPages(ctx = {}) {
 
   // ---------------------------------------------------------------- замовлення клієнтів партнерів
   let clFilter = { view: '', partner: '', q: '', from: '', to: '', pay: '', crm_status: '' };
-  const VIEWS = { '': 'Усі', new: 'Нові', crm: 'Передані в CRM', nosupply: 'Без закупівлі', cancelled: 'Скасовані' };
+  const VIEWS = { '': 'Усі', urgent: '🔥 Термінові', new: 'Нові', crm: 'Передані в CRM', nosupply: 'Без закупівлі', cancelled: 'Скасовані' };
   async function viewClients(id) {
     if (id) return viewClient(id);
     const qs = filterQs(clFilter);
@@ -1145,16 +1145,16 @@ export function createB2bPages(ctx = {}) {
         ? `Кнопка «Додати в CRM» створює замовлення в LP-CRM (відділ ID ${esc(cfg.office)}, ціни партнера, вкладка «Нові»).`
         : 'Передача в LP-CRM вимкнена: поки ключ не має дозволу на addNewOrder, створюйте замовлення в CRM вручну і вписуйте його номер — партнер бачитиме статус. Увімкнути — «Налаштування CRM».'}</div>
       <div class="btn-row" style="margin-bottom:12px;flex-wrap:wrap">
-        ${Object.entries(VIEWS).map(([k, v]) => `<button class="chip ${clFilter.view === k ? 'on' : ''}" data-v="${k}">${esc(v)}${k && counts[k] ? ` · ${counts[k]}` : ''}</button>`).join('')}
+        ${Object.entries(VIEWS).filter(([k]) => k !== 'urgent' || counts.urgent || clFilter.view === 'urgent').map(([k, v]) => `<button class="chip ${clFilter.view === k ? 'on' : ''} ${k === 'urgent' ? 'chip-urgent' : ''}" data-v="${k}">${esc(v)}${k && counts[k] ? ` · ${counts[k]}` : ''}</button>`).join('')}
         <select id="clPartner" aria-label="Партнер"><option value="">Усі партнери</option>${partners.map((p) => `<option value="${p.id}" ${String(clFilter.partner) === String(p.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
         ${crmStatusSelect(crmSts, clFilter.crm_status)}
       </div>
       ${filterBar(clFilter, { pay: true })}
       ${bulkBar()}
       ${rows.length ? `<table class="list"><thead><tr>${selHead()}<th>№</th><th>Партнер / клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th>Статус LP-CRM</th></tr></thead><tbody>
-        ${rows.map((o) => `<tr class="click ${o.pending ? 'row-info' : o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''}" data-o="${o.id}">
+        ${rows.map((o) => `<tr class="click ${o.pending ? 'row-info' : o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''} ${urgentRow(o)}" data-o="${o.id}">
           ${selCell(o.id)}
-          <td><b>${esc(o.number)}</b><div>${supplyMark(o)}</div>${o.pending ? '<div><span class="badge info">🔵 чекає підтвердження партнера</span></div>' : ''}<div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
+          <td><b>${esc(o.number)}</b>${o.urgent && o.status !== 'cancelled' ? `<div>${urgentBadge(o)}</div>` : ''}<div>${supplyMark(o)}</div>${o.pending ? '<div><span class="badge info">🔵 чекає підтвердження партнера</span></div>' : ''}<div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
           <td>${esc(o.partner)}<div class="small">${esc(o.client_name)} · ${esc(phoneFmt(o.client_phone))}</div><div class="small muted">${o.ttn ? `ТТН ${esc(o.ttn)} · ` : ''}${o.labels ? `📎 маркування: ${o.labels}` : (o.status === 'new' ? '<span class="badge bad">без маркування</span>' : '')}${o.files > (o.labels || 0) ? ` · 📄 документів: ${o.files - (o.labels || 0)}` : ''}</div></td>
           <td class="r"><b>${uah(o.total)}</b></td>
           <td>${statusBadge(o)}</td>
@@ -1250,7 +1250,7 @@ export function createB2bPages(ctx = {}) {
     if (o.kind !== 'client') { location.hash = `#/b2borders/${id}`; return; }
     const closed = o.status === 'cancelled';
     main.innerHTML = `
-      <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)} ${payBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2bclients">← До списку</a>${o.status === 'crm' && !ro() ? '<button class="btn" id="clClaim">🛠 Брак / обмін</button>' : ''}${closed ? '' : '<button class="btn" id="clEdit">✏️ Змінити</button>'}<button class="btn danger" id="clDel">Видалити</button></div></div>
+      <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)} ${payBadge(o)} ${urgentBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2bclients">← До списку</a>${!closed && !ro() ? `<button class="btn ${o.urgent ? '' : 'urgent-btn'}" id="clUrgent" aria-pressed="${o.urgent ? 'true' : 'false'}">${o.urgent ? 'Зняти «Терміново»' : '🔥 Терміново'}</button>` : ''}${o.status === 'crm' && !ro() ? '<button class="btn" id="clClaim">🛠 Брак / обмін</button>' : ''}${closed ? '' : '<button class="btn" id="clEdit">✏️ Змінити</button>'}<button class="btn danger" id="clDel">Видалити</button></div></div>
       ${o.pending ? `<div class="card form-stack card-info" style="margin-bottom:12px"><b>🔵 Чекає підтвердження партнера</b>
           ${o.pending.crm_old ? `<div class="small">Старе замовлення в LP-CRM № <b>${esc(o.pending.crm_old)}</b> анульовано — скасуйте його в CRM; нове передайте після підтвердження.</div>` : ''}
           ${o.pending.changes.length ? `<ul class="small" style="margin:0;padding-left:18px">${o.pending.changes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
@@ -1305,6 +1305,10 @@ export function createB2bPages(ctx = {}) {
       </div>`;
     const re = () => viewClient(o.id);
     wireTracking(`/api/b2b/clients/${o.id}/tracking`);
+    $('#clUrgent') && ($('#clUrgent').onclick = async () => {
+      try { await api('POST', `/api/b2b/clients/${o.id}/urgent`, { urgent: !o.urgent }); toast(o.urgent ? 'Позначку «Терміново» знято' : 'Позначено «Терміново»'); viewClient(o.id); }
+      catch (er) { toast(er.message, true); }
+    });
     $('#clCrm') && ($('#clCrm').onclick = async (e) => {
       e.currentTarget.disabled = true;
       try { const r = await api('POST', `/api/b2b/clients/${o.id}/crm`); toast(r.crm_id ? `Додано в CRM: № ${r.crm_id}` : 'Додано в CRM — номер не повернувся, впишіть його вручну'); re(); }

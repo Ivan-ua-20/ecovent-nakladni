@@ -8,6 +8,9 @@ export const statusBadge = (o) => `<span class="badge ${ST_CLS[o.status] || ''}"
 // Замовлення клієнта: оплата (за закупівлею) і «без закупівлі».
 const PAY_CLS = { paid: 'ok', partial: 'info', unpaid: 'warn' };
 export const payBadge = (o) => (o.pay ? `<span class="badge ${PAY_CLS[o.pay] || ''}">${esc(o.pay_name || o.pay)}</span>` : '');
+// «Терміново» (замовлення клієнта партнера): яскрава позначка і рядок; urgentRow — клас рядка (поверх «без закупівлі»).
+export const urgentBadge = (o) => (o.urgent && o.status !== 'cancelled' ? '<span class="badge urgent">🔥 Терміново</span>' : '');
+export const urgentRow = (o) => (o.urgent && o.status !== 'cancelled' ? 'row-urgent' : '');
 export const supplyMark = (o) => (o.no_supply ? '<span class="badge bad">Без закупівлі</span>'
   : o.draft_supply ? `<span class="small muted">у чернетці ${esc(o.supply_number)}</span>` : `<span class="small muted">із ${esc(o.supply_number)}</span>`);
 // Статус замовлення в LP-CRM кольором: зелений — доставлено/виконано, червоний — повернення/відмова, синій — в дорозі.
