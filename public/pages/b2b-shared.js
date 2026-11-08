@@ -347,3 +347,39 @@ export function filterSide(f, { pay = false, placeholder = '№, клієнт, �
 }
 // Картка-показник у ряду над таблицею.
 export const fpKpi = (label, value, sub = '', cls = '') => `<div class="kpi ${cls}"><span class="kpi-l">${label}</span><span class="kpi-v">${value}</span>${sub ? `<span class="small muted">${sub}</span>` : ''}</div>`;
+
+// ---------------------------------------------------------------- пошук товару у формах (закупівля, замовлення клієнта)
+// Рядок пошуку над списком товарів: назва або артикул (усі слова), лічильник «показано N з M», «Лише вибрані»,
+// ✕ і Esc — очистити. Збіг підсвічується (psHl). Стан — у ps: { q, sel }.
+const psNorm = (v) => String(v || '').toLowerCase().replace(/[’ʼ`']/g, "'").replace(/\s+/g, ' ').trim();
+export const psMatch = (p, q) => { const w = psNorm(q).split(' ').filter(Boolean); if (!w.length) return true; const hay = psNorm(`${p.name} ${p.article || ''}`); return w.every((x) => hay.includes(x)); };
+export function psHl(text, q) {
+  const s = String(text ?? '');
+  const words = psNorm(q).split(' ').filter((x) => x.length > 1).sort((a, b) => b.length - a.length);
+  if (!words.length) return esc(s);
+  const re = new RegExp(`(${words.map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi');
+  return s.split(re).map((part, i) => (i % 2 ? `<mark class="ps-hl">${esc(part)}</mark>` : esc(part))).join('');
+}
+export const psBar = (id, ps, placeholder = 'Пошук товару: назва або артикул') => `<div class="ps-bar" id="${id}">
+  <label class="ps-field"><span class="sr-only">Пошук товару</span>
+    <svg class="ps-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input type="search" class="ps-q" placeholder="${esc(placeholder)}" value="${esc(ps.q)}" autocomplete="off" spellcheck="false" enterkeyhint="search">
+    <button type="button" class="ps-x" aria-label="Очистити пошук" ${ps.q ? '' : 'hidden'}>✕</button></label>
+  <button type="button" class="chip ps-sel ${ps.sel ? 'on' : ''}" aria-pressed="${ps.sel ? 'true' : 'false'}">Лише вибрані <b class="ps-sel-n">0</b></button>
+  <span class="small muted ps-count" aria-live="polite"></span></div>`;
+// onChange — перемалювати список; count(shown, total, selected) — оновити лічильники.
+export function wirePsBar(root, ps, onChange) {
+  const q = $('.ps-q', root); const x = $('.ps-x', root); const sel = $('.ps-sel', root);
+  let t;
+  q.oninput = () => { x.hidden = !q.value; clearTimeout(t); t = setTimeout(() => { ps.q = q.value; onChange(); }, 120); };
+  q.onkeydown = (e) => { if (e.key === 'Escape' && q.value) { e.preventDefault(); q.value = ''; x.hidden = true; ps.q = ''; onChange(); } };
+  x.onclick = () => { q.value = ''; x.hidden = true; ps.q = ''; onChange(); q.focus(); };
+  sel.onclick = () => { ps.sel = !ps.sel; sel.classList.toggle('on', ps.sel); sel.setAttribute('aria-pressed', String(ps.sel)); onChange(); };
+  return (shown, total, selected) => {
+    $('.ps-sel-n', root).textContent = selected;
+    $('.ps-count', root).textContent = shown === total ? `${total} ${total === 1 ? 'товар' : total % 10 >= 2 && total % 10 <= 4 && (total % 100 < 12 || total % 100 > 14) ? 'товари' : 'товарів'}` : `Показано ${shown} з ${total}`;
+  };
+}
+export const psEmpty = (ps) => `<div class="ps-empty"><div><b>${ps.sel && !ps.q ? 'Ще нічого не вибрано' : `Нічого не знайдено${ps.q ? ` за «${esc(ps.q)}»` : ''}`}</b></div>
+  <div class="small muted">${ps.sel && !ps.q ? 'Вкажіть кількість біля потрібних товарів.' : 'Перевірте написання або шукайте за артикулом.'}</div>
+  <button type="button" class="btn sm ps-reset">Показати всі товари</button></div>`;

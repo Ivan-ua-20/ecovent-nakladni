@@ -45,7 +45,13 @@ const nameKey = (n) => String(n || '').toLowerCase().replace(/[^a-zа-яіїєґ
 const mpIso = (v) => String(v || '').replace(' ', 'T').slice(0, 19);
 const NP_TTN = (col) => `(length(${col}) BETWEEN 11 AND 20 AND ${col} NOT GLOB '*[^0-9]*')`;
 const addDays = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
-const days = (from, to = Date.now()) => (from ? Math.max(0, Math.floor((to - Date.parse(from)) / 86400000)) : null);
+// Скільки календарних днів (за Києвом) минуло: дати перевізників — київський час без поясу, наші — ISO з «Z».
+const kday = (v) => (typeof v === 'number' ? kyivDay(new Date(v)) : /(Z|[+-]\d\d:\d\d)$/.test(String(v)) ? kyivDay(new Date(v)) : String(v).slice(0, 10));
+const days = (from, to = Date.now()) => {
+  if (!from) return null;
+  const a = Date.parse(kday(from)); const b = Date.parse(kday(to));
+  return Number.isFinite(a) && Number.isFinite(b) ? Math.max(0, Math.round((b - a) / 86400000)) : null;
+};
 
 export function mountReturns(app, { db, fetchFn, onCron, services = {} }) {
   const getState = async () => {

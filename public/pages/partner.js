@@ -2,7 +2,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi, psBar, wirePsBar, psMatch, psHl, psEmpty } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
@@ -422,7 +422,7 @@ export function createPartnerPages(ctx = {}) {
     const [plim, couriers] = await Promise.all([api('GET', '/api/b2b/p/limits').catch(() => null), api('GET', '/api/b2b/p/couriers').catch(() => [])]);
     const pp = plim?.postpay || { days: 0 };
     let fb = '';
-    let fq = '';
+    const ps = { q: '', sel: false }; // пошук у списку товарів
     if (!entities.length) {
       main.innerHTML = `<h2>${id ? 'Зміна закупівлі' : 'Нова закупівля'}</h2><div class="card empty"><div class="big">Спершу додайте юрособу</div>
         На неї виставлятиметься рахунок.<div class="btn-row" style="justify-content:center;margin-top:12px"><a class="btn primary" href="#/pentities">Додати юрособу</a></div></div>`;
@@ -435,9 +435,8 @@ export function createPartnerPages(ctx = {}) {
           <div class="btn-row" style="flex-wrap:wrap">
             <button class="chip on" data-fb="">Усі бренди</button>
             ${brands.map((b) => `<button class="chip" data-fb="${b.id}">${esc(b.name)}</button>`).join('')}
-            <input id="ofQ" placeholder="Пошук товару" style="max-width:240px">
           </div>
-          <div class="card" id="ofList"></div>
+          <div class="card ps-card">${psBar('ofPs', ps)}<div id="ofList"></div></div>
         </div>
         <div class="form-stack">
           <div class="card form-stack" style="position:sticky;top:12px">
@@ -471,20 +470,24 @@ export function createPartnerPages(ctx = {}) {
         : '<div class="small muted">Вкажіть кількість біля товарів зліва.</div>';
     };
     const draw = () => {
-      const q = fq.toLowerCase();
-      const list = products.filter((p) => (!fb || String(p.brand_id) === fb) && (!q || p.name.toLowerCase().includes(q) || String(p.article || '').toLowerCase().includes(q)));
+      const inBrand = products.filter((p) => !fb || String(p.brand_id) === fb);
+      const list = inBrand.filter((p) => psMatch(p, ps.q) && (!ps.sel || qty.get(p.id) > 0));
+      psCount(list.length, inBrand.length, products.filter((p) => qty.get(p.id) > 0).length);
       $('#ofList').innerHTML = list.length ? `<table class="list"><thead><tr><th>Товар</th><th class="r">Ціна</th><th class="r">К-сть</th></tr></thead><tbody>
-        ${list.map((p) => `<tr><td>${p.ordered ? '<span title="Часто замовляєте">⭐</span> ' : ''}${esc(p.name)}${p.article || p.ordered ? `<div class="small muted">${[p.article, p.ordered ? `замовляли ${p.ordered} раз` : ''].filter(Boolean).map(esc).join(' · ')}</div>` : ''}</td><td class="r"><b>${money(p.price)}</b><div class="small muted">РРЦ ${money(p.rrp)}</div>${graceTxt(p)}</td>
+        ${list.map((p) => `<tr class="${qty.get(p.id) > 0 ? 'ps-on' : ''}"><td>${p.ordered ? '<span title="Часто замовляєте">⭐</span> ' : ''}${psHl(p.name, ps.q)}${p.article || p.ordered ? `<div class="small muted">${[p.article ? psHl(p.article, ps.q) : '', p.ordered ? `замовляли ${p.ordered} раз` : ''].filter(Boolean).join(' · ')}</div>` : ''}</td><td class="r"><b>${money(p.price)}</b><div class="small muted">РРЦ ${money(p.rrp)}</div>${graceTxt(p)}</td>
           <td class="r"><input type="number" min="0" step="1" inputmode="numeric" data-q="${p.id}" value="${qty.get(p.id) || ''}" style="width:80px;text-align:right" aria-label="Кількість: ${esc(p.name)}"></td></tr>`).join('')}</tbody></table>`
-        : '<div class="small muted">Нічого не знайдено.</div>';
-      $$('[data-q]').forEach((inp) => (inp.oninput = () => {
+        : psEmpty(ps);
+      $$('#ofList [data-q]').forEach((inp) => (inp.oninput = () => {
         const v = Math.max(0, Math.floor(Number(inp.value) || 0));
         if (v) qty.set(Number(inp.dataset.q), v); else qty.delete(Number(inp.dataset.q));
+        inp.closest('tr').classList.toggle('ps-on', v > 0);
+        psCount(list.length, inBrand.length, products.filter((p) => qty.get(p.id) > 0).length);
         sum();
       }));
+      $('#ofList .ps-reset') && ($('#ofList .ps-reset').onclick = () => { ps.q = ''; ps.sel = false; $('#ofPs .ps-q').value = ''; $('#ofPs .ps-x').hidden = true; $('#ofPs .ps-sel').classList.remove('on'); draw(); $('#ofPs .ps-q').focus(); });
     };
+    const psCount = wirePsBar($('#ofPs'), ps, () => draw());
     $$('[data-fb]').forEach((b) => (b.onclick = () => { fb = b.dataset.fb; $$('[data-fb]').forEach((x) => x.classList.toggle('on', x === b)); draw(); }));
-    $('#ofQ').oninput = (e) => { fq = e.target.value.trim(); draw(); };
     const pickSync = () => { $('#ofPick').hidden = $('input[name="ofDel"]:checked')?.value !== 'pickup'; };
     $$('input[name="ofDel"]').forEach((r) => (r.onchange = pickSync));
     wirePickupFields(document, 'ofPk');
@@ -680,6 +683,7 @@ export function createPartnerPages(ctx = {}) {
     if (into !== 'new' && !drafts.some((d) => String(d.id) === into)) into = drafts[0] ? String(drafts[0].id) : 'new';
     const intoName = () => (into === 'new' ? '' : drafts.find((d) => String(d.id) === into)?.number || '');
     const qty = new Map((cur?.items || []).map((i) => [i.product_id, i.qty]));
+    const ps = { q: '', sel: false }; // пошук у списку товарів
     const o = cur?.order || {};
     const payTxt = { paid: 'оплачено', partial: 'частково оплачено', unpaid: 'не оплачено' };
     main.innerHTML = `
@@ -712,7 +716,7 @@ export function createPartnerPages(ctx = {}) {
           </div>
           <h3 style="margin:4px 0 0">2. Товари й кількість</h3>
           <div id="cfWarn"></div>
-          <div class="card" id="cfList"></div>
+          <div class="card ps-card">${psBar('cfPs', ps)}<div id="cfList"></div></div>
         </div>
         <div class="form-stack">
           <form class="card form-stack" id="cfForm" style="position:sticky;top:12px">
@@ -753,20 +757,33 @@ export function createPartnerPages(ctx = {}) {
         : !source && into !== 'new' ? `<div class="alert warn"><b>У чернетку закупівлі ${esc(intoName())}.</b> Товари буде додано в чернетку — рахунок на них прийде разом із нею, коли чернетку відправлять.</div>`
         : !source ? '<div class="alert bad"><b>Без закупівлі.</b> Замовлення буде підсвічене червоним; менеджер виставить рахунок на ці товари окремо.</div>'
         : (s && s.pay && s.pay !== 'paid' ? `<div class="alert warn">Закупівля ${esc(s.number)} ще не оплачена — замовлення буде позначене як неоплачене.</div>` : '');
-      const ls = lines();
-      $('#cfList').innerHTML = ls.length ? `<table class="list"><thead><tr><th>Товар</th><th class="r">Ціна</th>${source ? '<th class="r">Залишок</th>' : ''}<th class="r">К-сть</th></tr></thead><tbody>
-        ${ls.map((l) => `<tr><td>${esc(l.name)}${l.article ? `<div class="small muted">${esc(l.article)}</div>` : ''}</td><td class="r">${money(l.price)}</td>
+      drawList();
+      sum();
+    };
+    // Список товарів з пошуком: перемальовується лише таблиця — поле пошуку не втрачає фокус.
+    const drawList = () => {
+      const all = lines();
+      const ls = all.filter((l) => psMatch(l, ps.q) && (!ps.sel || qty.get(l.product_id) > 0));
+      const selN = all.filter((l) => qty.get(l.product_id) > 0).length;
+      $('#cfPs').hidden = !all.length;
+      psCount(ls.length, all.length, selN);
+      $('#cfList').innerHTML = !all.length ? '<div class="small muted" style="padding:12px 14px">Немає доступних товарів.</div>'
+        : ls.length ? `<table class="list"><thead><tr><th>Товар</th><th class="r">Ціна</th>${source ? '<th class="r">Залишок</th>' : ''}<th class="r">К-сть</th></tr></thead><tbody>
+        ${ls.map((l) => `<tr class="${qty.get(l.product_id) > 0 ? 'ps-on' : ''}"><td>${psHl(l.name, ps.q)}${l.article ? `<div class="small muted">${psHl(l.article, ps.q)}</div>` : ''}</td><td class="r">${money(l.price)}</td>
           ${source ? `<td class="r">${l.left}</td>` : ''}
           <td class="r"><input type="number" min="0" step="1" ${source ? `max="${l.left}"` : ''} inputmode="numeric" data-q="${l.product_id}" value="${qty.get(l.product_id) || ''}" style="width:80px;text-align:right" aria-label="Кількість: ${esc(l.name)}"></td></tr>`).join('')}</tbody></table>`
-        : '<div class="small muted">Немає доступних товарів.</div>';
-      $$('[data-q]').forEach((inp) => (inp.oninput = () => {
+        : psEmpty(ps);
+      $$('#cfList [data-q]').forEach((inp) => (inp.oninput = () => {
         let v = Math.max(0, Math.floor(Number(inp.value) || 0));
         if (inp.max && v > Number(inp.max)) { v = Number(inp.max); inp.value = v; }
         if (v) qty.set(Number(inp.dataset.q), v); else qty.delete(Number(inp.dataset.q));
+        inp.closest('tr').classList.toggle('ps-on', v > 0);
+        psCount(ls.length, all.length, all.filter((l) => qty.get(l.product_id) > 0).length);
         sum();
       }));
-      sum();
+      $('#cfList .ps-reset') && ($('#cfList .ps-reset').onclick = () => { ps.q = ''; ps.sel = false; $('#cfPs .ps-q').value = ''; $('#cfPs .ps-x').hidden = true; $('#cfPs .ps-sel').classList.remove('on'); drawList(); $('#cfPs .ps-q').focus(); });
     };
+    const psCount = wirePsBar($('#cfPs'), ps, () => drawList());
     if ($('#cfInto')) $('#cfInto').onchange = (e) => {
       into = e.target.value;
       $('#cfOpenNote').hidden = into !== 'new';

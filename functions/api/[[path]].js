@@ -14755,7 +14755,13 @@ var nameKey2 = (n) => String(n || "").toLowerCase().replace(/[^a-zа-яіїєґ�
 var mpIso = (v) => String(v || "").replace(" ", "T").slice(0, 19);
 var NP_TTN = (col) => `(length(${col}) BETWEEN 11 AND 20 AND ${col} NOT GLOB '*[^0-9]*')`;
 var addDays5 = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
-var days = (from, to = Date.now()) => from ? Math.max(0, Math.floor((to - Date.parse(from)) / 864e5)) : null;
+var kday = (v) => typeof v === "number" ? kyivDay(new Date(v)) : /(Z|[+-]\d\d:\d\d)$/.test(String(v)) ? kyivDay(new Date(v)) : String(v).slice(0, 10);
+var days = (from, to = Date.now()) => {
+  if (!from) return null;
+  const a = Date.parse(kday(from));
+  const b = Date.parse(kday(to));
+  return Number.isFinite(a) && Number.isFinite(b) ? Math.max(0, Math.round((b - a) / 864e5)) : null;
+};
 function mountReturns(app, { db, fetchFn, onCron, services = {} }) {
   const getState = async () => {
     const r = await db.get(`SELECT value FROM settings WHERE key = 'ret_cycle'`);
