@@ -368,7 +368,10 @@ assert.deepEqual(mq.own, { logins: [] }, 'без прив’язки — пор�
 assert.equal(mq.kpi.cur.cnt, 0);
 await app.request(`/api/users/${cu.id}`, { method: 'PUT', headers: H, body: JSON.stringify({ crm_logins: 'Olena, ivan' }) });
 mq = await (await mreq('POST', '/api/an/query', { from, to: today, managers: ['denys'] })).json();
-const mine = (await req('POST', '/api/an/query', { from, to: today, managers: ['olena', 'ivan'] })).kpi.cur.cnt;
+const ownerQ = await req('POST', '/api/an/query', { from, to: today, managers: ['olena', 'ivan'] });
+assert.equal(ownerQ.own, null, 'власник з тим самим фільтром не отримує кеш менеджера (рядок «Менеджер» не зникає)');
+assert.ok(ownerQ.options.managers.length > 2 && ownerQ.options.managers.every((m) => !m.own));
+const mine = ownerQ.kpi.cur.cnt;
 assert.ok(mine > 0 && mq.kpi.cur.cnt === mine, 'менеджер бачить лише замовлення своїх логінів');
 assert.equal(mq.target.applicable, false, 'без таргету');
 assert.ok(mq.byManager.every((m) => ['olena', 'ivan'].includes(m.login)));

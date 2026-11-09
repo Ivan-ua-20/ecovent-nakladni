@@ -1201,7 +1201,8 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
     // kpi: 3 — додано розбивку за службами доставки.
     // kpi: 4 — «Відправлено» (усі статуси, крім «Прийнято») і оборот без відмов у розбивках для порівняння.
     // kpi: 5 — усі продані товари (не лише 20), фільтр за товарами, к-сть у періоді порівняння.
-    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today, kpi: 5 }));
+    // own — у ключі: інакше власник з таким самим фільтром менеджера отримав би кеш менеджера (без рядка «Менеджер»).
+    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today, kpi: 5, own: own ? 1 : 0 }));
     const hit = await db.get(`SELECT value FROM an_cache WHERE key = ?`, [cacheKey]);
     if (hit) return c.body(hit.value, 200, { 'content-type': 'application/json; charset=UTF-8' });
 
