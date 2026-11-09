@@ -5579,7 +5579,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const ph = (a) => a.map(() => "?").join(",");
     const rfExpr = `(CASE WHEN o.status IN (${rf.join(",") || "-1"}) THEN 1 ELSE 0 END)`;
     const ver = (await db.get(`SELECT value FROM settings WHERE key = 'an_ver'`))?.value || "0";
-    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today: today3, kpi: 5 }));
+    const cacheKey = await hashKey(JSON.stringify({ ver, from, to, cmp, f, today: today3, kpi: 5, own: own ? 1 : 0 }));
     const hit = await db.get(`SELECT value FROM an_cache WHERE key = ?`, [cacheKey]);
     if (hit) return c.body(hit.value, 200, { "content-type": "application/json; charset=UTF-8" });
     function base(range, { items = itemLevel, skipCats = false } = {}) {
