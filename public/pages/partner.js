@@ -2,7 +2,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi, psBar, wirePsBar, psMatch, psHl, psEmpty, urgentBadge, urgentRow } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi, psBar, wirePsBar, psMatch, psHl, psEmpty, urgentBadge, urgentRow, cancelNote } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
@@ -340,6 +340,7 @@ export function createPartnerPages(ctx = {}) {
           ${['pay_wait', 'partial', 'paid', 'done'].includes(o.status) && canEdit() ? '<button class="btn" id="oClaim">🛠 Брак / обмін</button>' : ''}
           ${isDraft && head ? '<button class="btn primary" id="oSend">Відправити закупівлю</button>' : ''}
           ${editable ? `<a class="btn" href="#/porders/${o.id}/edit">Змінити</a><button class="btn danger" id="oCancel">${isDraft ? 'Видалити чернетку' : 'Скасувати'}</button>` : ''}</div></div>
+      ${cancelNote(o)}
       ${toConfirm ? `<div class="card form-stack" style="margin-bottom:12px;border-color:var(--warn)">
         <h3 style="margin:0">📝 Цю закупівлю підготував наш менеджер — підтвердіть її</h3>
         <div class="small">${o.pay_terms === 'postpay' ? `Оплата: <b>відстрочка ${o.pay_days} дн.</b> від дати рахунку.` : 'Оплата: передоплата за рахунком.'} Отримання: <b>${esc(o.delivery_name || '')}</b>${o.ship_to ? ` — ${esc([o.ship_to.name, o.ship_to.phone, o.ship_to.address].filter(Boolean).join(', '))}` : ''}.</div>
@@ -576,6 +577,7 @@ export function createPartnerPages(ctx = {}) {
           ${canEdit() && o.status !== 'cancelled' ? `<button class="btn ${o.urgent ? '' : 'urgent-btn'}" id="cUrgent" aria-pressed="${o.urgent ? 'true' : 'false'}">${o.urgent ? 'Зняти «Терміново»' : '🔥 Терміново'}</button>` : ''}
           ${o.status === 'crm' && canEdit() ? '<button class="btn" id="cClaim">🛠 Брак / обмін</button>' : ''}
           ${editable ? `<a class="btn" href="#/pclients/${o.id}/edit">Змінити</a><button class="btn danger" id="cCancel">Скасувати</button>` : ''}</div></div>
+      ${cancelNote(o)}
       ${o.pending ? `<div class="card form-stack card-info" style="margin-bottom:12px">
           <h3 style="margin:0">🔵 Менеджер змінив замовлення — підтвердіть або відхиліть</h3>
           ${o.pending.crm_old ? `<div class="small">Старе замовлення в LP-CRM № <b>${esc(o.pending.crm_old)}</b> анульовано — після підтвердження буде створене нове.</div>` : ''}

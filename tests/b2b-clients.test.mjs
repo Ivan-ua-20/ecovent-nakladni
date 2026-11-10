@@ -254,8 +254,16 @@ assert.ok(late && String(late.chat_id) === '100', 'адмінам особист
 assert.match(late.text, new RegExp(`B2B-${c3.id}.*CRM № <b>77001.*✅ ОПЛАЧЕНО: закупівля B2B-${sup2.id}, рахунок № СФ-77 від 25.10.2026`, 's'));
 
 // ---------- 7. Скасування повертає залишок ----------
-await req('POST', `/api/b2b/clients/${c1.id}/cancel`);
+tg.length = 0;
+await req('POST', `/api/b2b/clients/${c1.id}/cancel`, { note: 'Немає в наявності, привеземо 15.11 <склад>' });
 assert.equal((await req('GET', '/api/b2b/p/supplies', null, A)).find((s) => s.id === sup.id).items.find((i) => i.product_id === 11).left, 5);
+{ // коментар менеджера: партнеру в сповіщенні (екрановано), на сторінці замовлення й в історії
+  const m = tg.find((x) => /скасовано менеджером/.test(x.text));
+  assert.match(m.text, /скасовано менеджером\.\n💬 Немає в наявності, привеземо 15\.11 &lt;склад&gt;/);
+  const pc = await req('GET', `/api/b2b/p/clients/${c1.id}`, null, A);
+  assert.equal(pc.order.cancel_note, 'Немає в наявності, привеземо 15.11 <склад>');
+  assert.ok((await req('GET', `/api/b2b/orders/${c1.id}`)).history.some((h) => /менеджер скасував замовлення клієнта.*: Немає в наявності/.test(h.action)));
+}
 const c4 = await req('POST', '/api/b2b/p/clients', { ...client, supply_id: sup.id, items: [{ product_id: 12, qty: 1 }] }, A);
 await req('POST', `/api/b2b/p/clients/${c4.id}/cancel`, {}, A);
 assert.equal((await req('GET', `/api/b2b/p/clients/${c4.id}`, null, A)).order.status, 'cancelled');

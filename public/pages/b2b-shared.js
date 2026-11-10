@@ -137,6 +137,32 @@ export function askNote(title, text, { verb = 'Зберегти', placeholder = 
     new MutationObserver((_, obs) => { if (!document.contains(m.el)) { obs.disconnect(); if (!done) resolve(null); } }).observe(document.body, { childList: true });
   });
 }
+// Скасування менеджером: підтвердження з необов'язковим коментарем для партнера (піде в сповіщення й на сторінку замовлення).
+// null — передумали; рядок (може бути порожній) — скасувати.
+const CANCEL_REASONS = ['Немає в наявності', 'Дубль замовлення', 'Клієнт відмовився', 'Помилка в даних доставки', 'Не оплачено вчасно'];
+export function askCancel(title, text) {
+  return new Promise((resolve) => {
+    let done = false;
+    const m = modal(title, `<div class="form-stack"><p style="margin:0">${text}</p>
+        <label class="f"><span>Коментар для партнера <span class="muted" style="font-weight:400">— необов'язково</span></span>
+          <textarea id="acTxt" rows="3" maxlength="500" placeholder="Напр.: товару немає на складі, привеземо 15.11 — оформіть, будь ласка, знову"></textarea></label>
+        <div class="ac-reasons" role="group" aria-label="Швидкі причини">${CANCEL_REASONS.map((r) => `<button type="button" class="chip" data-acr="${esc(r)}">${esc(r)}</button>`).join('')}</div>
+        <div class="small muted">Партнер побачить коментар у сповіщенні й на сторінці замовлення.</div></div>`, {
+      footer: `<button class="btn" data-close>Не скасовувати</button><button class="btn danger solid" id="acOk">Скасувати замовлення</button>`,
+      focus: '#acTxt',
+    });
+    const ta = $('#acTxt', m.el);
+    $$('[data-acr]', m.el).forEach((b) => (b.onclick = () => {
+      const r = b.dataset.acr;
+      ta.value = ta.value.trim() ? (ta.value.includes(r) ? ta.value : `${r} — ${ta.value.trim()}`) : r;
+      ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+    }));
+    $('#acOk', m.el).onclick = () => { done = true; const v = ta.value.trim(); m.close(); resolve(v); };
+    new MutationObserver((_, obs) => { if (!document.contains(m.el)) { obs.disconnect(); if (!done) resolve(null); } }).observe(document.body, { childList: true });
+  });
+}
+// Плашка на сторінці скасованого замовлення: хто скасував і чому.
+export const cancelNote = (o) => (o.status === 'cancelled' && o.cancel_note ? `<div class="alert bad small ac-note"><b>Скасовано менеджером:</b> ${esc(o.cancel_note)}</div>` : '');
 export const PAID_NOTE_HINT = 'Напр.: гарантійна заміна — товар повернуто, відправка з нашого складу; взаємозалік; оплата готівкою.';
 
 // ---------- самовивіз: хто забирає зі складу ----------

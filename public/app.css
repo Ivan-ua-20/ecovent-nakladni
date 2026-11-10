@@ -855,3 +855,8 @@ tr.ps-on > td { background: #f0faf7; }
 .ps-empty { padding: 28px 16px; text-align: center; display: flex; flex-direction: column; gap: 6px; align-items: center; }
 .ps-empty .btn { margin-top: 6px; }
 @media (max-width: 700px) { .ps-count { margin-left: 0; } .ps-field { flex-basis: 100%; } }
+
+/* Скасування менеджером: швидкі причини в діалозі й плашка з коментарем на сторінці замовлення. */
+.ac-reasons { display: flex; flex-wrap: wrap; gap: 6px; }
+.ac-reasons .chip { font-size: 13px; }
+.ac-note { margin-bottom: 12px; white-space: pre-line; }

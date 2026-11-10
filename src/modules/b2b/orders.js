@@ -984,10 +984,10 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       await db.run(`UPDATE b2b_orders SET status = ?, paid_amount = 0, paid_at = '', paid_by = '', paid_note = '', updated_at = ? WHERE id = ?`, [back, now, o.id]);
       await log(o.id, u, o.status === 'partial' ? 'знято часткову оплату — «Очікує оплату»' : `статус: «${ORDER_STATUS[back]}» (оплату знято)`);
     } else {
-      await db.run(`UPDATE b2b_orders SET status = ?, updated_at = ? WHERE id = ?`, [status, now, o.id]);
-      await log(o.id, u, `статус: «${ORDER_STATUS[status]}»`);
+      await db.run(`UPDATE b2b_orders SET status = ?, ${status === 'cancelled' ? 'cancel_note = ?, ' : ''}updated_at = ? WHERE id = ?`, status === 'cancelled' ? [status, note, now, o.id] : [status, now, o.id]);
+      await log(o.id, u, `статус: «${ORDER_STATUS[status]}»${status === 'cancelled' && note ? `: ${note}` : ''}`);
       if (status === 'cancelled') {
-        await tgPartner(o.partner_id, `❌ Закупівлю ${orderNo(o.id)} скасовано менеджером.`);
+        await tgPartner(o.partner_id, `❌ Закупівлю ${orderNo(o.id)} скасовано менеджером.${note ? `\n💬 ${h(note)}` : ''}`);
         await hooks.finClosed?.(o.id, '❌ скасовано').catch(() => 0);
       }
     }
