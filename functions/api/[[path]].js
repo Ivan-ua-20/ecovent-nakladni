@@ -7690,10 +7690,11 @@ ${link(c, `porders/${o.id}`)}`);
       await db.run(`UPDATE b2b_orders SET status = ?, paid_amount = 0, paid_at = '', paid_by = '', paid_note = '', updated_at = ? WHERE id = ?`, [back, now, o.id]);
       await log(o.id, u, o.status === "partial" ? "\u0437\u043D\u044F\u0442\u043E \u0447\u0430\u0441\u0442\u043A\u043E\u0432\u0443 \u043E\u043F\u043B\u0430\u0442\u0443 \u2014 \xAB\u041E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443\xBB" : `\u0441\u0442\u0430\u0442\u0443\u0441: \xAB${ORDER_STATUS[back]}\xBB (\u043E\u043F\u043B\u0430\u0442\u0443 \u0437\u043D\u044F\u0442\u043E)`);
     } else {
-      await db.run(`UPDATE b2b_orders SET status = ?, updated_at = ? WHERE id = ?`, [status, now, o.id]);
-      await log(o.id, u, `\u0441\u0442\u0430\u0442\u0443\u0441: \xAB${ORDER_STATUS[status]}\xBB`);
+      await db.run(`UPDATE b2b_orders SET status = ?, ${status === "cancelled" ? "cancel_note = ?, " : ""}updated_at = ? WHERE id = ?`, status === "cancelled" ? [status, note, now, o.id] : [status, now, o.id]);
+      await log(o.id, u, `\u0441\u0442\u0430\u0442\u0443\u0441: \xAB${ORDER_STATUS[status]}\xBB${status === "cancelled" && note ? `: ${note}` : ""}`);
       if (status === "cancelled") {
-        await tgPartner(o.partner_id, `\u274C \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)} \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u043E\u043C.`);
+        await tgPartner(o.partner_id, `\u274C \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)} \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u043E\u043C.${note ? `
+\u{1F4AC} ${h3(note)}` : ""}`);
         await hooks.finClosed?.(o.id, "\u274C \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E").catch(() => 0);
       }
     }
@@ -9099,15 +9100,17 @@ ${link(c, `pclients/${o.id}`)}`);
     need(c, "b2b.admin");
     const o = await clientOrder(c);
     if (o.status === "cancelled") throw fail(400, "\u0423\u0436\u0435 \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.");
+    const note = String((await c.req.json().catch(() => ({}))).note ?? "").trim().slice(0, 500);
     const s = await supplyOf(o.supply_id);
-    await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+    await db.run(`UPDATE b2b_orders SET status = 'cancelled', cancel_note = ?, updated_at = ? WHERE id = ?`, [note, nowIso(), o.id]);
     if (s?.status === "draft") {
       await draftAdjust(s.id, neg(await orderItems(o.id)));
       await log(s.id, c.get("user"), `\u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${o.client_name}) \u2014 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438: ${itemsTxt(await orderItems(o.id))}`);
     }
     if (o.supply_id) await rebuildOpen(o.supply_id);
-    await log(o.id, c.get("user"), `\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430${s?.status === "draft" ? ` (\u0442\u043E\u0432\u0430\u0440\u0438 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438 ${orderNo(s.id)})` : ""}`);
-    await tgPartner(o.partner_id, `\u274C \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h8(o.client_name)}) \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u043E\u043C.`);
+    await log(o.id, c.get("user"), `\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430${s?.status === "draft" ? ` (\u0442\u043E\u0432\u0430\u0440\u0438 \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0437 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438 ${orderNo(s.id)})` : ""}${note ? `: ${note}` : ""}`);
+    await tgPartner(o.partner_id, `\u274C \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h8(o.client_name)}) \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u043E\u043C.${note ? `
+\u{1F4AC} ${h8(note)}` : ""}`);
     return c.json({ ok: true, inCrm: !!o.crm_id });
   });
   return { refreshCrm };
@@ -17873,7 +17876,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 36,
+  version: 37,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18192,6 +18195,8 @@ var schema11 = {
     ["b2b_orders", "crm_ext", "TEXT DEFAULT ''"],
     // «Терміново» — партнер (або наш менеджер) позначає замовлення клієнта, щоб його виділити й зібрати першим.
     ["b2b_orders", "urgent", "INTEGER NOT NULL DEFAULT 0"],
+    // Коментар менеджера при скасуванні (партнер бачить на сторінці замовлення і в сповіщенні).
+    ["b2b_orders", "cancel_note", "TEXT DEFAULT ''"],
     // етап 3а: команда партнера (роль у команді, хто додав) і видалені партнери (з замовленнями — в архіві)
     ["users", "partner_role", "TEXT DEFAULT ''"],
     ["users", "added_by", "TEXT DEFAULT ''"],

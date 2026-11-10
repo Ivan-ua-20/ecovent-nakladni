@@ -4,7 +4,7 @@ import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
 import { viewAdminSupplyForm } from './b2b-supply.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard, urgentBadge, urgentRow } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard, urgentBadge, urgentRow, askCancel, cancelNote } from './b2b-shared.js';
 
 const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
 
@@ -899,6 +899,7 @@ export function createB2bPages(ctx = {}) {
     const pkCouriers = o.delivery === 'pickup' && !closed ? await api('GET', `/api/b2b/partners/${o.partner_id}/couriers`).catch(() => []) : [];
     main.innerHTML = `
       <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2borders">← До списку</a>${o.status === 'draft' ? '<button class="btn primary" id="oSendDraft">Відправити закупівлю</button>' : ''}${o.status === 'open' ? '<button class="btn primary" id="oForm">🧾 Сформувати закупівлю</button>' : ''}${['pay_wait', 'partial', 'paid', 'done'].includes(o.status) && !ro() ? '<button class="btn" id="oClaim">🛠 Брак / обмін</button>' : ''}${closed ? '' : '<button class="btn" id="oEdit">✏️ Змінити</button>'}<button class="btn danger" id="oDel">Видалити</button></div></div>
+      ${cancelNote(o)}
       ${o.reinvoice ? `<div class="alert warn" style="margin-bottom:12px"><b>Закупівлю змінено після рахунку</b> — потрібно переробити рахунок № ${esc(o.reinvoice)}. Запит надіслано в «Фінансові питання»; новий рахунок замінить старий файл і піде в групу партнера.${o.paid_amount ? ` Уже оплачено: ${uah(o.paid_amount)}.` : ''}</div>` : ''}
       ${o.status === 'open' ? '<div class="alert info" style="margin-bottom:12px"><b>Відкрита закупівля</b> — сюди автоматично складаються замовлення клієнтів партнера без закупівлі. Сформуйте її («🧾 Сформувати закупівлю»): оберіть юрособу партнера й оплату — вона стане звичайною закупівлею «Очікує рахунок», а наступні замовлення без закупівлі підуть у нову відкриту.</div>' : ''}
       ${o.status === 'confirm' ? '<div class="alert warn" style="margin-bottom:12px"><b>Чекає підтвердження партнера</b> — закупівлю створили ми; партнер отримав її в кабінеті й у Telegram. Після підтвердження він обере юрособу, і в «Фінансові питання» піде запит рахунку. Склад ще можна змінити («✏️ Змінити»).</div>' : ''}
@@ -1063,8 +1064,8 @@ export function createB2bPages(ctx = {}) {
     $$('[data-set]').forEach((b) => (b.onclick = async () => {
       const st = b.dataset.set;
       if (st === 'pay_wait' && !(await confirmDanger(o.status === 'partial' ? 'Зняти часткову оплату?' : 'Скасувати статус «Оплачено»?', 'Платежі Opendatabot відв’яжуться від закупівлі й більше не зараховуватимуться в неї автоматично.', 'Так, зняти оплату'))) return;
-      if (st === 'cancelled' && !(await confirmDanger(`Скасувати ${o.number}?`, 'Партнер отримає сповіщення.', 'Скасувати замовлення'))) return;
       let note;
+      if (st === 'cancelled') { note = await askCancel(`Скасувати ${o.number}?`, 'Партнер отримає сповіщення.'); if (note === null) return; }
       if (st === 'paid' && o.status !== 'done') {
         note = await askNote(`Оплачено вручну: ${o.number}`, `${o.invoice_no ? '' : 'Рахунку немає — це нормально, якщо оплати не буде (гарантія, взаємозалік). '}Коментар піде в історію й партнеру в бот.`, { verb: 'Позначити «Оплачено»', placeholder: PAID_NOTE_HINT });
         if (note === null) return;
@@ -1251,6 +1252,7 @@ export function createB2bPages(ctx = {}) {
     const closed = o.status === 'cancelled';
     main.innerHTML = `
       <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)} ${payBadge(o)} ${urgentBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2bclients">← До списку</a>${!closed && !ro() ? `<button class="btn ${o.urgent ? '' : 'urgent-btn'}" id="clUrgent" aria-pressed="${o.urgent ? 'true' : 'false'}">${o.urgent ? 'Зняти «Терміново»' : '🔥 Терміново'}</button>` : ''}${o.status === 'crm' && !ro() ? '<button class="btn" id="clClaim">🛠 Брак / обмін</button>' : ''}${closed ? '' : '<button class="btn" id="clEdit">✏️ Змінити</button>'}<button class="btn danger" id="clDel">Видалити</button></div></div>
+      ${cancelNote(o)}
       ${o.pending ? `<div class="card form-stack card-info" style="margin-bottom:12px"><b>🔵 Чекає підтвердження партнера</b>
           ${o.pending.crm_old ? `<div class="small">Старе замовлення в LP-CRM № <b>${esc(o.pending.crm_old)}</b> анульовано — скасуйте його в CRM; нове передайте після підтвердження.</div>` : ''}
           ${o.pending.changes.length ? `<ul class="small" style="margin:0;padding-left:18px">${o.pending.changes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
@@ -1349,8 +1351,9 @@ export function createB2bPages(ctx = {}) {
       viewClient(o.id);
     });
     $('#clCancel') && ($('#clCancel').onclick = async () => {
-      if (!(await confirmDanger(`Скасувати ${o.number}?`, o.crm_id ? `Замовлення № ${o.crm_id} у LP-CRM скасуйте вручну.` : 'Партнер отримає сповіщення.', 'Скасувати замовлення'))) return;
-      try { await api('POST', `/api/b2b/clients/${o.id}/cancel`); toast('Скасовано'); re(); } catch (er) { toast(er.message, true); }
+      const note = await askCancel(`Скасувати ${o.number}?`, o.crm_id ? `Партнер отримає сповіщення. Замовлення № ${esc(o.crm_id)} у LP-CRM скасуйте вручну.` : 'Партнер отримає сповіщення.');
+      if (note === null) return;
+      try { await api('POST', `/api/b2b/clients/${o.id}/cancel`, { note }); toast(note ? 'Скасовано, коментар надіслано партнеру' : 'Скасовано'); re(); } catch (er) { toast(er.message, true); }
     });
   }
 

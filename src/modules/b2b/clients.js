@@ -1166,15 +1166,16 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     need(c, 'b2b.admin');
     const o = await clientOrder(c);
     if (o.status === 'cancelled') throw fail(400, 'Уже скасовано.');
+    const note = String((await c.req.json().catch(() => ({}))).note ?? '').trim().slice(0, 500); // коментар для партнера (необов'язково)
     const s = await supplyOf(o.supply_id);
-    await db.run(`UPDATE b2b_orders SET status = 'cancelled', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+    await db.run(`UPDATE b2b_orders SET status = 'cancelled', cancel_note = ?, updated_at = ? WHERE id = ?`, [note, nowIso(), o.id]);
     if (s?.status === 'draft') {
       await draftAdjust(s.id, neg(await orderItems(o.id)));
       await log(s.id, c.get('user'), `скасовано замовлення клієнта ${orderNo(o.id)} (${o.client_name}) — прибрано з чернетки: ${itemsTxt(await orderItems(o.id))}`);
     }
     if (o.supply_id) await rebuildOpen(o.supply_id);
-    await log(o.id, c.get('user'), `менеджер скасував замовлення клієнта${s?.status === 'draft' ? ` (товари прибрано з чернетки ${orderNo(s.id)})` : ''}`);
-    await tgPartner(o.partner_id, `❌ Замовлення ${orderNo(o.id)} (${h(o.client_name)}) скасовано менеджером.`);
+    await log(o.id, c.get('user'), `менеджер скасував замовлення клієнта${s?.status === 'draft' ? ` (товари прибрано з чернетки ${orderNo(s.id)})` : ''}${note ? `: ${note}` : ''}`);
+    await tgPartner(o.partner_id, `❌ Замовлення ${orderNo(o.id)} (${h(o.client_name)}) скасовано менеджером.${note ? `\n💬 ${h(note)}` : ''}`);
     return c.json({ ok: true, inCrm: !!o.crm_id });
   });
 

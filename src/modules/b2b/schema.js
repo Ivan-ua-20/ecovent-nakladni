@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 36,
+  version: 37,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -322,6 +322,8 @@ export const schema = {
     ['b2b_orders', 'crm_ext', "TEXT DEFAULT ''"],
     // «Терміново» — партнер (або наш менеджер) позначає замовлення клієнта, щоб його виділити й зібрати першим.
     ['b2b_orders', 'urgent', 'INTEGER NOT NULL DEFAULT 0'],
+    // Коментар менеджера при скасуванні (партнер бачить на сторінці замовлення і в сповіщенні).
+    ['b2b_orders', 'cancel_note', "TEXT DEFAULT ''"],
     // етап 3а: команда партнера (роль у команді, хто додав) і видалені партнери (з замовленнями — в архіві)
     ['users', 'partner_role', "TEXT DEFAULT ''"],
     ['users', 'added_by', "TEXT DEFAULT ''"],

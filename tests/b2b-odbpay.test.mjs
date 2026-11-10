@@ -168,7 +168,8 @@ await hook({ amount: 4500, purpose: 'Рахунок на оплату № 110 в
 assert.equal((await order(s5)).status, 'paid');
 const s6 = await supply([{ product_id: 12, qty: 1 }], '111');
 assert.ok(!(await req('GET', `/api/b2b/orders/${s6}/payments`)).possible.some((t) => /№ 110/.test(t.purpose)), 'уже зарахований — не пропонується');
-await req('POST', `/api/b2b/orders/${s6}/status`, { status: 'cancelled' });
+await req('POST', `/api/b2b/orders/${s6}/status`, { status: 'cancelled', note: 'Дубль закупівлі' });
+assert.equal((await order(s6)).cancel_note, 'Дубль закупівлі', 'коментар скасування закупівлі зберігається');
 
 // ---------- 5. Кілька закупівель з однаковим залишком без № → «перевірити» з кандидатами ----------
 const s3 = await supply([{ product_id: 12, qty: 1 }], 'СФ-103');
