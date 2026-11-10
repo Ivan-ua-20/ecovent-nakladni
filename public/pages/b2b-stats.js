@@ -14,6 +14,7 @@ const wdOf = (d) => (new Date(`${d}T12:00:00Z`).getUTCDay() + 6) % 7; // 0 — �
 const WD = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'];
 const SHADES = ['#eef0ef', '#cfe9e4', '#a7d3cc', '#5fb3a7', '#0f766e'];
 const EARN = '#5fb3a7';
+const SUP = '#c2410c'; // закупівлі партнера (наші продажі йому)
 
 const PERIODS = {
   today: () => [kday(), kday()],
@@ -47,10 +48,11 @@ const kpi = (label, value, sub = '') => `<div class="kpi"><div class="kpi-l">${l
 function lineChart(series) {
   if (!series.length) return '';
   const W = 800, H = 220, L = 46, B = 22, T = 10;
-  const max = Math.max(1, ...series.map((r) => r.sum));
+  const withSup = series.some((r) => r.supply > 0);
+  const max = Math.max(1, ...series.map((r) => Math.max(r.sum, withSup ? r.supply || 0 : 0)));
   const x = (i) => L + (series.length === 1 ? (W - L) / 2 : (i / (series.length - 1)) * (W - L - 6));
   const y = (v) => Math.round(T + (H - B - T) * (1 - v / max));
-  const pts = (k) => series.map((r, i) => `${x(i).toFixed(1)},${y(r[k])}`).join(' ');
+  const pts = (k) => series.map((r, i) => `${x(i).toFixed(1)},${y(r[k] || 0)}`).join(' ');
   const step = Math.max(1, Math.ceil(series.length / 10));
   const bw = (W - L) / series.length;
   const grid = [0, 0.5, 1].map((f) => `<line x1="${L}" y1="${y(max * f)}" x2="${W}" y2="${y(max * f)}" stroke="#eef0ef"></line>
@@ -64,12 +66,14 @@ function lineChart(series) {
     <circle class="an7-gd" r="5" fill="var(--accent)" stroke="#fff" stroke-width="2" visibility="hidden"></circle>
     <rect class="an7-hit" x="${L}" y="0" width="${W - L}" height="${H - B}" fill="transparent"></rect>`;
   lineChart.geo = { W, L, x, y, n: series.length, bw };
-  const dots = series.length <= 45 ? series.map((r, i) => (r.sum ? `<circle cx="${x(i)}" cy="${y(r.sum)}" r="3" fill="var(--accent)"></circle>` : '')).join('') : '';
+  const dots = series.length <= 45 ? series.map((r, i) => (r.sum ? `<circle cx="${x(i)}" cy="${y(r.sum)}" r="3" fill="var(--accent)"></circle>` : '')
+    + (withSup && r.supply ? `<rect x="${x(i) - 3.5}" y="${y(r.supply) - 3.5}" width="7" height="7" fill="${SUP}"></rect>` : '')).join('') : '';
   return `<div class="an7-chart"><svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" role="img" aria-label="Продажі й заробіток по днях">
     ${grid}
     <polygon points="${x(0)},${y(0)} ${pts('sum')} ${x(series.length - 1)},${y(0)}" fill="var(--accent)" opacity=".1"></polygon>
     <polyline points="${pts('sum')}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round"></polyline>
     <polyline points="${pts('earn')}" fill="none" stroke="${EARN}" stroke-width="2" stroke-dasharray="6 4" stroke-linejoin="round"></polyline>
+    ${withSup ? `<polyline points="${pts('supply')}" fill="none" stroke="${SUP}" stroke-width="2" stroke-linejoin="round"></polyline>` : ''}
     ${dots}${labels}${hover}</svg><div class="an7-tip" hidden></div></div>`;
 }
 
@@ -94,7 +98,8 @@ function wireChart(series) {
     tip.innerHTML = `<b>${fmtD(r.d)}.${r.d.slice(0, 4)} · ${WD[wdOf(r.d)]}</b>
       <div class="an7-tr"><span><span class="an7-ln" style="background:var(--accent)"></span>Продажі</span><b>${uah(r.sum)}</b></div>
       <div class="an7-tr"><span>Замовлень</span><b>${r.cnt}</b></div>
-      <div class="an7-tr"><span><span class="an7-ln" style="background:${EARN}"></span>Заробіток</span><b>${uah(r.earn)}</b></div>`;
+      <div class="an7-tr"><span><span class="an7-ln" style="background:${EARN}"></span>Заробіток</span><b>${uah(r.earn)}</b></div>
+      ${r.supply ? `<div class="an7-tr"><span><span class="an7-ln" style="background:${SUP}"></span>Закупівлі</span><b>${uah(r.supply)}</b></div>` : ''}`;
     tip.hidden = false;
     const px = (cx / g.W) * rc.width + (svg.offsetLeft || 0);
     const left = px + 14 + tip.offsetWidth > box.scrollLeft + box.clientWidth ? px - 14 - tip.offsetWidth : px + 14;
@@ -213,6 +218,8 @@ export function createB2bStats() {
     const checks = (list, sel, attr) => (list.length ? list.map((r) => `<label class="an7-c"><input type="checkbox" data-${attr}="${r.id}" ${!sel.length || sel.includes(r.id) ? 'checked' : ''}>
       <span class="an7-ell">${esc(r.name)}</span><span class="small muted">${nf0.format(r.units)}</span></label>`).join('') : '<div class="small muted">Немає продажів за період.</div>');
     const cmp = d.period.all ? () => '' : delta;
+    // Закупівлі — що партнер купив у нас (окремо від «Продажів» — замовлень його клієнтів через сервіс).
+    const supKpi = kpi('Закупівлі', uah0(d.supplies.sum), `${cmp(d.supplies.sum, d.suppliesPrev.sum)} <span class="muted">${d.supplies.cnt} шт · оплачено ${uah0(d.supplies.paid)}</span>`);
     const perLabel = state.period === 'custom' ? `${fmtD(d.period.from)}–${fmtD(d.period.to)}` : PERIOD_NAMES[state.period];
 
     main.innerHTML = `
@@ -240,20 +247,24 @@ export function createB2bStats() {
 
         <div class="an7-main">
           <div class="small muted">Період ${fmtD(d.period.from)}${d.period.all ? `.${d.period.from.slice(0, 4)}` : ''}–${fmtD(d.period.to)} (${d.period.days} дн.)${d.period.all ? '' : ` · порівняння з ${fmtD(d.prev.from)}–${fmtD(d.prev.to)}`}.
-            «Заробіток» — різниця між РРЦ і ціною партнера, якщо продавати за РРЦ.</div>
+            «Продажі» — замовлення клієнтів партнера через сервіс, «Закупівлі» — що партнер купив у нас. «Заробіток» — різниця між РРЦ і ціною партнера, якщо продавати за РРЦ.</div>
+          ${admin && state.partner && !s.cnt && d.supplies.cnt ? `<div class="alert info small">${esc(partners.find((p) => String(p.id) === String(state.partner))?.name || 'Партнер')} не оформлює через сервіс замовлень клієнтів (самовивіз або власна доставка), тож «Продажі» клієнтам — 0. Його закупівлі за період — <b>${uah(d.supplies.sum)}</b> (${d.supplies.cnt} шт), вони на графіку і в «Гроші й закупівлі».</div>` : ''}
           <div class="kpis an7-k">
+            ${admin ? supKpi : ''}
             ${kpi('Продажі', uah0(s.sum), cmp(s.sum, sp.sum))}
             ${kpi('Замовлень', nf0.format(s.cnt), `${cmp(s.cnt, sp.cnt)} <span class="muted">${nf1.format(s.perDay)} на день</span>`)}
             ${kpi('Середній чек', uah0(s.avg), cmp(s.avg, sp.avg))}
             ${kpi('Заробіток', uah0(s.earn), cmp(s.earn, sp.earn))}
             ${kpi('Повернення', `${nf1.format(s.returnsPct || 0)}<small>%</small>`, `${cmp(s.returnsPct || 0, sp.returnsPct || 0, { lowerBetter: true, points: true })} <span class="muted">${s.returns || 0} замовл.</span>`)}
+            ${admin ? '' : supKpi}
           </div>
           <div class="card form-stack">
-            <h3 style="margin:0">Продажі й заробіток</h3>
+            <h3 style="margin:0">${d.series.some((r) => r.supply > 0) ? 'Продажі, заробіток і закупівлі' : 'Продажі й заробіток'}</h3>
             ${lineChart(d.series)}
             <div class="small muted" style="display:flex;gap:16px;flex-wrap:wrap">
               <span><span class="an7-ln" style="background:var(--accent)"></span>Продажі</span>
               <span><span class="an7-ln" style="background:repeating-linear-gradient(90deg,${EARN} 0 6px,transparent 6px 10px)"></span>Заробіток</span>
+              ${d.series.some((r) => r.supply > 0) ? `<span><span class="an7-ln" style="background:${SUP}"></span>Закупівлі</span>` : ''}
               <span>Наведіть на день — побачите цифри</span></div>
           </div>
           <div class="an7-2">
