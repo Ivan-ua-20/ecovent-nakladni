@@ -2,7 +2,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi, psBar, wirePsBar, psMatch, psHl, psEmpty, urgentBadge, urgentRow, cancelNote } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi, psBar, wirePsBar, psMatch, psHl, psEmpty, urgentBadge, urgentRow, cancelNote, askDeliveryChange, deliveryReqText } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
@@ -333,6 +333,8 @@ export function createPartnerPages(ctx = {}) {
     const ob = o.status === 'open' ? await openBanner() : { html: '', wire: () => {} };
     const pkLast = o.delivery === 'pickup' && !o.pickup_by ? (await api('GET', '/api/b2b/p/limits').catch(() => null))?.pickup_last || null : null;
     const couriers = o.delivery === 'pickup' ? await api('GET', '/api/b2b/p/couriers').catch(() => []) : [];
+    // Спосіб отримання після рахунку партнер змінює запитом — чинним стає після підтвердження менеджера.
+    const canReq = canEdit() && ['invoice_wait', 'pay_wait', 'partial', 'paid'].includes(o.status) && !(o.crm_id || o.crm_ext);
     main.innerHTML = `
       ${ob.html}
       <div class="head-row"><h2>Закупівля ${esc(o.number)} ${statusBadge(o)}</h2>
@@ -341,6 +343,8 @@ export function createPartnerPages(ctx = {}) {
           ${isDraft && head ? '<button class="btn primary" id="oSend">Відправити закупівлю</button>' : ''}
           ${editable ? `<a class="btn" href="#/porders/${o.id}/edit">Змінити</a><button class="btn danger" id="oCancel">${isDraft ? 'Видалити чернетку' : 'Скасувати'}</button>` : ''}</div></div>
       ${cancelNote(o)}
+      ${o.delivery_req ? `<div class="alert warn dr-req"><div>⏳ <b>Запит на зміну способу отримання чекає підтвердження менеджера:</b> ${deliveryReqText(o.delivery_req)}.<div class="small">Поки що діє поточний спосіб — «${esc(o.delivery_name || '')}».</div></div>
+        ${canEdit() ? '<button class="btn sm" id="oDrUndo">Відкликати запит</button>' : ''}</div>` : ''}
       ${toConfirm ? `<div class="card form-stack" style="margin-bottom:12px;border-color:var(--warn)">
         <h3 style="margin:0">📝 Цю закупівлю підготував наш менеджер — підтвердіть її</h3>
         <div class="small">${o.pay_terms === 'postpay' ? `Оплата: <b>відстрочка ${o.pay_days} дн.</b> від дати рахунку.` : 'Оплата: передоплата за рахунком.'} Отримання: <b>${esc(o.delivery_name || '')}</b>${o.ship_to ? ` — ${esc([o.ship_to.name, o.ship_to.phone, o.ship_to.address].filter(Boolean).join(', '))}` : ''}.</div>
@@ -370,6 +374,7 @@ export function createPartnerPages(ctx = {}) {
             <h3>Рахунок</h3>
             <div class="small" style="white-space:pre-line"><b>Платник:</b> ${esc(o.entity || (toConfirm ? 'оберіть при підтвердженні' : '—'))}</div>
             <div class="small"><b>Отримання:</b> ${esc(o.delivery_name || '')}</div>
+            ${canReq && !o.delivery_req ? '<div class="btn-row"><button class="btn sm" id="oDrAsk">🔁 Змінити спосіб отримання</button></div>' : ''}
             ${o.reinvoice ? `<div class="alert warn small">Закупівлю змінив менеджер — рахунок № ${esc(o.reinvoice)} перевиставляється, новий надійде в Telegram і з’явиться тут.${o.paid_amount ? ` Уже оплачено: ${uah(o.paid_amount)}.` : ''}</div>` : ''}
             ${o.pay_terms === 'postpay' ? `<div class="small"><b>Оплата:</b> відстрочка ${o.pay_days} дн.${o.due_date ? ` — до <b>${esc(fmtDay(o.due_date))}</b>` : ' від дати рахунку'}${o.overdue ? ` <span class="badge bad">прострочено ${o.overdue} дн.</span>` : ''}</div>` : ''}
             ${o.invoice_no ? `<div><b>Рахунок № ${esc(o.invoice_no)}</b>${o.invoice_date ? ` від ${esc(fmtDay(o.invoice_date))}` : ''}</div>` : '<div class="muted small">Рахунок ще готується — сповістимо в Telegram.</div>'}
@@ -385,6 +390,15 @@ export function createPartnerPages(ctx = {}) {
     ob.wire(() => viewOrder(o.id));
     if ($('#oClaim')) $('#oClaim').onclick = () => ctx.openClaimForm(o.id).catch((e) => toast(e.message, true));
     if (o.delivery === 'pickup') wirePickupCard(o, `/api/b2b/p/orders/${o.id}/pickup`, () => viewOrder(o.id), couriers);
+    if ($('#oDrAsk')) $('#oDrAsk').onclick = async () => {
+      const [lim, ks] = await Promise.all([api('GET', '/api/b2b/p/limits').catch(() => null), couriers.length ? couriers : api('GET', '/api/b2b/p/couriers').catch(() => [])]);
+      const v = await askDeliveryChange(o, { couriers: ks, warehouse: lim?.warehouse, pickupLast: lim?.pickup_last, blocked: clients.some((x) => x.status !== 'cancelled') });
+      if (!v) return;
+      try { await api('POST', `/api/b2b/p/orders/${o.id}/delivery-request`, v); toast('Запит надіслано — менеджер підтвердить зміну'); viewOrder(o.id); } catch (e) { toast(e.message, true); }
+    };
+    if ($('#oDrUndo')) $('#oDrUndo').onclick = async () => {
+      try { await api('DELETE', `/api/b2b/p/orders/${o.id}/delivery-request`); toast('Запит відкликано'); viewOrder(o.id); } catch (e) { toast(e.message, true); }
+    };
     $('#oCancel') && ($('#oCancel').onclick = async () => {
       if (isDraft) {
         if (!(await confirmDanger(`Видалити чернетку ${o.number}?`, 'Товари з неї буде видалено; нам вона не надходила.', 'Видалити чернетку'))) return;

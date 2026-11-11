@@ -441,26 +441,33 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
   const dt = (iso) => (iso ? new Date(iso).toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
   const ukDate = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d || '') ? d.split('-').reverse().join('.') : '');
   const num = (n) => new Intl.NumberFormat('uk-UA', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n).replace(/\s/g, ' ');
-  async function payText(o, partnerName) {
+  // own — коментар до самої закупівлі (самовивіз / на склад): без повтору її номера й платника в кожному рядку.
+  async function payText(o, partnerName, { own = false } = {}) {
     if (!o.supply_id) return { paid: !!o.paid_at, text: o.paid_at ? `✅ ОПЛАЧЕНО (без закупівлі, позначено ${dt(o.paid_at)})` : '⏳ БЕЗ ЗАКУПІВЛІ — ОЧІКУЄМО ОПЛАТУ' };
     const s = await db.get(`SELECT * FROM b2b_orders WHERE id = ?`, [o.supply_id]);
     if (!s) return { paid: false, text: '' };
     if (s.status === 'open') return { paid: false, text: `⏳ БЕЗ ЗАКУПІВЛІ (відкрита закупівля ${orderNo(s.id)}, рахунок ще не сформовано) — ОЧІКУЄМО ОПЛАТУ` };
-    const ent = String(s.entity || '').split('\n')[0];
+    const ent = String(s.entity || '').split('\n')[0].replace(/^(ФОП|ТОВ|ПП)(?=[А-ЯІЇЄҐ])/u, '$1 ');
     const inv = s.invoice_no ? `рахунок № ${s.invoice_no}${s.invoice_date ? ` від ${ukDate(s.invoice_date)}` : ''} на ${num(s.total)} грн` : `рахунок ще не виставлено (${num(s.total)} грн)`;
+    const wb = s.waybill_no ? `ВН № ${s.waybill_no}` : ''; // видаткова накладна — складу, щоб видати товар
     const pays = await db.all(`SELECT amount, date, payer_name, payer_code, account FROM b2b_payments WHERE order_id = ? ORDER BY date`, [s.id]).catch(() => []);
-    const lines = pays.map((t) => `Оплата ${dt(t.date)} — ${num(t.amount)} грн від ${t.payer_name || '—'}${t.payer_code ? ` (${t.payer_code})` : ''}${t.account ? ` на ${t.account}` : ''}`);
+    // Платник у рядку оплати — лише якщо це не та сама юрособа, що в рахунку (own: вона вже є окремим рядком).
+    const from = (t) => (own && t.payer_code && ent.includes(t.payer_code) ? '' : ` від ${t.payer_name || '—'}${t.payer_code ? ` (${t.payer_code})` : ''}`);
+    const lines = pays.map((t) => `Оплата ${dt(t.date)} — ${num(t.amount)} грн${from(t)}${t.account ? ` на ${t.account}` : ''}`);
+    const head = (label) => (own ? `${label} — ` : `${label}: закупівля ${orderNo(s.id)}, `);
     if (['paid', 'done'].includes(s.status)) {
-      return { paid: true, text: [`✅ ОПЛАЧЕНО: закупівля ${orderNo(s.id)}, ${inv}, платник ${ent}`,
-        ...(lines.length ? lines : [`Позначено «Оплачено» вручну${s.paid_by && s.paid_by !== 'Opendatabot' ? ` (${s.paid_by})` : ''}${s.paid_at ? ` ${dt(s.paid_at)}` : ''}`])].join('\n') };
+      const how = lines.length ? lines : [`Позначено «Оплачено» вручну${s.paid_by && s.paid_by !== 'Opendatabot' ? ` (${s.paid_by})` : ''}${s.paid_at ? ` ${dt(s.paid_at)}` : ''}`];
+      return { paid: true, text: (own ? [`✅ ОПЛАЧЕНО — ${inv}${wb ? ` · ${wb}` : ''}`, `Платник: ${ent}`, ...how]
+        : [`✅ ОПЛАЧЕНО: закупівля ${orderNo(s.id)}, ${inv}${wb ? `, ${wb}` : ''}, платник ${ent}`, ...how]).join('\n') };
     }
+    const payer = own ? `платник: ${ent}` : `рахунок на ${ent}, від «${partnerName}»`;
     if (s.status === 'partial') {
-      return { paid: false, text: [`⏳ ЧАСТКОВО ОПЛАЧЕНО: закупівля ${orderNo(s.id)}, ${inv} — отримано ${num(s.paid_amount)}, залишок ${num(s.total - s.paid_amount)} грн`, ...lines].join('\n') };
+      return { paid: false, text: [`${head('⏳ ЧАСТКОВО ОПЛАЧЕНО')}${inv} — отримано ${num(s.paid_amount)}, залишок ${num(s.total - s.paid_amount)} грн`, ...(own ? [`Платник: ${ent}`] : []), ...lines].join('\n') };
     }
     if (s.pay_terms === 'postpay') {
-      return { paid: false, text: `⏳ ВІДСТРОЧКА ОПЛАТИ${s.due_date ? ` до ${ukDate(s.due_date)}` : ` ${s.pay_days} дн. від рахунку`}: закупівля ${orderNo(s.id)}, ${inv}; рахунок на ${ent}, від «${partnerName}»${overdueDays(s) ? ` — ПРОСТРОЧЕНО ${overdueDays(s)} дн.` : ''}` };
+      return { paid: false, text: `⏳ ВІДСТРОЧКА ОПЛАТИ${s.due_date ? ` до ${ukDate(s.due_date)}` : ` ${s.pay_days} дн. від рахунку`}${own ? ' — ' : `: закупівля ${orderNo(s.id)}, `}${inv}; ${payer}${overdueDays(s) ? ` — ПРОСТРОЧЕНО ${overdueDays(s)} дн.` : ''}` };
     }
-    return { paid: false, text: `⏳ ОЧІКУЄМО ОПЛАТУ: закупівля ${orderNo(s.id)}, ${inv}; рахунок на ${ent}, від «${partnerName}»` };
+    return { paid: false, text: `${head('⏳ ОЧІКУЄМО ОПЛАТУ')}${inv}; ${payer}` };
   }
   async function crmComment(o, partnerName) {
     const pay = await payText(o, partnerName);
@@ -1066,10 +1073,11 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
       db.all(`SELECT product_id, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [s.id]),
       db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [s.partner_id]),
     ]);
-    const pay = await payText({ supply_id: s.id }, p?.name || '');
-    const comment = [pickup ? `${orderNo(s.id)} · САМОВИВІЗ — партнер «${p?.name || ''}» забирає зі складу · рахунок № ${s.invoice_no}\n`
-      + `Забирає: ${orders.parsePickup(s.pickup_by) ? orders.pickupTxt(orders.parsePickup(s.pickup_by)) : 'ще не вказано — уточніть у партнера'}` : `${orderNo(s.id)} · закупівля B2B на склад партнера «${p?.name || ''}»`,
-      pay.text, s.comment || ''].filter(Boolean).join('\n');
+    // Коментар для складу: що це, хто забирає, оплата (рахунок, ВН, платник) — без повторів.
+    const pay = await payText({ supply_id: s.id }, p?.name || '', { own: true });
+    const comment = [pickup ? `${orderNo(s.id)} · САМОВИВІЗ · партнер «${p?.name || ''}»\n`
+      + `Забирає: ${orders.parsePickup(s.pickup_by) ? orders.pickupTxt(orders.parsePickup(s.pickup_by)) : 'ще не вказано — уточніть у партнера'}` : `${orderNo(s.id)} · B2B на склад партнера «${p?.name || ''}»`,
+      pay.text, s.comment ? `Коментар партнера: ${s.comment}` : ''].filter(Boolean).join('\n');
     const undo = () => db.run(`UPDATE b2b_orders SET crm_ext = '', crm_sent_at = '' WHERE id = ?`, [s.id]);
     let res;
     try {
