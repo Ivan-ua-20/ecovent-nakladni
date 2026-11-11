@@ -11,15 +11,17 @@ const INVOICED = `kind = 'supply' AND invoice_no != '' AND status NOT IN ('cance
 export function mountB2bHome(app, { db, myPartner, orders }) {
   // ---------- адмін: що чекає дій (коротко, для головної сторінки) ----------
   async function attention() {
-    const [st, checks, overdue, clientsNew] = await Promise.all([
+    const [st, checks, overdue, clientsNew, delReq] = await Promise.all([
       db.all(`SELECT status, COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND status IN ('invoice_wait') GROUP BY status`),
       db.get(`SELECT COUNT(*) AS n FROM b2b_payments WHERE order_id IS NULL AND dismissed = 0 AND candidates != '[]'`),
       db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(total - paid_amount), 0) AS sum FROM b2b_orders WHERE kind = 'supply' AND status IN ${DEBT} AND due_date != '' AND due_date < ?`, [today()]),
       db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE kind = 'client' AND status = 'new'`),
+      db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND COALESCE(delivery_req, '') != '' AND status IN ('invoice_wait', 'pay_wait', 'partial', 'paid') AND COALESCE(crm_id, '') = '' AND COALESCE(crm_ext, '') = ''`),
     ]);
     const n = (s) => st.find((r) => r.status === s)?.n || 0;
     return [
       { key: 'b2b_invoice', level: 'warn', count: n('invoice_wait'), label: 'Закупівлі партнерів чекають рахунку', link: '#/b2borders' },
+      { key: 'b2b_delivery_req', level: 'warn', count: delReq?.n || 0, label: 'Партнери просять змінити спосіб отримання закупівлі', link: '#/b2borders' },
       { key: 'b2b_clients', level: 'warn', count: clientsNew?.n || 0, label: 'Замовлення клієнтів партнерів не передані в CRM', link: '#/b2bclients' },
       { key: 'b2b_paycheck', level: 'warn', count: checks?.n || 0, label: 'Платежі B2B: перевірити, в яку закупівлю зарахувати', link: '#/payments' },
       { key: 'b2b_overdue', level: 'bad', count: overdue?.n || 0, label: `Прострочена оплата закупівель${overdue?.n ? ` на ${round2(overdue.sum).toLocaleString('uk-UA')} грн` : ''}`, link: '#/b2bpartners' },

@@ -482,6 +482,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       debt: await debtOf(p.id),
       paused: p.paused ? { note: p.pause_note || '' } : null,
       pickup_last: parsePickup(p.pickup_last), // хто забирав минулого разу — підказка у формі самовивозу
+      warehouse: { name: p.wh_name || '', phone: p.wh_phone || '', address: p.wh_address || '' }, // склад партнера — підказка в запиті «на склад»
     });
   });
 
@@ -601,9 +602,29 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (!o) throw fail(404, 'Замовлення не знайдено.');
     return o;
   }
+  // Запит партнера на зміну способу отримання (b2b_orders.delivery_req, JSON) — чинним стає лише після підтвердження менеджера.
+  // Діє, поки закупівля в роботі й не передана в LP-CRM; інакше запит вважаємо знятим.
+  const REQ_STATUSES = ['invoice_wait', 'pay_wait', 'partial', 'paid'];
+  const deliveryReq = (o) => {
+    if (!o.delivery_req || o.kind !== 'supply' || !REQ_STATUSES.includes(o.status) || o.crm_id || o.crm_ext) return null;
+    try {
+      const x = JSON.parse(o.delivery_req);
+      if (!DELIVERY[x?.delivery]) return null;
+      return { delivery: x.delivery, delivery_name: DELIVERY[x.delivery], ship_to: x.delivery === 'warehouse' ? parseShipTo(JSON.stringify(x.ship_to || null)) : null,
+        pickup_by: x.delivery === 'pickup' ? parsePickup(x.pickup_by) : null, by: String(x.by || ''), at: String(x.at || '') };
+    } catch { return null; }
+  };
+  const deliveryLine = (delivery, ship, pk) => `${DELIVERY[delivery]}${delivery === 'warehouse' && ship ? `: ${[ship.name, ship.phone, ship.address].filter(Boolean).join(', ')}` : ''}${delivery === 'pickup' && pk ? `; забирає ${pickupTxt(pk)}` : ''}`;
+  // Чи можна зараз змінити спосіб отримання (однаково для менеджера й для запиту партнера).
+  async function deliveryGuard(o, delivery) {
+    if (o.crm_ext || o.crm_id) throw fail(400, 'Закупівлю вже передано в LP-CRM на відправку — спосіб отримання не змінити.');
+    if (delivery !== 'np' && await db.get(`SELECT id FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled' LIMIT 1`, [o.id])) {
+      throw fail(400, 'З цієї закупівлі вже є замовлення клієнтів — спершу скасуйте їх, потім ставте самовивіз або відправку на склад.');
+    }
+  }
   const publicOrder = (o) => {
     const out = { ...o, number: orderNo(o.id), status_name: ANY_STATUS[o.status] || o.status };
-    if (o.kind === 'supply') { out.delivery = deliveryOf(o.delivery); out.delivery_name = DELIVERY[out.delivery]; out.ship_to = parseShipTo(o.ship_to); out.pickup_by = parsePickup(o.pickup_by); }
+    if (o.kind === 'supply') { out.delivery = deliveryOf(o.delivery); out.delivery_name = DELIVERY[out.delivery]; out.ship_to = parseShipTo(o.ship_to); out.pickup_by = parsePickup(o.pickup_by); out.delivery_req = deliveryReq(o); }
     if (o.kind === 'supply' && ['partial', 'pay_wait'].includes(o.status)) out.due = round2(o.total - (o.paid_amount || 0));
     if (o.kind === 'supply' && o.status === 'partial') out.status_name = `Частково оплачено · ще ${uah(out.due)}`;
     if (o.kind === 'supply' && o.closed) { out.closed = true; out.status_name = `${out.status_name} · Закрито`; }
@@ -940,13 +961,71 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       ship = JSON.stringify(shipToOf(shipIn, p));
     }
     if (delivery === deliveryOf(o.delivery) && ship === (o.ship_to || '')) return c.json({ ok: true });
-    if (o.crm_ext || o.crm_id) throw fail(400, 'Закупівлю вже передано в LP-CRM на відправку — спосіб отримання не змінити.');
-    if (delivery !== 'np' && await db.get(`SELECT id FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled' LIMIT 1`, [o.id])) {
-      throw fail(400, 'З цієї закупівлі вже є замовлення клієнтів — спершу скасуйте їх, потім ставте самовивіз або відправку на склад.');
-    }
-    await db.run(`UPDATE b2b_orders SET delivery = ?, ship_to = ?, updated_at = ? WHERE id = ?`, [delivery, delivery === 'warehouse' ? ship : '', nowIso(), o.id]);
-    await log(o.id, c.get('user'), `спосіб отримання: «${DELIVERY[delivery]}» (змінив менеджер)`);
+    await deliveryGuard(o, delivery);
+    const hadReq = Boolean(deliveryReq(o));
+    await db.run(`UPDATE b2b_orders SET delivery = ?, ship_to = ?, delivery_req = '', updated_at = ? WHERE id = ?`, [delivery, delivery === 'warehouse' ? ship : '', nowIso(), o.id]);
+    await log(o.id, c.get('user'), `спосіб отримання: «${DELIVERY[delivery]}» (змінив менеджер)${hadReq ? '; запит партнера на зміну знято' : ''}`);
     await tgPartner(o.partner_id, `🔁 Закупівля ${orderNo(o.id)}: спосіб отримання змінено на «${DELIVERY[delivery]}».\n${link(c, `porders/${o.id}`)}`);
+    return c.json({ ok: true });
+  });
+
+  // Партнер просить змінити спосіб отримання (після рахунку сам уже не змінить): запит зберігаємо, закупівля лишається як була,
+  // доки менеджер не підтвердить. Самовивіз — одразу хто забирає; на склад — отримувач, телефон, відділення.
+  app.post('/api/b2b/p/orders/:id/delivery-request', async (c) => {
+    const p = await myPartner(c);
+    if (!can(c.get('user'), 'b2b.order')) throw fail(403, 'Недостатньо прав.');
+    const o = await orderOf(c.req.param('id'), p.id);
+    if (o.kind !== 'supply') throw fail(404, 'Замовлення не знайдено.');
+    if (o.status === 'draft') throw fail(400, 'Це чернетка — спосіб отримання змініть через «Змінити».');
+    if (!REQ_STATUSES.includes(o.status)) throw fail(400, 'У цьому статусі спосіб отримання вже не змінити — напишіть менеджеру.');
+    const b = await c.req.json();
+    const delivery = DELIVERY[b.delivery] ? b.delivery : '';
+    if (!delivery) throw fail(400, 'Оберіть спосіб отримання.');
+    const cur = deliveryOf(o.delivery);
+    const ship = delivery === 'warehouse' ? shipToOf(b.ship_to, p) : null;
+    if (delivery === cur && (delivery !== 'warehouse' || JSON.stringify(ship) === JSON.stringify(parseShipTo(o.ship_to)))) throw fail(400, 'Цей спосіб отримання вже встановлено.');
+    await deliveryGuard(o, delivery);
+    const pk = delivery === 'pickup' ? await resolvePickup(p.id, b.pickup_by, c.get('user')) : null;
+    const req = { delivery, ship_to: ship, pickup_by: pk, by: userName(c.get('user')), at: nowIso() };
+    await db.run(`UPDATE b2b_orders SET delivery_req = ?, updated_at = ? WHERE id = ?`, [JSON.stringify(req), nowIso(), o.id]);
+    await log(o.id, c.get('user'), `запит на зміну способу отримання: «${deliveryLine(delivery, ship, pk)}» — чекає підтвердження менеджера`);
+    await tgAdmins(`🔁 <b>Запит на зміну способу отримання</b> — закупівля ${orderNo(o.id)} («${h(p.name)}»)\nЗараз: ${h(DELIVERY[cur])}\nПросить: <b>${h(deliveryLine(delivery, ship, pk))}</b>\nПідтвердіть або відхиліть:\n${link(c, `b2borders/${o.id}`)}`);
+    return c.json({ ok: true });
+  });
+  app.delete('/api/b2b/p/orders/:id/delivery-request', async (c) => {
+    const p = await myPartner(c);
+    if (!can(c.get('user'), 'b2b.order')) throw fail(403, 'Недостатньо прав.');
+    const o = await orderOf(c.req.param('id'), p.id);
+    if (!deliveryReq(o)) return c.json({ ok: true });
+    await db.run(`UPDATE b2b_orders SET delivery_req = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+    await log(o.id, c.get('user'), 'запит на зміну способу отримання відкликано');
+    await tgAdmins(`↩️ Партнер «${h(p.name)}» відкликав запит на зміну способу отримання — закупівля ${orderNo(o.id)}.`);
+    return c.json({ ok: true });
+  });
+  // Менеджер підтверджує (зміна набирає чинності) або відхиляє запит партнера (з необов'язковим коментарем).
+  app.post('/api/b2b/orders/:id/delivery-request', async (c) => {
+    need(c, 'b2b.admin');
+    const o = await orderOf(c.req.param('id'));
+    const req = deliveryReq(o);
+    if (!req) throw fail(400, 'Запиту на зміну способу отримання немає — можливо, партнер його відкликав.');
+    const b = await c.req.json().catch(() => ({}));
+    const note = String(b.note ?? '').trim().slice(0, 300);
+    const now = nowIso();
+    if (!b.ok) {
+      await db.run(`UPDATE b2b_orders SET delivery_req = '', updated_at = ? WHERE id = ?`, [now, o.id]);
+      await log(o.id, c.get('user'), `запит на зміну способу отримання відхилено${note ? `: ${note}` : ''}`);
+      await tgPartner(o.partner_id, `✖️ Закупівля ${orderNo(o.id)}: запит на зміну способу отримання на «${h(req.delivery_name)}» відхилено — лишається «${h(DELIVERY[deliveryOf(o.delivery)])}».${note ? `\n💬 ${h(note)}` : ''}\n${link(c, `porders/${o.id}`)}`);
+      return c.json({ ok: true });
+    }
+    await deliveryGuard(o, req.delivery);
+    const ship = req.delivery === 'warehouse' ? shipToOf(req.ship_to, null) : null;
+    await db.batch([
+      [`UPDATE b2b_orders SET delivery = ?, ship_to = ?, delivery_req = '', updated_at = ? WHERE id = ?`, [req.delivery, ship ? JSON.stringify(ship) : '', now, o.id]],
+      ...(req.pickup_by ? [[`UPDATE b2b_orders SET pickup_by = ? WHERE id = ?`, [JSON.stringify(req.pickup_by), o.id]], [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(req.pickup_by), o.partner_id]]] : []),
+      ...(ship ? [[`UPDATE b2b_partners SET wh_name = ?, wh_phone = ?, wh_address = ? WHERE id = ?`, [ship.name, ship.phone, ship.address, o.partner_id]]] : []),
+    ]);
+    await log(o.id, c.get('user'), `спосіб отримання: «${deliveryLine(req.delivery, ship, req.pickup_by)}» (запит партнера підтверджено)`);
+    await tgPartner(o.partner_id, `✅ Закупівля ${orderNo(o.id)}: зміну способу отримання підтверджено — тепер «${h(deliveryLine(req.delivery, ship, req.pickup_by))}».\n${link(c, `porders/${o.id}`)}`);
     return c.json({ ok: true });
   });
 

@@ -140,15 +140,15 @@ export function askNote(title, text, { verb = 'Зберегти', placeholder = 
 // Скасування менеджером: підтвердження з необов'язковим коментарем для партнера (піде в сповіщення й на сторінку замовлення).
 // null — передумали; рядок (може бути порожній) — скасувати.
 const CANCEL_REASONS = ['Немає в наявності', 'Дубль замовлення', 'Клієнт відмовився', 'Помилка в даних доставки', 'Не оплачено вчасно'];
-export function askCancel(title, text) {
+export function askCancel(title, text, { verb = 'Скасувати замовлення', keep = 'Не скасовувати', reasons = CANCEL_REASONS } = {}) {
   return new Promise((resolve) => {
     let done = false;
     const m = modal(title, `<div class="form-stack"><p style="margin:0">${text}</p>
         <label class="f"><span>Коментар для партнера <span class="muted" style="font-weight:400">— необов'язково</span></span>
           <textarea id="acTxt" rows="3" maxlength="500" placeholder="Напр.: товару немає на складі, привеземо 15.11 — оформіть, будь ласка, знову"></textarea></label>
-        <div class="ac-reasons" role="group" aria-label="Швидкі причини">${CANCEL_REASONS.map((r) => `<button type="button" class="chip" data-acr="${esc(r)}">${esc(r)}</button>`).join('')}</div>
+        <div class="ac-reasons" role="group" aria-label="Швидкі причини">${reasons.map((r) => `<button type="button" class="chip" data-acr="${esc(r)}">${esc(r)}</button>`).join('')}</div>
         <div class="small muted">Партнер побачить коментар у сповіщенні й на сторінці замовлення.</div></div>`, {
-      footer: `<button class="btn" data-close>Не скасовувати</button><button class="btn danger solid" id="acOk">Скасувати замовлення</button>`,
+      footer: `<button class="btn" data-close>${esc(keep)}</button><button class="btn danger solid" id="acOk">${esc(verb)}</button>`,
       focus: '#acTxt',
     });
     const ta = $('#acTxt', m.el);
@@ -163,6 +163,57 @@ export function askCancel(title, text) {
 }
 // Плашка на сторінці скасованого замовлення: хто скасував і чому.
 export const cancelNote = (o) => (o.status === 'cancelled' && o.cancel_note ? `<div class="alert bad small ac-note"><b>Скасовано менеджером:</b> ${esc(o.cancel_note)}</div>` : '');
+// ---------- зміна способу отримання закупівлі: партнер просить, менеджер підтверджує ----------
+export const DELIVERY_OPTS = [
+  ['np', '📦 Відправка клієнтам', 'Розписуєте закупівлю на замовлення своїх клієнтів — відправляємо Новою поштою.'],
+  ['pickup', '🚗 Самовивіз', 'Усю закупівлю забираєте зі складу самі.'],
+  ['warehouse', '🏬 На ваш склад', 'Усю закупівлю відправляємо Новою поштою на ваш склад.'],
+];
+// Що саме просять: спосіб + склад або хто забирає.
+export const deliveryReqText = (r) => `<b>${esc(r.delivery_name)}</b>${r.ship_to ? ` — ${esc([r.ship_to.name, r.ship_to.phone, r.ship_to.address].filter(Boolean).join(', '))}` : ''}${r.pickup_by ? ` — забирає ${pickupLine(r.pickup_by)}` : ''}`;
+// Вікно партнера «Змінити спосіб отримання». Повертає { delivery, ship_to?, pickup_by? } або null.
+// blocked — є замовлення клієнтів із цієї закупівлі: самовивіз і «на склад» недоступні.
+export function askDeliveryChange(o, { couriers = [], warehouse = null, pickupLast = null, blocked = false } = {}) {
+  return new Promise((resolve) => {
+    let done = false;
+    const first = DELIVERY_OPTS.find(([k]) => k !== o.delivery && !(blocked && k !== 'np'))?.[0] || '';
+    const wh = o.ship_to || warehouse || {};
+    const m = modal('Змінити спосіб отримання', `<div class="form-stack">
+        <div class="small">Зараз: <b>${esc(o.delivery_name || '')}</b>. Зміна набере чинності після підтвердження менеджера — ми сповістимо вас у Telegram.</div>
+        <div class="dr-opts" role="radiogroup" aria-label="Новий спосіб отримання">${DELIVERY_OPTS.map(([k, t, d]) => {
+          const off = k === o.delivery || (blocked && k !== 'np');
+          return `<label class="dr-opt ${off ? 'off' : ''}"><input type="radio" name="drDel" value="${k}" ${k === first ? 'checked' : ''} ${off ? 'disabled' : ''}>
+            <span><b>${t}</b>${k === o.delivery ? ' <span class="badge">зараз</span>' : ''}<span class="small muted dr-hint">${off && k !== o.delivery ? 'Недоступно: з цієї закупівлі вже є замовлення клієнтів — спершу скасуйте їх.' : d}</span></span></label>`;
+        }).join('')}</div>
+        <div id="drPick" class="form-stack" hidden>${pickupFields(o.pickup_by || (couriers.length ? null : pickupLast), 'drPk', couriers)}</div>
+        <div id="drWh" class="form-stack" style="gap:8px" hidden>
+          <label class="f"><span>Отримувач (ПІБ)</span><input id="drWhName" value="${esc(wh.name || '')}" autocomplete="off"></label>
+          <div class="grid2"><label class="f"><span>Телефон</span><input id="drWhPhone" value="${esc(wh.phone || '')}" inputmode="tel" placeholder="067 123 45 67" autocomplete="off"></label>
+            <label class="f"><span>Місто й відділення Нової пошти</span><input id="drWhAddr" value="${esc(wh.address || '')}" placeholder="Київ, відділення №25" autocomplete="off"></label></div>
+        </div></div>`, {
+      footer: `<button class="btn" data-close>Скасувати</button><button class="btn primary" id="drOk" ${first ? '' : 'disabled'}>Надіслати на підтвердження</button>`,
+    });
+    const cur = () => $('input[name="drDel"]:checked', m.el)?.value || '';
+    const sync = () => { $('#drPick', m.el).hidden = cur() !== 'pickup'; $('#drWh', m.el).hidden = cur() !== 'warehouse'; };
+    $$('input[name="drDel"]', m.el).forEach((r) => (r.onchange = sync));
+    wirePickupFields(m.el, 'drPk'); sync();
+    $('#drOk', m.el).onclick = () => {
+      const delivery = cur();
+      if (!delivery) return;
+      const v = { delivery };
+      if (delivery === 'pickup') {
+        v.pickup_by = pickupRead(m.el, 'drPk');
+        if (!v.pickup_by.courier_id && (v.pickup_by.name.length < 3 || v.pickup_by.phone.replace(/\D/g, '').length < 10)) { toast('Самовивіз: вкажіть, хто забирає — оберіть кур’єра або впишіть ПІБ і телефон', true); return; }
+      }
+      if (delivery === 'warehouse') {
+        v.ship_to = { name: $('#drWhName', m.el).value.trim(), phone: $('#drWhPhone', m.el).value.trim(), address: $('#drWhAddr', m.el).value.trim() };
+        if (!v.ship_to.name || !v.ship_to.address || v.ship_to.phone.replace(/\D/g, '').length < 10) { toast('Склад: вкажіть отримувача, телефон і відділення Нової пошти', true); return; }
+      }
+      done = true; m.close(); resolve(v);
+    };
+    new MutationObserver((_, obs) => { if (!document.contains(m.el)) { obs.disconnect(); if (!done) resolve(null); } }).observe(document.body, { childList: true });
+  });
+}
 export const PAID_NOTE_HINT = 'Напр.: гарантійна заміна — товар повернуто, відправка з нашого складу; взаємозалік; оплата готівкою.';
 
 // ---------- самовивіз: хто забирає зі складу ----------

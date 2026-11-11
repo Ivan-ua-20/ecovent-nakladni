@@ -4,7 +4,7 @@ import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
 import { viewAdminSupplyForm } from './b2b-supply.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard, urgentBadge, urgentRow, askCancel, cancelNote } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard, urgentBadge, urgentRow, askCancel, cancelNote, deliveryReqText } from './b2b-shared.js';
 
 const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
 
@@ -825,7 +825,7 @@ export function createB2bPages(ctx = {}) {
       ${rows.length ? `<table class="list"><thead><tr>${selHead()}<th>№</th><th>Партнер</th><th class="hide-m">Дата</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Рахунок</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click" data-o="${o.id}">
           ${selCell(o.id)}
-          <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? '<div><span class="badge info">🚗 самовивіз</span></div>' : o.delivery === 'warehouse' ? `<div><span class="badge info">🏬 на склад${o.crm_id || o.crm_ext ? ' · в LP-CRM' : ''}</span></div>` : ''}</td>
+          <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? '<div><span class="badge info">🚗 самовивіз</span></div>' : o.delivery === 'warehouse' ? `<div><span class="badge info">🏬 на склад${o.crm_id || o.crm_ext ? ' · в LP-CRM' : ''}</span></div>` : ''}${o.delivery_req ? '<div><span class="badge warn">🔁 просить змінити отримання</span></div>' : ''}</td>
           <td>${esc(o.partner)}<div class="small muted">${esc(o.status === 'confirm' ? 'юрособу обере партнер' : o.entity.split('\n')[0].split(',')[0])}</div></td>
           <td class="small hide-m">${esc(fmtDateTime(o.created_at))}</td>
           <td class="r"><b>${uah(o.total)}</b></td>
@@ -900,6 +900,9 @@ export function createB2bPages(ctx = {}) {
     main.innerHTML = `
       <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2borders">← До списку</a>${o.status === 'draft' ? '<button class="btn primary" id="oSendDraft">Відправити закупівлю</button>' : ''}${o.status === 'open' ? '<button class="btn primary" id="oForm">🧾 Сформувати закупівлю</button>' : ''}${['pay_wait', 'partial', 'paid', 'done'].includes(o.status) && !ro() ? '<button class="btn" id="oClaim">🛠 Брак / обмін</button>' : ''}${closed ? '' : '<button class="btn" id="oEdit">✏️ Змінити</button>'}<button class="btn danger" id="oDel">Видалити</button></div></div>
       ${cancelNote(o)}
+      ${o.delivery_req ? `<div class="alert warn dr-req"><div>🔁 <b>Партнер просить змінити спосіб отримання:</b> ${deliveryReqText(o.delivery_req)}.
+          <div class="small">Зараз: «${esc(o.delivery_name || '')}». Запит: ${esc(o.delivery_req.by)}${o.delivery_req.at ? `, ${esc(fmtDateTime(o.delivery_req.at))}` : ''}. Зміна набере чинності лише після підтвердження.</div></div>
+        ${ro() ? '' : '<div class="btn-row"><button class="btn primary" id="oDrOk">✅ Підтвердити зміну</button><button class="btn danger" id="oDrNo">Відхилити</button></div>'}</div>` : ''}
       ${o.reinvoice ? `<div class="alert warn" style="margin-bottom:12px"><b>Закупівлю змінено після рахунку</b> — потрібно переробити рахунок № ${esc(o.reinvoice)}. Запит надіслано в «Фінансові питання»; новий рахунок замінить старий файл і піде в групу партнера.${o.paid_amount ? ` Уже оплачено: ${uah(o.paid_amount)}.` : ''}</div>` : ''}
       ${o.status === 'open' ? '<div class="alert info" style="margin-bottom:12px"><b>Відкрита закупівля</b> — сюди автоматично складаються замовлення клієнтів партнера без закупівлі. Сформуйте її («🧾 Сформувати закупівлю»): оберіть юрособу партнера й оплату — вона стане звичайною закупівлею «Очікує рахунок», а наступні замовлення без закупівлі підуть у нову відкриту.</div>' : ''}
       ${o.status === 'confirm' ? '<div class="alert warn" style="margin-bottom:12px"><b>Чекає підтвердження партнера</b> — закупівлю створили ми; партнер отримав її в кабінеті й у Telegram. Після підтвердження він обере юрособу, і в «Фінансові питання» піде запит рахунку. Склад ще можна змінити («✏️ Змінити»).</div>' : ''}
@@ -1041,6 +1044,16 @@ export function createB2bPages(ctx = {}) {
     const setDelivery = async (delivery, ship_to) => {
       try { await api('POST', `/api/b2b/orders/${o.id}/delivery`, { delivery, ship_to }); toast('Спосіб отримання змінено — партнеру надіслано повідомлення'); viewOrder(o.id); }
       catch (er) { toast(er.message, true); if ($('#oDeliv')) $('#oDeliv').value = o.delivery; }
+    };
+    if ($('#oDrOk')) $('#oDrOk').onclick = async (e) => {
+      e.currentTarget.disabled = true;
+      try { await api('POST', `/api/b2b/orders/${o.id}/delivery-request`, { ok: true }); toast('Зміну підтверджено — партнеру надіслано повідомлення'); } catch (er) { toast(er.message, true); }
+      viewOrder(o.id);
+    };
+    if ($('#oDrNo')) $('#oDrNo').onclick = async () => {
+      const note = await askCancel(`Відхилити запит партнера — ${o.number}?`, `Спосіб отримання лишиться «${esc(o.delivery_name || '')}». Партнер отримає сповіщення.`, { verb: 'Відхилити запит', keep: 'Не відхиляти', reasons: ['Закупівлю вже зібрано на відправку', 'Немає можливості видати зі складу', 'Уточніть дані отримувача'] });
+      if (note === null) return;
+      try { await api('POST', `/api/b2b/orders/${o.id}/delivery-request`, { ok: false, note }); toast('Запит відхилено — партнеру надіслано повідомлення'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
     };
     if ($('#oDeliv')) $('#oDeliv').onchange = async (e) => {
       if (e.target.value !== 'warehouse') return setDelivery(e.target.value);

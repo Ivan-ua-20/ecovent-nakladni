@@ -860,3 +860,10 @@ tr.ps-on > td { background: #f0faf7; }
 .ac-reasons { display: flex; flex-wrap: wrap; gap: 6px; }
 .ac-reasons .chip { font-size: 13px; }
 .ac-note { margin-bottom: 12px; white-space: pre-line; }
+.dr-opts { display: grid; gap: 8px; }
+.dr-opt { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.dr-opt:has(input:checked) { border-color: var(--brand); background: var(--brand-soft, rgba(15, 118, 110, .06)); }
+.dr-opt.off { opacity: .55; cursor: not-allowed; }
+.dr-opt input { margin-top: 3px; }
+.dr-hint { display: block; margin-top: 2px; }
+.dr-req { margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; }
