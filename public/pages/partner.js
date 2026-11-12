@@ -154,13 +154,12 @@ export function createPartnerPages(ctx = {}) {
         ${fpGroup('Бренди · ваша знижка', `${brands.length > 1 ? fpBtn('<span>Усі бренди</span>', !filter.brand, 'data-br=""') : ''}
           ${brands.map((b) => fpBtn(`<span>${esc(b.name)}</span><span class="small">−${pct(b.margin)}</span>`, String(filter.brand) === String(b.id) || brands.length === 1, `data-br="${b.id}"`)).join('')}`)}
         <div id="pcCats"></div>
-        ${fpGroup('Показати', Object.entries(SHOWS).map(([k, [label]]) => fpBtn(`<span>${label}</span>`, filter.show === k, `data-show="${k}"`)).join(''))}
-        <button type="button" class="btn" id="pcXlsx">⬇ Excel</button>`;
+        ${fpGroup('Показати', Object.entries(SHOWS).map(([k, [label]]) => fpBtn(`<span>${label}</span>`, filter.show === k, `data-show="${k}"`)).join(''))}`;
     const body = `<div id="pcFeeds"></div>
         <div class="head-row" style="margin:0"><span class="small muted" id="pcCount"></span><span class="small muted">Ціни з ПДВ. «Ваша ціна» = РРЦ − ваша знижка на бренд.</span></div>
         <div id="pcList"></div>`;
     main.innerHTML = `
-      <div class="head-row"><h2>Каталог — ${esc(partner.name)}</h2><div class="btn-row">${products.length && canEdit() ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div></div>
+      <div class="head-row"><h2>Каталог — ${esc(partner.name)}</h2><div class="btn-row">${products.length ? '<button type="button" class="btn" id="pcXlsx">⬇ Excel — мої ціни</button>' : ''}${products.length && canEdit() ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : ''}</div></div>
       ${products.length ? fpLayout(aside, body, { summary: `${products.length} товарів` })
         : '<div id="pcFeeds"></div><div class="card empty"><div class="big">Каталог ще порожній</div>Ваш менеджер ще не відкрив вам бренди. Зверніться до нього — після цього товари з’являться тут.</div>'}`;
     wireFp();
@@ -178,26 +177,39 @@ export function createPartnerPages(ctx = {}) {
     $('#pcQ').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { filter.q = e.target.value.trim(); saveFilter(); draw(); }, 200); };
     $('#pcSort').onchange = (e) => { filter.sort = e.target.value; saveFilter(); draw(); };
     $$('[data-show]').forEach((b) => (b.onclick = () => { filter.show = b.dataset.show; saveFilter(); draw(); }));
-    // Excel: кожна категорія — окремий аркуш; назва, артикул, бренд, РРЦ, ваша ціна, знижка (маржа) від РРЦ у %.
-    $('#pcXlsx').onclick = () => {
-      const byCat = new Map();
+    // Excel-книга з вашими цінами: аркуш на кожен бренд (за замовчуванням) або на кожну категорію.
+    // Колонки: товар, артикул, бренд/категорія, РРЦ, ваша ціна, знижка від РРЦ у %, (ціна на ваш склад — якщо інша).
+    const xlsxBook = (by) => {
+      const groups = new Map();
       for (const p of products) {
-        const k = String(p.cat);
-        if (!byCat.has(k)) byCat.set(k, []);
-        byCat.get(k).push(p);
+        const k = by === 'brand' ? String(p.brand || 'Інші') : String(p.cat);
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(p);
       }
-      const cols = [{ title: 'Товар', width: 60 }, { title: 'Артикул', width: 18 }, { title: 'Бренд', width: 16 },
-        { title: 'РРЦ, грн', width: 13, fmt: 'money' }, { title: hasWh ? 'Ціна з відправкою клієнтам, грн' : 'Ваша ціна, грн', width: 15, fmt: 'money' }, { title: 'Маржа від РРЦ', width: 14, fmt: 'pct' },
+      const catOf = (p) => catName.get(String(p.cat)) || 'Інше';
+      const cols = [{ title: 'Товар', width: 60 }, { title: 'Артикул', width: 18 }, by === 'brand' ? { title: 'Категорія', width: 28 } : { title: 'Бренд', width: 16 },
+        { title: 'РРЦ, грн', width: 13, fmt: 'money' }, { title: hasWh ? 'Ціна з відправкою клієнтам, грн' : 'Ваша ціна, грн', width: 15, fmt: 'money' }, { title: 'Знижка від РРЦ', width: 14, fmt: 'pct' },
         ...(hasWh ? [{ title: 'Закупівля на ваш склад, грн', width: 16, fmt: 'money' }] : [])];
-      const sheets = [...byCat].map(([k, list]) => ({
-        name: catName.get(k) || 'Інше',
+      const sheets = [...groups].map(([k, list]) => ({
+        name: by === 'brand' ? k : (catName.get(k) || 'Інше'),
         cols,
-        rows: [...list].sort((a, b) => a.brand.localeCompare(b.brand, 'uk') || a.name.localeCompare(b.name, 'uk'))
-          .map((p) => [p.name, p.article || '', p.brand, Number(p.rrp), Number(p.price), Math.round((p.rrp ? ((p.rrp - p.price) / p.rrp) * 100 : 0) * 100) / 100, ...(hasWh ? [Number(p.price_wh)] : [])]),
+        rows: [...list].sort((a, b) => (by === 'brand' ? catOf(a).localeCompare(catOf(b), 'uk') : a.brand.localeCompare(b.brand, 'uk')) || a.name.localeCompare(b.name, 'uk'))
+          .map((p) => [p.name, p.article || '', by === 'brand' ? catOf(p) : p.brand, Number(p.rrp), Number(p.price), Math.round((p.rrp ? ((p.rrp - p.price) / p.rrp) * 100 : 0) * 100) / 100, ...(hasWh ? [Number(p.price_wh)] : [])]),
       })).sort((a, b) => a.name.localeCompare(b.name, 'uk'));
-      downloadXlsx(`Каталог ${partner.name} ${new Date().toLocaleDateString('uk-UA')}.xlsx`.replace(/[\\/:*?"<>|]+/g, '_'), sheets);
+      const day = new Date().toLocaleDateString('uk-UA');
+      downloadXlsx(`Ціни ${partner.name} ${by === 'brand' ? 'за брендами' : 'за категоріями'} ${day}.xlsx`.replace(/[\\/:*?"<>|]+/g, '_'), sheets);
       toast(`Завантажено: ${products.length} товарів, ${sheets.length} ${sheets.length === 1 ? 'аркуш' : 'аркушів'}`);
     };
+    $('#pcXlsx') && ($('#pcXlsx').onclick = () => {
+      const nb = new Set(products.map((p) => p.brand)).size;
+      const nc = new Set(products.map((p) => String(p.cat))).size;
+      const m = modal('Вивантажити ціни в Excel', `<div class="form-stack">
+          <div class="small muted">Книга з вашими цінами на всі ${products.length} товарів каталогу (РРЦ, ваша ціна, знижка від РРЦ${hasWh ? ', ціна на ваш склад' : ''}).</div>
+          <label class="check"><input type="radio" name="pxBy" value="brand" checked> Аркуш на кожен бренд <span class="muted small">(${nb})</span></label>
+          <label class="check"><input type="radio" name="pxBy" value="cat"> Аркуш на кожну категорію <span class="muted small">(${nc})</span></label>
+        </div>`, { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="pxGo">⬇ Завантажити</button>' });
+      $('#pxGo', m.el).onclick = () => { const by = $('input[name="pxBy"]:checked', m.el)?.value || 'brand'; m.close(); xlsxBook(by); };
+    });
     draw();
   }
 
@@ -1046,7 +1058,7 @@ export function createPartnerPages(ctx = {}) {
         <h3>1. Каталог</h3>
         <p>У «Каталозі» — товари брендів, відкритих вам менеджером: <b>РРЦ</b> (рекомендована роздрібна ціна) і <b>ваша ціна</b> партнера. Ціни з ПДВ.
           Фільтр — за брендом і категорією, пошук — за назвою або артикулом. Сортування «Часто замовляю» показує першими товари, які ви замовляєте найчастіше (⭐).
-          Кнопка <b>«⬇ Excel»</b> вивантажує каталог: кожна категорія — окремий аркуш, з РРЦ, вашою ціною і знижкою у %.</p>
+          Кнопка <b>«⬇ Excel — мої ціни»</b> вгорі каталогу вивантажує книгу з вашими цінами: аркуш на кожен бренд (або на кожну категорію), з РРЦ, вашою ціною і знижкою у %.</p>
 
         <h3>2. Юрособи</h3>
         <p>У «Мої юрособи» додайте ФОП або ТОВ, на які виставляти рахунки: повна назва, ЄДРПОУ (8 цифр) або ІПН ФОП (10 цифр), адреса, IBAN.
