@@ -56,7 +56,7 @@ export function mountB2bNewProducts(app, { db, services, partnerPrice, brandName
     let cur = head;
     let brand = null;
     for (const r of rows) {
-      const line = `${r.brand_id !== brand ? `\n\n<b>${h(names.get(r.brand_id) || 'Інші')}</b>` : ''}\n${h(r.name)}${r.article ? ` (${h(r.article)})` : ''}\n   РРЦ ${m2(r.rrp)} · ваша ціна <b>${m2(partnerPrice(r.rrp, r.margin))}</b> грн`;
+      const line = `${r.brand_id !== brand ? `\n\n<b>${h(names.get(r.brand_id) || 'Інші')}</b>` : ''}\n${h(r.name)}${r.article ? ` (${h(r.article)})` : ''}\n   РРЦ ${m2(r.rrp)} · ваша ціна <b>${m2(partnerPrice(r.rrp, r.margin))}</b> грн${r.margin_wh != null && Number(r.margin_wh) !== Number(r.margin) ? ` · на ваш склад <b>${m2(partnerPrice(r.rrp, r.margin_wh))}</b> грн` : ''}`;
       if (cur.length + line.length > MAX_CHUNK) { parts.push(cur); cur = `${head} (продовження)`; brand = null; }
       cur += line;
       brand = r.brand_id;

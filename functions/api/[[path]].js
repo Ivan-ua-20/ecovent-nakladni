@@ -6716,7 +6716,11 @@ var limitsOf = (p) => ({
 var UNPAID = `('open', 'invoice_wait', 'pay_wait', 'partial')`;
 var DEBT = `('pay_wait', 'partial')`;
 var PM_JOIN = `LEFT JOIN b2b_product_margins pm ON pm.partner_id = m.partner_id AND pm.product_id = c.product_id AND (pm.until = '' OR pm.until >= ?)`;
-var PM_COLS = `COALESCE(pm.margin, m.margin) AS margin, pm.margin IS NOT NULL AS special, COALESCE(pm.until, '') AS special_until`;
+var PM_COLS = `COALESCE(pm.margin, m.margin) AS margin, COALESCE(pm.margin_wh, pm.margin, m.margin_wh, m.margin) AS margin_wh,
+  pm.margin IS NOT NULL AS special, COALESCE(pm.until, '') AS special_until`;
+var WH_PRICE = /* @__PURE__ */ new Set(["warehouse"]);
+var priceKind = (delivery) => WH_PRICE.has(delivery) ? "wh" : "np";
+var marginFor = (r, delivery) => priceKind(delivery) === "wh" ? r.margin_wh ?? r.margin : r.margin;
 async function graceHoursOf(db, p) {
   if (p?.price_grace_hours != null && p.price_grace_hours !== "") return Math.max(0, Number(p.price_grace_hours) || 0);
   const g = await db.get(`SELECT value FROM settings WHERE key = 'b2b_price_grace_hours'`);
@@ -6970,7 +6974,7 @@ ${e.address}` : ""}${e.iban ? `
 IBAN ${e.iban}` : ""}${e.phone ? `
 \u0422\u0435\u043B. ${e.phone}` : ""}${e.email ? `
 ${e.email}` : ""}`;
-  async function priceItems(p, items) {
+  async function priceItems(p, items, delivery = "np") {
     const want = /* @__PURE__ */ new Map();
     for (const it of Array.isArray(items) ? items : []) {
       const id = parseInt(it.product_id, 10);
@@ -6987,7 +6991,7 @@ ${e.email}` : ""}`;
       [p.id, kyivDay(), JSON.stringify([...want.keys()])]
     ));
     if (rows.length !== want.size) throw fail(400, "\u0414\u0435\u044F\u043A\u0456 \u0442\u043E\u0432\u0430\u0440\u0438 \u0431\u0456\u043B\u044C\u0448\u0435 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0456 \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443 \u043A\u0430\u0442\u0430\u043B\u043E\u0433\u0443.");
-    return rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || "", qty: want.get(r.product_id), price: partnerPrice2(r.rrp, r.margin), rrp: r.rrp }));
+    return rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || "", qty: want.get(r.product_id), price: partnerPrice2(r.rrp, marginFor(r, delivery)), rrp: r.rrp }));
   }
   const totalOf = (items) => round2(items.reduce((t, i) => t + round2(i.price * i.qty), 0));
   const itemRows = (orderId, items) => items.map((i) => [
@@ -7007,7 +7011,7 @@ ${e.email}` : ""}`;
       const add = (Array.isArray(b.items) ? b.items : []).filter((i) => Number(i.qty) > 0);
       if (!add.length) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C \u0445\u043E\u0447\u0430 \u0431 \u043E\u0434\u043D\u043E\u0433\u043E \u0442\u043E\u0432\u0430\u0440\u0443.");
       for (const i of add) sum.set(Number(i.product_id), (sum.get(Number(i.product_id)) || 0) + Math.floor(Number(i.qty)));
-      const items2 = await priceItems(p, [...sum].map(([product_id, qty]) => ({ product_id, qty })));
+      const items2 = await priceItems(p, [...sum].map(([product_id, qty]) => ({ product_id, qty })), deliveryOf(d.delivery));
       const total2 = totalOf(items2);
       await db.batch([
         [`DELETE FROM b2b_order_items WHERE order_id = ?`, [d.id]],
@@ -7020,7 +7024,9 @@ ${e.email}` : ""}`;
     }
     const draft = Boolean(b.draft) || !isHead(c);
     const e = await myEntity(p, b.entity_id);
-    const items = await priceItems(p, b.items);
+    const delivery = deliveryOf(b.delivery);
+    const ship = delivery === "warehouse" ? shipToOf(b.ship_to, p) : null;
+    const items = await priceItems(p, b.items, delivery);
     const total = totalOf(items);
     const terms = termsOf(b);
     if (terms === "postpay" && !(Number(p.postpay_days) > 0)) throw fail(403, "\u0412\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0443 \u043E\u043F\u043B\u0430\u0442\u0438 \u0432\u0430\u043C \u0449\u0435 \u043D\u0435 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u043E \u2014 \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.");
@@ -7028,7 +7034,10 @@ ${e.email}` : ""}`;
     const payDays = terms === "postpay" ? Number(p.postpay_days) : 0;
     const now = nowIso();
     const pk = deliveryOf(b.delivery) === "pickup" ? await resolvePickup(p.id, b.pickup_by, c.get("user")) : null;
-    const pkRows = (id) => pk ? [[`UPDATE b2b_orders SET pickup_by = ? WHERE id = ?`, [JSON.stringify(pk), id]], [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(pk), p.id]]] : [];
+    const pkRows = (id) => [
+      ...pk ? [[`UPDATE b2b_orders SET pickup_by = ? WHERE id = ?`, [JSON.stringify(pk), id]], [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(pk), p.id]]] : [],
+      ...ship ? [[`UPDATE b2b_orders SET ship_to = ? WHERE id = ?`, [JSON.stringify(ship), id]], [`UPDATE b2b_partners SET wh_name = ?, wh_phone = ?, wh_address = ? WHERE id = ?`, [ship.name, ship.phone, ship.address, p.id]]] : []
+    ];
     if (draft) {
       const r3 = await db.run(
         `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -7046,12 +7055,12 @@ ${e.email}` : ""}`;
       `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [p.id, e.id, entityText(e), total, String(b.comment || "").trim().slice(0, 1e3), userName2(c.get("user")), now, now, deliveryOf(b.delivery), terms, payDays]
     );
-    if (pk) await db.batch(pkRows(r.lastId));
+    if (pk || ship) await db.batch(pkRows(r.lastId));
     await db.batch([...itemRows(r.lastId, items), [
       `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
       [r.lastId, now, userName2(c.get("user")), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah3(total)}${deliveryOf(b.delivery) === "pickup" ? ` (\u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437${pk ? `, \u0437\u0430\u0431\u0438\u0440\u0430\u0454: ${pickupTxt(pk)}` : ""})` : ""}: ${itemsTxt(items)}`.slice(0, 2e3)]
     ]]);
-    const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), pay_terms: terms, pay_days: payDays, pickup_by: pk ? JSON.stringify(pk) : "" }, p, items);
+    const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), ship_to: ship ? JSON.stringify(ship) : "", pay_terms: terms, pay_days: payDays, pickup_by: pk ? JSON.stringify(pk) : "" }, p, items);
     await tgAdmins(`${full}
 
 ${link(c, `b2borders/${r.lastId}`)}`);
@@ -7284,12 +7293,16 @@ ${link(c, `porders/${open.id}`)}`);
       const x = JSON.parse(o.delivery_req);
       if (!DELIVERY[x?.delivery]) return null;
       return {
+        from: x.from === "admin" ? "admin" : "partner",
         delivery: x.delivery,
         delivery_name: DELIVERY[x.delivery],
         ship_to: x.delivery === "warehouse" ? parseShipTo(JSON.stringify(x.ship_to || null)) : null,
         pickup_by: x.delivery === "pickup" ? parsePickup(x.pickup_by) : null,
         by: String(x.by || ""),
-        at: String(x.at || "")
+        at: String(x.at || ""),
+        total_now: Number.isFinite(x.total_now) ? x.total_now : null,
+        total_new: Number.isFinite(x.total_new) ? x.total_new : null,
+        kept: Number(x.kept) || 0
       };
     } catch {
       return null;
@@ -7436,7 +7449,9 @@ ${link(c, `porders/${open.id}`)}`);
       throw fail(400, "\u0423 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0454 \u0442\u043E\u0432\u0430\u0440 \u0443 \u043A\u0456\u043B\u044C\u043A\u043E\u0445 \u0440\u044F\u0434\u043A\u0430\u0445 \u0437 \u0440\u0456\u0437\u043D\u043E\u044E \u0446\u0456\u043D\u043E\u044E \u2014 \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u0457\u0457 \u043C\u043E\u0436\u0435 \u043B\u0438\u0448\u0435 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440. \u041D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u0439\u043E\u043C\u0443, \u0449\u043E \u043F\u043E\u0442\u0440\u0456\u0431\u043D\u043E \u0437\u043C\u0456\u043D\u0438\u0442\u0438.");
     }
     const e = await myEntity(p, b.entity_id ?? o.entity_id);
-    const items = await priceItems(p, b.items);
+    const delivery = b.delivery === void 0 ? deliveryOf(o.delivery) : deliveryOf(b.delivery);
+    const ship = delivery === "warehouse" ? b.ship_to ? shipToOf(b.ship_to, p) : parseShipTo(o.ship_to) || shipToOf(null, p) : null;
+    const items = await priceItems(p, b.items, delivery);
     const total = totalOf(items);
     const terms = termsOf(b, o);
     if (terms === "postpay" && !(Number(p.postpay_days) > 0)) throw fail(403, "\u0412\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0443 \u043E\u043F\u043B\u0430\u0442\u0438 \u0432\u0430\u043C \u0449\u0435 \u043D\u0435 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u043E \u2014 \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.");
@@ -7447,18 +7462,17 @@ ${link(c, `porders/${open.id}`)}`);
     for (const r of left) {
       if (r.used > (want.get(r.product_id) || 0)) throw fail(400, `\xAB${r.name}\xBB: \u043D\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u0443\u0436\u0435 \u0440\u043E\u0437\u043F\u0438\u0441\u0430\u043D\u043E ${r.used} \u0448\u0442. \u2014 \u043C\u0435\u043D\u0448\u0435 \u0437\u043C\u0435\u043D\u0448\u0438\u0442\u0438 \u043D\u0435 \u043C\u043E\u0436\u043D\u0430.`);
     }
-    const delivery = b.delivery === void 0 ? deliveryOf(o.delivery) : deliveryOf(b.delivery);
     const wasItems = await db.all(`SELECT product_id, name, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
-    if (delivery === "pickup" && left.some((r) => r.used > 0)) throw fail(400, "\u0417 \u0446\u0456\u0454\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0432\u0436\u0435 \u0454 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u2014 \u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437 \u043D\u0435\u043C\u043E\u0436\u043B\u0438\u0432\u0438\u0439.");
-    if (delivery === "warehouse" && deliveryOf(o.delivery) !== "warehouse") throw fail(400, "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0441\u0442\u0430\u0432\u0438\u0442\u044C \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440.");
+    if (delivery !== "np" && left.some((r) => r.used > 0)) throw fail(400, `\u0417 \u0446\u0456\u0454\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0432\u0436\u0435 \u0454 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u2014 ${delivery === "pickup" ? "\u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437" : "\u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0430 \u043D\u0430 \u0432\u0430\u0448 \u0441\u043A\u043B\u0430\u0434"} \u043D\u0435\u043C\u043E\u0436\u043B\u0438\u0432${delivery === "pickup" ? "\u0438\u0439" : "\u0430"}.`);
     const pk = delivery === "pickup" ? await resolvePickup(p.id, b.pickup_by, c.get("user"), { required: !parsePickup(o.pickup_by) }) : null;
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, items),
       [
-        `UPDATE b2b_orders SET entity_id = ?, entity = ?, total = ?, comment = ?, delivery = ?, pay_terms = ?, pay_days = ?, updated_at = ? WHERE id = ?`,
-        [e.id, entityText(e), total, String(b.comment ?? o.comment ?? "").trim().slice(0, 1e3), delivery, terms, payDays, nowIso(), o.id]
-      ]
+        `UPDATE b2b_orders SET entity_id = ?, entity = ?, total = ?, comment = ?, delivery = ?, ship_to = ?, pay_terms = ?, pay_days = ?, updated_at = ? WHERE id = ?`,
+        [e.id, entityText(e), total, String(b.comment ?? o.comment ?? "").trim().slice(0, 1e3), delivery, ship ? JSON.stringify(ship) : "", terms, payDays, nowIso(), o.id]
+      ],
+      ...ship ? [[`UPDATE b2b_partners SET wh_name = ?, wh_phone = ?, wh_address = ? WHERE id = ?`, [ship.name, ship.phone, ship.address, p.id]]] : []
     ]);
     await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E ${isDraft ? "\u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E"}: ${itemsDiff(wasItems, items)} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah3(total)}`);
     if (pk) await storePickup(c, { ...o, delivery }, pk);
@@ -7565,7 +7579,19 @@ ${link(c, `b2borders/${o.id}`)}`);
         warehouse: { name: p.wh_name || "", phone: p.wh_phone || "", address: p.wh_address || "" }
       },
       brands: [...used.values()].sort((a, b) => a.name.localeCompare(b.name, "uk")),
-      products: rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || "", brand_id: r.brand_id, rrp: r.rrp, margin: r.margin, price: partnerPrice2(r.rrp, r.margin) }))
+      products: rows.map((r) => ({
+        product_id: r.product_id,
+        name: r.name,
+        article: r.article || "",
+        brand_id: r.brand_id,
+        rrp: r.rrp,
+        margin: r.margin,
+        price: partnerPrice2(r.rrp, r.margin),
+        margin_wh: r.margin_wh,
+        price_wh: partnerPrice2(r.rrp, r.margin_wh)
+      })),
+      wh_price: [...WH_PRICE]
+      // способи отримання з ціною «на склад партнера»
     });
   });
   app.post("/api/b2b/orders", async (c) => {
@@ -7574,12 +7600,12 @@ ${link(c, `b2borders/${o.id}`)}`);
     const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ? AND COALESCE(deleted_at, '') = ''`, [parseInt(b.partner_id, 10) || 0]);
     if (!p) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430.");
     if (!p.active) throw fail(400, "\u041A\u0430\u0431\u0456\u043D\u0435\u0442 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E \u2014 \u0432\u0456\u043D \u043D\u0435 \u0437\u043C\u043E\u0436\u0435 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0438 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E.");
-    const items = await priceItems(p, b.items);
+    const delivery = deliveryOf(b.delivery);
+    const items = await priceItems(p, b.items, delivery);
     const total = totalOf(items);
     const terms = b.pay_terms === "postpay" ? "postpay" : "prepay";
     const payDays = terms === "postpay" ? parseInt(b.pay_days, 10) || 0 : 0;
     if (terms === "postpay" && !(payDays >= 1 && payDays <= 90)) throw fail(400, "\u0412\u0456\u0434\u0441\u0442\u0440\u043E\u0447\u043A\u0430 \u2014 \u0432\u0456\u0434 1 \u0434\u043E 90 \u0434\u043D\u0456\u0432.");
-    const delivery = deliveryOf(b.delivery);
     const ship = delivery === "warehouse" ? shipToOf(b.ship_to, p) : null;
     const now = nowIso();
     const u = c.get("user");
@@ -7726,25 +7752,121 @@ ${link(c, `${o.kind === "client" ? "pclients" : "porders"}/${o.id}`)}`);
     }
     return status;
   }
+  async function repriceFor(o, delivery) {
+    const items = await db.all(`SELECT id, product_id, name, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
+    const k0 = priceKind(deliveryOf(o.delivery));
+    const k1 = priceKind(delivery);
+    if (k0 === k1 || !items.length) return { items, total: round2(o.total), changed: [], kept: 0 };
+    const cat = new Map((await db.all(
+      `SELECT c.product_id, ${PM_COLS} FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN}
+       WHERE m.partner_id = ? AND c.product_id IN (SELECT value FROM json_each(?))`,
+      [kyivDay(), o.partner_id, JSON.stringify([...new Set(items.map((i) => i.product_id))])]
+    )).map((r) => [r.product_id, r]));
+    const mOf = (r, k) => k === "wh" ? r.margin_wh ?? r.margin : r.margin;
+    let kept = 0;
+    const changed = [];
+    const out = items.map((i) => {
+      const r = cat.get(i.product_id);
+      if (!r || round2(i.price) !== partnerPrice2(i.rrp, mOf(r, k0))) {
+        kept++;
+        return i;
+      }
+      const price = partnerPrice2(i.rrp, mOf(r, k1));
+      if (price === round2(i.price)) return i;
+      changed.push({ name: i.name, qty: i.qty, from: i.price, to: price });
+      return { ...i, price };
+    });
+    return { items: out, total: totalOf(out), changed, kept };
+  }
+  const repriceTxt = (o, rp) => rp.changed.length ? `\u0446\u0456\u043D\u0438 \u043F\u0435\u0440\u0435\u0440\u0430\u0445\u043E\u0432\u0430\u043D\u043E (${rp.changed.length} \u043F\u043E\u0437.): ${rp.changed.slice(0, 10).map((x) => `${x.name} ${uah3(x.from)} \u2192 ${uah3(x.to)}`).join("; ")} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah3(o.total)} \u2192 ${uah3(rp.total)}${rp.kept ? `; ${rp.kept} \u043F\u043E\u0437. \u0437 \u043E\u043A\u0440\u0435\u043C\u043E\u044E \u0446\u0456\u043D\u043E\u044E \u2014 \u0431\u0435\u0437 \u0437\u043C\u0456\u043D` : ""}` : "";
+  async function applyDelivery(c, o, { delivery, ship = null, pk = null }, how) {
+    await deliveryGuard(o, delivery);
+    const rp = await repriceFor(o, delivery);
+    const invoiced = Boolean(o.invoice_no) && ["pay_wait", "partial", "paid", "done"].includes(o.status);
+    const paid = Number(o.paid_amount) || 0;
+    const moved = rp.changed.length > 0;
+    const status = moved && invoiced && paid > 0 && ["pay_wait", "partial", "paid"].includes(o.status) ? paid >= rp.total - 4e-3 ? "paid" : "partial" : o.status;
+    const now = nowIso();
+    const redo = `${o.invoice_no}${o.waybill_no ? ` (\u0456 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0443 \u2116 ${o.waybill_no})` : ""}`;
+    await db.batch([
+      [
+        `UPDATE b2b_orders SET delivery = ?, ship_to = ?, delivery_req = '', total = ?, status = ?, updated_at = ? WHERE id = ?`,
+        [delivery, ship ? JSON.stringify(ship) : "", rp.total, status, now, o.id]
+      ],
+      ...moved ? rp.items.map((i) => [`UPDATE b2b_order_items SET price = ? WHERE id = ?`, [i.price, i.id]]) : [],
+      ...moved && invoiced ? [[`UPDATE b2b_orders SET reinvoice = CASE WHEN COALESCE(reinvoice, '') = '' THEN ? ELSE reinvoice END, reinvoiced_at = ?, reinvoice_sent = '', group_done = 0 WHERE id = ?`, [redo, now, o.id]]] : [],
+      ...pk ? [[`UPDATE b2b_orders SET pickup_by = ? WHERE id = ?`, [JSON.stringify(pk), o.id]], [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(pk), o.partner_id]]] : [],
+      ...ship ? [[`UPDATE b2b_partners SET wh_name = ?, wh_phone = ?, wh_address = ? WHERE id = ?`, [ship.name, ship.phone, ship.address, o.partner_id]]] : []
+    ]);
+    const pr = repriceTxt(o, rp);
+    await log(o.id, c.get("user"), `\u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F: \xAB${deliveryLine(delivery, ship, pk)}\xBB (${how})${pr ? `; ${pr}` : ""}${moved && invoiced ? ` \xB7 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${redo} \u0442\u0440\u0435\u0431\u0430 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u0438\u0442\u0438` : ""}${status !== o.status ? ` \xB7 \u0441\u0442\u0430\u0442\u0443\u0441: ${status === "partial" ? "\xAB\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB" : "\xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB"}` : ""}`.slice(0, 1800));
+    if (moved && !invoiced && o.status === "invoice_wait") await hooks.finRequest?.(o.id, "changed").catch(() => 0);
+    return { rp, status, invoiced };
+  }
+  const moneyLine = (o, rp) => rp.changed.length ? `
+\u0421\u0443\u043C\u0430: ${uah3(o.total)} \u2192 <b>${uah3(rp.total)}</b>${rp.kept ? ` (${rp.kept} \u043F\u043E\u0437. \u0437 \u043E\u043A\u0440\u0435\u043C\u043E\u044E \u0446\u0456\u043D\u043E\u044E \u2014 \u0431\u0435\u0437 \u0437\u043C\u0456\u043D)` : ""}` : "\n\u0421\u0443\u043C\u0430 \u043D\u0435 \u0437\u043C\u0456\u043D\u044E\u0454\u0442\u044C\u0441\u044F.";
   app.post("/api/b2b/orders/:id/delivery", async (c) => {
     need(c, "b2b.admin");
     const o = await orderOf(c.req.param("id"));
     if (o.kind !== "supply" || o.status === "open") throw fail(400, "\u0421\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u2014 \u043B\u0438\u0448\u0435 \u0434\u043B\u044F \u0437\u0432\u0438\u0447\u0430\u0439\u043D\u043E\u0457 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456.");
+    if (o.status === "cancelled") throw fail(400, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.");
     const { delivery, ship_to: shipIn } = await c.req.json();
     if (!DELIVERY[delivery]) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F.");
-    let ship = o.ship_to || "";
-    if (delivery === "warehouse") {
-      const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [o.partner_id]);
-      ship = JSON.stringify(shipToOf(shipIn, p));
-    }
-    if (delivery === deliveryOf(o.delivery) && ship === (o.ship_to || "")) return c.json({ ok: true });
+    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [o.partner_id]);
+    const ship = delivery === "warehouse" ? shipToOf(shipIn, p) : null;
+    if (delivery === deliveryOf(o.delivery) && (delivery !== "warehouse" || JSON.stringify(ship) === JSON.stringify(parseShipTo(o.ship_to)))) return c.json({ ok: true });
     await deliveryGuard(o, delivery);
-    const hadReq = Boolean(deliveryReq(o));
-    await db.run(`UPDATE b2b_orders SET delivery = ?, ship_to = ?, delivery_req = '', updated_at = ? WHERE id = ?`, [delivery, delivery === "warehouse" ? ship : "", nowIso(), o.id]);
-    await log(o.id, c.get("user"), `\u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F: \xAB${DELIVERY[delivery]}\xBB (\u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440)${hadReq ? "; \u0437\u0430\u043F\u0438\u0442 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0430 \u0437\u043C\u0456\u043D\u0443 \u0437\u043D\u044F\u0442\u043E" : ""}`);
-    await tgPartner(o.partner_id, `\u{1F501} \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}: \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u0437\u043C\u0456\u043D\u0435\u043D\u043E \u043D\u0430 \xAB${DELIVERY[delivery]}\xBB.
+    const prev = deliveryReq(o);
+    if (!REQ_STATUSES.includes(o.status)) {
+      const r = await applyDelivery(c, o, { delivery, ship }, "\u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440");
+      await tgPartner(o.partner_id, `\u{1F501} \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}: \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u2014 \xAB${h3(deliveryLine(delivery, ship, null))}\xBB.${moneyLine(o, r.rp)}
 ${link(c, `porders/${o.id}`)}`);
+      return c.json({ ok: true, applied: true, total: r.rp.total });
+    }
+    const rp = await repriceFor(o, delivery);
+    const req2 = { from: "admin", delivery, ship_to: ship, by: userName2(c.get("user")), at: nowIso(), total_now: round2(o.total), total_new: rp.total, changed: rp.changed.length, kept: rp.kept };
+    await db.run(`UPDATE b2b_orders SET delivery_req = ?, updated_at = ? WHERE id = ?`, [JSON.stringify(req2), nowIso(), o.id]);
+    await log(o.id, c.get("user"), `\u0437\u0430\u043F\u0440\u043E\u043F\u043E\u043D\u043E\u0432\u0430\u043D\u043E \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u043D\u0430 \xAB${deliveryLine(delivery, ship, null)}\xBB${rp.changed.length ? ` (\u0441\u0443\u043C\u0430 ${uah3(o.total)} \u2192 ${uah3(rp.total)})` : ""} \u2014 \u0447\u0435\u043A\u0430\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430${prev && prev.from === "partner" ? "; \u0437\u0430\u043F\u0438\u0442 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0437\u043D\u044F\u0442\u043E" : ""}`);
+    const text = `\u{1F501} <b>\u0417\u043C\u0456\u043D\u0430 \u0441\u043F\u043E\u0441\u043E\u0431\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u2014 \u043F\u043E\u0442\u0440\u0456\u0431\u043D\u0435 \u0432\u0430\u0448\u0435 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F</b>
+\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}: \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u043F\u0440\u043E\u043F\u043E\u043D\u0443\u0454 \xAB<b>${h3(deliveryLine(delivery, ship, null))}</b>\xBB \u0437\u0430\u043C\u0456\u0441\u0442\u044C \xAB${h3(DELIVERY[deliveryOf(o.delivery)])}\xBB.${moneyLine(o, rp)}
+\u0414\u043E \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u0432\u0441\u0435 \u043B\u0438\u0448\u0430\u0454\u0442\u044C\u0441\u044F \u044F\u043A \u0431\u0443\u043B\u043E. \u041F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0456\u0442\u044C \u0430\u0431\u043E \u0432\u0456\u0434\u0445\u0438\u043B\u0456\u0442\u044C \u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456:
+${link(c, `porders/${o.id}`)}`;
+    await tgPartner(o.partner_id, text);
+    await tgGroup(o.partner_id, text);
+    return c.json({ ok: true, pending: true, total_new: rp.total });
+  });
+  app.delete("/api/b2b/orders/:id/delivery-request", async (c) => {
+    need(c, "b2b.admin");
+    const o = await orderOf(c.req.param("id"));
+    const req2 = deliveryReq(o);
+    if (!req2 || req2.from !== "admin") return c.json({ ok: true });
+    await db.run(`UPDATE b2b_orders SET delivery_req = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+    await log(o.id, c.get("user"), "\u043F\u0440\u043E\u043F\u043E\u0437\u0438\u0446\u0456\u044E \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u0432\u0456\u0434\u043A\u043B\u0438\u043A\u0430\u043D\u043E");
+    await tgPartner(o.partner_id, `\u21A9\uFE0F \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}: \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0432\u0456\u0434\u043A\u043B\u0438\u043A\u0430\u0432 \u043F\u0440\u043E\u043F\u043E\u0437\u0438\u0446\u0456\u044E \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u2014 \u043B\u0438\u0448\u0430\u0454\u0442\u044C\u0441\u044F \xAB${h3(DELIVERY[deliveryOf(o.delivery)])}\xBB.`);
     return c.json({ ok: true });
+  });
+  app.post("/api/b2b/p/orders/:id/delivery-request/answer", async (c) => {
+    const p = await myPartner(c);
+    if (!can(c.get("user"), "b2b.order")) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432.");
+    const o = await orderOf(c.req.param("id"), p.id);
+    const req2 = deliveryReq(o);
+    if (!req2 || req2.from !== "admin") throw fail(400, "\u041F\u0440\u043E\u043F\u043E\u0437\u0438\u0446\u0456\u0457 \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u0432\u0436\u0435 \u043D\u0435\u043C\u0430\u0454 \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443.");
+    const b = await c.req.json().catch(() => ({}));
+    const note = String(b.note ?? "").trim().slice(0, 300);
+    if (!b.ok) {
+      await db.run(`UPDATE b2b_orders SET delivery_req = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+      await log(o.id, c.get("user"), `\u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0432\u0456\u0434\u0445\u0438\u043B\u0438\u0432 \u0437\u043C\u0456\u043D\u0443 \u0441\u043F\u043E\u0441\u043E\u0431\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u043D\u0430 \xAB${req2.delivery_name}\xBB${note ? `: ${note}` : ""}`);
+      await tgAdmins(`\u2716\uFE0F \u041F\u0430\u0440\u0442\u043D\u0435\u0440 \xAB${h3(p.name)}\xBB \u0432\u0456\u0434\u0445\u0438\u043B\u0438\u0432 \u0437\u043C\u0456\u043D\u0443 \u0441\u043F\u043E\u0441\u043E\u0431\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u043D\u0430 \xAB${h3(req2.delivery_name)}\xBB \u2014 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u043B\u0438\u0448\u0430\u0454\u0442\u044C\u0441\u044F \xAB${h3(DELIVERY[deliveryOf(o.delivery)])}\xBB.${note ? `
+\u{1F4AC} ${h3(note)}` : ""}
+${link(c, `b2borders/${o.id}`)}`);
+      return c.json({ ok: true });
+    }
+    const pk = req2.delivery === "pickup" ? await resolvePickup(p.id, b.pickup_by, c.get("user")) : null;
+    const ship = req2.delivery === "warehouse" ? shipToOf(b.ship_to || req2.ship_to, p) : null;
+    const r = await applyDelivery(c, o, { delivery: req2.delivery, ship, pk }, "\u0437\u0430\u043F\u0440\u043E\u043F\u043E\u043D\u0443\u0432\u0430\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440, \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432 \u043F\u0430\u0440\u0442\u043D\u0435\u0440");
+    await tgAdmins(`\u2705 \u041F\u0430\u0440\u0442\u043D\u0435\u0440 \xAB${h3(p.name)}\xBB \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \xAB${h3(deliveryLine(req2.delivery, ship, pk))}\xBB \u2014 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}.${moneyLine(o, r.rp)}${r.rp.changed.length && r.invoiced ? "\n\u{1F501} \u0420\u0430\u0445\u0443\u043D\u043E\u043A \u0442\u0440\u0435\u0431\u0430 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u0438\u0442\u0438." : ""}
+${link(c, `b2borders/${o.id}`)}`);
+    return c.json({ ok: true, total: r.rp.total });
   });
   app.post("/api/b2b/p/orders/:id/delivery-request", async (c) => {
     const p = await myPartner(c);
@@ -7753,6 +7875,7 @@ ${link(c, `porders/${o.id}`)}`);
     if (o.kind !== "supply") throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     if (o.status === "draft") throw fail(400, "\u0426\u0435 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0430 \u2014 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u0447\u0435\u0440\u0435\u0437 \xAB\u0417\u043C\u0456\u043D\u0438\u0442\u0438\xBB.");
     if (!REQ_STATUSES.includes(o.status)) throw fail(400, "\u0423 \u0446\u044C\u043E\u043C\u0443 \u0441\u0442\u0430\u0442\u0443\u0441\u0456 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u0432\u0436\u0435 \u043D\u0435 \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u2014 \u043D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0443.");
+    if (deliveryReq(o)?.from === "admin") throw fail(400, "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0443\u0436\u0435 \u0437\u0430\u043F\u0440\u043E\u043F\u043E\u043D\u0443\u0432\u0430\u0432 \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0456\u0442\u044C \u0430\u0431\u043E \u0432\u0456\u0434\u0445\u0438\u043B\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u043F\u0440\u043E\u043F\u043E\u0437\u0438\u0446\u0456\u044E.");
     const b = await c.req.json();
     const delivery = DELIVERY[b.delivery] ? b.delivery : "";
     if (!delivery) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F.");
@@ -7761,21 +7884,23 @@ ${link(c, `porders/${o.id}`)}`);
     if (delivery === cur && (delivery !== "warehouse" || JSON.stringify(ship) === JSON.stringify(parseShipTo(o.ship_to)))) throw fail(400, "\u0426\u0435\u0439 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u0432\u0436\u0435 \u0432\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u043E.");
     await deliveryGuard(o, delivery);
     const pk = delivery === "pickup" ? await resolvePickup(p.id, b.pickup_by, c.get("user")) : null;
-    const req2 = { delivery, ship_to: ship, pickup_by: pk, by: userName2(c.get("user")), at: nowIso() };
+    const rp = await repriceFor(o, delivery);
+    const req2 = { from: "partner", delivery, ship_to: ship, pickup_by: pk, by: userName2(c.get("user")), at: nowIso(), total_now: round2(o.total), total_new: rp.total, changed: rp.changed.length, kept: rp.kept };
     await db.run(`UPDATE b2b_orders SET delivery_req = ?, updated_at = ? WHERE id = ?`, [JSON.stringify(req2), nowIso(), o.id]);
-    await log(o.id, c.get("user"), `\u0437\u0430\u043F\u0438\u0442 \u043D\u0430 \u0437\u043C\u0456\u043D\u0443 \u0441\u043F\u043E\u0441\u043E\u0431\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F: \xAB${deliveryLine(delivery, ship, pk)}\xBB \u2014 \u0447\u0435\u043A\u0430\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430`);
+    await log(o.id, c.get("user"), `\u0437\u0430\u043F\u0438\u0442 \u043D\u0430 \u0437\u043C\u0456\u043D\u0443 \u0441\u043F\u043E\u0441\u043E\u0431\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F: \xAB${deliveryLine(delivery, ship, pk)}\xBB${rp.changed.length ? ` (\u0441\u0443\u043C\u0430 ${uah3(o.total)} \u2192 ${uah3(rp.total)})` : ""} \u2014 \u0447\u0435\u043A\u0430\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430`);
     await tgAdmins(`\u{1F501} <b>\u0417\u0430\u043F\u0438\u0442 \u043D\u0430 \u0437\u043C\u0456\u043D\u0443 \u0441\u043F\u043E\u0441\u043E\u0431\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F</b> \u2014 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} (\xAB${h3(p.name)}\xBB)
 \u0417\u0430\u0440\u0430\u0437: ${h3(DELIVERY[cur])}
-\u041F\u0440\u043E\u0441\u0438\u0442\u044C: <b>${h3(deliveryLine(delivery, ship, pk))}</b>
+\u041F\u0440\u043E\u0441\u0438\u0442\u044C: <b>${h3(deliveryLine(delivery, ship, pk))}</b>${moneyLine(o, rp)}
 \u041F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0456\u0442\u044C \u0430\u0431\u043E \u0432\u0456\u0434\u0445\u0438\u043B\u0456\u0442\u044C:
 ${link(c, `b2borders/${o.id}`)}`);
-    return c.json({ ok: true });
+    return c.json({ ok: true, total_new: rp.total });
   });
   app.delete("/api/b2b/p/orders/:id/delivery-request", async (c) => {
     const p = await myPartner(c);
     if (!can(c.get("user"), "b2b.order")) throw fail(403, "\u041D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043D\u044C\u043E \u043F\u0440\u0430\u0432.");
     const o = await orderOf(c.req.param("id"), p.id);
-    if (!deliveryReq(o)) return c.json({ ok: true });
+    const req2 = deliveryReq(o);
+    if (!req2 || req2.from !== "partner") return c.json({ ok: true });
     await db.run(`UPDATE b2b_orders SET delivery_req = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
     await log(o.id, c.get("user"), "\u0437\u0430\u043F\u0438\u0442 \u043D\u0430 \u0437\u043C\u0456\u043D\u0443 \u0441\u043F\u043E\u0441\u043E\u0431\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u0432\u0456\u0434\u043A\u043B\u0438\u043A\u0430\u043D\u043E");
     await tgAdmins(`\u21A9\uFE0F \u041F\u0430\u0440\u0442\u043D\u0435\u0440 \xAB${h3(p.name)}\xBB \u0432\u0456\u0434\u043A\u043B\u0438\u043A\u0430\u0432 \u0437\u0430\u043F\u0438\u0442 \u043D\u0430 \u0437\u043C\u0456\u043D\u0443 \u0441\u043F\u043E\u0441\u043E\u0431\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u2014 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}.`);
@@ -7785,29 +7910,22 @@ ${link(c, `b2borders/${o.id}`)}`);
     need(c, "b2b.admin");
     const o = await orderOf(c.req.param("id"));
     const req2 = deliveryReq(o);
-    if (!req2) throw fail(400, "\u0417\u0430\u043F\u0438\u0442\u0443 \u043D\u0430 \u0437\u043C\u0456\u043D\u0443 \u0441\u043F\u043E\u0441\u043E\u0431\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u043D\u0435\u043C\u0430\u0454 \u2014 \u043C\u043E\u0436\u043B\u0438\u0432\u043E, \u043F\u0430\u0440\u0442\u043D\u0435\u0440 \u0439\u043E\u0433\u043E \u0432\u0456\u0434\u043A\u043B\u0438\u043A\u0430\u0432.");
+    if (!req2 || req2.from !== "partner") throw fail(400, "\u0417\u0430\u043F\u0438\u0442\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0430 \u0437\u043C\u0456\u043D\u0443 \u0441\u043F\u043E\u0441\u043E\u0431\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u043D\u0435\u043C\u0430\u0454 \u2014 \u043C\u043E\u0436\u043B\u0438\u0432\u043E, \u0439\u043E\u0433\u043E \u0432\u0456\u0434\u043A\u043B\u0438\u043A\u0430\u043B\u0438.");
     const b = await c.req.json().catch(() => ({}));
     const note = String(b.note ?? "").trim().slice(0, 300);
-    const now = nowIso();
     if (!b.ok) {
-      await db.run(`UPDATE b2b_orders SET delivery_req = '', updated_at = ? WHERE id = ?`, [now, o.id]);
+      await db.run(`UPDATE b2b_orders SET delivery_req = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
       await log(o.id, c.get("user"), `\u0437\u0430\u043F\u0438\u0442 \u043D\u0430 \u0437\u043C\u0456\u043D\u0443 \u0441\u043F\u043E\u0441\u043E\u0431\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u0432\u0456\u0434\u0445\u0438\u043B\u0435\u043D\u043E${note ? `: ${note}` : ""}`);
       await tgPartner(o.partner_id, `\u2716\uFE0F \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}: \u0437\u0430\u043F\u0438\u0442 \u043D\u0430 \u0437\u043C\u0456\u043D\u0443 \u0441\u043F\u043E\u0441\u043E\u0431\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u043D\u0430 \xAB${h3(req2.delivery_name)}\xBB \u0432\u0456\u0434\u0445\u0438\u043B\u0435\u043D\u043E \u2014 \u043B\u0438\u0448\u0430\u0454\u0442\u044C\u0441\u044F \xAB${h3(DELIVERY[deliveryOf(o.delivery)])}\xBB.${note ? `
 \u{1F4AC} ${h3(note)}` : ""}
 ${link(c, `porders/${o.id}`)}`);
       return c.json({ ok: true });
     }
-    await deliveryGuard(o, req2.delivery);
     const ship = req2.delivery === "warehouse" ? shipToOf(req2.ship_to, null) : null;
-    await db.batch([
-      [`UPDATE b2b_orders SET delivery = ?, ship_to = ?, delivery_req = '', updated_at = ? WHERE id = ?`, [req2.delivery, ship ? JSON.stringify(ship) : "", now, o.id]],
-      ...req2.pickup_by ? [[`UPDATE b2b_orders SET pickup_by = ? WHERE id = ?`, [JSON.stringify(req2.pickup_by), o.id]], [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(req2.pickup_by), o.partner_id]]] : [],
-      ...ship ? [[`UPDATE b2b_partners SET wh_name = ?, wh_phone = ?, wh_address = ? WHERE id = ?`, [ship.name, ship.phone, ship.address, o.partner_id]]] : []
-    ]);
-    await log(o.id, c.get("user"), `\u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F: \xAB${deliveryLine(req2.delivery, ship, req2.pickup_by)}\xBB (\u0437\u0430\u043F\u0438\u0442 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E)`);
-    await tgPartner(o.partner_id, `\u2705 \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}: \u0437\u043C\u0456\u043D\u0443 \u0441\u043F\u043E\u0441\u043E\u0431\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E \u2014 \u0442\u0435\u043F\u0435\u0440 \xAB${h3(deliveryLine(req2.delivery, ship, req2.pickup_by))}\xBB.
+    const r = await applyDelivery(c, o, { delivery: req2.delivery, ship, pk: req2.pickup_by }, "\u0437\u0430\u043F\u0438\u0442 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E");
+    await tgPartner(o.partner_id, `\u2705 \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}: \u0437\u043C\u0456\u043D\u0443 \u0441\u043F\u043E\u0441\u043E\u0431\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E \u2014 \u0442\u0435\u043F\u0435\u0440 \xAB${h3(deliveryLine(req2.delivery, ship, req2.pickup_by))}\xBB.${moneyLine(o, r.rp)}${r.rp.changed.length && r.invoiced ? "\n\u{1F501} \u0420\u0430\u0445\u0443\u043D\u043E\u043A \u0431\u0443\u0434\u0435 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u043B\u0435\u043D\u043E \u2014 \u043D\u043E\u0432\u0456 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0438 \u043D\u0430\u0434\u0456\u0439\u0434\u0443\u0442\u044C \u0441\u044E\u0434\u0438." : ""}
 ${link(c, `porders/${o.id}`)}`);
-    return c.json({ ok: true });
+    return c.json({ ok: true, total: r.rp.total });
   });
   app.post("/api/b2b/orders/:id/status", async (c) => {
     need(c, "b2b.admin");
@@ -9520,11 +9638,13 @@ function mountB2bPrices(app, { db, services, partnerPrice: partnerPrice2, myPart
   }
   async function changesOf(p, names) {
     const since = p.prices_sent_at || p.created_at || "";
-    const [margins, mlog] = await Promise.all([
-      db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id]),
-      db.all(`SELECT brand_id, old_margin, new_margin FROM b2b_margin_log WHERE partner_id = ? AND at > ? ORDER BY id`, [p.id, since])
+    const [margins, mlogAll] = await Promise.all([
+      db.all(`SELECT brand_id, margin, margin_wh FROM b2b_margins WHERE partner_id = ?`, [p.id]),
+      db.all(`SELECT at, brand_id, old_margin, new_margin, COALESCE(kind, '') AS kind FROM b2b_margin_log WHERE partner_id = ? AND at > ? ORDER BY id`, [p.id, since])
     ]);
+    const mlog = mlogAll.filter((r) => r.kind !== "wh");
     const cur = new Map(margins.map((m) => [m.brand_id, m.margin]));
+    const curWh = new Map(margins.map((m) => [m.brand_id, m.margin_wh]));
     const firstOld = /* @__PURE__ */ new Map();
     const firstAt = /* @__PURE__ */ new Map();
     for (const r of mlog) if (!firstOld.has(r.brand_id)) {
@@ -9545,8 +9665,18 @@ function mountB2bPrices(app, { db, services, partnerPrice: partnerPrice2, myPart
       const mc = marginChanged.find((x) => x.brand === brand);
       return mc ? mc.old : cur.get(brand);
     };
+    const whFirst = /* @__PURE__ */ new Map();
+    for (const r of mlogAll) if (r.kind === "wh" && !whFirst.has(r.brand_id)) whFirst.set(r.brand_id, r.old_margin);
+    const whChanged = [...whFirst].filter(([brand, old]) => cur.has(brand) && (old ?? null) !== (curWh.get(brand) ?? null) && !opened.some((o) => o.brand === brand)).map(([brand, old]) => ({ brand, name: names.get(brand) || "\u0406\u043D\u0448\u0456", old: old ?? null, now: curWh.get(brand) ?? null }));
+    const whOld = (brand) => {
+      const w = whChanged.find((x) => x.brand === brand);
+      const raw2 = w ? w.old : curWh.get(brand);
+      return raw2 ?? oldMargin(brand);
+    };
+    const whNow = (brand) => curWh.get(brand) ?? cur.get(brand);
+    const showWh = (brand) => curWh.get(brand) != null || whChanged.some((x) => x.brand === brand);
     const brands = [...cur.keys()];
-    if (!brands.length) return { since, opened, closed, marginChanged, products: [] };
+    if (!brands.length) return { since, opened, closed, marginChanged, whChanged, products: [] };
     const plog = await db.all(
       `SELECT l.product_id, l.old_rrp FROM b2b_price_log l JOIN b2b_catalog c ON c.product_id = l.product_id
        WHERE l.at > ? AND c.hidden = 0 AND c.brand_id IN (SELECT value FROM json_each(?)) ORDER BY l.id`,
@@ -9554,7 +9684,7 @@ function mountB2bPrices(app, { db, services, partnerPrice: partnerPrice2, myPart
     );
     const oldRrp = /* @__PURE__ */ new Map();
     for (const r of plog) if (!oldRrp.has(r.product_id)) oldRrp.set(r.product_id, r.old_rrp);
-    const mcBrands = marginChanged.map((x) => x.brand).filter((b) => !opened.some((o) => o.brand === b));
+    const mcBrands = [.../* @__PURE__ */ new Set([...marginChanged.map((x) => x.brand), ...whChanged.map((x) => x.brand)])].filter((b) => !opened.some((o) => o.brand === b));
     const rows = oldRrp.size || mcBrands.length ? await db.all(
       `SELECT product_id, name, article, rrp, brand_id FROM b2b_catalog WHERE hidden = 0 AND rrp > 0
          AND (product_id IN (SELECT value FROM json_each(?)) OR brand_id IN (SELECT value FROM json_each(?)))
@@ -9566,8 +9696,9 @@ function mountB2bPrices(app, { db, services, partnerPrice: partnerPrice2, myPart
       const o = oldRrp.has(r.product_id) ? oldRrp.get(r.product_id) : r.rrp;
       const oldPrice = partnerPrice2(o, oldMargin(r.brand_id));
       const newPrice = partnerPrice2(r.rrp, cur.get(r.brand_id));
-      if (round2(o) === round2(r.rrp) && oldPrice === newPrice) continue;
-      products.push({ id: r.product_id, name: r.name, article: r.article, brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456", oldRrp: o, newRrp: r.rrp, oldPrice, newPrice });
+      const wh = showWh(r.brand_id) ? { oldWh: partnerPrice2(o, whOld(r.brand_id)), newWh: partnerPrice2(r.rrp, whNow(r.brand_id)) } : {};
+      if (round2(o) === round2(r.rrp) && oldPrice === newPrice && wh.oldWh === wh.newWh) continue;
+      products.push({ id: r.product_id, name: r.name, article: r.article, brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456", oldRrp: o, newRrp: r.rrp, oldPrice, newPrice, ...wh });
     }
     const grace = await graceHoursOf(db, p);
     if (grace && products.some((x) => x.newPrice > x.oldPrice)) {
@@ -9580,19 +9711,22 @@ function mountB2bPrices(app, { db, services, partnerPrice: partnerPrice2, myPart
         if (x.newPrice > x.oldPrice && at && Date.parse(at) + grace * 36e5 > Date.now()) x.graceUntil = new Date(Date.parse(at) + grace * 36e5).toISOString();
       }
     }
-    return { since, opened, closed, marginChanged, products, grace };
+    return { since, opened, closed, marginChanged, whChanged, products, grace };
   }
-  const empty = (ch) => !ch.products.length && !ch.opened.length && !ch.closed.length && !ch.marginChanged.length;
+  const empty = (ch) => !ch.products.length && !ch.opened.length && !ch.closed.length && !ch.marginChanged.length && !ch.whChanged?.length;
   function messages(p, ch) {
     const head = `\u{1F4B2} <b>\u0417\u043C\u0456\u043D\u0430 \u0446\u0456\u043D</b> \u2014 \xAB${h4(p.name)}\xBB`;
     const blocks = [];
     if (ch.marginChanged.length) blocks.push(`<b>\u0412\u0430\u0448\u0430 \u0437\u043D\u0438\u0436\u043A\u0430 \u0432\u0456\u0434 \u0420\u0420\u0426:</b>
 ${ch.marginChanged.map((x) => `${h4(x.name)}: ${pct(x.old)} \u2192 <b>${pct(x.now)}</b>`).join("\n")}`);
+    if (ch.whChanged?.length) blocks.push(`<b>\u0417\u043D\u0438\u0436\u043A\u0430 \u0432\u0456\u0434 \u0420\u0420\u0426 \u043D\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 \u0432\u0430\u0448 \u0441\u043A\u043B\u0430\u0434:</b>
+${ch.whChanged.map((x) => `${h4(x.name)}: ${x.old == null ? "\u044F\u043A \u0434\u043B\u044F \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0438 \u043A\u043B\u0456\u0454\u043D\u0442\u0430\u043C" : pct(x.old)} \u2192 <b>${x.now == null ? "\u044F\u043A \u0434\u043B\u044F \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0438 \u043A\u043B\u0456\u0454\u043D\u0442\u0430\u043C" : pct(x.now)}</b>`).join("\n")}`);
     if (ch.opened.length) blocks.push(`<b>\u041D\u043E\u0432\u0456 \u0431\u0440\u0435\u043D\u0434\u0438 \u0434\u043B\u044F \u0432\u0430\u0441:</b>
 ${ch.opened.map((x) => `${h4(x.name)} \u2014 \u0437\u043D\u0438\u0436\u043A\u0430 ${pct(x.margin)} \u0432\u0456\u0434 \u0420\u0420\u0426 (\u0442\u043E\u0432\u0430\u0440\u0438 \u2014 \u0443 \u043A\u0430\u0442\u0430\u043B\u043E\u0437\u0456)`).join("\n")}`);
     if (ch.closed.length) blocks.push(`<b>\u0411\u0456\u043B\u044C\u0448\u0435 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0456:</b> ${ch.closed.map((x) => h4(x.name)).join(", ")}`);
     const lines = ch.products.map((x) => `${h4(x.name)}${x.article ? ` (${h4(x.article)})` : ""}
-   \u0420\u0420\u0426 ${m2(x.oldRrp)} \u2192 <b>${m2(x.newRrp)}</b> ${arrow(x.oldRrp, x.newRrp)} \xB7 \u0432\u0430\u0448\u0430 \u0446\u0456\u043D\u0430 ${m2(x.oldPrice)} \u2192 <b>${m2(x.newPrice)}</b> \u0433\u0440\u043D ${arrow(x.oldPrice, x.newPrice)}${x.graceUntil ? `
+   \u0420\u0420\u0426 ${m2(x.oldRrp)} \u2192 <b>${m2(x.newRrp)}</b> ${arrow(x.oldRrp, x.newRrp)} \xB7 \u0432\u0430\u0448\u0430 \u0446\u0456\u043D\u0430 ${m2(x.oldPrice)} \u2192 <b>${m2(x.newPrice)}</b> \u0433\u0440\u043D ${arrow(x.oldPrice, x.newPrice)}${x.newWh !== void 0 ? `
+   \u043D\u0430 \u0432\u0430\u0448 \u0441\u043A\u043B\u0430\u0434 ${m2(x.oldWh)} \u2192 <b>${m2(x.newWh)}</b> \u0433\u0440\u043D ${arrow(x.oldWh, x.newWh)}` : ""}${x.graceUntil ? `
    \u23F3 \u0437\u0430 \u0441\u0442\u0430\u0440\u043E\u044E \u0446\u0456\u043D\u043E\u044E \u2014 \u0434\u043E ${dt(x.graceUntil)}` : ""}`);
     if (ch.products.some((x) => x.graceUntil)) blocks.push(`\u23F3 \u041F\u0456\u0434\u0432\u0438\u0449\u0435\u043D\u0456 \u0446\u0456\u043D\u0438 \u043F\u043E\u0447\u0438\u043D\u0430\u044E\u0442\u044C \u0434\u0456\u044F\u0442\u0438 \u0447\u0435\u0440\u0435\u0437 ${ch.grace} \u0433\u043E\u0434 \u043F\u0456\u0441\u043B\u044F \u0437\u043C\u0456\u043D\u0438 \u2014 \u0434\u043E \u0442\u043E\u0433\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043F\u0440\u0438\u0439\u043C\u0430\u044E\u0442\u044C\u0441\u044F \u0437\u0430 \u0441\u0442\u0430\u0440\u0438\u043C\u0438 \u0446\u0456\u043D\u0430\u043C\u0438.`);
     const out = [];
@@ -9637,7 +9771,7 @@ ${l}`;
       name: p.name,
       since: ch.since,
       products: ch.products.length,
-      brands: ch.marginChanged.length + ch.opened.length + ch.closed.length,
+      brands: ch.marginChanged.length + (ch.whChanged?.length || 0) + ch.opened.length + ch.closed.length,
       empty: empty(ch),
       group: p.tg_group_title || (p.tg_group ? "\u0433\u0440\u0443\u043F\u0430" : ""),
       tgUsers: p.tg_users,
@@ -9673,13 +9807,13 @@ ${l}`;
     let mlog = [];
     if (partner) {
       margins = new Map((await db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [partner.id])).map((m) => [m.brand_id, m.margin]));
-      mlog = await db.all(`SELECT at, brand_id, old_margin, new_margin FROM b2b_margin_log WHERE partner_id = ? ORDER BY id`, [partner.id]);
+      mlog = await db.all(`SELECT at, brand_id, old_margin, new_margin, COALESCE(kind, '') AS kind FROM b2b_margin_log WHERE partner_id = ? ORDER BY id`, [partner.id]);
     }
     const marginAt = (brandId, at) => {
       let before = null;
       let after = null;
       for (const r of mlog) {
-        if (r.brand_id !== brandId) continue;
+        if (r.brand_id !== brandId || r.kind === "wh") continue;
         if (r.at <= at) before = r;
         else if (!after) after = r;
       }
@@ -9726,7 +9860,7 @@ ${l}`;
       }
       return x;
     });
-    const disc = partner ? mlog.filter((r) => r.at >= lo && r.at < hi && (brand === null || r.brand_id === brand) && (!search || low3(names.get(r.brand_id)).includes(search))).map((r) => ({ kind: "margin", at: r.at, brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456", brand_id: r.brand_id, old_margin: r.old_margin, new_margin: r.new_margin })) : [];
+    const disc = partner ? mlog.filter((r) => r.at >= lo && r.at < hi && (brand === null || r.brand_id === brand) && (!search || low3(names.get(r.brand_id)).includes(search))).map((r) => ({ kind: "margin", at: r.at, brand: `${names.get(r.brand_id) || "\u0406\u043D\u0448\u0456"}${r.kind === "wh" ? " \u2014 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430" : ""}`, brand_id: r.brand_id, old_margin: r.old_margin, new_margin: r.new_margin, wh: r.kind === "wh" })) : [];
     const all = [...out, ...disc].sort((a, b) => a.at < b.at ? 1 : a.at > b.at ? -1 : 0);
     const brandsList = partner ? [...margins.keys()].map((id) => ({ id, name: names.get(id) || "\u0406\u043D\u0448\u0456" })) : (await db.all(`SELECT DISTINCT brand_id FROM b2b_catalog WHERE hidden = 0`)).map((r) => ({ id: r.brand_id, name: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456" }));
     return { from, to, rows: all, more: rows.length > 1e3, brands: brandsList.sort((a, b) => a.name.localeCompare(b.name, "uk")) };
@@ -10691,21 +10825,21 @@ var userName4 = (u) => u?.name || u?.login || "";
 var firstLine = (s) => String(s || "").split("\n")[0];
 function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partnerPrice2 }) {
   const { orderOf, supplyLeft, itemRows, totalOf, log, tgPartner, tgGroup, link, uah: uah4, h: h8, rebuildOpen, getOpen, entityText } = orders;
-  const partnerCatalog = async (partnerId) => {
+  const partnerCatalog = async (partnerId, delivery = "np") => {
     const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [partnerId]);
     const rows = await withGrace(db, p, await db.all(
       `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN}
        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`,
       [kyivDay(), partnerId]
     ));
-    return rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || "", rrp: r.rrp, price: partnerPrice2(r.rrp, r.margin) }));
+    return rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || "", rrp: r.rrp, price: partnerPrice2(r.rrp, marginFor(r, delivery)) }));
   };
   hooks.partnerCatalog = partnerCatalog;
   app.get("/api/b2b/orders/:id/edit-options", async (c) => {
     need(c, "b2b.admin");
     const o = await orderOf(c.req.param("id"));
     const [catalog, entities, partner] = await Promise.all([
-      partnerCatalog(o.partner_id),
+      partnerCatalog(o.partner_id, o.delivery),
       db.all(`SELECT id, name, code FROM b2b_entities WHERE partner_id = ? AND (active = 1 OR id = ?) ORDER BY name`, [o.partner_id, o.entity_id || 0]),
       db.get(`SELECT default_entity, postpay_days FROM b2b_partners WHERE id = ?`, [o.partner_id])
     ]);
@@ -10792,7 +10926,7 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
       const r = cat.get(l.product_id);
       if (!r) throw fail(400, `\u0422\u043E\u0432\u0430\u0440\u0443 ID ${l.product_id} \u043D\u0435\u043C\u0430\u0454 \u0432 \u043A\u0430\u0442\u0430\u043B\u043E\u0437\u0456.`);
       const rrp = l.rrp ?? r.rrp;
-      return { product_id: l.product_id, name: r.name, article: r.article || "", qty: l.qty, price: l.price ?? partnerPrice2(rrp, r.margin || 0), rrp, _idx: null, _extra: l.extra };
+      return { product_id: l.product_id, name: r.name, article: r.article || "", qty: l.qty, price: l.price ?? partnerPrice2(rrp, marginFor(r, o.delivery) || 0), rrp, _idx: null, _extra: l.extra };
     });
     const merged = [];
     const mergedIdx = /* @__PURE__ */ new Set();
@@ -11028,7 +11162,7 @@ function mountB2bHome(app, { db, myPartner, orders }) {
       db.get(`SELECT COUNT(*) AS n FROM b2b_payments WHERE order_id IS NULL AND dismissed = 0 AND candidates != '[]'`),
       db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(total - paid_amount), 0) AS sum FROM b2b_orders WHERE kind = 'supply' AND status IN ${DEBT} AND due_date != '' AND due_date < ?`, [today2()]),
       db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE kind = 'client' AND status = 'new'`),
-      db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND COALESCE(delivery_req, '') != '' AND status IN ('invoice_wait', 'pay_wait', 'partial', 'paid') AND COALESCE(crm_id, '') = '' AND COALESCE(crm_ext, '') = ''`),
+      db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND COALESCE(delivery_req, '') != '' AND delivery_req NOT LIKE '%"from":"admin"%' AND status IN ('invoice_wait', 'pay_wait', 'partial', 'paid') AND COALESCE(crm_id, '') = '' AND COALESCE(crm_ext, '') = ''`),
       db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND COALESCE(reinvoice, '') != '' AND status != 'cancelled'`)
     ]);
     const n = (s) => st.find((r) => r.status === s)?.n || 0;
@@ -11232,7 +11366,7 @@ function mountB2bCrm(app, { db, services, onCleanup }) {
   app.get("/api/b2b/partners/:id/product-margins", async (c) => {
     need(c, "b2b.admin");
     const p = await partnerOf(c.req.param("id"));
-    const rows = await db.all(`SELECT pm.product_id, pm.margin, pm.until, pm.created_by, c.name, c.article, c.rrp, m.margin AS brand_margin
+    const rows = await db.all(`SELECT pm.product_id, pm.margin, pm.margin_wh, pm.until, pm.created_by, c.name, c.article, c.rrp, m.margin AS brand_margin, m.margin_wh AS brand_margin_wh
       FROM b2b_product_margins pm LEFT JOIN b2b_catalog c ON c.product_id = pm.product_id LEFT JOIN b2b_margins m ON m.partner_id = pm.partner_id AND m.brand_id = c.brand_id
       WHERE pm.partner_id = ? ORDER BY c.name`, [p.id]);
     const t = kyivDay();
@@ -11247,13 +11381,16 @@ function mountB2bCrm(app, { db, services, onCleanup }) {
     if (!prod) throw fail(400, "\u0422\u043E\u0432\u0430\u0440 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 \u043A\u0430\u0442\u0430\u043B\u043E\u0437\u0456 \u2014 \u0432\u043A\u0430\u0436\u0456\u0442\u044C ID LP-CRM \u0430\u0431\u043E \u0430\u0440\u0442\u0438\u043A\u0443\u043B.");
     const margin = Number(String(b.margin ?? "").replace(",", "."));
     if (!Number.isFinite(margin) || margin < 0 || margin > 90) throw fail(400, "\u0417\u043D\u0438\u0436\u043A\u0430 \u0432\u0456\u0434 \u0420\u0420\u0426 \u2014 \u0432\u0456\u0434 0 \u0434\u043E 90 %.");
+    const whRaw = String(b.margin_wh ?? "").trim().replace(",", ".");
+    const marginWh = whRaw === "" ? null : Number(whRaw);
+    if (marginWh !== null && !(Number.isFinite(marginWh) && marginWh >= 0 && marginWh <= 90)) throw fail(400, "\u0417\u043D\u0438\u0436\u043A\u0430 \xAB\u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430\xBB \u2014 \u0432\u0456\u0434 0 \u0434\u043E 90 % (\u0430\u0431\u043E \u043F\u043E\u0440\u043E\u0436\u043D\u044C\u043E).");
     const until = String(b.until || "").trim();
     if (until && (!/^\d{4}-\d{2}-\d{2}$/.test(until) || until < kyivDay())) throw fail(400, "\u0414\u0430\u0442\u0430 \xAB\u0434\u043E\xBB \u2014 \u0441\u044C\u043E\u0433\u043E\u0434\u043D\u0456 \u0430\u0431\u043E \u043F\u0456\u0437\u043D\u0456\u0448\u0435 (\u0430\u0431\u043E \u043F\u043E\u0440\u043E\u0436\u043D\u044C\u043E \u2014 \u043F\u043E\u0441\u0442\u0456\u0439\u043D\u043E).");
     const u = c.get("user");
     await db.run(
-      `INSERT INTO b2b_product_margins (partner_id, product_id, margin, until, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(partner_id, product_id) DO UPDATE SET margin = excluded.margin, until = excluded.until, created_by = excluded.created_by, created_at = excluded.created_at`,
-      [p.id, prod.product_id, Math.round(margin * 100) / 100, until, u.name || u.login, nowIso()]
+      `INSERT INTO b2b_product_margins (partner_id, product_id, margin, margin_wh, until, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(partner_id, product_id) DO UPDATE SET margin = excluded.margin, margin_wh = excluded.margin_wh, until = excluded.until, created_by = excluded.created_by, created_at = excluded.created_at`,
+      [p.id, prod.product_id, Math.round(margin * 100) / 100, marginWh === null ? null : Math.round(marginWh * 100) / 100, until, u.name || u.login, nowIso()]
     );
     return c.json({ ok: true, product_id: prod.product_id, name: prod.name });
   });
@@ -11357,7 +11494,7 @@ function mountB2bNewProducts(app, { db, services, partnerPrice: partnerPrice2, b
 
 <b>${h6(names.get(r.brand_id) || "\u0406\u043D\u0448\u0456")}</b>` : ""}
 ${h6(r.name)}${r.article ? ` (${h6(r.article)})` : ""}
-   \u0420\u0420\u0426 ${m23(r.rrp)} \xB7 \u0432\u0430\u0448\u0430 \u0446\u0456\u043D\u0430 <b>${m23(partnerPrice2(r.rrp, r.margin))}</b> \u0433\u0440\u043D`;
+   \u0420\u0420\u0426 ${m23(r.rrp)} \xB7 \u0432\u0430\u0448\u0430 \u0446\u0456\u043D\u0430 <b>${m23(partnerPrice2(r.rrp, r.margin))}</b> \u0433\u0440\u043D${r.margin_wh != null && Number(r.margin_wh) !== Number(r.margin) ? ` \xB7 \u043D\u0430 \u0432\u0430\u0448 \u0441\u043A\u043B\u0430\u0434 <b>${m23(partnerPrice2(r.rrp, r.margin_wh))}</b> \u0433\u0440\u043D` : ""}`;
       if (cur.length + line.length > MAX_CHUNK2) {
         parts.push(cur);
         cur = `${head} (\u043F\u0440\u043E\u0434\u043E\u0432\u0436\u0435\u043D\u043D\u044F)`;
@@ -12061,10 +12198,11 @@ function mountB2bApi(app, { db, myPartner, tgPartner, CLIENT_STATUS: CLIENT_STAT
         image: p.image || "",
         rrp: p.rrp,
         price: p.price,
+        price_warehouse: p.price_wh,
         special: p.special,
         special_until: p.special_until || null,
         is_new: p.is_new,
-        ...p.rrp_new ? { next_price: { rrp: p.rrp_new, price: p.price_new, from: p.grace_until } } : {}
+        ...p.rrp_new ? { next_price: { rrp: p.rrp_new, price: p.price_new, price_warehouse: p.price_wh_new, from: p.grace_until } } : {}
       })).sort((a, b) => a.name.localeCompare(b.name, "uk"))
     });
   });
@@ -12272,18 +12410,19 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const p = await getPartner(c.req.param("id"));
     const [users, margins, counts, names, entities] = await Promise.all([
       services.notify?.fillTgNames?.(5).catch(() => 0).then(() => db.all(`SELECT id, login, name, active, created_at, partner_role, added_by, tg_chat_id, tg_name, tg_linked_at FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY active DESC, login`, [p.id])),
-      db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id]),
+      db.all(`SELECT brand_id, margin, margin_wh FROM b2b_margins WHERE partner_id = ?`, [p.id]),
       db.all(`SELECT brand_id, COUNT(*) AS n, SUM(CASE WHEN rrp > 0 THEN 1 ELSE 0 END) AS priced FROM b2b_catalog WHERE hidden = 0 GROUP BY brand_id`),
       brandNames(),
       db.all(`SELECT * FROM b2b_entities WHERE partner_id = ? ORDER BY active DESC, name`, [p.id])
     ]);
-    const m = new Map(margins.map((x) => [x.brand_id, x.margin]));
+    const m = new Map(margins.map((x) => [x.brand_id, x]));
     const cnt = new Map(counts.map((x) => [x.brand_id, x]));
     const brands = [...names].map(([id, name]) => ({
       id,
       name,
       enabled: m.has(id),
-      margin: m.get(id) ?? null,
+      margin: m.get(id)?.margin ?? null,
+      margin_wh: m.get(id)?.margin_wh ?? null,
       products: cnt.get(id)?.n || 0,
       priced: cnt.get(id)?.priced || 0
     }));
@@ -12295,6 +12434,8 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       brands,
       entities,
       roles: PARTNER_ROLES,
+      margin_defaults: await marginDefaults(),
+      wh_price: [...WH_PRICE],
       limits: { open: lim.open, unpaid: lim.unpaid, openTotal: open?.total || 0, openId: open?.id || null, unpaidTotal: await orders.unpaidTotal(p.id) },
       postpay: await orders.postpayInfo(p),
       debt: await orders.debtOf(p.id)
@@ -12463,15 +12604,67 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const list = await c.req.json();
     if (!Array.isArray(list)) throw fail(400, "\u041D\u0435\u0432\u0456\u0440\u043D\u0456 \u0434\u0430\u043D\u0456.");
     const next = /* @__PURE__ */ new Map();
+    const wh = /* @__PURE__ */ new Map();
     for (const r of list) {
       const brand = parseInt(r.brand_id, 10);
       const margin = round2(num3(r.margin));
       if (!Number.isFinite(brand) || brand < 0) continue;
       if (margin < 0 || margin >= 100) throw fail(400, "\u041C\u0430\u0440\u0436\u0430 \u2014 \u0432\u0456\u0434 0 \u0434\u043E 99,99 %.");
       next.set(brand, margin);
+      if (r.margin_wh !== void 0) {
+        const w = r.margin_wh === null || String(r.margin_wh).trim() === "" ? null : round2(num3(r.margin_wh));
+        if (w !== null && !(w >= 0 && w < 100)) throw fail(400, "\u041C\u0430\u0440\u0436\u0430 \xAB\u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430\xBB \u2014 \u0432\u0456\u0434 0 \u0434\u043E 99,99 % (\u043F\u043E\u0440\u043E\u0436\u043D\u044C\u043E \u2014 \u044F\u043A \u0434\u043B\u044F \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0438 \u043A\u043B\u0456\u0454\u043D\u0442\u0430\u043C).");
+        wh.set(brand, w);
+      }
     }
     const changes = await applyMargins(c, p, () => next);
-    return c.json({ ok: true, changed: changes.length });
+    const whChanges = await applyWhMargins(c, p, wh);
+    return c.json({ ok: true, changed: changes.length + whChanges });
+  });
+  async function applyWhMargins(c, p, wh) {
+    if (!wh.size) return 0;
+    const cur = new Map((await db.all(`SELECT brand_id, margin_wh FROM b2b_margins WHERE partner_id = ?`, [p.id])).map((x) => [x.brand_id, x.margin_wh]));
+    const names = await brandNames();
+    const at = nowIso();
+    const st = [];
+    const changes = [];
+    for (const [brand, w] of wh) {
+      if (!cur.has(brand)) continue;
+      const was = cur.get(brand) ?? null;
+      if (was === w) continue;
+      st.push([`UPDATE b2b_margins SET margin_wh = ? WHERE partner_id = ? AND brand_id = ?`, [w, p.id, brand]]);
+      st.push([`INSERT INTO b2b_margin_log (at, partner_id, brand_id, old_margin, new_margin, kind) VALUES (?, ?, ?, ?, ?, 'wh')`, [at, p.id, brand, was, w]]);
+      changes.push({ field: `${names.get(brand) || `\u0431\u0440\u0435\u043D\u0434 ${brand}`} \u2014 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430`, from: was == null ? "\u044F\u043A \u043A\u043B\u0456\u0454\u043D\u0442\u0430\u043C" : `${was}%`, to: w == null ? "\u044F\u043A \u043A\u043B\u0456\u0454\u043D\u0442\u0430\u043C" : `${w}%` });
+    }
+    if (st.length) await db.batch(st);
+    if (changes.length) await audit(c, p.id, `\u043C\u0430\u0440\u0436\u0430 \xAB\u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430\xBB \u2014 \xAB${p.name}\xBB`, changes);
+    return changes.length;
+  }
+  async function marginDefaults() {
+    const rows = await db.all(`SELECT key, value FROM settings WHERE key IN ('b2b_margin_default', 'b2b_margin_wh_default')`);
+    const v = (k) => {
+      const r = rows.find((x) => x.key === k)?.value;
+      return r === void 0 || r === "" ? null : Number(r);
+    };
+    return { margin: v("b2b_margin_default"), margin_wh: v("b2b_margin_wh_default") };
+  }
+  app.get("/api/b2b/margin-defaults", async (c) => {
+    need(c, "b2b.admin");
+    return c.json(await marginDefaults());
+  });
+  app.put("/api/b2b/margin-defaults", async (c) => {
+    need(c, "b2b.admin");
+    const b = await c.req.json().catch(() => ({}));
+    const val = (x, what) => {
+      if (x === null || x === void 0 || String(x).trim() === "") return "";
+      const n = round2(num3(x));
+      if (!(n >= 0 && n < 100)) throw fail(400, `${what} \u2014 \u0432\u0456\u0434 0 \u0434\u043E 99,99 % (\u0430\u0431\u043E \u043F\u043E\u0440\u043E\u0436\u043D\u044C\u043E).`);
+      return String(n);
+    };
+    const m = val(b.margin, "\u041C\u0430\u0440\u0436\u0430 \u0434\u043B\u044F \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0438 \u043A\u043B\u0456\u0454\u043D\u0442\u0430\u043C");
+    const w = val(b.margin_wh, "\u041C\u0430\u0440\u0436\u0430 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430");
+    await db.batch([["b2b_margin_default", m], ["b2b_margin_wh_default", w]].map(([k, v]) => [`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, v]]));
+    return c.json(await marginDefaults());
   });
   const MAX_TEAM = 30;
   const teamRow = (u) => {
@@ -12735,6 +12928,8 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       partner: { id: p.id, name: p.name },
       brands,
       categories,
+      wh_price: [...WH_PRICE],
+      // способи отримання з ціною «на склад»
       // Спершу те, що партнер замовляє найчастіше (далі — за назвою).
       products: rows.map((r) => ({
         id: r.product_id,
@@ -12749,8 +12944,10 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
         margin: r.margin,
         special: Boolean(r.special),
         special_until: r.special_until || "",
+        price_wh: partnerPrice(r.rrp, r.margin_wh),
+        // ціна закупівлі на склад партнера
         // відстрочка підвищення: поки діє стара ціна — нова й коли почне діяти
-        ...r.rrp_new ? { rrp_new: r.rrp_new, price_new: partnerPrice(r.rrp_new, r.margin), grace_until: r.grace_until } : {},
+        ...r.rrp_new ? { rrp_new: r.rrp_new, price_new: partnerPrice(r.rrp_new, r.margin), price_wh_new: partnerPrice(r.rrp_new, r.margin_wh), grace_until: r.grace_until } : {},
         // «Новинка» — 14 днів після того, як адмін надіслав її партнерам (до розсилки партнер про неї не дізнається).
         is_new: /^\d{4}-/.test(r.announced_at || "") && Date.now() - Date.parse(r.announced_at) < 14 * 864e5,
         ordered: freq.get(r.product_id)?.n || 0,
@@ -18095,7 +18292,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 39,
+  version: 40,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18416,9 +18613,15 @@ var schema11 = {
     ["b2b_orders", "urgent", "INTEGER NOT NULL DEFAULT 0"],
     // Коментар менеджера при скасуванні (партнер бачить на сторінці замовлення і в сповіщенні).
     ["b2b_orders", "cancel_note", "TEXT DEFAULT ''"],
+    // Запит на зміну способу отримання (JSON): від партнера — чекає менеджера, від менеджера — чекає партнера.
     ["b2b_orders", "delivery_req", "TEXT DEFAULT ''"],
+    // Коли менеджер надіслав запит «переробити рахунок/накладну» у «Фінансові питання».
     ["b2b_orders", "reinvoice_sent", "TEXT DEFAULT ''"],
-    // коли менеджер надіслав запит «переробити рахунок/накладну» у «Фінансові питання» // запит партнера на зміну способу отримання (JSON) — чекає підтвердження менеджера
+    // Друга маржа — для закупівлі «на склад партнера» (NULL — та сама, що для відправки клієнтам): на бренд і окрема на товар.
+    ["b2b_margins", "margin_wh", "REAL"],
+    ["b2b_product_margins", "margin_wh", "REAL"],
+    // Журнал маржі: '' — для відправки клієнтам, 'wh' — для закупівлі на склад партнера.
+    ["b2b_margin_log", "kind", "TEXT DEFAULT ''"],
     // етап 3а: команда партнера (роль у команді, хто додав) і видалені партнери (з замовленнями — в архіві)
     ["users", "partner_role", "TEXT DEFAULT ''"],
     ["users", "added_by", "TEXT DEFAULT ''"],

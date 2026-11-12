@@ -114,9 +114,15 @@ d = await get(s1.id, A);
 assert.equal(d.order.delivery, 'warehouse');
 assert.deepEqual(d.order.ship_to, { name: 'Петренко Склад', phone: '0501112233', address: 'Київ, відділення № 25' });
 assert.equal((await req('GET', '/api/b2b/p/limits', null, A)).warehouse.name, 'Петренко Склад', 'склад запам’ятався');
-// менеджер змінив сам — запит партнера знімається
+// менеджер пропонує свій варіант — запит партнера замінюється пропозицією, яку підтверджує партнер
 await req('POST', R(s1.id), { delivery: 'np' }, A);
 await req('POST', `/api/b2b/orders/${s1.id}/delivery`, { delivery: 'pickup' });
+d = await get(s1.id);
+assert.equal(d.order.delivery, 'warehouse', 'до підтвердження партнером — як було');
+assert.equal(d.order.delivery_req.from, 'admin');
+assert.match(await errOf(() => req('POST', R(s1.id), { delivery: 'np' }, A)), /Менеджер уже запропонував/);
+assert.match(await errOf(() => req('POST', `/api/b2b/orders/${s1.id}/delivery-request`, { ok: true })), /Запиту партнера .* немає/);
+await req('POST', `${R(s1.id)}/answer`, { ok: true, pickup_by: { name: 'Піць Іван', phone: '0966357990' } }, A);
 d = await get(s1.id);
 assert.equal(d.order.delivery, 'pickup');
 assert.equal(d.order.delivery_req, null);

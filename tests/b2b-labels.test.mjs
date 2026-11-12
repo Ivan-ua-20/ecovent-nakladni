@@ -143,14 +143,17 @@ let so = (await req('GET', `/api/b2b/orders/${sp.id}`)).order;
 assert.deepEqual([so.delivery, so.delivery_name], ['pickup', 'Самовивіз — партнер забирає всю закупівлю зі складу']);
 assert.ok(!(await req('GET', '/api/b2b/p/supplies', null, A)).some((x) => x.id === sp.id), 'самовивіз — не джерело для замовлень клієнтів');
 assert.match(await errOf(() => req('POST', '/api/b2b/p/clients', { client_name: 'X', client_phone: '0501112233', supply_id: sp.id, items: [{ product_id: 11, qty: 1 }] }, A)), /самовивіз/);
-// адмін виправляє: відправка клієнтам → можна оформлювати замовлення клієнтів
+// адмін виправляє: відправка клієнтам → пропозиція партнеру; після його підтвердження можна оформлювати замовлення клієнтів
 await req('POST', `/api/b2b/orders/${sp.id}/delivery`, { delivery: 'np' });
+assert.equal((await req('GET', `/api/b2b/orders/${sp.id}`)).order.delivery, 'pickup', 'до підтвердження партнером — як було');
+assert.ok(tg.some((m) => /потрібне ваше підтвердження/.test(m.text)), 'партнеру — пропозиція');
+await req('POST', `/api/b2b/p/orders/${sp.id}/delivery-request/answer`, { ok: true }, A);
 assert.equal((await req('GET', `/api/b2b/orders/${sp.id}`)).order.delivery, 'np');
-assert.ok(tg.some((m) => /спосіб отримання змінено/.test(m.text)), 'партнеру — повідомлення');
 const kx = await req('POST', '/api/b2b/p/clients', { client_name: 'X', client_phone: '0501112233', supply_id: sp.id, items: [{ product_id: 11, qty: 1 }] }, A);
 assert.match(await errOf(() => req('POST', `/api/b2b/orders/${sp.id}/delivery`, { delivery: 'pickup' })), /вже є замовлення клієнтів/);
 await req('POST', `/api/b2b/p/clients/${kx.id}/cancel`, {}, A);
 await req('POST', `/api/b2b/orders/${sp.id}/delivery`, { delivery: 'pickup' });
+await req('POST', `/api/b2b/p/orders/${sp.id}/delivery-request/answer`, { ok: true, pickup_by: { name: 'Іван Водій', phone: '0675554433' } }, A);
 assert.equal((await req('GET', `/api/b2b/p/orders/${sp.id}`, null, A)).order.delivery, 'pickup');
 assert.equal((await errOf(() => req('POST', `/api/b2b/orders/${sp.id}/delivery`, { delivery: 'np' }, A))) !== '', true, 'партнер — лише через «Змінити»');
 // партнер змінює сам, поки рахунку немає

@@ -15,7 +15,7 @@ export function createPriceLogPages() {
     if (!d.rows.length) return '<div class="card empty"><div class="big">Змін цін за цей період немає</div>Змініть період чи фільтри.</div>';
     return `<div class="table-wrap"><table class="list"><thead><tr><th>Коли</th><th>Товар</th><th class="hide-m">Бренд</th><th class="r">РРЦ</th>${withPrice ? '<th class="r">Ціна партнера</th>' : ''}<th class="r">Зміна</th></tr></thead><tbody>
       ${d.rows.map((r) => (r.kind === 'margin'
-    ? `<tr class="row-info"><td class="small nowrap">${esc(at(r.at))}</td><td colspan="${withPrice ? 3 : 2}"><b>Знижка на бренд «${esc(r.brand)}»</b>: ${r.old_margin == null ? 'бренд відкрито' : pctTxt(r.old_margin)} → ${r.new_margin == null ? 'бренд закрито' : `<b>${pctTxt(r.new_margin)}</b>`}</td><td class="hide-m"></td><td></td></tr>`
+    ? `<tr class="row-info"><td class="small nowrap">${esc(at(r.at))}</td><td colspan="${withPrice ? 3 : 2}"><b>Знижка на бренд «${esc(r.brand)}»</b>: ${r.old_margin == null ? (r.wh ? 'як для відправки клієнтам' : 'бренд відкрито') : pctTxt(r.old_margin)} → ${r.new_margin == null ? (r.wh ? '<b>як для відправки клієнтам</b>' : 'бренд закрито') : `<b>${pctTxt(r.new_margin)}</b>`}</td><td class="hide-m"></td><td></td></tr>`
     : `<tr><td class="small nowrap">${esc(at(r.at))}</td>
           <td>${esc(r.name)}${r.article ? `<div class="small muted">${esc(r.article)}</div>` : ''}</td>
           <td class="small hide-m">${esc(r.brand)}</td>

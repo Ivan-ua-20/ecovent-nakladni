@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 39,
+  version: 40,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -324,8 +324,15 @@ export const schema = {
     ['b2b_orders', 'urgent', 'INTEGER NOT NULL DEFAULT 0'],
     // Коментар менеджера при скасуванні (партнер бачить на сторінці замовлення і в сповіщенні).
     ['b2b_orders', 'cancel_note', "TEXT DEFAULT ''"],
+    // Запит на зміну способу отримання (JSON): від партнера — чекає менеджера, від менеджера — чекає партнера.
     ['b2b_orders', 'delivery_req', "TEXT DEFAULT ''"],
-    ['b2b_orders', 'reinvoice_sent', "TEXT DEFAULT ''"], // коли менеджер надіслав запит «переробити рахунок/накладну» у «Фінансові питання» // запит партнера на зміну способу отримання (JSON) — чекає підтвердження менеджера
+    // Коли менеджер надіслав запит «переробити рахунок/накладну» у «Фінансові питання».
+    ['b2b_orders', 'reinvoice_sent', "TEXT DEFAULT ''"],
+    // Друга маржа — для закупівлі «на склад партнера» (NULL — та сама, що для відправки клієнтам): на бренд і окрема на товар.
+    ['b2b_margins', 'margin_wh', 'REAL'],
+    ['b2b_product_margins', 'margin_wh', 'REAL'],
+    // Журнал маржі: '' — для відправки клієнтам, 'wh' — для закупівлі на склад партнера.
+    ['b2b_margin_log', 'kind', "TEXT DEFAULT ''"],
     // етап 3а: команда партнера (роль у команді, хто додав) і видалені партнери (з замовленнями — в архіві)
     ['users', 'partner_role', "TEXT DEFAULT ''"],
     ['users', 'added_by', "TEXT DEFAULT ''"],

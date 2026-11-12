@@ -25,11 +25,13 @@ export function mountB2bPrices(app, { db, services, partnerPrice, myPartner }) {
   // Що змінилося для партнера з минулої розсилки.
   async function changesOf(p, names) {
     const since = p.prices_sent_at || p.created_at || '';
-    const [margins, mlog] = await Promise.all([
-      db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id]),
-      db.all(`SELECT brand_id, old_margin, new_margin FROM b2b_margin_log WHERE partner_id = ? AND at > ? ORDER BY id`, [p.id, since]),
+    const [margins, mlogAll] = await Promise.all([
+      db.all(`SELECT brand_id, margin, margin_wh FROM b2b_margins WHERE partner_id = ?`, [p.id]),
+      db.all(`SELECT at, brand_id, old_margin, new_margin, COALESCE(kind, '') AS kind FROM b2b_margin_log WHERE partner_id = ? AND at > ? ORDER BY id`, [p.id, since]),
     ]);
+    const mlog = mlogAll.filter((r) => r.kind !== 'wh');
     const cur = new Map(margins.map((m) => [m.brand_id, m.margin]));
+    const curWh = new Map(margins.map((m) => [m.brand_id, m.margin_wh])); // null — як для відправки клієнтам
     // знижки: перше «було» і поточне «стало» за брендом
     const firstOld = new Map();
     const firstAt = new Map();
@@ -49,16 +51,24 @@ export function mountB2bPrices(app, { db, services, partnerPrice, myPartner }) {
       const mc = marginChanged.find((x) => x.brand === brand);
       return mc ? mc.old : cur.get(brand);
     };
+    // Маржа «на склад партнера»: що змінилося (null — «як для відправки клієнтам») і яка діяла раніше.
+    const whFirst = new Map();
+    for (const r of mlogAll) if (r.kind === 'wh' && !whFirst.has(r.brand_id)) whFirst.set(r.brand_id, r.old_margin);
+    const whChanged = [...whFirst].filter(([brand, old]) => cur.has(brand) && (old ?? null) !== (curWh.get(brand) ?? null)
+      && !opened.some((o) => o.brand === brand)).map(([brand, old]) => ({ brand, name: names.get(brand) || 'Інші', old: old ?? null, now: curWh.get(brand) ?? null }));
+    const whOld = (brand) => { const w = whChanged.find((x) => x.brand === brand); const raw = w ? w.old : curWh.get(brand); return raw ?? oldMargin(brand); };
+    const whNow = (brand) => curWh.get(brand) ?? cur.get(brand);
+    const showWh = (brand) => curWh.get(brand) != null || whChanged.some((x) => x.brand === brand);
     // товари: зміна РРЦ (журнал) — для всіх відкритих брендів, і всі товари брендів зі зміненою знижкою
     const brands = [...cur.keys()];
-    if (!brands.length) return { since, opened, closed, marginChanged, products: [] };
+    if (!brands.length) return { since, opened, closed, marginChanged, whChanged, products: [] };
     const plog = await db.all(
       `SELECT l.product_id, l.old_rrp FROM b2b_price_log l JOIN b2b_catalog c ON c.product_id = l.product_id
        WHERE l.at > ? AND c.hidden = 0 AND c.brand_id IN (SELECT value FROM json_each(?)) ORDER BY l.id`, [since, JSON.stringify(brands)],
     );
     const oldRrp = new Map();
     for (const r of plog) if (!oldRrp.has(r.product_id)) oldRrp.set(r.product_id, r.old_rrp);
-    const mcBrands = marginChanged.map((x) => x.brand).filter((b) => !opened.some((o) => o.brand === b));
+    const mcBrands = [...new Set([...marginChanged.map((x) => x.brand), ...whChanged.map((x) => x.brand)])].filter((b) => !opened.some((o) => o.brand === b));
     const rows = (oldRrp.size || mcBrands.length) ? await db.all(
       `SELECT product_id, name, article, rrp, brand_id FROM b2b_catalog WHERE hidden = 0 AND rrp > 0
          AND (product_id IN (SELECT value FROM json_each(?)) OR brand_id IN (SELECT value FROM json_each(?)))
@@ -70,8 +80,9 @@ export function mountB2bPrices(app, { db, services, partnerPrice, myPartner }) {
       const o = oldRrp.has(r.product_id) ? oldRrp.get(r.product_id) : r.rrp;
       const oldPrice = partnerPrice(o, oldMargin(r.brand_id));
       const newPrice = partnerPrice(r.rrp, cur.get(r.brand_id));
-      if (round2(o) === round2(r.rrp) && oldPrice === newPrice) continue;
-      products.push({ id: r.product_id, name: r.name, article: r.article, brand: names.get(r.brand_id) || 'Інші', oldRrp: o, newRrp: r.rrp, oldPrice, newPrice });
+      const wh = showWh(r.brand_id) ? { oldWh: partnerPrice(o, whOld(r.brand_id)), newWh: partnerPrice(r.rrp, whNow(r.brand_id)) } : {};
+      if (round2(o) === round2(r.rrp) && oldPrice === newPrice && wh.oldWh === wh.newWh) continue;
+      products.push({ id: r.product_id, name: r.name, article: r.article, brand: names.get(r.brand_id) || 'Інші', oldRrp: o, newRrp: r.rrp, oldPrice, newPrice, ...wh });
     }
     // відстрочка підвищення: до якого часу партнер ще замовляє за старою ціною (від останньої зміни РРЦ товару)
     const grace = await graceHoursOf(db, p);
@@ -83,20 +94,22 @@ export function mountB2bPrices(app, { db, services, partnerPrice, myPartner }) {
         if (x.newPrice > x.oldPrice && at && Date.parse(at) + grace * 3600e3 > Date.now()) x.graceUntil = new Date(Date.parse(at) + grace * 3600e3).toISOString();
       }
     }
-    return { since, opened, closed, marginChanged, products, grace };
+    return { since, opened, closed, marginChanged, whChanged, products, grace };
   }
 
-  const empty = (ch) => !ch.products.length && !ch.opened.length && !ch.closed.length && !ch.marginChanged.length;
+  const empty = (ch) => !ch.products.length && !ch.opened.length && !ch.closed.length && !ch.marginChanged.length && !ch.whChanged?.length;
 
   // Повідомлення (частинами до ~3800 символів).
   function messages(p, ch) {
     const head = `💲 <b>Зміна цін</b> — «${h(p.name)}»`;
     const blocks = [];
     if (ch.marginChanged.length) blocks.push(`<b>Ваша знижка від РРЦ:</b>\n${ch.marginChanged.map((x) => `${h(x.name)}: ${pct(x.old)} → <b>${pct(x.now)}</b>`).join('\n')}`);
+    if (ch.whChanged?.length) blocks.push(`<b>Знижка від РРЦ на закупівлю на ваш склад:</b>\n${ch.whChanged.map((x) => `${h(x.name)}: ${x.old == null ? 'як для відправки клієнтам' : pct(x.old)} → <b>${x.now == null ? 'як для відправки клієнтам' : pct(x.now)}</b>`).join('\n')}`);
     if (ch.opened.length) blocks.push(`<b>Нові бренди для вас:</b>\n${ch.opened.map((x) => `${h(x.name)} — знижка ${pct(x.margin)} від РРЦ (товари — у каталозі)`).join('\n')}`);
     if (ch.closed.length) blocks.push(`<b>Більше недоступні:</b> ${ch.closed.map((x) => h(x.name)).join(', ')}`);
     const lines = ch.products.map((x) => `${h(x.name)}${x.article ? ` (${h(x.article)})` : ''}\n`
       + `   РРЦ ${m2(x.oldRrp)} → <b>${m2(x.newRrp)}</b> ${arrow(x.oldRrp, x.newRrp)} · ваша ціна ${m2(x.oldPrice)} → <b>${m2(x.newPrice)}</b> грн ${arrow(x.oldPrice, x.newPrice)}`
+      + `${x.newWh !== undefined ? `\n   на ваш склад ${m2(x.oldWh)} → <b>${m2(x.newWh)}</b> грн ${arrow(x.oldWh, x.newWh)}` : ''}`
       + `${x.graceUntil ? `\n   ⏳ за старою ціною — до ${dt(x.graceUntil)}` : ''}`);
     if (ch.products.some((x) => x.graceUntil)) blocks.push(`⏳ Підвищені ціни починають діяти через ${ch.grace} год після зміни — до того замовлення приймаються за старими цінами.`);
     const out = [];
@@ -132,7 +145,7 @@ export function mountB2bPrices(app, { db, services, partnerPrice, myPartner }) {
     need(c, 'b2b.admin');
     const rows = await partnersWithChanges();
     return c.json(rows.map(({ p, ch }) => ({
-      id: p.id, name: p.name, since: ch.since, products: ch.products.length, brands: ch.marginChanged.length + ch.opened.length + ch.closed.length,
+      id: p.id, name: p.name, since: ch.since, products: ch.products.length, brands: ch.marginChanged.length + (ch.whChanged?.length || 0) + ch.opened.length + ch.closed.length,
       empty: empty(ch), group: p.tg_group_title || (p.tg_group ? 'група' : ''), tgUsers: p.tg_users,
       preview: empty(ch) ? [] : messages(p, ch),
     })));
@@ -172,13 +185,13 @@ export function mountB2bPrices(app, { db, services, partnerPrice, myPartner }) {
     let mlog = [];
     if (partner) {
       margins = new Map((await db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [partner.id])).map((m) => [m.brand_id, m.margin]));
-      mlog = await db.all(`SELECT at, brand_id, old_margin, new_margin FROM b2b_margin_log WHERE partner_id = ? ORDER BY id`, [partner.id]);
+      mlog = await db.all(`SELECT at, brand_id, old_margin, new_margin, COALESCE(kind, '') AS kind FROM b2b_margin_log WHERE partner_id = ? ORDER BY id`, [partner.id]);
     }
     // знижка партнера на бренд на момент at: остання зміна до at — її «стало»; інакше перша після — її «було»; інакше поточна
     const marginAt = (brandId, at) => {
       let before = null; let after = null;
       for (const r of mlog) {
-        if (r.brand_id !== brandId) continue;
+        if (r.brand_id !== brandId || r.kind === 'wh') continue;
         if (r.at <= at) before = r; else if (!after) after = r;
       }
       if (before) return before.new_margin;
@@ -204,7 +217,7 @@ export function mountB2bPrices(app, { db, services, partnerPrice, myPartner }) {
     });
     // зміни знижки партнера на бренди за період
     const disc = partner ? mlog.filter((r) => r.at >= lo && r.at < hi && (brand === null || r.brand_id === brand) && (!search || low(names.get(r.brand_id)).includes(search)))
-      .map((r) => ({ kind: 'margin', at: r.at, brand: names.get(r.brand_id) || 'Інші', brand_id: r.brand_id, old_margin: r.old_margin, new_margin: r.new_margin })) : [];
+      .map((r) => ({ kind: 'margin', at: r.at, brand: `${names.get(r.brand_id) || 'Інші'}${r.kind === 'wh' ? ' — на склад партнера' : ''}`, brand_id: r.brand_id, old_margin: r.old_margin, new_margin: r.new_margin, wh: r.kind === 'wh' })) : [];
     const all = [...out, ...disc].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
     const brandsList = partner
       ? [...margins.keys()].map((id) => ({ id, name: names.get(id) || 'Інші' }))

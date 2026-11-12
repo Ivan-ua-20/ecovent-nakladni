@@ -35,7 +35,11 @@ export async function viewAdminSupplyForm(preset = '') {
     draw();
   }
 
-  const total = () => st.opt.products.reduce((t, x) => t + (st.qty.get(x.product_id) || 0) * x.price, 0);
+  // Ціна за способом отримання: «на склад партнера» (і самовивіз, якщо так налаштовано) — за маржею «на склад».
+  const isWh = () => (st.opt.wh_price || ['warehouse']).includes(st.delivery);
+  const pr = (x) => (isWh() && x.price_wh != null ? x.price_wh : x.price);
+  const mg = (x) => (isWh() && x.margin_wh != null ? x.margin_wh : x.margin);
+  const total = () => st.opt.products.reduce((t, x) => t + (st.qty.get(x.product_id) || 0) * pr(x), 0);
   const count = () => [...st.qty.values()].filter((n) => n > 0).length;
 
   function draw() {
@@ -92,7 +96,7 @@ export async function viewAdminSupplyForm(preset = '') {
     $('#asCom').oninput = (e) => { st.comment = e.target.value; };
     $$('[name=asT]').forEach((r) => (r.onchange = () => { st.terms = r.value; $('#asDaysF').hidden = st.terms !== 'postpay'; }));
     $('#asDays').oninput = (e) => { st.days = e.target.value; };
-    $$('[name=asD]').forEach((r) => (r.onchange = () => { st.delivery = r.value; $('#asShip').hidden = st.delivery !== 'warehouse'; }));
+    $$('[name=asD]').forEach((r) => (r.onchange = () => { st.delivery = r.value; $('#asShip').hidden = st.delivery !== 'warehouse'; rows(); sums(); })); // ціни — за способом
     [['#asSN', 'name'], ['#asSP', 'phone'], ['#asSA', 'address']].forEach(([sel, k]) => { $(sel).oninput = (e) => { st.ship[k] = e.target.value; }; });
     $('#asSend').onclick = send;
   }
@@ -106,16 +110,16 @@ export async function viewAdminSupplyForm(preset = '') {
     $('#asRows').innerHTML = [...chosen, ...list].slice(0, 400).map((x) => {
       const n = st.qty.get(x.product_id) || 0;
       return `<tr${n ? ' class="sel"' : ''}><td>${esc(x.name)}${x.article ? `<div class="small muted">${esc(x.article)}</div>` : ''}</td>
-        <td class="r small muted nowrap">${money(x.rrp)}</td><td class="r nowrap"><b>${money(x.price)}</b><div class="small muted">−${pctTxt(x.margin)}</div></td>
+        <td class="r small muted nowrap">${money(x.rrp)}</td><td class="r nowrap"><b>${money(pr(x))}</b><div class="small muted">−${pctTxt(mg(x))}</div></td>
         <td class="r"><input type="number" min="0" step="1" data-q="${x.product_id}" value="${n || ''}" style="width:90px" aria-label="Кількість: ${esc(x.name)}"></td>
-        <td class="r nowrap" data-s="${x.product_id}">${n ? money(n * x.price) : '—'}</td></tr>`;
+        <td class="r nowrap" data-s="${x.product_id}">${n ? money(n * pr(x)) : '—'}</td></tr>`;
     }).join('') || '<tr><td colspan="5" class="muted">Нічого не знайдено.</td></tr>';
     $$('[data-q]').forEach((i) => (i.oninput = () => {
       const id = Number(i.dataset.q);
       const n = Math.max(0, Math.floor(Number(i.value) || 0));
       if (n) st.qty.set(id, n); else st.qty.delete(id);
       const x = st.opt.products.find((y) => y.product_id === id);
-      $(`[data-s="${id}"]`).textContent = n ? money(n * x.price) : '—';
+      $(`[data-s="${id}"]`).textContent = n ? money(n * pr(x)) : '—';
       sums();
     }));
   }

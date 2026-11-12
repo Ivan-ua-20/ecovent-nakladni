@@ -9,7 +9,7 @@ import { hashPassword, can, PARTNER_ROLES, partnerRole, randomToken } from '../.
 import { fail, need, nowIso, kyivDay, loadSettings, round2 } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
 import { call } from '../../integrations/lpcrm.js';
-import { mountB2bOrders, PM_JOIN, PM_COLS, withGrace, graceHoursOf, CLIENT_STATUS, orderNo, payState, PAY_NAME } from './orders.js';
+import { mountB2bOrders, PM_JOIN, PM_COLS, WH_PRICE, marginFor, withGrace, graceHoursOf, CLIENT_STATUS, orderNo, payState, PAY_NAME } from './orders.js';
 import { mountB2bClients } from './clients.js';
 import { mountB2bStats } from './stats.js';
 import { mountB2bPrices } from './prices.js';
@@ -120,19 +120,19 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     const p = await getPartner(c.req.param('id'));
     const [users, margins, counts, names, entities] = await Promise.all([
       services.notify?.fillTgNames?.(5).catch(() => 0).then(() => db.all(`SELECT id, login, name, active, created_at, partner_role, added_by, tg_chat_id, tg_name, tg_linked_at FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY active DESC, login`, [p.id])),
-      db.all(`SELECT brand_id, margin FROM b2b_margins WHERE partner_id = ?`, [p.id]),
+      db.all(`SELECT brand_id, margin, margin_wh FROM b2b_margins WHERE partner_id = ?`, [p.id]),
       db.all(`SELECT brand_id, COUNT(*) AS n, SUM(CASE WHEN rrp > 0 THEN 1 ELSE 0 END) AS priced FROM b2b_catalog WHERE hidden = 0 GROUP BY brand_id`),
       brandNames(),
       db.all(`SELECT * FROM b2b_entities WHERE partner_id = ? ORDER BY active DESC, name`, [p.id]),
     ]);
-    const m = new Map(margins.map((x) => [x.brand_id, x.margin]));
+    const m = new Map(margins.map((x) => [x.brand_id, x]));
     const cnt = new Map(counts.map((x) => [x.brand_id, x]));
     const brands = [...names].map(([id, name]) => ({
-      id, name, enabled: m.has(id), margin: m.get(id) ?? null, products: cnt.get(id)?.n || 0, priced: cnt.get(id)?.priced || 0,
+      id, name, enabled: m.has(id), margin: m.get(id)?.margin ?? null, margin_wh: m.get(id)?.margin_wh ?? null, products: cnt.get(id)?.n || 0, priced: cnt.get(id)?.priced || 0,
     }));
     const lim = orders.limitsOf(p);
     const open = await orders.getOpen(p.id);
-    return c.json({ partner: p, users: users.map(teamRow), brands, entities, roles: PARTNER_ROLES,
+    return c.json({ partner: p, users: users.map(teamRow), brands, entities, roles: PARTNER_ROLES, margin_defaults: await marginDefaults(), wh_price: [...WH_PRICE],
       limits: { open: lim.open, unpaid: lim.unpaid, openTotal: open?.total || 0, openId: open?.id || null, unpaidTotal: await orders.unpaidTotal(p.id) },
       postpay: await orders.postpayInfo(p), debt: await orders.debtOf(p.id) });
   });
@@ -316,15 +316,66 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     const list = await c.req.json();
     if (!Array.isArray(list)) throw fail(400, 'Невірні дані.');
     const next = new Map();
+    const wh = new Map(); // маржа «на склад партнера»: null — та сама, що для відправки клієнтам
     for (const r of list) {
       const brand = parseInt(r.brand_id, 10);
       const margin = round2(num(r.margin));
       if (!Number.isFinite(brand) || brand < 0) continue;
       if (margin < 0 || margin >= 100) throw fail(400, 'Маржа — від 0 до 99,99 %.');
       next.set(brand, margin);
+      if (r.margin_wh !== undefined) {
+        const w = r.margin_wh === null || String(r.margin_wh).trim() === '' ? null : round2(num(r.margin_wh));
+        if (w !== null && !(w >= 0 && w < 100)) throw fail(400, 'Маржа «на склад партнера» — від 0 до 99,99 % (порожньо — як для відправки клієнтам).');
+        wh.set(brand, w);
+      }
     }
     const changes = await applyMargins(c, p, () => next);
-    return c.json({ ok: true, changed: changes.length });
+    const whChanges = await applyWhMargins(c, p, wh);
+    return c.json({ ok: true, changed: changes.length + whChanges });
+  });
+  // Маржа «на склад партнера» для увімкнених брендів; зміни — у журнал (kind 'wh') для розсилки цін.
+  async function applyWhMargins(c, p, wh) {
+    if (!wh.size) return 0;
+    const cur = new Map((await db.all(`SELECT brand_id, margin_wh FROM b2b_margins WHERE partner_id = ?`, [p.id])).map((x) => [x.brand_id, x.margin_wh]));
+    const names = await brandNames();
+    const at = nowIso();
+    const st = [];
+    const changes = [];
+    for (const [brand, w] of wh) {
+      if (!cur.has(brand)) continue; // бренд вимкнено
+      const was = cur.get(brand) ?? null;
+      if (was === w) continue;
+      st.push([`UPDATE b2b_margins SET margin_wh = ? WHERE partner_id = ? AND brand_id = ?`, [w, p.id, brand]]);
+      st.push([`INSERT INTO b2b_margin_log (at, partner_id, brand_id, old_margin, new_margin, kind) VALUES (?, ?, ?, ?, ?, 'wh')`, [at, p.id, brand, was, w]]);
+      changes.push({ field: `${names.get(brand) || `бренд ${brand}`} — на склад партнера`, from: was == null ? 'як клієнтам' : `${was}%`, to: w == null ? 'як клієнтам' : `${w}%` });
+    }
+    if (st.length) await db.batch(st);
+    if (changes.length) await audit(c, p.id, `маржа «на склад партнера» — «${p.name}»`, changes);
+    return changes.length;
+  }
+  // Маржа за замовчуванням: підставляється, коли вмикаєте бренд партнеру (клієнтам і на склад партнера; порожньо — без підказки).
+  async function marginDefaults() {
+    const rows = await db.all(`SELECT key, value FROM settings WHERE key IN ('b2b_margin_default', 'b2b_margin_wh_default')`);
+    const v = (k) => { const r = rows.find((x) => x.key === k)?.value; return r === undefined || r === '' ? null : Number(r); };
+    return { margin: v('b2b_margin_default'), margin_wh: v('b2b_margin_wh_default') };
+  }
+  app.get('/api/b2b/margin-defaults', async (c) => {
+    need(c, 'b2b.admin');
+    return c.json(await marginDefaults());
+  });
+  app.put('/api/b2b/margin-defaults', async (c) => {
+    need(c, 'b2b.admin');
+    const b = await c.req.json().catch(() => ({}));
+    const val = (x, what) => {
+      if (x === null || x === undefined || String(x).trim() === '') return '';
+      const n = round2(num(x));
+      if (!(n >= 0 && n < 100)) throw fail(400, `${what} — від 0 до 99,99 % (або порожньо).`);
+      return String(n);
+    };
+    const m = val(b.margin, 'Маржа для відправки клієнтам');
+    const w = val(b.margin_wh, 'Маржа на склад партнера');
+    await db.batch([['b2b_margin_default', m], ['b2b_margin_wh_default', w]].map(([k, v]) => [`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, v]]));
+    return c.json(await marginDefaults());
   });
 
   // ---------- користувачі партнера (команда) ----------
@@ -585,12 +636,14 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
       partner: { id: p.id, name: p.name },
       brands,
       categories,
+      wh_price: [...WH_PRICE], // способи отримання з ціною «на склад»
       // Спершу те, що партнер замовляє найчастіше (далі — за назвою).
       products: rows.map((r) => ({
         id: r.product_id, name: r.name, article: r.article, image: r.image, brand_id: r.brand_id, cat: r.cat,
         brand: names.get(r.brand_id) || 'Інші', rrp: r.rrp, price: partnerPrice(r.rrp, r.margin), margin: r.margin, special: Boolean(r.special), special_until: r.special_until || '',
+        price_wh: partnerPrice(r.rrp, r.margin_wh), // ціна закупівлі на склад партнера
         // відстрочка підвищення: поки діє стара ціна — нова й коли почне діяти
-        ...(r.rrp_new ? { rrp_new: r.rrp_new, price_new: partnerPrice(r.rrp_new, r.margin), grace_until: r.grace_until } : {}),
+        ...(r.rrp_new ? { rrp_new: r.rrp_new, price_new: partnerPrice(r.rrp_new, r.margin), price_wh_new: partnerPrice(r.rrp_new, r.margin_wh), grace_until: r.grace_until } : {}),
         // «Новинка» — 14 днів після того, як адмін надіслав її партнерам (до розсилки партнер про неї не дізнається).
         is_new: /^\d{4}-/.test(r.announced_at || '') && Date.now() - Date.parse(r.announced_at) < 14 * 86400000,
         ordered: freq.get(r.product_id)?.n || 0, ordered_qty: freq.get(r.product_id)?.q || 0,
