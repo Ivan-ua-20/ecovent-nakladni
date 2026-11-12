@@ -642,13 +642,42 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return out;
   };
   // Залишок товарів закупівлі для замовлень клієнтів (без скасованих; exceptId — замовлення, що зараз змінюється).
+  // Товар може стояти в закупівлі кількома рядками з різною ціною (менеджер додав ще одиниці за іншою ціною).
+  // Залишок рахуємо по товару загалом; ціна наступних одиниць для замовлень клієнтів — з рядків по черзі.
+  function linePrice(lines, from, n) {
+    let skip = Math.max(0, from || 0); let got = 0; let sum = 0; let rrp = null;
+    const need = Math.max(1, n || 1);
+    for (const l of lines) {
+      const off = Math.min(skip, l.qty); skip -= off;
+      const take = Math.min(l.qty - off, need - got);
+      if (take <= 0) continue;
+      if (rrp === null) rrp = l.rrp;
+      sum += take * l.price; got += take;
+      if (got >= need) break;
+    }
+    if (!got) { const l = lines[lines.length - 1] || {}; return { price: l.price, rrp: l.rrp }; } // понад залишок — ціна останнього рядка
+    return { price: round2(sum / got), rrp };
+  }
+  // Рядки закупівлі → по одному на товар: qty — разом, used — розписано на замовлення клієнтів, price — ціна наступної одиниці.
+  function aggLines(rows) {
+    const m = new Map();
+    for (const r of rows) {
+      const a = m.get(r.product_id);
+      if (a) { a.qty += r.qty; a.lines.push({ qty: r.qty, price: r.price, rrp: r.rrp }); } else m.set(r.product_id, { ...r, lines: [{ qty: r.qty, price: r.price, rrp: r.rrp }] });
+    }
+    return [...m.values()].map((a) => {
+      const used = Number(a.used) || 0;
+      const next = linePrice(a.lines, used, 1);
+      return { ...a, used, left: a.qty - used, price: next.price, rrp: next.rrp };
+    });
+  }
   async function supplyLeft(supplyId, exceptId = 0) {
     return db.all(
       `SELECT i.product_id, i.name, i.article, i.price, i.rrp, i.qty,
         COALESCE((SELECT SUM(ci.qty) FROM b2b_order_items ci JOIN b2b_orders co ON co.id = ci.order_id
           WHERE co.supply_id = i.order_id AND co.kind = 'client' AND co.status != 'cancelled' AND co.id != ? AND ci.product_id = i.product_id), 0) AS used
        FROM b2b_order_items i WHERE i.order_id = ? ORDER BY i.id`, [exceptId, supplyId],
-    ).then((rows) => rows.map((r) => ({ ...r, left: r.qty - r.used })));
+    ).then(aggLines);
   }
   async function orderDetail(o) {
     if (o.kind === 'client' && o.supply_id && o.supply_status === undefined) {
@@ -664,7 +693,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const out = { order: publicOrder(o), items, files: files.map((f) => ({ ...f, kind_name: f.doc_name || FILE_KIND[f.kind] || f.kind })), history };
     if (o.kind === 'supply') {
       out.clients = clients.map((x) => ({ ...x, number: orderNo(x.id), status_name: CLIENT_STATUS[x.status] || x.status }));
-      out.left = clients.length ? await supplyLeft(o.id) : items.map((i) => ({ ...i, used: 0, left: i.qty }));
+      out.left = clients.length ? await supplyLeft(o.id) : aggLines(items.map((i) => ({ ...i, used: 0 })));
       if (!['open', 'cancelled'].includes(o.status) && out.left.length && out.left.every((l) => l.left <= 0)) out.order = publicOrder({ ...o, closed: 1 });
     }
     return out;
@@ -699,6 +728,9 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (!['invoice_wait', 'draft'].includes(o.status)) throw fail(400, 'Рахунок уже виставлено — змінити замовлення може лише менеджер.');
     const isDraft = o.status === 'draft';
     const b = await c.req.json();
+    if (await db.get(`SELECT product_id FROM b2b_order_items WHERE order_id = ? GROUP BY product_id HAVING COUNT(*) > 1 LIMIT 1`, [o.id])) {
+      throw fail(400, 'У закупівлі є товар у кількох рядках з різною ціною — змінити її може лише менеджер. Напишіть йому, що потрібно змінити.');
+    }
     const e = await myEntity(p, b.entity_id ?? o.entity_id);
     const items = await priceItems(p, b.items);
     const total = totalOf(items);
@@ -1293,5 +1325,5 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
 
   // Видалення замовлень і кошик — у edits.js.
 
-  return { parsePickup, pickupTxt, itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, sendFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
+  return { parsePickup, pickupTxt, itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, sendFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, linePrice, aggLines, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
 }

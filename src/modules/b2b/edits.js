@@ -53,65 +53,96 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
   hooks.supplyPrices = async (c, supplyId, changes) => {
     const o = await orderOf(supplyId);
     const cur = await db.all(`SELECT product_id, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
-    return editSupply(c, o, { items: cur.map((i) => ({ product_id: i.product_id, qty: i.qty, price: changes.get(i.product_id)?.price ?? i.price, rrp: changes.get(i.product_id)?.rrp ?? i.rrp })) });
+    return editSupply(c, o, { items: cur.map((i, line) => ({ line, product_id: i.product_id, qty: i.qty, price: changes.get(i.product_id)?.price ?? i.price, rrp: changes.get(i.product_id)?.rrp ?? i.rrp })) });
   };
   // Додати товари в закупівлю (з правки замовлення клієнта: товару немає в закупівлі або бракує залишку).
   hooks.supplyAdd = async (c, supplyId, add) => {
     const o = await orderOf(supplyId);
-    const cur = await db.all(`SELECT product_id, qty FROM b2b_order_items WHERE order_id = ?`, [o.id]);
-    const want = new Map(cur.map((i) => [i.product_id, i.qty]));
-    for (const [id, n] of add) want.set(id, (want.get(id) || 0) + n);
-    return editSupply(c, o, { items: [...want].map(([product_id, qty]) => ({ product_id, qty })) });
+    const cur = await db.all(`SELECT product_id, qty FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
+    const items = cur.map((i, line) => ({ line, product_id: i.product_id, qty: i.qty })); // рядки з окремими цінами не зливаються
+    for (const [id, n] of add) { const it = items.find((x) => x.product_id === id); if (it) it.qty += n; else items.push({ product_id: id, qty: n }); }
+    return editSupply(c, o, { items });
   };
   async function editSupply(c, o, b) {
     const u = c.get('user');
     if (o.kind !== 'supply') throw fail(400, 'Це замовлення клієнта — змінюйте його на сторінці замовлення.');
     if (o.status === 'cancelled') throw fail(400, 'Закупівлю скасовано.');
     const cur = await db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
-    const curMap = new Map(cur.map((i) => [i.product_id, i]));
-    const want = new Map();
+    // Рядок закупівлі: line — номер наявного рядка (як у списку товарів закупівлі); extra — новий окремий рядок товару,
+    // що вже є, з іншою ціною (лише у відправленій закупівлі: чернетка й відкрита мають одну ціну на товар).
+    // Без line й extra — як раніше: перший рядок цього товару, а повтори того ж товару сумуються.
+    const extraOk = !['draft', 'open'].includes(o.status);
+    const money = (v, what) => {
+      const raw = v === undefined || v === null ? '' : String(v).replace(/\s/g, '').replace(',', '.');
+      const x = raw === '' ? null : round2(Number(raw));
+      if (x !== null && !(x >= 0 && x < 1e8)) throw fail(400, `${what} — число від 0.`);
+      return x;
+    };
+    const claimed = new Set();
+    const asked = [];
     for (const it of Array.isArray(b.items) ? b.items : []) {
       const id = parseInt(it.product_id, 10);
       const qty = Number(it.qty);
       if (!id) continue;
       if (!Number.isInteger(qty) || qty < 0 || qty > 100000) throw fail(400, 'Кількість — ціле число від 0.');
-      const money = (v, what) => {
-        const raw = v === undefined || v === null ? '' : String(v).replace(/\s/g, '').replace(',', '.');
-        const x = raw === '' ? null : round2(Number(raw));
-        if (x !== null && !(x >= 0 && x < 1e8)) throw fail(400, `${what} — число від 0.`);
-        return x;
-      };
       const price = money(it.price, 'Ціна');
       const rrp = money(it.rrp, 'РРЦ');
-      if (qty > 0) want.set(id, { qty: (want.get(id)?.qty || 0) + qty, price: price ?? want.get(id)?.price ?? null, rrp: rrp ?? want.get(id)?.rrp ?? null });
+      let idx = null;
+      if (it.line !== undefined && it.line !== null && it.line !== '' && !it.extra) {
+        idx = Number(it.line);
+        if (!Number.isInteger(idx) || !cur[idx] || cur[idx].product_id !== id || claimed.has(idx)) throw fail(409, 'Склад закупівлі щойно змінився — закрийте вікно, оновіть сторінку й внесіть зміни ще раз.');
+      } else if (!it.extra) {
+        const same = asked.find((l) => l.product_id === id && !l.extra && l.plain);
+        if (same) { same.qty += qty; if (price !== null) same.price = price; if (rrp !== null) same.rrp = rrp; continue; }
+        const k = cur.findIndex((r, n) => r.product_id === id && !claimed.has(n));
+        if (k >= 0) idx = k;
+      }
+      if (idx !== null) claimed.add(idx);
+      asked.push({ idx, product_id: id, qty, price, rrp, extra: Boolean(it.extra), plain: !it.extra && (it.line === undefined || it.line === null || it.line === '') });
     }
-    if (!want.size) throw fail(400, 'У закупівлі має лишитися хоча б один товар. Щоб прибрати все — видаліть закупівлю.');
-    if (want.size > 300) throw fail(400, 'Не більше 300 позицій.');
-    const newIds = [...want.keys()].filter((id) => !curMap.has(id));
+    const live = asked.filter((l) => l.qty > 0);
+    if (!live.length) throw fail(400, 'У закупівлі має лишитися хоча б один товар. Щоб прибрати все — видаліть закупівлю.');
+    if (live.length > 300) throw fail(400, 'Не більше 300 позицій.');
+    const curOf = (id) => cur.find((r) => r.product_id === id);
+    const newIds = [...new Set(live.filter((l) => l.idx === null && !curOf(l.product_id)).map((l) => l.product_id))];
     const cat = newIds.length ? new Map((await withGrace(db, await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [o.partner_id]), await db.all(
       `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_catalog c LEFT JOIN b2b_margins m ON m.brand_id = c.brand_id AND m.partner_id = ? ${PM_JOIN}
        WHERE c.product_id IN (SELECT value FROM json_each(?))`, [o.partner_id, kyivDay(), JSON.stringify(newIds)],
     ))).map((r) => [r.product_id, r])) : new Map();
-    const items = [...want].map(([id, w]) => {
-      const old = curMap.get(id);
+    let items = live.map((l) => {
+      const old = l.idx !== null ? cur[l.idx] : null;
       if (old) {
-        const rrp = w.rrp ?? old.rrp;
+        const rrp = l.rrp ?? old.rrp;
         // нова РРЦ без нової ціни — ціна з тією ж знижкою від РРЦ, що була в закупівлі
-        const price = w.price ?? (w.rrp != null && round2(w.rrp) !== round2(old.rrp) && old.rrp > 0 ? round2((old.price / old.rrp) * w.rrp) : old.price);
-        return { product_id: id, name: old.name, article: old.article || '', qty: w.qty, price, rrp };
+        const price = l.price ?? (l.rrp != null && round2(l.rrp) !== round2(old.rrp) && old.rrp > 0 ? round2((old.price / old.rrp) * l.rrp) : old.price);
+        return { product_id: l.product_id, name: old.name, article: old.article || '', qty: l.qty, price, rrp, _idx: l.idx };
       }
-      const r = cat.get(id);
-      if (!r) throw fail(400, `Товару ID ${id} немає в каталозі.`);
-      const rrp = w.rrp ?? r.rrp;
-      return { product_id: id, name: r.name, article: r.article || '', qty: w.qty, price: w.price ?? partnerPrice(rrp, r.margin || 0), rrp };
+      const same = curOf(l.product_id);
+      if (same) return { product_id: l.product_id, name: same.name, article: same.article || '', qty: l.qty, price: l.price ?? same.price, rrp: l.rrp ?? same.rrp, _idx: null, _extra: true };
+      const r = cat.get(l.product_id);
+      if (!r) throw fail(400, `Товару ID ${l.product_id} немає в каталозі.`);
+      const rrp = l.rrp ?? r.rrp;
+      return { product_id: l.product_id, name: r.name, article: r.article || '', qty: l.qty, price: l.price ?? partnerPrice(rrp, r.margin || 0), rrp, _idx: null, _extra: l.extra };
     });
+    // Рядки одного товару з однаковою ціною й РРЦ — один рядок (кількості сумуються).
+    const merged = [];
+    const mergedIdx = new Set();
+    for (const i of items) {
+      const into = merged.find((x) => x.product_id === i.product_id && round2(x.price) === round2(i.price) && round2(x.rrp) === round2(i.rrp));
+      if (into) { into.qty += i.qty; if (i._idx !== null) mergedIdx.add(i._idx); } else merged.push({ ...i });
+    }
+    items = merged;
+    const multi = new Set(items.filter((i, n) => items.findIndex((x) => x.product_id === i.product_id) !== n).map((i) => i.product_id));
+    if (multi.size && !extraOk) throw fail(400, 'Окремий рядок товару з іншою ціною можна додати лише у відправлену закупівлю — не в чернетку й не у відкриту.');
     // Відкрита закупівля = сума замовлень клієнтів: тут змінюються лише ціни й РРЦ (склад — через замовлення клієнтів).
-    if (o.status === 'open' && (items.length !== cur.length || items.some((i) => curMap.get(i.product_id)?.qty !== i.qty))) {
+    if (o.status === 'open' && (items.length !== cur.length || items.some((i) => i._idx === null || cur[i._idx].qty !== i.qty))) {
       throw fail(400, 'У відкритій закупівлі можна змінити лише ціни й РРЦ: товари й кількість ідуть із замовлень клієнтів — змініть їх там.');
     }
-    // Не менше, ніж уже розписано на замовлення клієнтів.
+    // Не менше, ніж уже розписано на замовлення клієнтів (по товару — всі його рядки разом).
+    const wantQty = new Map();
+    for (const i of items) wantQty.set(i.product_id, (wantQty.get(i.product_id) || 0) + i.qty);
     for (const r of await supplyLeft(o.id)) {
-      if (r.used > (want.get(r.product_id)?.qty || 0)) throw fail(400, `«${r.name}»: на замовлення клієнтів уже розписано ${r.used} шт. — спершу змініть або видаліть ці замовлення.`);
+      if (r.used > (wantQty.get(r.product_id) || 0)) throw fail(400, `«${r.name}»: на замовлення клієнтів уже розписано ${r.used} шт. — спершу змініть або видаліть ці замовлення.`);
     }
     let ent = { id: o.entity_id, text: o.entity };
     if (b.entity_id !== undefined && b.entity_id !== null && Number(b.entity_id) !== Number(o.entity_id)) {
@@ -123,14 +154,19 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
     const total = totalOf(items);
 
     const changes = [];
+    // товар у кількох рядках (до чи після) — у записі видно, про який рядок мова
+    const several = new Set([...multi, ...cur.filter((i, n) => cur.findIndex((x) => x.product_id === i.product_id) !== n).map((i) => i.product_id)]);
+    const nm = (i, price) => (several.has(i.product_id) ? `${i.name} (рядок по ${uah(price)})` : i.name);
     for (const i of items) {
-      const old = curMap.get(i.product_id);
-      if (!old) { changes.push(`+ ${i.name} × ${i.qty} по ${uah(i.price)}`); continue; }
-      if (old.qty !== i.qty) changes.push(`${i.name}: ${old.qty} → ${i.qty} шт`);
-      if (round2(old.rrp) !== round2(i.rrp)) changes.push(`${i.name}: РРЦ ${uah(old.rrp)} → ${uah(i.rrp)}`);
-      if (round2(old.price) !== round2(i.price)) changes.push(`${i.name}: ціна ${uah(old.price)} → ${uah(i.price)}`);
+      const old = i._idx !== null ? cur[i._idx] : null;
+      if (!old) { changes.push(`+ ${i.name} × ${i.qty} по ${uah(i.price)}${curOf(i.product_id) ? ' (окремий рядок — товар уже є в закупівлі за іншою ціною)' : ''}`); continue; }
+      if (old.qty !== i.qty) changes.push(`${nm(i, old.price)}: ${old.qty} → ${i.qty} шт`);
+      if (round2(old.rrp) !== round2(i.rrp)) changes.push(`${nm(i, old.price)}: РРЦ ${uah(old.rrp)} → ${uah(i.rrp)}`);
+      if (round2(old.price) !== round2(i.price)) changes.push(`${nm(i, old.price)}: ціна ${uah(old.price)} → ${uah(i.price)}`);
     }
-    const removed = cur.filter((i) => !want.has(i.product_id));
+    const kept = new Set([...items.map((i) => i._idx).filter((x) => x !== null), ...mergedIdx]);
+    const removed = cur.filter((i, n) => !kept.has(n));
+    if (mergedIdx.size) changes.push('рядки товару з однаковою ціною об’єднано');
     for (const i of removed) changes.push(`− ${i.name} × ${i.qty} (прибрано)`);
     if (ent.id !== o.entity_id) changes.push(`юрособа: ${firstLine(ent.text)}`);
     if (comment !== (o.comment || '')) changes.push('коментар');
@@ -142,6 +178,7 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
     const paid = Number(o.paid_amount) || 0;
     const status = invoiced && paid > 0 && ['pay_wait', 'partial', 'paid'].includes(o.status) ? (paid >= total - 0.004 ? 'paid' : 'partial') : o.status;
     const now = nowIso();
+    items = items.map(({ _idx, _extra, ...i }) => i);
     const st = [[`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]], ...itemRows(o.id, items)];
     st.push(invoiced
       ? [`UPDATE b2b_orders SET total = ?, entity_id = ?, entity = ?, comment = ?, status = ?, reinvoice = ?, reinvoiced_at = ?, reinvoice_sent = '', group_done = 0, updated_at = ? WHERE id = ?`,

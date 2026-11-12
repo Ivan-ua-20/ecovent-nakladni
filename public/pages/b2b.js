@@ -1389,8 +1389,11 @@ export function createB2bPages(ctx = {}) {
     const opt = await api('GET', `/api/b2b/orders/${o.id}/edit-options`);
     const cat = new Map(opt.catalog.map((p) => [p.product_id, p]));
     const open = o.status === 'open';
-    const rows = items.map((i) => ({ product_id: i.product_id, name: i.name, article: i.article, qty: i.qty, price: i.price, rrp: i.rrp, was: i.qty }));
+    const rows = items.map((i, line) => ({ line, product_id: i.product_id, name: i.name, article: i.article, qty: i.qty, price: i.price, rrp: i.rrp, was: i.qty }));
     const r2 = (x) => Math.round(x * 100) / 100;
+    // Окремий рядок того ж товару з іншою ціною — лише у відправленій закупівлі (чернетка й відкрита мають одну ціну на товар).
+    const extraOk = !['draft', 'open'].includes(o.status);
+    const several = (r, i) => rows.some((x, k) => k !== i && x.product_id === r.product_id && x.qty > 0);
     const m = modal(`Змінити закупівлю ${o.number}`, `<div class="form-stack">
         ${opt.invoiced ? `<div class="alert warn small">Рахунок № <b>${esc(o.invoice_no)}</b>${o.waybill_no ? ` і накладна № <b>${esc(o.waybill_no)}</b>` : ''} уже є. Після збереження закупівля лишиться у своєму статусі з позначкою
           «потрібно переробити рахунок/накладну»; у «Фінансові питання» нічого не піде, поки ви не натиснете «Надіслати» на сторінці закупівлі. Партнер отримає сповіщення.${o.paid_amount ? ` Оплата ${uah(o.paid_amount)} лишається зарахованою; якщо сума зросте — «Частково оплачено».` : ''}</div>`
@@ -1398,7 +1401,7 @@ export function createB2bPages(ctx = {}) {
             : open ? '<div class="alert info small">Відкрита закупівля: тут змінюються лише ціни й РРЦ — товари й кількість ідуть із замовлень клієнтів. Нові ціни перейдуть і в ці замовлення клієнтів; партнер отримає сповіщення в бот і групу.</div>'
               : '<div class="small muted">Партнер отримає сповіщення в бот і групу (хто й що змінив); ціни в замовленнях клієнтів цієї чернетки теж оновляться.</div>'}
         <div id="seRows"></div>
-        ${open ? '' : `<div class="f se-add"><span>Додати товар (каталог партнера)</span><input id="seQ" placeholder="Назва, артикул або ID — далі оберіть зі списку" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="seHits"><div id="seHits" class="se-hits" role="listbox" hidden></div></div>
+        ${open ? '' : `<div class="f se-add"><span>Додати товар (каталог партнера)</span><input id="seQ" placeholder="Назва, артикул або ID — далі оберіть зі списку" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="seHits"><div id="seHits" class="se-hits" role="listbox" hidden></div><div id="seDup" class="alert warn small se-dup" hidden></div></div>
         <label class="f"><span>Юрособа (на кого рахунок)</span><select id="seEnt">${opt.entities.map((e) => `<option value="${e.id}" ${e.id === o.entity_id ? 'selected' : ''}>${esc(e.name)} · ${esc(e.code)}</option>`).join('')}</select></label>`}
         <label class="f"><span>Коментар</span><textarea id="seCom" rows="2">${esc(o.comment || '')}</textarea></label>
       </div>`, { wide: true, footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="seSave">Зберегти</button>' });
@@ -1415,7 +1418,7 @@ export function createB2bPages(ctx = {}) {
     const draw = () => {
       const total = rows.reduce((t, r) => t + Math.round(r.qty * r.price * 100) / 100, 0);
       $('#seRows', m.el).innerHTML = `<table class="list"><thead><tr><th>Товар</th><th class="r">К-сть</th><th class="r">РРЦ, грн</th><th class="r">Ціна, грн</th><th class="r">Сума</th><th></th></tr></thead><tbody>
-        ${rows.map((r, i) => `<tr style="${r.qty ? '' : 'opacity:.5;text-decoration:line-through'}"><td>${esc(r.name)}${r.was === undefined ? ' <span class="badge info">новий</span>' : ''}<div class="small muted">ID ${r.product_id}${r.article ? ` · ${esc(r.article)}` : ''}</div></td>
+        ${rows.map((r, i) => `<tr style="${r.qty ? '' : 'opacity:.5;text-decoration:line-through'}"><td>${esc(r.name)}${r.extra ? ' <span class="badge warn">окрема ціна</span>' : r.was === undefined ? ' <span class="badge info">новий</span>' : several(r, i) ? ' <span class="badge">кілька цін</span>' : ''}<div class="small muted">ID ${r.product_id}${r.article ? ` · ${esc(r.article)}` : ''}</div></td>
           <td class="r"><input data-sq="${i}" type="number" min="0" step="1" value="${r.qty}" style="width:76px" aria-label="Кількість" ${open ? 'disabled' : ''}></td>
           <td class="r"><input data-sr="${i}" inputmode="decimal" value="${String(r.rrp ?? 0).replace('.', ',')}" style="width:100px" aria-label="РРЦ"></td>
           <td class="r"><input data-sp="${i}" inputmode="decimal" value="${String(r.price).replace('.', ',')}" style="width:100px" aria-label="Ціна"></td>
@@ -1439,14 +1442,43 @@ export function createB2bPages(ctx = {}) {
         box.hidden = !words.length; q.setAttribute('aria-expanded', String(!box.hidden));
         box.innerHTML = hits.length ? hits.map((p, i) => { const have = rows.find((r) => r.product_id === p.product_id && r.qty > 0);
           return `<button type="button" class="se-hit ${i === at ? 'on' : ''}" role="option" data-hit="${i}"><span>${esc(p.name)}<span class="small muted"> · ID ${p.product_id}${p.article ? ` · ${esc(p.article)}` : ''}</span></span>
-            <span class="small nowrap">${have ? `<span class="badge info">уже є: ${have.qty} шт</span> ` : ''}${uah(p.price)}</span></button>`; }).join('')
+            <span class="small nowrap">${have ? `<span class="badge warn">уже є: ${rows.filter((r) => r.product_id === p.product_id).reduce((t, r) => t + r.qty, 0)} шт</span> ` : ''}${uah(p.price)}</span></button>`; }).join('')
           : '<div class="small muted" style="padding:8px 10px">Нічого не знайдено в каталозі партнера.</div>';
-        $$('[data-hit]', box).forEach((b) => (b.onmousedown = (ev) => { ev.preventDefault(); add(hits[Number(b.dataset.hit)]); }));
+        $$('[data-hit]', box).forEach((b) => (b.onmousedown = (ev) => { ev.preventDefault(); pick(hits[Number(b.dataset.hit)]); }));
+      };
+      const dup = $('#seDup', m.el);
+      // Товар уже є — попередження й вибір: +1 до наявного рядка або окремий рядок з іншою ціною.
+      const pick = (p) => {
+        if (!p) return;
+        sync();
+        const have = rows.filter((r) => r.product_id === p.product_id && r.qty > 0);
+        if (!have.length || !extraOk) { if (have.length) toast(`«${p.name}» уже є в закупівлі — додаю +1 шт.`); add(p); return; }
+        q.value = ''; box.hidden = true; q.setAttribute('aria-expanded', 'false');
+        dup.hidden = false;
+        dup.innerHTML = `<div>⚠️ <b>${esc(p.name)}</b> уже є в закупівлі: ${have.map((r) => `${r.qty} шт по ${uah(r.price)}`).join(', ')}.</div>
+          <div class="btn-row" style="margin-top:6px"><button type="button" class="btn sm" id="seDupPlus">+1 шт до наявного рядка</button>
+            <button type="button" class="btn sm primary" id="seDupNew">Додати окремим рядком з іншою ціною</button>
+            <button type="button" class="btn sm" id="seDupNo">Скасувати</button></div>`;
+        $('#seDupPlus', m.el).onclick = () => { dup.hidden = true; add(p); };
+        $('#seDupNo', m.el).onclick = () => { dup.hidden = true; q.focus(); };
+        $('#seDupNew', m.el).onclick = () => {
+          dup.hidden = true; sync();
+          const base = have[have.length - 1];
+          rows.push({ product_id: p.product_id, name: p.name, article: p.article, qty: 1, price: base.price, rrp: base.rrp, extra: true });
+          draw();
+          const k = rows.length - 1;
+          const inp = $(`[data-sp="${k}"]`, m.el);
+          inp?.closest('tr')?.classList.add('se-flash');
+          inp?.scrollIntoView({ block: 'nearest' }); inp?.focus(); inp?.select();
+          toast(`Новий рядок «${p.name}» — вкажіть ціну й кількість`);
+        };
+        $('#seDupNew', m.el).focus();
       };
       const add = (p) => {
         if (!p) return;
         sync();
-        let i = rows.findIndex((r) => r.product_id === p.product_id);
+        let i = rows.findIndex((r) => r.product_id === p.product_id && !r.extra);
+        if (i < 0) i = rows.findIndex((r) => r.product_id === p.product_id);
         if (i >= 0) rows[i].qty = (rows[i].qty || 0) + 1; else { rows.push({ product_id: p.product_id, name: p.name, article: p.article, qty: 1, price: p.price, rrp: p.rrp }); i = rows.length - 1; }
         draw();
         q.value = ''; box.hidden = true; q.setAttribute('aria-expanded', 'false');
@@ -1458,7 +1490,7 @@ export function createB2bPages(ctx = {}) {
       q.onkeydown = (ev) => {
         if (box.hidden || !hits.length) return;
         if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') { ev.preventDefault(); at = (at + (ev.key === 'ArrowDown' ? 1 : hits.length - 1)) % hits.length; $$('[data-hit]', box).forEach((b, i) => b.classList.toggle('on', i === at)); $$('[data-hit]', box)[at]?.scrollIntoView({ block: 'nearest' }); }
-        if (ev.key === 'Enter') { ev.preventDefault(); add(hits[at]); }
+        if (ev.key === 'Enter') { ev.preventDefault(); pick(hits[at]); }
         if (ev.key === 'Escape') { ev.stopPropagation(); box.hidden = true; }
       };
       q.onblur = () => setTimeout(() => { box.hidden = true; q.setAttribute('aria-expanded', 'false'); }, 150);
@@ -1469,7 +1501,7 @@ export function createB2bPages(ctx = {}) {
       if (opt.invoiced && !(await confirmDanger(`Змінити закупівлю з рахунком № ${o.invoice_no}?`, 'Закупівля отримає позначку «потрібно переробити рахунок/накладну». Запит у «Фінансові питання» надішлете кнопкою на сторінці закупівлі, коли будете готові. Партнер отримає сповіщення.', 'Зберегти зміни'))) return;
       e.target.closest("button").disabled = true;
       try {
-        const r = await api('PUT', `/api/b2b/orders/${o.id}/edit`, { items: rows.map((x) => ({ product_id: x.product_id, qty: x.qty, price: x.price, rrp: x.rrp })), entity_id: open ? undefined : Number($('#seEnt', m.el).value) || undefined, comment: $('#seCom', m.el).value });
+        const r = await api('PUT', `/api/b2b/orders/${o.id}/edit`, { items: rows.map((x) => ({ line: x.line, extra: x.extra || undefined, product_id: x.product_id, qty: x.qty, price: x.price, rrp: x.rrp })), entity_id: open ? undefined : Number($('#seEnt', m.el).value) || undefined, comment: $('#seCom', m.el).value });
         m.close();
         toast(!r.changed ? 'Змін немає' : r.reinvoice ? 'Збережено — закупівля позначена «переробити рахунок/накладну»' : 'Збережено');
         viewOrder(o.id);
