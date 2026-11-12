@@ -180,8 +180,8 @@ export function mountB2bApi(app, { db, myPartner, tgPartner, CLIENT_STATUS, orde
     return c.json({
       products: d.products.map((p) => ({
         product_id: p.id, article: p.article || '', name: p.name, brand: p.brand, category: cats.get(p.cat) || '', image: p.image || '',
-        rrp: p.rrp, price: p.price, special: p.special, special_until: p.special_until || null, is_new: p.is_new,
-        ...(p.rrp_new ? { next_price: { rrp: p.rrp_new, price: p.price_new, from: p.grace_until } } : {}),
+        rrp: p.rrp, price: p.price, price_warehouse: p.price_wh, special: p.special, special_until: p.special_until || null, is_new: p.is_new,
+        ...(p.rrp_new ? { next_price: { rrp: p.rrp_new, price: p.price_new, price_warehouse: p.price_wh_new, from: p.grace_until } } : {}),
       })).sort((a, b) => a.name.localeCompare(b.name, 'uk')),
     });
   });

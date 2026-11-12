@@ -2,7 +2,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi, psBar, wirePsBar, psMatch, psHl, psEmpty, urgentBadge, urgentRow, cancelNote, askDeliveryChange, deliveryReqText } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi, psBar, wirePsBar, psMatch, psHl, psEmpty, urgentBadge, urgentRow, cancelNote, askDeliveryChange, deliveryReqText, deliveryReqMoney, askCancel } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
@@ -90,6 +90,8 @@ export function createPartnerPages(ctx = {}) {
 
   async function viewPartnerCatalog() {
     const { partner, brands, categories = [], products } = await api('GET', '/api/b2b/p/catalog');
+    // Ціна закупівлі на ваш склад — окрема колонка, якщо хоч на щось вона відрізняється.
+    const hasWh = products.some((p) => p.price_wh != null && Math.abs(p.price_wh - p.price) > 0.004);
     if (filter.brand && !brands.some((b) => String(b.id) === String(filter.brand))) filter.brand = '';
     filter.cat = filter.cat ?? '';
     filter.sort = SORTS[filter.sort] ? filter.sort : 'often';
@@ -127,8 +129,8 @@ export function createPartnerPages(ctx = {}) {
       const rowsHtml = list.map((p) => {
         const gk = filter.sort === 'often' && p.ordered ? 'fav' : p.brand_id; // «часто» — окремою групою зверху
         const head = grouped && gk !== lastBrand
-          ? (gk === 'fav' ? '<tr class="grp"><td colspan="6"><b>⭐ Часто замовляєте</b></td></tr>'
-            : `<tr class="grp"><td colspan="6"><b>${esc(p.brand)}</b> <span class="badge ok">ваша знижка ${pct(p.margin)} від РРЦ</span></td></tr>`) : '';
+          ? (gk === 'fav' ? `<tr class="grp"><td colspan="${hasWh ? 7 : 6}"><b>⭐ Часто замовляєте</b></td></tr>`
+            : `<tr class="grp"><td colspan="${hasWh ? 7 : 6}"><b>${esc(p.brand)}</b> <span class="badge ok">ваша знижка ${pct(p.margin)} від РРЦ</span></td></tr>`) : '';
         lastBrand = gk;
         return `${head}<tr>
           <td style="width:56px">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" style="width:48px;height:48px;object-fit:contain">` : ''}</td>
@@ -137,10 +139,11 @@ export function createPartnerPages(ctx = {}) {
           <td class="r small muted">${money(p.rrp)} грн</td>
           <td class="r small hide-m">${pct(p.margin)}<div class="muted">−${money(p.rrp - p.price)}</div></td>
           <td class="r"><b>${money(p.price)} грн</b>${p.special ? `<div><span class="badge ok">${p.special_until ? `акція до ${p.special_until.slice(5).split('-').reverse().join('.')}` : 'особлива ціна'}</span></div>` : ''}${graceTxt(p)}</td>
+          ${hasWh ? `<td class="r"><b>${money(p.price_wh)} грн</b>${p.grace_until && p.price_wh_new != null ? `<div class="small muted">далі ${money(p.price_wh_new)} грн</div>` : ''}</td>` : ''}
         </tr>`;
       }).join('');
       $('#pcCount').textContent = `Знайдено: ${list.length} з ${products.length}`;
-      $('#pcList').innerHTML = list.length ? `<table class="list"><thead><tr><th></th><th>Товар</th><th class="hide-m">Бренд</th><th class="r">РРЦ</th><th class="r hide-m">Знижка від РРЦ</th><th class="r">Ваша ціна</th></tr></thead>
+      $('#pcList').innerHTML = list.length ? `<table class="list"><thead><tr><th></th><th>Товар</th><th class="hide-m">Бренд</th><th class="r">РРЦ</th><th class="r hide-m">Знижка від РРЦ</th><th class="r">${hasWh ? 'Ціна з відправкою клієнтам' : 'Ваша ціна'}</th>${hasWh ? '<th class="r">Закупівля на ваш склад</th>' : ''}</tr></thead>
         <tbody>${rowsHtml}</tbody></table>`
         : `<div class="card empty"><div class="big">Нічого не знайдено</div>Змініть пошук, бренд, категорію чи «Показати».
           <div class="btn-row" style="justify-content:center;margin-top:10px"><button class="btn" id="pcReset">Скинути фільтри</button></div></div>`;
@@ -184,12 +187,13 @@ export function createPartnerPages(ctx = {}) {
         byCat.get(k).push(p);
       }
       const cols = [{ title: 'Товар', width: 60 }, { title: 'Артикул', width: 18 }, { title: 'Бренд', width: 16 },
-        { title: 'РРЦ, грн', width: 13, fmt: 'money' }, { title: 'Ваша ціна, грн', width: 15, fmt: 'money' }, { title: 'Маржа від РРЦ', width: 14, fmt: 'pct' }];
+        { title: 'РРЦ, грн', width: 13, fmt: 'money' }, { title: hasWh ? 'Ціна з відправкою клієнтам, грн' : 'Ваша ціна, грн', width: 15, fmt: 'money' }, { title: 'Маржа від РРЦ', width: 14, fmt: 'pct' },
+        ...(hasWh ? [{ title: 'Закупівля на ваш склад, грн', width: 16, fmt: 'money' }] : [])];
       const sheets = [...byCat].map(([k, list]) => ({
         name: catName.get(k) || 'Інше',
         cols,
         rows: [...list].sort((a, b) => a.brand.localeCompare(b.brand, 'uk') || a.name.localeCompare(b.name, 'uk'))
-          .map((p) => [p.name, p.article || '', p.brand, Number(p.rrp), Number(p.price), Math.round((p.rrp ? ((p.rrp - p.price) / p.rrp) * 100 : 0) * 100) / 100]),
+          .map((p) => [p.name, p.article || '', p.brand, Number(p.rrp), Number(p.price), Math.round((p.rrp ? ((p.rrp - p.price) / p.rrp) * 100 : 0) * 100) / 100, ...(hasWh ? [Number(p.price_wh)] : [])]),
       })).sort((a, b) => a.name.localeCompare(b.name, 'uk'));
       downloadXlsx(`Каталог ${partner.name} ${new Date().toLocaleDateString('uk-UA')}.xlsx`.replace(/[\\/:*?"<>|]+/g, '_'), sheets);
       toast(`Завантажено: ${products.length} товарів, ${sheets.length} ${sheets.length === 1 ? 'аркуш' : 'аркушів'}`);
@@ -302,7 +306,7 @@ export function createPartnerPages(ctx = {}) {
       </div>`;
     const table = rows.length ? `<table class="list"><thead><tr><th>№</th><th class="hide-m">Дата</th><th>Сума</th><th>Статус</th><th class="hide-m">Рахунок</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click" data-o="${o.id}">
-          <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? ' <span class="badge info">🚗 самовивіз</span>' : o.delivery === 'warehouse' ? ' <span class="badge info">🏬 на ваш склад</span>' : ''}${o.status === 'confirm' ? ' <span class="badge warn">👉 підтвердіть</span>' : ''}${o.pay_terms === 'postpay' ? ` <span class="badge ${o.overdue ? 'bad' : 'warn'}">відстрочка${o.due_date ? ` до ${esc(fmtDay(o.due_date))}` : ''}</span>` : ''}<div class="small muted">${esc(o.entity.split('\n')[0].split(',')[0])}</div></td>
+          <td><b>${esc(o.number)}</b>${o.delivery_req?.from === 'admin' ? ' <span class="badge warn">🔁 підтвердіть спосіб отримання</span>' : ''}${o.delivery === 'pickup' ? ' <span class="badge info">🚗 самовивіз</span>' : o.delivery === 'warehouse' ? ' <span class="badge info">🏬 на ваш склад</span>' : ''}${o.status === 'confirm' ? ' <span class="badge warn">👉 підтвердіть</span>' : ''}${o.pay_terms === 'postpay' ? ` <span class="badge ${o.overdue ? 'bad' : 'warn'}">відстрочка${o.due_date ? ` до ${esc(fmtDay(o.due_date))}` : ''}</span>` : ''}<div class="small muted">${esc(o.entity.split('\n')[0].split(',')[0])}</div></td>
           <td class="small hide-m">${esc(fmtDateTime(o.created_at))}</td>
           <td><b>${uah(o.total)}</b></td>
           <td>${statusBadge(o)}</td>
@@ -343,8 +347,11 @@ export function createPartnerPages(ctx = {}) {
           ${isDraft && head ? '<button class="btn primary" id="oSend">Відправити закупівлю</button>' : ''}
           ${editable ? `<a class="btn" href="#/porders/${o.id}/edit">Змінити</a><button class="btn danger" id="oCancel">${isDraft ? 'Видалити чернетку' : 'Скасувати'}</button>` : ''}</div></div>
       ${cancelNote(o)}
-      ${o.delivery_req ? `<div class="alert warn dr-req"><div>⏳ <b>Запит на зміну способу отримання чекає підтвердження менеджера:</b> ${deliveryReqText(o.delivery_req)}.<div class="small">Поки що діє поточний спосіб — «${esc(o.delivery_name || '')}».</div></div>
+      ${o.delivery_req?.from === 'partner' ? `<div class="alert warn dr-req"><div>⏳ <b>Запит на зміну способу отримання чекає підтвердження менеджера:</b> ${deliveryReqText(o.delivery_req)}.${deliveryReqMoney(o.delivery_req)}<div class="small">Поки що діє поточний спосіб — «${esc(o.delivery_name || '')}».</div></div>
         ${canEdit() ? '<button class="btn sm" id="oDrUndo">Відкликати запит</button>' : ''}</div>` : ''}
+      ${o.delivery_req?.from === 'admin' ? `<div class="alert warn dr-req"><div>🔁 <b>Менеджер пропонує змінити спосіб отримання</b> з «${esc(o.delivery_name || '')}» на ${deliveryReqText(o.delivery_req)}.${deliveryReqMoney(o.delivery_req)}
+          <div class="small">Нічого не зміниться, доки ви не підтвердите.${o.invoice_no ? ' Якщо сума зміниться — рахунок буде перероблено.' : ''}</div></div>
+        ${canEdit() ? '<div class="btn-row"><button class="btn primary" id="oDaOk">✅ Підтвердити</button><button class="btn danger" id="oDaNo">Відхилити</button></div>' : ''}</div>` : ''}
       ${toConfirm ? `<div class="card form-stack" style="margin-bottom:12px;border-color:var(--warn)">
         <h3 style="margin:0">📝 Цю закупівлю підготував наш менеджер — підтвердіть її</h3>
         <div class="small">${o.pay_terms === 'postpay' ? `Оплата: <b>відстрочка ${o.pay_days} дн.</b> від дати рахунку.` : 'Оплата: передоплата за рахунком.'} Отримання: <b>${esc(o.delivery_name || '')}</b>${o.ship_to ? ` — ${esc([o.ship_to.name, o.ship_to.phone, o.ship_to.address].filter(Boolean).join(', '))}` : ''}.</div>
@@ -396,6 +403,35 @@ export function createPartnerPages(ctx = {}) {
       if (!v) return;
       try { await api('POST', `/api/b2b/p/orders/${o.id}/delivery-request`, v); toast('Запит надіслано — менеджер підтвердить зміну'); viewOrder(o.id); } catch (e) { toast(e.message, true); }
     };
+    // Пропозиція менеджера: підтвердити (самовивіз — хто забирає) або відхилити з коментарем.
+    if ($('#oDaOk')) $('#oDaOk').onclick = async () => {
+      const r = o.delivery_req;
+      let body = { ok: true };
+      if (r.delivery === 'pickup') {
+        const ks = await api('GET', '/api/b2b/p/couriers').catch(() => []);
+        const lim = await api('GET', '/api/b2b/p/limits').catch(() => null);
+        const pk = await new Promise((resolve) => {
+          let done = false;
+          const m = modal('Хто забирає зі складу?', `<div class="form-stack"><div class="small">Самовивіз: склад підготує закупівлю на цю людину.</div>${pickupFields(ks.length ? null : lim?.pickup_last, 'daPk', ks)}</div>`,
+            { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="daOk">Підтвердити самовивіз</button>' });
+          wirePickupFields(m.el, 'daPk');
+          $('#daOk', m.el).onclick = () => {
+            const v = pickupRead(m.el, 'daPk');
+            if (!v.courier_id && (v.name.length < 3 || v.phone.replace(/\D/g, '').length < 10)) { toast('Оберіть кур’єра або впишіть ПІБ і телефон', true); return; }
+            done = true; m.close(); resolve(v);
+          };
+          new MutationObserver((_, obs) => { if (!document.contains(m.el)) { obs.disconnect(); if (!done) resolve(null); } }).observe(document.body, { childList: true });
+        });
+        if (!pk) return;
+        body = { ok: true, pickup_by: pk };
+      } else if (!(await confirmDanger(`Підтвердити «${r.delivery_name}»?`, r.total_new != null && Math.abs(r.total_new - (r.total_now ?? o.total)) > 0.004 ? `Сума закупівлі стане ${uah(r.total_new)} (зараз ${uah(o.total)}).` : 'Сума закупівлі не зміниться.', 'Підтвердити'))) return;
+      try { await api('POST', `/api/b2b/p/orders/${o.id}/delivery-request/answer`, body); toast('Підтверджено — спосіб отримання змінено'); viewOrder(o.id); } catch (e) { toast(e.message, true); }
+    };
+    if ($('#oDaNo')) $('#oDaNo').onclick = async () => {
+      const note = await askCancel(`Відхилити зміну способу отримання — ${o.number}?`, `Лишиться «${esc(o.delivery_name || '')}». Менеджер отримає сповіщення.`, { verb: 'Відхилити', keep: 'Не відхиляти', reasons: ['Нам зручніше як є', 'Обговоримо з менеджером', 'Інша адреса доставки'] });
+      if (note === null) return;
+      try { await api('POST', `/api/b2b/p/orders/${o.id}/delivery-request/answer`, { ok: false, note }); toast('Відхилено — менеджер отримав сповіщення'); viewOrder(o.id); } catch (e) { toast(e.message, true); }
+    };
     if ($('#oDrUndo')) $('#oDrUndo').onclick = async () => {
       try { await api('DELETE', `/api/b2b/p/orders/${o.id}/delivery-request`); toast('Запит відкликано'); viewOrder(o.id); } catch (e) { toast(e.message, true); }
     };
@@ -426,7 +462,7 @@ export function createPartnerPages(ctx = {}) {
 
   // Оформлення або зміна закупівлі: товари з каталогу з кількістю, юрособа, коментар.
   async function orderForm(id) {
-    const [{ products, brands }, entities, cur] = await Promise.all([
+    const [{ products, brands, wh_price: catWh }, entities, cur] = await Promise.all([
       api('GET', '/api/b2b/p/catalog'), api('GET', '/api/b2b/p/entities'), id ? api('GET', `/api/b2b/p/orders/${id}`) : null,
     ]);
     if (cur && !['invoice_wait', 'draft'].includes(cur.order.status)) { location.hash = `#/porders/${id}`; return; }
@@ -438,6 +474,12 @@ export function createPartnerPages(ctx = {}) {
     const pp = plim?.postpay || { days: 0 };
     let fb = '';
     const ps = { q: '', sel: false }; // пошук у списку товарів
+    // Ціна залежить від способу отримання: «на ваш склад» (і, якщо так налаштовано, самовивіз) — окрема ціна.
+    const whModes = new Set(catWh || ['warehouse']);
+    const delNow = () => $('input[name="ofDel"]:checked')?.value || 'np';
+    const priceOf = (p, d = delNow()) => (whModes.has(d) && p.price_wh != null ? p.price_wh : p.price);
+    const twoPrices = products.some((p) => p.price_wh != null && Math.abs(p.price_wh - p.price) > 0.004);
+    const wh0 = cur?.order.ship_to || plim?.warehouse || {};
     if (!entities.length) {
       main.innerHTML = `<h2>${id ? 'Зміна закупівлі' : 'Нова закупівля'}</h2><div class="card empty"><div class="big">Спершу додайте юрособу</div>
         На неї виставлятиметься рахунок.<div class="btn-row" style="justify-content:center;margin-top:12px"><a class="btn primary" href="#/pentities">Додати юрособу</a></div></div>`;
@@ -458,8 +500,13 @@ export function createPartnerPages(ctx = {}) {
             <h3>Ваше замовлення</h3>
             <div id="ofSum"></div>
             <div class="f"><span>Як отримуєте товар</span>
-              <label class="check"><input type="radio" name="ofDel" value="np" ${cur?.order.delivery === 'pickup' ? '' : 'checked'}> Відправка клієнтам Новою поштою (оформлюю замовлення на клієнтів)</label>
-              <label class="check"><input type="radio" name="ofDel" value="pickup" ${cur?.order.delivery === 'pickup' ? 'checked' : ''}> Самовивіз — забираю всю закупівлю зі складу</label></div>
+              <label class="check"><input type="radio" name="ofDel" value="np" ${['pickup', 'warehouse'].includes(cur?.order.delivery) ? '' : 'checked'}> Відправка клієнтам Новою поштою (оформлюю замовлення на клієнтів)</label>
+              <label class="check"><input type="radio" name="ofDel" value="pickup" ${cur?.order.delivery === 'pickup' ? 'checked' : ''}> Самовивіз — забираю всю закупівлю зі складу</label>
+              <label class="check"><input type="radio" name="ofDel" value="warehouse" ${cur?.order.delivery === 'warehouse' ? 'checked' : ''}> На мій склад — відправте всю закупівлю Новою поштою${twoPrices ? ' <span class="badge info">окремі ціни</span>' : ''}</label></div>
+            <div id="ofWh" class="form-stack" hidden style="padding:10px;border:1px solid var(--line);border-radius:8px;gap:8px"><div class="small"><b>🏬 Куди відправити *</b></div>
+              <label class="f"><span>Отримувач (ПІБ)</span><input id="ofWhName" value="${esc(wh0.name || '')}" autocomplete="off"></label>
+              <div class="grid2"><label class="f"><span>Телефон</span><input id="ofWhPhone" value="${esc(wh0.phone || '')}" inputmode="tel" placeholder="067 123 45 67" autocomplete="off"></label>
+                <label class="f"><span>Місто й відділення Нової пошти</span><input id="ofWhAddr" value="${esc(wh0.address || '')}" placeholder="Київ, відділення №25" autocomplete="off"></label></div></div>
             <div id="ofPick" class="form-stack" hidden style="padding:10px;border:1px solid var(--line);border-radius:8px"><div class="small"><b>🚗 Хто забирає зі складу *</b> <span class="muted">— склад підготує закупівлю на цю людину. Список — у вкладці «Кур’єри».</span></div>
               ${pickupFields(cur?.order.pickup_by || (couriers.length ? null : plim?.pickup_last), 'ofPk', couriers)}</div>
             ${pp.days ? `<div class="f"><span>Оплата</span>
@@ -479,9 +526,13 @@ export function createPartnerPages(ctx = {}) {
       </div>`;
     const sum = () => {
       const lines = products.filter((p) => qty.get(p.id) > 0);
-      const total = lines.reduce((t, p) => t + Math.round(p.price * qty.get(p.id) * 100) / 100, 0);
-      $('#ofSum').innerHTML = lines.length ? `${lines.map((p) => `<div class="small" style="display:flex;justify-content:space-between;gap:8px"><span>${esc(p.name)} × ${qty.get(p.id)}</span><b>${money(Math.round(p.price * qty.get(p.id) * 100) / 100)}</b></div>`).join('')}
-        <div style="display:flex;justify-content:space-between;border-top:1px solid var(--line);padding-top:6px;margin-top:4px"><b>Разом з ПДВ</b><b>${uah(total)}</b></div>`
+      const total = lines.reduce((t, p) => t + Math.round(priceOf(p) * qty.get(p.id) * 100) / 100, 0);
+      // інший спосіб — для порівняння (якщо ціни різні)
+      const alt = whModes.has(delNow()) ? 'np' : 'warehouse';
+      const totalAlt = lines.reduce((t, p) => t + Math.round(priceOf(p, alt) * qty.get(p.id) * 100) / 100, 0);
+      $('#ofSum').innerHTML = lines.length ? `${lines.map((p) => `<div class="small" style="display:flex;justify-content:space-between;gap:8px"><span>${esc(p.name)} × ${qty.get(p.id)}</span><b>${money(Math.round(priceOf(p) * qty.get(p.id) * 100) / 100)}</b></div>`).join('')}
+        <div style="display:flex;justify-content:space-between;border-top:1px solid var(--line);padding-top:6px;margin-top:4px"><b>Разом з ПДВ</b><b>${uah(total)}</b></div>
+        ${Math.abs(totalAlt - total) > 0.004 ? `<div class="small muted">${alt === 'np' ? 'З відправкою клієнтам' : 'На ваш склад'} було б ${uah(totalAlt)}</div>` : ''}`
         : '<div class="small muted">Вкажіть кількість біля товарів зліва.</div>';
     };
     const draw = () => {
@@ -489,7 +540,7 @@ export function createPartnerPages(ctx = {}) {
       const list = inBrand.filter((p) => psMatch(p, ps.q) && (!ps.sel || qty.get(p.id) > 0));
       psCount(list.length, inBrand.length, products.filter((p) => qty.get(p.id) > 0).length);
       $('#ofList').innerHTML = list.length ? `<table class="list"><thead><tr><th>Товар</th><th class="r">Ціна</th><th class="r">К-сть</th></tr></thead><tbody>
-        ${list.map((p) => `<tr class="${qty.get(p.id) > 0 ? 'ps-on' : ''}"><td>${p.ordered ? '<span title="Часто замовляєте">⭐</span> ' : ''}${psHl(p.name, ps.q)}${p.article || p.ordered ? `<div class="small muted">${[p.article ? psHl(p.article, ps.q) : '', p.ordered ? `замовляли ${p.ordered} раз` : ''].filter(Boolean).join(' · ')}</div>` : ''}</td><td class="r"><b>${money(p.price)}</b><div class="small muted">РРЦ ${money(p.rrp)}</div>${graceTxt(p)}</td>
+        ${list.map((p) => `<tr class="${qty.get(p.id) > 0 ? 'ps-on' : ''}"><td>${p.ordered ? '<span title="Часто замовляєте">⭐</span> ' : ''}${psHl(p.name, ps.q)}${p.article || p.ordered ? `<div class="small muted">${[p.article ? psHl(p.article, ps.q) : '', p.ordered ? `замовляли ${p.ordered} раз` : ''].filter(Boolean).join(' · ')}</div>` : ''}</td><td class="r"><b>${money(priceOf(p))}</b>${twoPrices && Math.abs(p.price_wh - p.price) > 0.004 ? `<div class="small muted">${whModes.has(delNow()) ? 'клієнтам' : 'на ваш склад'} ${money(whModes.has(delNow()) ? p.price : p.price_wh)}</div>` : ''}<div class="small muted">РРЦ ${money(p.rrp)}</div>${graceTxt(p)}</td>
           <td class="r"><input type="number" min="0" step="1" inputmode="numeric" data-q="${p.id}" value="${qty.get(p.id) || ''}" style="width:80px;text-align:right" aria-label="Кількість: ${esc(p.name)}"></td></tr>`).join('')}</tbody></table>`
         : psEmpty(ps);
       $$('#ofList [data-q]').forEach((inp) => (inp.oninput = () => {
@@ -503,8 +554,9 @@ export function createPartnerPages(ctx = {}) {
     };
     const psCount = wirePsBar($('#ofPs'), ps, () => draw());
     $$('[data-fb]').forEach((b) => (b.onclick = () => { fb = b.dataset.fb; $$('[data-fb]').forEach((x) => x.classList.toggle('on', x === b)); draw(); }));
-    const pickSync = () => { $('#ofPick').hidden = $('input[name="ofDel"]:checked')?.value !== 'pickup'; };
-    $$('input[name="ofDel"]').forEach((r) => (r.onchange = pickSync));
+    const pickSync = () => { $('#ofPick').hidden = delNow() !== 'pickup'; $('#ofWh').hidden = delNow() !== 'warehouse'; };
+    // Змінили спосіб — ціни в списку й у підсумку перераховуються.
+    $$('input[name="ofDel"]').forEach((r) => (r.onchange = () => { pickSync(); draw(); sum(); }));
     wirePickupFields(document, 'ofPk');
     pickSync();
     const submit = async (draft) => {
@@ -516,6 +568,10 @@ export function createPartnerPages(ctx = {}) {
       if (pk) {
         if (!pk.courier_id && (pk.name.length < 3 || pk.phone.replace(/\D/g, '').length < 10)) { toast('Самовивіз: вкажіть, хто забирає — оберіть кур’єра або впишіть ПІБ і телефон', true); $('#ofPk' + (pk.name ? 'Phone' : 'Name'))?.focus(); return; }
         body.pickup_by = pk;
+      }
+      if (body.delivery === 'warehouse' && !toDraft) {
+        body.ship_to = { name: $('#ofWhName').value.trim(), phone: $('#ofWhPhone').value.trim(), address: $('#ofWhAddr').value.trim() };
+        if (!body.ship_to.name || !body.ship_to.address || body.ship_to.phone.replace(/\D/g, '').length < 10) { toast('На ваш склад: вкажіть отримувача, телефон і відділення Нової пошти', true); $('#ofWhName').focus(); return; }
       }
       $$('#ofSave, #ofDraftSave').forEach((b) => { b.disabled = true; });
       try {

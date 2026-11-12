@@ -50,7 +50,7 @@ export function createHomePages(ctx = {}) {
     const paused = d.partner.paused;
     // Стрічка: історія закупівель / замовлень / обмінів + зміни цін за 14 днів.
     const priceRows = (prices.rows || []).slice(0, 30).map((r) => (r.kind === 'margin'
-      ? { kind: 'price', at: r.at, text: `Ваша знижка на ${r.brand}: ${r.old_margin ?? '—'}% → ${r.new_margin}%`, link: '#/pprices', number: '', who: '' }
+      ? { kind: 'price', at: r.at, text: `Ваша знижка на ${r.brand}: ${r.old_margin == null ? (r.wh ? 'як для відправки клієнтам' : '—') : `${r.old_margin}%`} → ${r.new_margin == null ? (r.wh ? 'як для відправки клієнтам' : 'закрито') : `${r.new_margin}%`}`, link: '#/pprices', number: '', who: '' }
       : { kind: 'price', at: r.at, text: `${r.new_rrp > r.old_rrp ? 'Подорожчав' : 'Подешевшав'} ${r.name}: РРЦ ${uah(r.old_rrp)} → ${uah(r.new_rrp)}${r.new_price != null ? ` · ваша ціна ${uah(r.new_price)}` : ''}`, link: '#/pprices', number: '', who: '' }));
     const all = [...(feed.rows || []), ...priceRows].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
     const st = viewPartnerHome.st || '';

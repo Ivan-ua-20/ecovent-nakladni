@@ -7,7 +7,7 @@
 // видаляють і відновлюють лише адміни, партнер бачить свій кошик (хто й коли видалив).
 import { fail, need, nowIso, round2, kyivDay } from '../../core/common.js';
 import { logAudit } from '../../core/requisites.js';
-import { orderNo, PM_JOIN, PM_COLS, withGrace } from './orders.js';
+import { orderNo, PM_JOIN, PM_COLS, marginFor, withGrace } from './orders.js';
 
 const INVOICED = ['pay_wait', 'partial', 'paid', 'done'];
 const userName = (u) => u?.name || u?.login || '';
@@ -18,13 +18,14 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
 
   // Товари, видимі партнеру (увімкнені бренди), — для «Додати товар».
   // Ціни — з відстрочкою підвищення партнера (як у його каталозі).
-  const partnerCatalog = async (partnerId) => {
+  // delivery — спосіб отримання закупівлі: ціна за маржею «клієнтам» або «на склад партнера».
+  const partnerCatalog = async (partnerId, delivery = 'np') => {
     const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [partnerId]);
     const rows = await withGrace(db, p, await db.all(
       `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN}
        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [kyivDay(), partnerId],
     ));
-    return rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || '', rrp: r.rrp, price: partnerPrice(r.rrp, r.margin) }));
+    return rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || '', rrp: r.rrp, price: partnerPrice(r.rrp, marginFor(r, delivery)) }));
   };
   hooks.partnerCatalog = partnerCatalog;
 
@@ -32,7 +33,7 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
     need(c, 'b2b.admin');
     const o = await orderOf(c.req.param('id'));
     const [catalog, entities, partner] = await Promise.all([
-      partnerCatalog(o.partner_id),
+      partnerCatalog(o.partner_id, o.delivery),
       db.all(`SELECT id, name, code FROM b2b_entities WHERE partner_id = ? AND (active = 1 OR id = ?) ORDER BY name`, [o.partner_id, o.entity_id || 0]),
       db.get(`SELECT default_entity, postpay_days FROM b2b_partners WHERE id = ?`, [o.partner_id]),
     ]);
@@ -122,7 +123,7 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
       const r = cat.get(l.product_id);
       if (!r) throw fail(400, `Товару ID ${l.product_id} немає в каталозі.`);
       const rrp = l.rrp ?? r.rrp;
-      return { product_id: l.product_id, name: r.name, article: r.article || '', qty: l.qty, price: l.price ?? partnerPrice(rrp, r.margin || 0), rrp, _idx: null, _extra: l.extra };
+      return { product_id: l.product_id, name: r.name, article: r.article || '', qty: l.qty, price: l.price ?? partnerPrice(rrp, marginFor(r, o.delivery) || 0), rrp, _idx: null, _extra: l.extra };
     });
     // Рядки одного товару з однаковою ціною й РРЦ — один рядок (кількості сумуються).
     const merged = [];

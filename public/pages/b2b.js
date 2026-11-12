@@ -4,7 +4,7 @@ import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
 import { viewAdminSupplyForm } from './b2b-supply.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard, urgentBadge, urgentRow, askCancel, cancelNote, deliveryReqText } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard, urgentBadge, urgentRow, askCancel, cancelNote, deliveryReqText, deliveryReqMoney } from './b2b-shared.js';
 
 const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
 
@@ -43,7 +43,7 @@ export function createB2bPages(ctx = {}) {
     const rows = all.filter(pMatch);
     const cnt = (k) => { const f = pFilter.st; pFilter.st = k; const n = all.filter(pMatch).length; pFilter.st = f; return n; };
     main.innerHTML = `
-      <div class="head-row"><h2>B2B партнери</h2><div class="btn-row"><button class="btn" id="pAuto">Автопауза…</button><button class="btn" id="pGrace">Відстрочка цін…</button><button class="btn" id="pAnn">📢 Оголошення партнерам</button><button class="btn primary" id="pNew">+ Новий партнер</button></div></div>
+      <div class="head-row"><h2>B2B партнери</h2><div class="btn-row"><button class="btn" id="pAuto">Автопауза…</button><button class="btn" id="pMd">Маржа за замовчуванням…</button><button class="btn" id="pGrace">Відстрочка цін…</button><button class="btn" id="pAnn">📢 Оголошення партнерам</button><button class="btn primary" id="pNew">+ Новий партнер</button></div></div>
       <div class="alert info help" style="margin-bottom:14px">Партнер бачить лише свій кабінет: каталог увімкнених йому брендів з РРЦ і своєю ціною (РРЦ − маржа).
         За замовчуванням партнер не бачить жодного бренду — увімкніть бренди й задайте маржу в картці партнера. Позначте кількох партнерів галочками — з'являться групові дії.</div>
       ${aging?.total ? `<div class="aging" aria-label="Борг партнерів за віком прострочки">${aging.buckets.map((b) => `<div class="aging-b ${b.key}"><span class="small muted">${esc(b.label)}</span><b>${money(b.sum)} грн</b><span class="small muted">${b.count} закуп.</span></div>`).join('')}</div>` : ''}
@@ -83,6 +83,19 @@ export function createB2bPages(ctx = {}) {
         </form>`, { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="apSave">Зберегти</button>' });
       $('#apSave', m.el).onclick = async () => {
         try { const r = await api('PUT', '/api/b2b/autopause', { days: $('#apDays', m.el).value }); m.close(); toast(r.days ? `Автопауза: понад ${r.days} дн. прострочки` : 'Автопаузу вимкнено'); } catch (e) { toast(e.message, true); }
+      };
+    };
+    // Маржа за замовчуванням — підставляється, коли вмикаєте бренд партнеру (у картці партнера).
+    $('#pMd').onclick = async () => {
+      const g = await api('GET', '/api/b2b/margin-defaults');
+      const v = (x) => (x == null ? '' : String(x).replace('.', ','));
+      const m = modal('Маржа за замовчуванням', `<form id="mdF" class="form-stack">
+          <p style="margin:0">Коли в картці партнера вмикаєте бренд, ці відсотки підставляються самі — їх можна змінити перед збереженням. На вже ввімкнені бренди не впливає.</p>
+          <div class="grid2"><label class="f">Відправка клієнтам, %<input id="mdM" inputmode="decimal" value="${v(g.margin)}" placeholder="без підказки"></label>
+            <label class="f">Закупівля на склад партнера, %<input id="mdW" inputmode="decimal" value="${v(g.margin_wh)}" placeholder="як клієнтам"></label></div>
+        </form>`, { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="mdSave">Зберегти</button>' });
+      $('#mdSave', m.el).onclick = async () => {
+        try { await api('PUT', '/api/b2b/margin-defaults', { margin: $('#mdM', m.el).value.replace(',', '.'), margin_wh: $('#mdW', m.el).value.replace(',', '.') }); m.close(); toast('Маржу за замовчуванням збережено'); } catch (e) { toast(e.message, true); }
       };
     };
     // Відстрочка підвищення цін: загальна (для партнерів без власної) і список партнерів зі своєю.
@@ -306,7 +319,8 @@ export function createB2bPages(ctx = {}) {
   }
 
   async function viewPartner(id) {
-    const { partner: p, users, brands, entities = [], roles = {}, limits, postpay, debt } = await api('GET', `/api/b2b/partners/${id}`);
+    const { partner: p, users, brands, entities = [], roles = {}, limits, postpay, debt, margin_defaults: md = {}, wh_price: whPrice = ['warehouse'] } = await api('GET', `/api/b2b/partners/${id}`);
+    const d = { wh_price: whPrice };
     const byPartner = users.filter((u) => u.added_by_partner).length;
     main.innerHTML = `
       <div class="head-row"><h2>${esc(p.name)} ${p.active ? '' : '<span class="badge bad">вимкнений</span>'}${p.paused ? ` <span class="badge warn">⏸ ${p.paused_auto ? 'автопауза: прострочка' : 'пауза'}</span>` : ''}</h2>
@@ -316,13 +330,15 @@ export function createB2bPages(ctx = {}) {
           <div class="card form-stack">
             <h3>Бренди й маржа</h3>
             <div class="muted small">Увімкніть бренди, які бачить партнер, і задайте маржу. Ціна партнера = РРЦ − маржа (з ПДВ, до копійок).
+              <b>Клієнтам</b> — закупівлі з відправкою клієнтам${d.wh_price?.includes('pickup') ? '' : ' і самовивіз'}, замовлення клієнтів; <b>на склад</b> — закупівля на склад партнера${d.wh_price?.includes('pickup') ? ' і самовивіз' : ''} (порожньо — як клієнтам).
               Нова маржа діє на нові замовлення; партнер отримає повідомлення про зміну цін, коли ви натиснете «Надіслати зміни цін».</div>
-            <table class="list"><thead><tr><th>Бренд</th><th class="r">Товарів з ціною</th><th>Бачить</th><th class="r">Маржа, %</th></tr></thead><tbody>
+            <table class="list"><thead><tr><th>Бренд</th><th class="r">Товарів з ціною</th><th>Бачить</th><th class="r">Маржа клієнтам, %</th><th class="r">На склад партнера, %</th></tr></thead><tbody>
               ${brands.map((b) => `<tr>
                 <td><b>${esc(b.name)}</b></td>
                 <td class="r small">${b.priced}${b.products !== b.priced ? ` <span class="muted">з ${b.products}</span>` : ''}</td>
                 <td><input type="checkbox" data-be="${b.id}" ${b.enabled ? 'checked' : ''} aria-label="Показувати бренд ${esc(b.name)}"></td>
-                <td class="r"><input data-bm="${b.id}" inputmode="decimal" value="${b.margin != null ? String(b.margin).replace('.', ',') : ''}" placeholder="напр. 20" style="width:90px;text-align:right" ${b.enabled ? '' : 'disabled'} aria-label="Маржа для ${esc(b.name)}"></td>
+                <td class="r"><input data-bm="${b.id}" inputmode="decimal" value="${b.margin != null ? String(b.margin).replace('.', ',') : ''}" placeholder="${md.margin != null ? String(md.margin).replace('.', ',') : 'напр. 20'}" style="width:90px;text-align:right" ${b.enabled ? '' : 'disabled'} aria-label="Маржа клієнтам для ${esc(b.name)}"></td>
+                <td class="r"><input data-bw="${b.id}" inputmode="decimal" value="${b.margin_wh != null ? String(b.margin_wh).replace('.', ',') : ''}" placeholder="як клієнтам" style="width:100px;text-align:right" ${b.enabled ? '' : 'disabled'} aria-label="Маржа на склад партнера для ${esc(b.name)}"></td>
               </tr>`).join('')}
             </tbody></table>
             ${brands.some((b) => b.enabled && !b.priced) ? `<div class="alert warn small">Для ввімкнених брендів ще немає цін — партнер бачить порожній каталог.
@@ -364,10 +380,11 @@ export function createB2bPages(ctx = {}) {
           </div>
           <div class="card form-stack">
             <h3>Особливі ціни на товари</h3>
-            <div class="small muted">Знижка від РРЦ на окремий товар замість маржі бренду. З датою «до» — акція, після неї діє маржа бренду.</div>
+            <div class="small muted">Знижка від РРЦ на окремий товар замість маржі бренду. З датою «до» — акція, після неї діє маржа бренду. «На склад партнера» порожньо — та сама знижка на обидва способи отримання.</div>
             <form id="pmF" class="btn-row" style="align-items:flex-end">
               <label class="f" style="flex:1 1 160px">Товар (ID LP-CRM або артикул)<input id="pmProd" required></label>
-              <label class="f" style="flex:0 1 110px">Знижка, %<input id="pmMargin" inputmode="decimal" required></label>
+              <label class="f" style="flex:0 1 110px">Знижка клієнтам, %<input id="pmMargin" inputmode="decimal" required></label>
+              <label class="f" style="flex:0 1 130px">На склад партнера, %<input id="pmMarginWh" inputmode="decimal" placeholder="та сама"></label>
               <label class="f" style="flex:0 1 160px">До (необов'язково)<input id="pmUntil" type="date"></label>
               <button class="btn primary" type="submit">Зберегти</button>
             </form>
@@ -455,8 +472,8 @@ export function createB2bPages(ctx = {}) {
       const list = await api('GET', `/api/b2b/partners/${p.id}/product-margins`);
       box.innerHTML = list.length ? `<table class="list"><thead><tr><th>Товар</th><th class="r">Знижка</th><th class="r">Ціна партнера</th><th>Діє</th><th></th></tr></thead><tbody>
         ${list.map((x) => `<tr class="${x.expired ? 'muted' : ''}"><td>${esc(x.name || `ID ${x.product_id}`)}${x.article ? ` <span class="small muted">${esc(x.article)}</span>` : ''}${x.brand_enabled ? '' : '<div class="small" style="color:var(--bad)">бренд вимкнено партнеру — ціна не діє</div>'}</td>
-          <td class="r">${pct(x.margin)}${x.brand_margin != null ? `<div class="small muted">бренд ${pct(x.brand_margin)}</div>` : ''}</td>
-          <td class="r">${x.rrp ? `${money(Math.round(x.rrp * (1 - x.margin / 100) * 100) / 100)} грн` : '—'}</td>
+          <td class="r">${pct(x.margin)}${x.margin_wh != null ? `<div class="small">на склад ${pct(x.margin_wh)}</div>` : ''}${x.brand_margin != null ? `<div class="small muted">бренд ${pct(x.brand_margin)}${x.brand_margin_wh != null ? ` / на склад ${pct(x.brand_margin_wh)}` : ''}</div>` : ''}</td>
+          <td class="r">${x.rrp ? `${money(Math.round(x.rrp * (1 - x.margin / 100) * 100) / 100)} грн${x.margin_wh != null ? `<div class="small">на склад ${money(Math.round(x.rrp * (1 - x.margin_wh / 100) * 100) / 100)} грн</div>` : ''}` : '—'}</td>
           <td>${x.until ? `${x.expired ? 'завершилась ' : 'до '}${x.until.split('-').reverse().join('.')}` : 'постійно'}</td>
           <td class="r"><button class="btn sm icon" data-pmdel="${x.product_id}" aria-label="Прибрати особливу ціну">✕</button></td></tr>`).join('')}
         </tbody></table>` : '<span class="small muted">Немає — діє маржа бренду.</span>';
@@ -466,9 +483,9 @@ export function createB2bPages(ctx = {}) {
     $('#pmF').onsubmit = async (e) => {
       e.preventDefault();
       try {
-        const r = await api('POST', `/api/b2b/partners/${p.id}/product-margins`, { product: $('#pmProd').value, margin: $('#pmMargin').value, until: $('#pmUntil').value });
+        const r = await api('POST', `/api/b2b/partners/${p.id}/product-margins`, { product: $('#pmProd').value, margin: $('#pmMargin').value, margin_wh: $('#pmMarginWh').value, until: $('#pmUntil').value });
         toast(`Особлива ціна: ${r.name}`);
-        $('#pmProd').value = ''; $('#pmMargin').value = ''; $('#pmUntil').value = '';
+        $('#pmProd').value = ''; $('#pmMargin').value = ''; $('#pmMarginWh').value = ''; $('#pmUntil').value = '';
         drawPm();
       } catch (er) { toast(er.message, true); }
     };
@@ -498,9 +515,13 @@ export function createB2bPages(ctx = {}) {
       try { await api('DELETE', `/api/b2b/partners/${p.id}/tg-group`); toast('Відв’язано'); viewPartner(p.id); } catch (e) { toast(e.message, true); }
     });
     $('[data-pord]').onclick = () => { ordFilter = { status: '', partner: String(p.id) }; };
+    // Увімкнули бренд — підставляємо маржу за замовчуванням (налаштування «Маржа за замовчуванням»).
     $$('[data-be]').forEach((cb) => (cb.onchange = () => {
       const inp = $(`[data-bm="${cb.dataset.be}"]`);
-      inp.disabled = !cb.checked;
+      const wi = $(`[data-bw="${cb.dataset.be}"]`);
+      inp.disabled = !cb.checked; wi.disabled = !cb.checked;
+      if (cb.checked && !inp.value && md.margin != null) inp.value = String(md.margin).replace('.', ',');
+      if (cb.checked && !wi.value && md.margin_wh != null) wi.value = String(md.margin_wh).replace('.', ',');
       if (cb.checked && !inp.value) inp.focus();
     }));
     $$('[data-dord]').forEach((tr) => (tr.onclick = () => { location.hash = `#/b2borders/${tr.dataset.dord}`; }));
@@ -510,7 +531,9 @@ export function createB2bPages(ctx = {}) {
         if (!cb.checked) continue;
         const v = $(`[data-bm="${cb.dataset.be}"]`).value.trim().replace(',', '.');
         if (v === '' || !Number.isFinite(Number(v))) { toast('Вкажіть маржу для кожного ввімкненого бренду', true); return; }
-        list.push({ brand_id: Number(cb.dataset.be), margin: Number(v) });
+        const w = $(`[data-bw="${cb.dataset.be}"]`).value.trim().replace(',', '.');
+        if (w !== '' && !Number.isFinite(Number(w))) { toast('Маржа «на склад партнера» — число або порожньо', true); return; }
+        list.push({ brand_id: Number(cb.dataset.be), margin: Number(v), margin_wh: w === '' ? null : Number(w) });
       }
       try {
         const r = await api('PUT', `/api/b2b/partners/${p.id}/margins`, list);
@@ -825,7 +848,7 @@ export function createB2bPages(ctx = {}) {
       ${rows.length ? `<table class="list"><thead><tr>${selHead()}<th>№</th><th>Партнер</th><th class="hide-m">Дата</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Рахунок</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click" data-o="${o.id}">
           ${selCell(o.id)}
-          <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? '<div><span class="badge info">🚗 самовивіз</span></div>' : o.delivery === 'warehouse' ? `<div><span class="badge info">🏬 на склад${o.crm_id || o.crm_ext ? ' · в LP-CRM' : ''}</span></div>` : ''}${o.delivery_req ? '<div><span class="badge warn">🔁 просить змінити отримання</span></div>' : ''}${o.reinvoice ? '<div><span class="badge warn">✏️ змінено — переробити рахунок</span></div>' : ''}</td>
+          <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? '<div><span class="badge info">🚗 самовивіз</span></div>' : o.delivery === 'warehouse' ? `<div><span class="badge info">🏬 на склад${o.crm_id || o.crm_ext ? ' · в LP-CRM' : ''}</span></div>` : ''}${o.delivery_req?.from === 'admin' ? '<div><span class="badge">⏳ чекає підтвердження партнера</span></div>' : o.delivery_req ? '<div><span class="badge warn">🔁 просить змінити отримання</span></div>' : ''}${o.reinvoice ? '<div><span class="badge warn">✏️ змінено — переробити рахунок</span></div>' : ''}</td>
           <td>${esc(o.partner)}<div class="small muted">${esc(o.status === 'confirm' ? 'юрособу обере партнер' : o.entity.split('\n')[0].split(',')[0])}</div></td>
           <td class="small hide-m">${esc(fmtDateTime(o.created_at))}</td>
           <td class="r"><b>${uah(o.total)}</b></td>
@@ -900,9 +923,14 @@ export function createB2bPages(ctx = {}) {
     main.innerHTML = `
       <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2borders">← До списку</a>${o.status === 'draft' ? '<button class="btn primary" id="oSendDraft">Відправити закупівлю</button>' : ''}${o.status === 'open' ? '<button class="btn primary" id="oForm">🧾 Сформувати закупівлю</button>' : ''}${['pay_wait', 'partial', 'paid', 'done'].includes(o.status) && !ro() ? '<button class="btn" id="oClaim">🛠 Брак / обмін</button>' : ''}${closed ? '' : '<button class="btn" id="oEdit">✏️ Змінити</button>'}<button class="btn danger" id="oDel">Видалити</button></div></div>
       ${cancelNote(o)}
-      ${o.delivery_req ? `<div class="alert warn dr-req"><div>🔁 <b>Партнер просить змінити спосіб отримання:</b> ${deliveryReqText(o.delivery_req)}.
-          <div class="small">Зараз: «${esc(o.delivery_name || '')}». Запит: ${esc(o.delivery_req.by)}${o.delivery_req.at ? `, ${esc(fmtDateTime(o.delivery_req.at))}` : ''}. Зміна набере чинності лише після підтвердження.</div></div>
+      ${o.delivery_req?.from === 'partner' ? `<div class="alert warn dr-req"><div>🔁 <b>Партнер просить змінити спосіб отримання:</b> ${deliveryReqText(o.delivery_req)}.
+          ${deliveryReqMoney(o.delivery_req)}
+          <div class="small">Зараз: «${esc(o.delivery_name || '')}». Запит: ${esc(o.delivery_req.by)}${o.delivery_req.at ? `, ${esc(fmtDateTime(o.delivery_req.at))}` : ''}. Зміна набере чинності лише після підтвердження${o.invoice_no ? '; якщо сума зміниться — закупівля отримає позначку «переробити рахунок/накладну»' : ''}.</div></div>
         ${ro() ? '' : '<div class="btn-row"><button class="btn primary" id="oDrOk">✅ Підтвердити зміну</button><button class="btn danger" id="oDrNo">Відхилити</button></div>'}</div>` : ''}
+      ${o.delivery_req?.from === 'admin' ? `<div class="alert info dr-req"><div>⏳ <b>Чекає підтвердження партнера:</b> змінити спосіб отримання на ${deliveryReqText(o.delivery_req)}.
+          ${deliveryReqMoney(o.delivery_req)}
+          <div class="small">Запропонував ${esc(o.delivery_req.by)}${o.delivery_req.at ? `, ${esc(fmtDateTime(o.delivery_req.at))}` : ''}. Поки партнер не підтвердить, діє «${esc(o.delivery_name || '')}».</div></div>
+        ${ro() ? '' : '<button class="btn sm" id="oDrWithdraw">Відкликати пропозицію</button>'}</div>` : ''}
       ${o.reinvoice ? `<div class="alert warn dr-req"><div>🔁 <b>Внесено зміни — потрібно переробити рахунок № ${esc(o.reinvoice)}</b>${o.paid_amount ? ` · оплачено ${uah(o.paid_amount)}${o.paid_amount < o.total - 0.004 ? `, <b>до доплати ${uah(o.total - o.paid_amount)}</b>` : ''}` : ''}
           <div class="small">${o.reinvoice_sent ? `Запит у «Фінансові питання» надіслано ${esc(fmtDateTime(o.reinvoice_sent))}.` : 'У «Фінансові питання» ще не надсилали — надішліть, коли закінчите зміни.'} Позначка зніметься, коли внесете новий № рахунку або додасте нові файли рахунку${o.waybill_no ? ' й накладної' : ''}.</div></div>
         ${ro() ? '' : `<div class="btn-row"><button class="btn ${o.reinvoice_sent ? '' : 'primary'}" id="oRiSend">${o.reinvoice_sent ? 'Надіслати запит ще раз' : '📨 Надіслати в «Фінансові питання»'}</button><button class="btn" id="oRiDone">✓ Перероблено</button></div>`}</div>` : ''}
@@ -1043,8 +1071,13 @@ export function createB2bPages(ctx = {}) {
       $('#shOk', m.el).onclick = () => { done = true; const d = Object.fromEntries(new FormData($('#shF', m.el))); m.close(); resolve(d); };
       new MutationObserver((_, obs) => { if (!document.contains(m.el)) { obs.disconnect(); if (!done) resolve(null); } }).observe(document.body, { childList: true });
     });
+    // Закупівля в роботі — зміна йде партнеру на підтвердження (ціни можуть змінитися); чернетка чи завершена — одразу.
     const setDelivery = async (delivery, ship_to) => {
-      try { await api('POST', `/api/b2b/orders/${o.id}/delivery`, { delivery, ship_to }); toast('Спосіб отримання змінено — партнеру надіслано повідомлення'); viewOrder(o.id); }
+      try {
+        const r = await api('POST', `/api/b2b/orders/${o.id}/delivery`, { delivery, ship_to });
+        toast(r.pending ? 'Партнер отримав пропозицію — спосіб зміниться після його підтвердження' : 'Спосіб отримання змінено — партнеру надіслано повідомлення');
+        viewOrder(o.id);
+      }
       catch (er) { toast(er.message, true); if ($('#oDeliv')) $('#oDeliv').value = o.delivery; }
     };
     if ($('#oRiSend')) $('#oRiSend').onclick = async (e) => {
@@ -1055,6 +1088,9 @@ export function createB2bPages(ctx = {}) {
     if ($('#oRiDone')) $('#oRiDone').onclick = async () => {
       if (!(await confirmDanger('Рахунок і накладну перероблено?', 'Позначку «переробити рахунок/накладну» буде знято. Якщо номер рахунку новий — просто внесіть його в «Рахунок і накладна», позначка зніметься сама.', 'Так, перероблено'))) return;
       try { await api('POST', `/api/b2b/orders/${o.id}/reinvoice-done`); toast('Позначку знято'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
+    };
+    if ($('#oDrWithdraw')) $('#oDrWithdraw').onclick = async () => {
+      try { await api('DELETE', `/api/b2b/orders/${o.id}/delivery-request`); toast('Пропозицію відкликано'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
     };
     if ($('#oDrOk')) $('#oDrOk').onclick = async (e) => {
       e.currentTarget.disabled = true;

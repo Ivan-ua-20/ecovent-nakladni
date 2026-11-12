@@ -48,7 +48,16 @@ export const DEBT = `('pay_wait', 'partial')`;
 // Особлива маржа на товар для партнера (b2b_product_margins) — замість маржі бренду, доки не минула дата until.
 // Підставляється після JOIN b2b_margins m і b2b_catalog c; перший параметр — сьогоднішня дата (kyivDay()).
 export const PM_JOIN = `LEFT JOIN b2b_product_margins pm ON pm.partner_id = m.partner_id AND pm.product_id = c.product_id AND (pm.until = '' OR pm.until >= ?)`;
-export const PM_COLS = `COALESCE(pm.margin, m.margin) AS margin, pm.margin IS NOT NULL AS special, COALESCE(pm.until, '') AS special_until`;
+// margin — для відправки клієнтам (і самовивозу), margin_wh — для закупівлі на склад партнера:
+// окрема маржа товару «на склад» → окрема маржа товару (та сама на обидва способи) → маржа бренду «на склад» → маржа бренду.
+export const PM_COLS = `COALESCE(pm.margin, m.margin) AS margin, COALESCE(pm.margin_wh, pm.margin, m.margin_wh, m.margin) AS margin_wh,
+  pm.margin IS NOT NULL AS special, COALESCE(pm.until, '') AS special_until`;
+// Які способи отримання беруть ціну «на склад партнера» (решта — «відправка клієнтам»).
+// Щоб самовивіз рахувався як «на склад партнера», додайте сюди 'pickup' — більше нічого міняти не треба.
+export const WH_PRICE = new Set(['warehouse']);
+export const priceKind = (delivery) => (WH_PRICE.has(delivery) ? 'wh' : 'np');
+// Маржа рядка каталогу (з PM_COLS) для способу отримання.
+export const marginFor = (r, delivery) => (priceKind(delivery) === 'wh' ? (r.margin_wh ?? r.margin) : r.margin);
 // Відстрочка підвищення цін: після того як РРЦ зросла (оновлення з LP-CRM), партнер ще N годин замовляє за старою РРЦ.
 // N — у картці партнера (price_grace_hours), порожньо — загальна (settings.b2b_price_grace_hours), 0 — без відстрочки.
 // Зниження ціни діє одразу. Рядки з product_id і rrp → rrp на час відстрочки — стара; rrp_new і grace_until — що й коли.
@@ -304,7 +313,8 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
 
   // ================================================================ ЗАКУПІВЛІ (партнер)
   // Позиції за поточними цінами партнера: лише видимі йому товари (увімкнений бренд, не прихований, є РРЦ).
-  async function priceItems(p, items) {
+  // delivery — спосіб отримання закупівлі: від нього залежить, яка маржа (клієнтам чи на склад партнера).
+  async function priceItems(p, items, delivery = 'np') {
     const want = new Map();
     for (const it of Array.isArray(items) ? items : []) {
       const id = parseInt(it.product_id, 10);
@@ -321,7 +331,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       [p.id, kyivDay(), JSON.stringify([...want.keys()])],
     ));
     if (rows.length !== want.size) throw fail(400, 'Деякі товари більше недоступні — оновіть сторінку каталогу.');
-    return rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || '', qty: want.get(r.product_id), price: partnerPrice(r.rrp, r.margin), rrp: r.rrp }));
+    return rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || '', qty: want.get(r.product_id), price: partnerPrice(r.rrp, marginFor(r, delivery)), rrp: r.rrp }));
   }
   const totalOf = (items) => round2(items.reduce((t, i) => t + round2(i.price * i.qty), 0));
   const itemRows = (orderId, items) => items.map((i) => [
@@ -345,7 +355,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       const add = (Array.isArray(b.items) ? b.items : []).filter((i) => Number(i.qty) > 0);
       if (!add.length) throw fail(400, 'Вкажіть кількість хоча б одного товару.');
       for (const i of add) sum.set(Number(i.product_id), (sum.get(Number(i.product_id)) || 0) + Math.floor(Number(i.qty)));
-      const items = await priceItems(p, [...sum].map(([product_id, qty]) => ({ product_id, qty })));
+      const items = await priceItems(p, [...sum].map(([product_id, qty]) => ({ product_id, qty })), deliveryOf(d.delivery));
       const total = totalOf(items);
       await db.batch([[`DELETE FROM b2b_order_items WHERE order_id = ?`, [d.id]], ...itemRows(d.id, items),
         [`UPDATE b2b_orders SET total = ?, updated_at = ? WHERE id = ?`, [total, nowIso(), d.id]]]);
@@ -355,7 +365,9 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     }
     const draft = Boolean(b.draft) || !isHead(c); // менеджер партнера — лише чернетка
     const e = await myEntity(p, b.entity_id);
-    const items = await priceItems(p, b.items);
+    const delivery = deliveryOf(b.delivery);
+    const ship = delivery === 'warehouse' ? shipToOf(b.ship_to, p) : null; // на свій склад — отримувач, телефон, відділення
+    const items = await priceItems(p, b.items, delivery);
     const total = totalOf(items);
     const terms = termsOf(b);
     if (terms === 'postpay' && !(Number(p.postpay_days) > 0)) throw fail(403, 'Відстрочку оплати вам ще не відкрито — зверніться до менеджера.');
@@ -364,7 +376,10 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const now = nowIso();
     // Самовивіз — одразу хто забирає (кур'єр зі списку або вручну).
     const pk = deliveryOf(b.delivery) === 'pickup' ? await resolvePickup(p.id, b.pickup_by, c.get('user')) : null;
-    const pkRows = (id) => (pk ? [[`UPDATE b2b_orders SET pickup_by = ? WHERE id = ?`, [JSON.stringify(pk), id]], [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(pk), p.id]]] : []);
+    const pkRows = (id) => [
+      ...(pk ? [[`UPDATE b2b_orders SET pickup_by = ? WHERE id = ?`, [JSON.stringify(pk), id]], [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(pk), p.id]]] : []),
+      ...(ship ? [[`UPDATE b2b_orders SET ship_to = ? WHERE id = ?`, [JSON.stringify(ship), id]], [`UPDATE b2b_partners SET wh_name = ?, wh_phone = ?, wh_address = ? WHERE id = ?`, [ship.name, ship.phone, ship.address, p.id]]] : []),
+    ];
     if (draft) {
       const r = await db.run(
         `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -378,10 +393,10 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery), terms, payDays],
     );
-    if (pk) await db.batch(pkRows(r.lastId));
+    if (pk || ship) await db.batch(pkRows(r.lastId));
     await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
       [r.lastId, now, userName(c.get('user')), `оформлено закупівлю на ${uah(total)}${deliveryOf(b.delivery) === 'pickup' ? ` (самовивіз${pk ? `, забирає: ${pickupTxt(pk)}` : ''})` : ''}: ${itemsTxt(items)}`.slice(0, 2000)]]]);
-    const full = orderText('🆕 Нова закупівля', { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), pay_terms: terms, pay_days: payDays, pickup_by: pk ? JSON.stringify(pk) : '' }, p, items);
+    const full = orderText('🆕 Нова закупівля', { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), ship_to: ship ? JSON.stringify(ship) : '', pay_terms: terms, pay_days: payDays, pickup_by: pk ? JSON.stringify(pk) : '' }, p, items);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${r.lastId}`)}`);
     await tgGroup(p.id, full);
     await hooks.finRequest?.(r.lastId).catch(() => 0); // запит рахунку в групу «Фінансові питання»
@@ -610,8 +625,9 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     try {
       const x = JSON.parse(o.delivery_req);
       if (!DELIVERY[x?.delivery]) return null;
-      return { delivery: x.delivery, delivery_name: DELIVERY[x.delivery], ship_to: x.delivery === 'warehouse' ? parseShipTo(JSON.stringify(x.ship_to || null)) : null,
-        pickup_by: x.delivery === 'pickup' ? parsePickup(x.pickup_by) : null, by: String(x.by || ''), at: String(x.at || '') };
+      return { from: x.from === 'admin' ? 'admin' : 'partner', delivery: x.delivery, delivery_name: DELIVERY[x.delivery], ship_to: x.delivery === 'warehouse' ? parseShipTo(JSON.stringify(x.ship_to || null)) : null,
+        pickup_by: x.delivery === 'pickup' ? parsePickup(x.pickup_by) : null, by: String(x.by || ''), at: String(x.at || ''),
+        total_now: Number.isFinite(x.total_now) ? x.total_now : null, total_new: Number.isFinite(x.total_new) ? x.total_new : null, kept: Number(x.kept) || 0 };
     } catch { return null; }
   };
   const deliveryLine = (delivery, ship, pk) => `${DELIVERY[delivery]}${delivery === 'warehouse' && ship ? `: ${[ship.name, ship.phone, ship.address].filter(Boolean).join(', ')}` : ''}${delivery === 'pickup' && pk ? `; забирає ${pickupTxt(pk)}` : ''}`;
@@ -732,7 +748,9 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       throw fail(400, 'У закупівлі є товар у кількох рядках з різною ціною — змінити її може лише менеджер. Напишіть йому, що потрібно змінити.');
     }
     const e = await myEntity(p, b.entity_id ?? o.entity_id);
-    const items = await priceItems(p, b.items);
+    const delivery = b.delivery === undefined ? deliveryOf(o.delivery) : deliveryOf(b.delivery);
+    const ship = delivery === 'warehouse' ? (b.ship_to ? shipToOf(b.ship_to, p) : parseShipTo(o.ship_to) || shipToOf(null, p)) : null;
+    const items = await priceItems(p, b.items, delivery);
     const total = totalOf(items);
     const terms = termsOf(b, o);
     if (terms === 'postpay' && !(Number(p.postpay_days) > 0)) throw fail(403, 'Відстрочку оплати вам ще не відкрито — зверніться до менеджера.');
@@ -744,16 +762,15 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     for (const r of left) {
       if (r.used > (want.get(r.product_id) || 0)) throw fail(400, `«${r.name}»: на замовлення клієнтів уже розписано ${r.used} шт. — менше зменшити не можна.`);
     }
-    const delivery = b.delivery === undefined ? deliveryOf(o.delivery) : deliveryOf(b.delivery);
     const wasItems = await db.all(`SELECT product_id, name, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
-    if (delivery === 'pickup' && left.some((r) => r.used > 0)) throw fail(400, 'З цієї закупівлі вже є замовлення клієнтів — самовивіз неможливий.');
-    if (delivery === 'warehouse' && deliveryOf(o.delivery) !== 'warehouse') throw fail(400, 'Відправку на склад партнера ставить менеджер.');
+    if (delivery !== 'np' && left.some((r) => r.used > 0)) throw fail(400, `З цієї закупівлі вже є замовлення клієнтів — ${delivery === 'pickup' ? 'самовивіз' : 'відправка на ваш склад'} неможлив${delivery === 'pickup' ? 'ий' : 'а'}.`);
     const pk = delivery === 'pickup' ? await resolvePickup(p.id, b.pickup_by, c.get('user'), { required: !parsePickup(o.pickup_by) }) : null;
     await db.batch([
       [`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]],
       ...itemRows(o.id, items),
-      [`UPDATE b2b_orders SET entity_id = ?, entity = ?, total = ?, comment = ?, delivery = ?, pay_terms = ?, pay_days = ?, updated_at = ? WHERE id = ?`,
-        [e.id, entityText(e), total, String(b.comment ?? o.comment ?? '').trim().slice(0, 1000), delivery, terms, payDays, nowIso(), o.id]],
+      [`UPDATE b2b_orders SET entity_id = ?, entity = ?, total = ?, comment = ?, delivery = ?, ship_to = ?, pay_terms = ?, pay_days = ?, updated_at = ? WHERE id = ?`,
+        [e.id, entityText(e), total, String(b.comment ?? o.comment ?? '').trim().slice(0, 1000), delivery, ship ? JSON.stringify(ship) : '', terms, payDays, nowIso(), o.id]],
+      ...(ship ? [[`UPDATE b2b_partners SET wh_name = ?, wh_phone = ?, wh_address = ? WHERE id = ?`, [ship.name, ship.phone, ship.address, p.id]]] : []),
     ]);
     await log(o.id, c.get('user'), `змінено ${isDraft ? 'чернетку' : 'закупівлю'}: ${itemsDiff(wasItems, items)} — разом ${uah(total)}`);
     if (pk) await storePickup(c, { ...o, delivery }, pk);
@@ -852,7 +869,9 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       partner: { id: p.id, name: p.name, active: !!p.active, paused: !!p.paused, postpay_days: Number(p.postpay_days) || 0, tg_group: !!p.tg_group, entities: ents?.n || 0,
         warehouse: { name: p.wh_name || '', phone: p.wh_phone || '', address: p.wh_address || '' } },
       brands: [...used.values()].sort((a, b) => a.name.localeCompare(b.name, 'uk')),
-      products: rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || '', brand_id: r.brand_id, rrp: r.rrp, margin: r.margin, price: partnerPrice(r.rrp, r.margin) })),
+      products: rows.map((r) => ({ product_id: r.product_id, name: r.name, article: r.article || '', brand_id: r.brand_id, rrp: r.rrp, margin: r.margin, price: partnerPrice(r.rrp, r.margin),
+        margin_wh: r.margin_wh, price_wh: partnerPrice(r.rrp, r.margin_wh) })),
+      wh_price: [...WH_PRICE], // способи отримання з ціною «на склад партнера»
     });
   });
   app.post('/api/b2b/orders', async (c) => {
@@ -861,12 +880,12 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ? AND COALESCE(deleted_at, '') = ''`, [parseInt(b.partner_id, 10) || 0]);
     if (!p) throw fail(400, 'Оберіть партнера.');
     if (!p.active) throw fail(400, 'Кабінет партнера вимкнено — він не зможе підтвердити закупівлю.');
-    const items = await priceItems(p, b.items);
+    const delivery = deliveryOf(b.delivery);
+    const items = await priceItems(p, b.items, delivery);
     const total = totalOf(items);
     const terms = b.pay_terms === 'postpay' ? 'postpay' : 'prepay';
     const payDays = terms === 'postpay' ? parseInt(b.pay_days, 10) || 0 : 0;
     if (terms === 'postpay' && !(payDays >= 1 && payDays <= 90)) throw fail(400, 'Відстрочка — від 1 до 90 днів.');
-    const delivery = deliveryOf(b.delivery);
     const ship = delivery === 'warehouse' ? shipToOf(b.ship_to, p) : null;
     const now = nowIso();
     const u = c.get('user');
@@ -1002,24 +1021,118 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   }
 
   // Адмін змінює спосіб отримання (партнер помилився): самовивіз — лише якщо з закупівлі ще немає замовлень клієнтів.
+  // ---------------------------------------------------------------- зміна способу отримання й ціни
+  // Ціни закупівлі залежать від способу отримання (маржа «клієнтам» чи «на склад партнера»). Коли спосіб змінюється,
+  // перераховуються лише позиції з автоматичною ціною (= ціна за маржею старого способу); ручні ціни менеджера лишаються.
+  async function repriceFor(o, delivery) {
+    const items = await db.all(`SELECT id, product_id, name, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
+    const k0 = priceKind(deliveryOf(o.delivery));
+    const k1 = priceKind(delivery);
+    if (k0 === k1 || !items.length) return { items, total: round2(o.total), changed: [], kept: 0 };
+    const cat = new Map((await db.all(
+      `SELECT c.product_id, ${PM_COLS} FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN}
+       WHERE m.partner_id = ? AND c.product_id IN (SELECT value FROM json_each(?))`, [kyivDay(), o.partner_id, JSON.stringify([...new Set(items.map((i) => i.product_id))])],
+    )).map((r) => [r.product_id, r]));
+    const mOf = (r, k) => (k === 'wh' ? (r.margin_wh ?? r.margin) : r.margin);
+    let kept = 0;
+    const changed = [];
+    const out = items.map((i) => {
+      const r = cat.get(i.product_id);
+      if (!r || round2(i.price) !== partnerPrice(i.rrp, mOf(r, k0))) { kept++; return i; } // ручна ціна або бренд уже вимкнено
+      const price = partnerPrice(i.rrp, mOf(r, k1));
+      if (price === round2(i.price)) return i;
+      changed.push({ name: i.name, qty: i.qty, from: i.price, to: price });
+      return { ...i, price };
+    });
+    return { items: out, total: totalOf(out), changed, kept };
+  }
+  const repriceTxt = (o, rp) => (rp.changed.length
+    ? `ціни перераховано (${rp.changed.length} поз.): ${rp.changed.slice(0, 10).map((x) => `${x.name} ${uah(x.from)} → ${uah(x.to)}`).join('; ')} — разом ${uah(o.total)} → ${uah(rp.total)}${rp.kept ? `; ${rp.kept} поз. з окремою ціною — без змін` : ''}`
+    : '');
+  // Застосувати новий спосіб отримання: спосіб, склад/хто забирає, перерахунок цін; з рахунком — позначка «переробити рахунок».
+  async function applyDelivery(c, o, { delivery, ship = null, pk = null }, how) {
+    await deliveryGuard(o, delivery);
+    const rp = await repriceFor(o, delivery);
+    const invoiced = Boolean(o.invoice_no) && ['pay_wait', 'partial', 'paid', 'done'].includes(o.status);
+    const paid = Number(o.paid_amount) || 0;
+    const moved = rp.changed.length > 0;
+    const status = moved && invoiced && paid > 0 && ['pay_wait', 'partial', 'paid'].includes(o.status) ? (paid >= rp.total - 0.004 ? 'paid' : 'partial') : o.status;
+    const now = nowIso();
+    const redo = `${o.invoice_no}${o.waybill_no ? ` (і накладну № ${o.waybill_no})` : ''}`;
+    await db.batch([
+      [`UPDATE b2b_orders SET delivery = ?, ship_to = ?, delivery_req = '', total = ?, status = ?, updated_at = ? WHERE id = ?`,
+        [delivery, ship ? JSON.stringify(ship) : '', rp.total, status, now, o.id]],
+      ...(moved ? rp.items.map((i) => [`UPDATE b2b_order_items SET price = ? WHERE id = ?`, [i.price, i.id]]) : []),
+      ...(moved && invoiced ? [[`UPDATE b2b_orders SET reinvoice = CASE WHEN COALESCE(reinvoice, '') = '' THEN ? ELSE reinvoice END, reinvoiced_at = ?, reinvoice_sent = '', group_done = 0 WHERE id = ?`, [redo, now, o.id]]] : []),
+      ...(pk ? [[`UPDATE b2b_orders SET pickup_by = ? WHERE id = ?`, [JSON.stringify(pk), o.id]], [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(pk), o.partner_id]]] : []),
+      ...(ship ? [[`UPDATE b2b_partners SET wh_name = ?, wh_phone = ?, wh_address = ? WHERE id = ?`, [ship.name, ship.phone, ship.address, o.partner_id]]] : []),
+    ]);
+    const pr = repriceTxt(o, rp);
+    await log(o.id, c.get('user'), `спосіб отримання: «${deliveryLine(delivery, ship, pk)}» (${how})${pr ? `; ${pr}` : ''}${moved && invoiced ? ` · рахунок № ${redo} треба переробити` : ''}${status !== o.status ? ` · статус: ${status === 'partial' ? '«Частково оплачено»' : '«Оплачено»'}` : ''}`.slice(0, 1800));
+    if (moved && !invoiced && o.status === 'invoice_wait') await hooks.finRequest?.(o.id, 'changed').catch(() => 0); // рахунку ще немає — оновлюємо запит рахунку
+    return { rp, status, invoiced };
+  }
+  const moneyLine = (o, rp) => (rp.changed.length ? `\nСума: ${uah(o.total)} → <b>${uah(rp.total)}</b>${rp.kept ? ` (${rp.kept} поз. з окремою ціною — без змін)` : ''}` : '\nСума не змінюється.');
+
+  // Менеджер змінює спосіб отримання. Закупівля в роботі (є рахунок або чекає його) — це пропозиція партнеру:
+  // діє лише після його підтвердження (бо можуть змінитися ціни). Чернетку, «чекає підтвердження» й завершену — одразу.
   app.post('/api/b2b/orders/:id/delivery', async (c) => {
     need(c, 'b2b.admin');
     const o = await orderOf(c.req.param('id'));
     if (o.kind !== 'supply' || o.status === 'open') throw fail(400, 'Спосіб отримання — лише для звичайної закупівлі.');
+    if (o.status === 'cancelled') throw fail(400, 'Закупівлю скасовано.');
     const { delivery, ship_to: shipIn } = await c.req.json();
     if (!DELIVERY[delivery]) throw fail(400, 'Невідомий спосіб отримання.');
-    let ship = o.ship_to || '';
-    if (delivery === 'warehouse') {
-      const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [o.partner_id]);
-      ship = JSON.stringify(shipToOf(shipIn, p));
-    }
-    if (delivery === deliveryOf(o.delivery) && ship === (o.ship_to || '')) return c.json({ ok: true });
+    const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [o.partner_id]);
+    const ship = delivery === 'warehouse' ? shipToOf(shipIn, p) : null;
+    if (delivery === deliveryOf(o.delivery) && (delivery !== 'warehouse' || JSON.stringify(ship) === JSON.stringify(parseShipTo(o.ship_to)))) return c.json({ ok: true });
     await deliveryGuard(o, delivery);
-    const hadReq = Boolean(deliveryReq(o));
-    await db.run(`UPDATE b2b_orders SET delivery = ?, ship_to = ?, delivery_req = '', updated_at = ? WHERE id = ?`, [delivery, delivery === 'warehouse' ? ship : '', nowIso(), o.id]);
-    await log(o.id, c.get('user'), `спосіб отримання: «${DELIVERY[delivery]}» (змінив менеджер)${hadReq ? '; запит партнера на зміну знято' : ''}`);
-    await tgPartner(o.partner_id, `🔁 Закупівля ${orderNo(o.id)}: спосіб отримання змінено на «${DELIVERY[delivery]}».\n${link(c, `porders/${o.id}`)}`);
+    const prev = deliveryReq(o);
+    if (!REQ_STATUSES.includes(o.status)) {
+      const r = await applyDelivery(c, o, { delivery, ship }, 'змінив менеджер');
+      await tgPartner(o.partner_id, `🔁 Закупівля ${orderNo(o.id)}: спосіб отримання — «${h(deliveryLine(delivery, ship, null))}».${moneyLine(o, r.rp)}\n${link(c, `porders/${o.id}`)}`);
+      return c.json({ ok: true, applied: true, total: r.rp.total });
+    }
+    const rp = await repriceFor(o, delivery);
+    const req = { from: 'admin', delivery, ship_to: ship, by: userName(c.get('user')), at: nowIso(), total_now: round2(o.total), total_new: rp.total, changed: rp.changed.length, kept: rp.kept };
+    await db.run(`UPDATE b2b_orders SET delivery_req = ?, updated_at = ? WHERE id = ?`, [JSON.stringify(req), nowIso(), o.id]);
+    await log(o.id, c.get('user'), `запропоновано змінити спосіб отримання на «${deliveryLine(delivery, ship, null)}»${rp.changed.length ? ` (сума ${uah(o.total)} → ${uah(rp.total)})` : ''} — чекає підтвердження партнера${prev && prev.from === 'partner' ? '; запит партнера знято' : ''}`);
+    const text = `🔁 <b>Зміна способу отримання — потрібне ваше підтвердження</b>\nЗакупівля ${orderNo(o.id)}: менеджер пропонує «<b>${h(deliveryLine(delivery, ship, null))}</b>» замість «${h(DELIVERY[deliveryOf(o.delivery)])}».${moneyLine(o, rp)}\nДо підтвердження все лишається як було. Підтвердіть або відхиліть у кабінеті:\n${link(c, `porders/${o.id}`)}`;
+    await tgPartner(o.partner_id, text);
+    await tgGroup(o.partner_id, text);
+    return c.json({ ok: true, pending: true, total_new: rp.total });
+  });
+  // Менеджер відкликає свою пропозицію.
+  app.delete('/api/b2b/orders/:id/delivery-request', async (c) => {
+    need(c, 'b2b.admin');
+    const o = await orderOf(c.req.param('id'));
+    const req = deliveryReq(o);
+    if (!req || req.from !== 'admin') return c.json({ ok: true });
+    await db.run(`UPDATE b2b_orders SET delivery_req = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+    await log(o.id, c.get('user'), 'пропозицію змінити спосіб отримання відкликано');
+    await tgPartner(o.partner_id, `↩️ Закупівля ${orderNo(o.id)}: менеджер відкликав пропозицію змінити спосіб отримання — лишається «${h(DELIVERY[deliveryOf(o.delivery)])}».`);
     return c.json({ ok: true });
+  });
+  // Партнер відповідає на пропозицію менеджера: підтвердити (самовивіз — хто забирає) або відхилити.
+  app.post('/api/b2b/p/orders/:id/delivery-request/answer', async (c) => {
+    const p = await myPartner(c);
+    if (!can(c.get('user'), 'b2b.order')) throw fail(403, 'Недостатньо прав.');
+    const o = await orderOf(c.req.param('id'), p.id);
+    const req = deliveryReq(o);
+    if (!req || req.from !== 'admin') throw fail(400, 'Пропозиції змінити спосіб отримання вже немає — оновіть сторінку.');
+    const b = await c.req.json().catch(() => ({}));
+    const note = String(b.note ?? '').trim().slice(0, 300);
+    if (!b.ok) {
+      await db.run(`UPDATE b2b_orders SET delivery_req = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+      await log(o.id, c.get('user'), `партнер відхилив зміну способу отримання на «${req.delivery_name}»${note ? `: ${note}` : ''}`);
+      await tgAdmins(`✖️ Партнер «${h(p.name)}» відхилив зміну способу отримання на «${h(req.delivery_name)}» — закупівля ${orderNo(o.id)} лишається «${h(DELIVERY[deliveryOf(o.delivery)])}».${note ? `\n💬 ${h(note)}` : ''}\n${link(c, `b2borders/${o.id}`)}`);
+      return c.json({ ok: true });
+    }
+    const pk = req.delivery === 'pickup' ? await resolvePickup(p.id, b.pickup_by, c.get('user')) : null;
+    const ship = req.delivery === 'warehouse' ? shipToOf(b.ship_to || req.ship_to, p) : null;
+    const r = await applyDelivery(c, o, { delivery: req.delivery, ship, pk }, 'запропонував менеджер, підтвердив партнер');
+    await tgAdmins(`✅ Партнер «${h(p.name)}» підтвердив спосіб отримання «${h(deliveryLine(req.delivery, ship, pk))}» — закупівля ${orderNo(o.id)}.${moneyLine(o, r.rp)}${r.rp.changed.length && r.invoiced ? '\n🔁 Рахунок треба переробити.' : ''}\n${link(c, `b2borders/${o.id}`)}`);
+    return c.json({ ok: true, total: r.rp.total });
   });
 
   // Партнер просить змінити спосіб отримання (після рахунку сам уже не змінить): запит зберігаємо, закупівля лишається як була,
@@ -1031,6 +1144,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (o.kind !== 'supply') throw fail(404, 'Замовлення не знайдено.');
     if (o.status === 'draft') throw fail(400, 'Це чернетка — спосіб отримання змініть через «Змінити».');
     if (!REQ_STATUSES.includes(o.status)) throw fail(400, 'У цьому статусі спосіб отримання вже не змінити — напишіть менеджеру.');
+    if (deliveryReq(o)?.from === 'admin') throw fail(400, 'Менеджер уже запропонував змінити спосіб отримання — спершу підтвердіть або відхиліть його пропозицію.');
     const b = await c.req.json();
     const delivery = DELIVERY[b.delivery] ? b.delivery : '';
     if (!delivery) throw fail(400, 'Оберіть спосіб отримання.');
@@ -1039,47 +1153,42 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (delivery === cur && (delivery !== 'warehouse' || JSON.stringify(ship) === JSON.stringify(parseShipTo(o.ship_to)))) throw fail(400, 'Цей спосіб отримання вже встановлено.');
     await deliveryGuard(o, delivery);
     const pk = delivery === 'pickup' ? await resolvePickup(p.id, b.pickup_by, c.get('user')) : null;
-    const req = { delivery, ship_to: ship, pickup_by: pk, by: userName(c.get('user')), at: nowIso() };
+    const rp = await repriceFor(o, delivery);
+    const req = { from: 'partner', delivery, ship_to: ship, pickup_by: pk, by: userName(c.get('user')), at: nowIso(), total_now: round2(o.total), total_new: rp.total, changed: rp.changed.length, kept: rp.kept };
     await db.run(`UPDATE b2b_orders SET delivery_req = ?, updated_at = ? WHERE id = ?`, [JSON.stringify(req), nowIso(), o.id]);
-    await log(o.id, c.get('user'), `запит на зміну способу отримання: «${deliveryLine(delivery, ship, pk)}» — чекає підтвердження менеджера`);
-    await tgAdmins(`🔁 <b>Запит на зміну способу отримання</b> — закупівля ${orderNo(o.id)} («${h(p.name)}»)\nЗараз: ${h(DELIVERY[cur])}\nПросить: <b>${h(deliveryLine(delivery, ship, pk))}</b>\nПідтвердіть або відхиліть:\n${link(c, `b2borders/${o.id}`)}`);
-    return c.json({ ok: true });
+    await log(o.id, c.get('user'), `запит на зміну способу отримання: «${deliveryLine(delivery, ship, pk)}»${rp.changed.length ? ` (сума ${uah(o.total)} → ${uah(rp.total)})` : ''} — чекає підтвердження менеджера`);
+    await tgAdmins(`🔁 <b>Запит на зміну способу отримання</b> — закупівля ${orderNo(o.id)} («${h(p.name)}»)\nЗараз: ${h(DELIVERY[cur])}\nПросить: <b>${h(deliveryLine(delivery, ship, pk))}</b>${moneyLine(o, rp)}\nПідтвердіть або відхиліть:\n${link(c, `b2borders/${o.id}`)}`);
+    return c.json({ ok: true, total_new: rp.total });
   });
   app.delete('/api/b2b/p/orders/:id/delivery-request', async (c) => {
     const p = await myPartner(c);
     if (!can(c.get('user'), 'b2b.order')) throw fail(403, 'Недостатньо прав.');
     const o = await orderOf(c.req.param('id'), p.id);
-    if (!deliveryReq(o)) return c.json({ ok: true });
+    const req = deliveryReq(o);
+    if (!req || req.from !== 'partner') return c.json({ ok: true });
     await db.run(`UPDATE b2b_orders SET delivery_req = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
     await log(o.id, c.get('user'), 'запит на зміну способу отримання відкликано');
     await tgAdmins(`↩️ Партнер «${h(p.name)}» відкликав запит на зміну способу отримання — закупівля ${orderNo(o.id)}.`);
     return c.json({ ok: true });
   });
-  // Менеджер підтверджує (зміна набирає чинності) або відхиляє запит партнера (з необов'язковим коментарем).
+  // Менеджер підтверджує (зміна набирає чинності, ціни перераховуються) або відхиляє запит партнера (з необов'язковим коментарем).
   app.post('/api/b2b/orders/:id/delivery-request', async (c) => {
     need(c, 'b2b.admin');
     const o = await orderOf(c.req.param('id'));
     const req = deliveryReq(o);
-    if (!req) throw fail(400, 'Запиту на зміну способу отримання немає — можливо, партнер його відкликав.');
+    if (!req || req.from !== 'partner') throw fail(400, 'Запиту партнера на зміну способу отримання немає — можливо, його відкликали.');
     const b = await c.req.json().catch(() => ({}));
     const note = String(b.note ?? '').trim().slice(0, 300);
-    const now = nowIso();
     if (!b.ok) {
-      await db.run(`UPDATE b2b_orders SET delivery_req = '', updated_at = ? WHERE id = ?`, [now, o.id]);
+      await db.run(`UPDATE b2b_orders SET delivery_req = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
       await log(o.id, c.get('user'), `запит на зміну способу отримання відхилено${note ? `: ${note}` : ''}`);
       await tgPartner(o.partner_id, `✖️ Закупівля ${orderNo(o.id)}: запит на зміну способу отримання на «${h(req.delivery_name)}» відхилено — лишається «${h(DELIVERY[deliveryOf(o.delivery)])}».${note ? `\n💬 ${h(note)}` : ''}\n${link(c, `porders/${o.id}`)}`);
       return c.json({ ok: true });
     }
-    await deliveryGuard(o, req.delivery);
     const ship = req.delivery === 'warehouse' ? shipToOf(req.ship_to, null) : null;
-    await db.batch([
-      [`UPDATE b2b_orders SET delivery = ?, ship_to = ?, delivery_req = '', updated_at = ? WHERE id = ?`, [req.delivery, ship ? JSON.stringify(ship) : '', now, o.id]],
-      ...(req.pickup_by ? [[`UPDATE b2b_orders SET pickup_by = ? WHERE id = ?`, [JSON.stringify(req.pickup_by), o.id]], [`UPDATE b2b_partners SET pickup_last = ? WHERE id = ?`, [JSON.stringify(req.pickup_by), o.partner_id]]] : []),
-      ...(ship ? [[`UPDATE b2b_partners SET wh_name = ?, wh_phone = ?, wh_address = ? WHERE id = ?`, [ship.name, ship.phone, ship.address, o.partner_id]]] : []),
-    ]);
-    await log(o.id, c.get('user'), `спосіб отримання: «${deliveryLine(req.delivery, ship, req.pickup_by)}» (запит партнера підтверджено)`);
-    await tgPartner(o.partner_id, `✅ Закупівля ${orderNo(o.id)}: зміну способу отримання підтверджено — тепер «${h(deliveryLine(req.delivery, ship, req.pickup_by))}».\n${link(c, `porders/${o.id}`)}`);
-    return c.json({ ok: true });
+    const r = await applyDelivery(c, o, { delivery: req.delivery, ship, pk: req.pickup_by }, 'запит партнера підтверджено');
+    await tgPartner(o.partner_id, `✅ Закупівля ${orderNo(o.id)}: зміну способу отримання підтверджено — тепер «${h(deliveryLine(req.delivery, ship, req.pickup_by))}».${moneyLine(o, r.rp)}${r.rp.changed.length && r.invoiced ? '\n🔁 Рахунок буде перероблено — нові документи надійдуть сюди.' : ''}\n${link(c, `porders/${o.id}`)}`);
+    return c.json({ ok: true, total: r.rp.total });
   });
 
   // Ручна зміна статусу: «Оплачено» (якщо Opendatabot не побачив оплату — або оплати й не буде: гарантійна заміна тощо;

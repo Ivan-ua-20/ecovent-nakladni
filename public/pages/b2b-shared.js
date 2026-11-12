@@ -170,6 +170,10 @@ export const DELIVERY_OPTS = [
   ['warehouse', '🏬 На ваш склад', 'Усю закупівлю відправляємо Новою поштою на ваш склад.'],
 ];
 // Що саме просять: спосіб + склад або хто забирає.
+// Як зміниться сума закупівлі після зміни способу отримання (ціни «клієнтам» / «на склад партнера»).
+export const deliveryReqMoney = (r) => (r.total_now != null && r.total_new != null && Math.abs(r.total_new - r.total_now) > 0.004
+  ? `<div class="small">Сума: ${uah(r.total_now)} → <b>${uah(r.total_new)}</b> (ціни ${r.total_new < r.total_now ? 'нижчі' : 'вищі'} для цього способу)${r.kept ? ` · ${r.kept} поз. з окремою ціною — без змін` : ''}</div>`
+  : '<div class="small">Сума не змінюється.</div>');
 export const deliveryReqText = (r) => `<b>${esc(r.delivery_name)}</b>${r.ship_to ? ` — ${esc([r.ship_to.name, r.ship_to.phone, r.ship_to.address].filter(Boolean).join(', '))}` : ''}${r.pickup_by ? ` — забирає ${pickupLine(r.pickup_by)}` : ''}`;
 // Вікно партнера «Змінити спосіб отримання». Повертає { delivery, ship_to?, pickup_by? } або null.
 // blocked — є замовлення клієнтів із цієї закупівлі: самовивіз і «на склад» недоступні.
