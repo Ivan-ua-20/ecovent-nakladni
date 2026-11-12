@@ -91,11 +91,23 @@ tg.length = 0;
 r = await edit(s1.id, { items: [{ product_id: 11, qty: 2 }, { product_id: 12, qty: 1 }] }); // 22 500
 assert.deepEqual([r.total, r.reinvoice], [22500, true]);
 o = (await req('GET', `/api/b2b/orders/${s1.id}`)).order;
-assert.deepEqual([o.status, o.invoice_no, o.reinvoice, o.paid_amount], ['invoice_wait', '', 'СФ-1', 13500]);
+// рахунок і статус лишаються; сума зросла понад оплачене — «Частково оплачено»; позначка «переробити»
+assert.deepEqual([o.status, o.invoice_no, o.reinvoice, o.paid_amount, o.reinvoice_sent], ['partial', 'СФ-1', 'СФ-1', 13500, '']);
+assert.ok(!tg.some((m) => String(m.chat_id) === '-900'), 'у «Фінансові питання» — не за замовчуванням');
+assert.ok(tg.some((m) => String(m.chat_id) === '-500' && /буде перероблено/.test(m.text) && /до доплати 9/.test(m.text)), 'група партнера — документи буде перероблено, доплата');
+assert.ok((await req('GET', '/api/b2b/orders')).rows.find((x) => x.id === s1.id).reinvoice, 'у списку — позначка');
+assert.ok(JSON.stringify(await req('GET', '/api/home')).includes('переробити рахунок/накладну'), 'головна: потребує дій');
+// ще одна зміна — позначка та сама (№ старого рахунку не губиться)
+await edit(s1.id, { items: [{ product_id: 11, qty: 2 }, { product_id: 12, qty: 1 }], comment: 'правка 2' });
+assert.equal((await req('GET', `/api/b2b/orders/${s1.id}`)).order.reinvoice, 'СФ-1');
+// запит у «Фінансові питання» — лише кнопкою
+tg.length = 0;
+await req('POST', `/api/b2b/orders/${s1.id}/reinvoice-request`);
 const fin = tg.find((m) => String(m.chat_id) === '-900');
 assert.match(fin.text, /Переробіть рахунок № СФ-1 · B2B-/);
-assert.match(fin.text, /уже оплачено 13/);
-assert.ok(tg.some((m) => String(m.chat_id) === '-500' && /буде перевиставлено/.test(m.text)), 'група партнера — рахунок перевиставляється');
+assert.match(fin.text, /уже оплачено 13[\s ]500,00 грн, до доплати 9[\s ]000,00 грн/);
+assert.ok((await req('GET', `/api/b2b/orders/${s1.id}`)).order.reinvoice_sent, 'видно, що надіслано');
+assert.match(await errOf(() => req('POST', `/api/b2b/orders/${s1.id}/reinvoice-request`, null, A)), /прав|доступ/i, 'партнер — ні');
 assert.match((await req('GET', `/api/b2b/p/orders/${s1.id}`, null, A)).order.reinvoice, /СФ-1/, 'партнер бачить');
 // новий рахунок: статус за оплатою (13 500 з 22 500 — частково), старий файл замінено
 await req('PUT', `/api/b2b/orders/${s1.id}`, { invoice_no: 'СФ-2', invoice_date: '2026-10-27' });
@@ -135,7 +147,7 @@ r = await cEdit({ supply_id: s1.id, items: [{ product_id: 13, qty: 1 }], add_to_
 assert.equal(r.supply.reinvoice, true);
 assert.deepEqual((await req('GET', `/api/b2b/orders/${c1.id}`)).items.map((i) => [i.product_id, i.qty, i.price]), [[13, 1, 1800]]);
 o = (await req('GET', `/api/b2b/orders/${s1.id}`)).order;
-assert.deepEqual([o.status, o.reinvoice], ['invoice_wait', 'СФ-2']);
+assert.deepEqual([o.status, o.invoice_no, o.reinvoice], ['partial', 'СФ-2', 'СФ-2']);
 assert.ok((await req('GET', `/api/b2b/orders/${s1.id}`)).items.some((i) => i.product_id === 13));
 await req('POST', `/api/b2b/p/clients/${c1.id}/confirm`, {}, A);
 assert.equal((await req('GET', `/api/b2b/orders/${c1.id}`)).order.pending, null);
@@ -256,5 +268,29 @@ assert.equal(r.draft, `B2B-${d9.id}`);
 assert.deepEqual((await items(d9.id)).find((i) => i[0] === 13), [13, 3, 1500], 'чернетка');
 assert.equal((await req('GET', `/api/b2b/orders/${k2.id}`)).order.total, 3000, 'інше замовлення цієї чернетки');
 assert.ok(tg.some((m) => String(m.chat_id) === '-500' && /Чернетку закупівлі .* змінив/.test(m.text)), 'у групу — як зміна чернетки');
+
+// ---------- Завершена й оплачена закупівля: зміна без скидання статусу; «Перероблено»; нові файли знімають позначку ----------
+{
+  const z = await req('POST', '/api/b2b/p/orders', { entity_id: (await db.get(`SELECT id FROM b2b_entities LIMIT 1`)).id, items: [{ product_id: 11, qty: 1 }] }, A);
+  await req('PUT', `/api/b2b/orders/${z.id}`, { invoice_no: 'СФ-9', invoice_date: '2026-11-01', waybill_no: 'ВН-9' });
+  await req('POST', `/api/b2b/orders/${z.id}/status`, { status: 'paid', note: 'готівка' });
+  await req('POST', `/api/b2b/orders/${z.id}/status`, { status: 'done' });
+  assert.equal((await req('GET', `/api/b2b/orders/${z.id}`)).order.status, 'done');
+  tg.length = 0;
+  await edit(z.id, { items: [{ product_id: 11, qty: 1 }, { product_id: 13, qty: 1 }] });
+  let zo = (await req('GET', `/api/b2b/orders/${z.id}`)).order;
+  assert.deepEqual([zo.status, zo.invoice_no, zo.waybill_no, zo.reinvoice], ['done', 'СФ-9', 'ВН-9', 'СФ-9 (і накладну № ВН-9)'], 'завершена лишається завершеною, документи ті самі');
+  assert.ok(!tg.some((m) => String(m.chat_id) === '-900'));
+  await req('POST', `/api/b2b/orders/${z.id}/reinvoice-done`);
+  zo = (await req('GET', `/api/b2b/orders/${z.id}`)).order;
+  assert.equal(zo.reinvoice, '', '«Перероблено» знімає позначку');
+  assert.ok((await req('GET', `/api/b2b/orders/${z.id}`)).history.some((x) => /рахунок\/накладну перероблено/.test(x.action)));
+  // знову змінили → нові файли рахунку й накладної знімають позначку самі (лише рахунку — ще ні)
+  await edit(z.id, { items: [{ product_id: 11, qty: 2 }, { product_id: 13, qty: 1 }] });
+  await upload(z.id, 'invoice', 'rah-new.pdf');
+  assert.ok((await req('GET', `/api/b2b/orders/${z.id}`)).order.reinvoice, 'накладної ще немає — позначка лишається');
+  await upload(z.id, 'waybill', 'vn-new.pdf');
+  assert.equal((await req('GET', `/api/b2b/orders/${z.id}`)).order.reinvoice, '', 'рахунок і накладна — позначку знято');
+}
 
 console.log('b2b-edit: ok');

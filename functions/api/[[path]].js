@@ -7632,6 +7632,28 @@ ${link(c, `b2borders/${o.id}`)}`);
     const status = await applyNumbers(o, b, c.get("user"), c);
     return c.json({ ok: true, status });
   });
+  app.post("/api/b2b/orders/:id/reinvoice-request", async (c) => {
+    need(c, "b2b.admin");
+    const o = await orderOf(c.req.param("id"));
+    if (!o.reinvoice) throw fail(400, "\u041F\u0435\u0440\u0435\u0440\u043E\u0431\u043B\u044F\u0442\u0438 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0435 \u043F\u043E\u0442\u0440\u0456\u0431\u043D\u043E \u2014 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043F\u0456\u0441\u043B\u044F \u0440\u0430\u0445\u0443\u043D\u043A\u0443 \u043D\u0435 \u0437\u043C\u0456\u043D\u044E\u0432\u0430\u043B\u0438.");
+    try {
+      await hooks.finRequest?.(o.id, "reinvoice");
+    } catch (e) {
+      throw fail(400, e.message);
+    }
+    const now = nowIso();
+    await db.run(`UPDATE b2b_orders SET reinvoice_sent = ? WHERE id = ?`, [now, o.id]);
+    await log(o.id, c.get("user"), `\u0437\u0430\u043F\u0438\u0442 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u0438\u0442\u0438 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${o.reinvoice} \u043D\u0430\u0434\u0456\u0441\u043B\u0430\u043D\u043E \u0443 \xAB\u0424\u0456\u043D\u0430\u043D\u0441\u043E\u0432\u0456 \u043F\u0438\u0442\u0430\u043D\u043D\u044F\xBB`);
+    return c.json({ ok: true, sent: now });
+  });
+  app.post("/api/b2b/orders/:id/reinvoice-done", async (c) => {
+    need(c, "b2b.admin");
+    const o = await orderOf(c.req.param("id"));
+    if (!o.reinvoice) return c.json({ ok: true });
+    await db.run(`UPDATE b2b_orders SET reinvoice = '', reinvoice_sent = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+    await log(o.id, c.get("user"), `\u0440\u0430\u0445\u0443\u043D\u043E\u043A/\u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0443 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u043B\u0435\u043D\u043E (\u2116 ${o.reinvoice})`);
+    return c.json({ ok: true });
+  });
   async function applyNumbers(o, b, user, c, how = "") {
     const next = {
       invoice_no: b.invoice_no !== void 0 ? String(b.invoice_no).trim().slice(0, 40) : o.invoice_no,
@@ -7646,7 +7668,7 @@ ${link(c, `b2borders/${o.id}`)}`);
     const dueDate = o.pay_terms === "postpay" && next.invoice_no ? addDaysTo(next.invoice_date || today(), Number(o.pay_days) || 0) : o.due_date || "";
     const reinvoice = next.invoice_no && next.invoice_no !== o.invoice_no ? "" : o.reinvoice || "";
     await db.run(
-      `UPDATE b2b_orders SET invoice_no = ?, invoice_date = ?, waybill_no = ?, status = ?, due_date = ?, reinvoice = ?, updated_at = ? WHERE id = ?`,
+      `UPDATE b2b_orders SET invoice_no = ?, invoice_date = ?, waybill_no = ?, status = ?, due_date = ?, reinvoice = ?, ${reinvoice ? "" : "reinvoice_sent = '', "}updated_at = ? WHERE id = ?`,
       [next.invoice_no, next.invoice_date, next.waybill_no, status, dueDate, reinvoice, nowIso(), o.id]
     );
     if (o.reinvoice && !reinvoice) await log(o.id, user, `\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043F\u0435\u0440\u0435\u0432\u0438\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E: \u2116 ${next.invoice_no} \u0437\u0430\u043C\u0456\u0441\u0442\u044C ${o.reinvoice}`);
@@ -7853,6 +7875,13 @@ ${link(c, `porders/${o.id}`)}`);
       const old = await db.all(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = ? AND created_at < ? AND id != ?`, [o.id, kind, o.reinvoiced_at, r.lastId]);
       for (const f of old) await deleteFile(f.id);
       if (old.length) await log(o.id, u, `\u0441\u0442\u0430\u0440\u0438\u0439 \u0444\u0430\u0439\u043B (${FILE_KIND[kind].toLowerCase()}) \u0437\u0430\u043C\u0456\u043D\u0435\u043D\u043E \u043D\u043E\u0432\u0438\u043C`);
+      if (o.reinvoice) {
+        const fresh = new Set((await db.all(`SELECT DISTINCT kind FROM b2b_files WHERE order_id = ? AND kind IN ('invoice', 'waybill') AND created_at >= ?`, [o.id, o.reinvoiced_at])).map((x) => x.kind));
+        if (fresh.has("invoice") && (!o.waybill_no || fresh.has("waybill"))) {
+          await db.run(`UPDATE b2b_orders SET reinvoice = '', reinvoice_sent = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+          await log(o.id, u, `\u0440\u0430\u0445\u0443\u043D\u043E\u043A${o.waybill_no ? " \u0456 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0443" : ""} \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u043B\u0435\u043D\u043E \u2014 \u0434\u043E\u0434\u0430\u043D\u043E \u043D\u043E\u0432\u0456 \u0444\u0430\u0439\u043B\u0438`);
+        }
+      }
     }
     return { id: r.lastId, bytes, name, mime };
   }
@@ -10223,7 +10252,7 @@ ${[...checks, ...itemLines.slice(0, 20), ...more].join("\n")}${!kind ? "\n\n<b>\
     const lines = items.slice(0, 50).map((i) => `${h5(i.name)} \u2014 ${i.qty} \u0448\u0442 \u2014 ${m22(i.price)}`);
     if (items.length > 50) lines.push(`\u2026\u0456 \u0449\u0435 ${items.length - 50} \u043F\u043E\u0437.`);
     const head = done ? `\u{1F9FE} <b>\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}</b> \xB7 \u2705 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h5(o.invoice_no)} \u0434\u043E\u0434\u0430\u043D\u043E` : o.reinvoice ? `\u{1F501} <b>\u041F\u0435\u0440\u0435\u0440\u043E\u0431\u0456\u0442\u044C \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h5(o.reinvoice)} \xB7 ${orderNo(o.id)}</b>
-\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430 \u0446\u0435\u0439 \u0441\u043A\u043B\u0430\u0434${Number(o.paid_amount) > 0 ? ` (\u0443\u0436\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E ${m22(o.paid_amount)} \u0433\u0440\u043D)` : ""}` : `\u{1F9FE} <b>\u041F\u043E\u0442\u0440\u0456\u0431\u0435\u043D \u0440\u0430\u0445\u0443\u043D\u043E\u043A \xB7 ${orderNo(o.id)}</b>${mode === "changed" ? " <i>(\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u043C\u0456\u043D\u0435\u043D\u043E)</i>" : ""}`;
+\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0440\u0430\u0445\u0443\u043D\u043E\u043A${o.waybill_no ? " \u0456 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0443" : ""} \u043D\u0430 \u0446\u0435\u0439 \u0441\u043A\u043B\u0430\u0434${Number(o.paid_amount) > 0 ? ` (\u0443\u0436\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E ${m22(o.paid_amount)} \u0433\u0440\u043D${Number(o.paid_amount) < o.total - 4e-3 ? `, \u0434\u043E \u0434\u043E\u043F\u043B\u0430\u0442\u0438 ${m22(o.total - o.paid_amount)} \u0433\u0440\u043D` : ""})` : ""}` : `\u{1F9FE} <b>\u041F\u043E\u0442\u0440\u0456\u0431\u0435\u043D \u0440\u0430\u0445\u0443\u043D\u043E\u043A \xB7 ${orderNo(o.id)}</b>${mode === "changed" ? " <i>(\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u043C\u0456\u043D\u0435\u043D\u043E)</i>" : ""}`;
     return `${head}
 \u041F\u0430\u0440\u0442\u043D\u0435\u0440: \xAB${h5(o.partner)}\xBB
 
@@ -10238,15 +10267,20 @@ ${lines.join("\n")}
   }
   async function finRequest(orderId, mode = "") {
     const chat = await finChat();
-    if (!chat) return;
+    if (!chat) {
+      if (mode === "reinvoice") throw new Error("\u0413\u0440\u0443\u043F\u0443 \xAB\u0424\u0456\u043D\u0430\u043D\u0441\u043E\u0432\u0456 \u043F\u0438\u0442\u0430\u043D\u043D\u044F\xBB \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u2014 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F B2B.");
+      return;
+    }
     const o = await orderFull(orderId);
-    if (!o || o.kind !== "supply" || o.status !== "invoice_wait") return;
+    if (!o || o.kind !== "supply") return;
+    if (mode === "reinvoice" ? !o.reinvoice : o.status !== "invoice_wait") return;
     const text = await reqText(o, { mode });
     if (mode === "reinvoice") {
       const reply = o.fin_inv_msg || o.fin_req_msg;
       const m3 = await tgApi("sendMessage", { chat_id: chat, text, parse_mode: "HTML", ...reply ? { reply_to_message_id: reply, allow_sending_without_reply: true } : {} }).catch(() => null);
-      if (m3?.message_id) await db.run(`UPDATE b2b_orders SET fin_req_msg = ?, fin_inv_msg = NULL, fin_pay_msg = NULL, fin_done = 0 WHERE id = ?`, [m3.message_id, o.id]);
-      return;
+      if (!m3?.message_id) throw new Error("\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u043D\u0430\u0434\u0456\u0441\u043B\u0430\u0442\u0438 \u0432 \xAB\u0424\u0456\u043D\u0430\u043D\u0441\u043E\u0432\u0456 \u043F\u0438\u0442\u0430\u043D\u043D\u044F\xBB \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0433\u0440\u0443\u043F\u0443 \u0432 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445 B2B.");
+      await db.run(`UPDATE b2b_orders SET fin_req_msg = ?, fin_inv_msg = NULL, fin_pay_msg = NULL, fin_done = 0 WHERE id = ?`, [m3.message_id, o.id]);
+      return true;
     }
     if (o.fin_req_msg) {
       const ok = await tgApi("editMessageText", { chat_id: chat, message_id: o.fin_req_msg, text, parse_mode: "HTML" }).catch(() => null);
@@ -10721,13 +10755,14 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
     if (comment !== (o.comment || "")) changes.push("\u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440");
     if (!changes.length) return { ok: true, changed: false };
     const invoiced = Boolean(o.invoice_no) && INVOICED.includes(o.status);
-    const redo = invoiced ? `${o.invoice_no}${o.waybill_no ? ` (\u0456 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0443 \u2116 ${o.waybill_no})` : ""}` : "";
+    const redo = invoiced ? o.reinvoice || `${o.invoice_no}${o.waybill_no ? ` (\u0456 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0443 \u2116 ${o.waybill_no})` : ""}` : "";
+    const paid = Number(o.paid_amount) || 0;
+    const status = invoiced && paid > 0 && ["pay_wait", "partial", "paid"].includes(o.status) ? paid >= total - 4e-3 ? "paid" : "partial" : o.status;
     const now = nowIso();
     const st = [[`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]], ...itemRows(o.id, items)];
     st.push(invoiced ? [
-      `UPDATE b2b_orders SET total = ?, entity_id = ?, entity = ?, comment = ?, status = 'invoice_wait', reinvoice = ?, reinvoiced_at = ?,
-          invoice_no = '', invoice_date = '', waybill_no = '', due_date = '', due_notified = '', fin_done = 0, group_done = 0, updated_at = ? WHERE id = ?`,
-      [total, ent.id, ent.text, comment, redo, now, now, o.id]
+      `UPDATE b2b_orders SET total = ?, entity_id = ?, entity = ?, comment = ?, status = ?, reinvoice = ?, reinvoiced_at = ?, reinvoice_sent = '', group_done = 0, updated_at = ? WHERE id = ?`,
+      [total, ent.id, ent.text, comment, status, redo, now, now, o.id]
     ] : [`UPDATE b2b_orders SET total = ?, entity_id = ?, entity = ?, comment = ?, group_done = 0, updated_at = ? WHERE id = ?`, [total, ent.id, ent.text, comment, now, o.id]]);
     for (const i of removed) {
       st.push([
@@ -10737,7 +10772,7 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
     }
     await db.batch(st);
     const who = userName4(u) || "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440";
-    await log(o.id, u, `\u0437\u043C\u0456\u043D\u0438\u0432 ${who}: ${changes.join("; ")} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah4(total)}${invoiced ? ` \xB7 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${redo} \u0442\u0440\u0435\u0431\u0430 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u0438\u0442\u0438` : ""}`.slice(0, 1800));
+    await log(o.id, u, `\u0437\u043C\u0456\u043D\u0438\u0432 ${who}: ${changes.join("; ")} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah4(total)}${invoiced ? ` \xB7 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${redo} \u0442\u0440\u0435\u0431\u0430 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u0438\u0442\u0438` : ""}${status !== o.status ? ` \xB7 \u0441\u0442\u0430\u0442\u0443\u0441: ${status === "partial" ? "\xAB\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB" : "\xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB"}` : ""}`.slice(0, 1800));
     if (["draft", "open"].includes(o.status)) await priceToClients(o, u, cur, items);
     if (o.status === "open") await rebuildOpen(o.id);
     const lines = changes.slice(0, 20).map(h8).join("\n");
@@ -10746,11 +10781,11 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
 ${lines}
 <b>\u0420\u0430\u0437\u043E\u043C: ${uah4(total)}</b>${invoiced ? `
 
-\u{1F501} \u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h8(o.invoice_no)} \u0431\u0443\u0434\u0435 \u043F\u0435\u0440\u0435\u0432\u0438\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E \u2014 \u043D\u043E\u0432\u0438\u0439 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430\u0434\u0456\u0439\u0434\u0435 \u0441\u044E\u0434\u0438.${Number(o.paid_amount) > 0 ? ` \u041E\u043F\u043B\u0430\u0442\u0430 ${uah4(o.paid_amount)} \u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0430\u043D\u0430.` : ""}` : ""}`;
+\u{1F501} \u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h8(o.invoice_no)}${o.waybill_no ? ` \u0456 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0443 \u2116 ${h8(o.waybill_no)}` : ""} \u0431\u0443\u0434\u0435 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u043B\u0435\u043D\u043E \u2014 \u043D\u043E\u0432\u0456 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0438 \u043D\u0430\u0434\u0456\u0439\u0434\u0443\u0442\u044C \u0441\u044E\u0434\u0438.${paid > 0 ? ` \u041E\u043F\u043B\u0430\u0442\u0430 ${uah4(paid)} \u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0430\u043D\u0430${status === "partial" ? `, \u0434\u043E \u0434\u043E\u043F\u043B\u0430\u0442\u0438 ${uah4(total - paid)}` : ""}.` : ""}` : ""}`;
     await tgPartner(o.partner_id, `${text}
 ${link(c, `porders/${o.id}`)}`);
     await tgGroup(o.partner_id, text);
-    if (!["draft", "open", "confirm"].includes(o.status)) await hooks.finRequest?.(o.id, invoiced ? "reinvoice" : "changed").catch(() => 0);
+    if (!invoiced && o.status === "invoice_wait") await hooks.finRequest?.(o.id, "changed").catch(() => 0);
     return { ok: true, changed: true, total, reinvoice: invoiced };
   }
   async function priceToClients(o, u, before, after) {
@@ -10899,16 +10934,18 @@ var dayOf = (v) => String(v || "").slice(0, 10);
 var INVOICED2 = `kind = 'supply' AND invoice_no != '' AND status NOT IN ('cancelled', 'draft', 'confirm', 'open')`;
 function mountB2bHome(app, { db, myPartner, orders }) {
   async function attention() {
-    const [st, checks, overdue, clientsNew, delReq] = await Promise.all([
+    const [st, checks, overdue, clientsNew, delReq, redo] = await Promise.all([
       db.all(`SELECT status, COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND status IN ('invoice_wait') GROUP BY status`),
       db.get(`SELECT COUNT(*) AS n FROM b2b_payments WHERE order_id IS NULL AND dismissed = 0 AND candidates != '[]'`),
       db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(total - paid_amount), 0) AS sum FROM b2b_orders WHERE kind = 'supply' AND status IN ${DEBT} AND due_date != '' AND due_date < ?`, [today2()]),
       db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE kind = 'client' AND status = 'new'`),
-      db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND COALESCE(delivery_req, '') != '' AND status IN ('invoice_wait', 'pay_wait', 'partial', 'paid') AND COALESCE(crm_id, '') = '' AND COALESCE(crm_ext, '') = ''`)
+      db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND COALESCE(delivery_req, '') != '' AND status IN ('invoice_wait', 'pay_wait', 'partial', 'paid') AND COALESCE(crm_id, '') = '' AND COALESCE(crm_ext, '') = ''`),
+      db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE kind = 'supply' AND COALESCE(reinvoice, '') != '' AND status != 'cancelled'`)
     ]);
     const n = (s) => st.find((r) => r.status === s)?.n || 0;
     return [
       { key: "b2b_invoice", level: "warn", count: n("invoice_wait"), label: "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432 \u0447\u0435\u043A\u0430\u044E\u0442\u044C \u0440\u0430\u0445\u0443\u043D\u043A\u0443", link: "#/b2borders" },
+      { key: "b2b_reinvoice", level: "warn", count: redo?.n || 0, label: "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0437\u043C\u0456\u043D\u0435\u043D\u043E \u043F\u0456\u0441\u043B\u044F \u0440\u0430\u0445\u0443\u043D\u043A\u0443 \u2014 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u0438\u0442\u0438 \u0440\u0430\u0445\u0443\u043D\u043E\u043A/\u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0443", link: "#/b2borders" },
       { key: "b2b_delivery_req", level: "warn", count: delReq?.n || 0, label: "\u041F\u0430\u0440\u0442\u043D\u0435\u0440\u0438 \u043F\u0440\u043E\u0441\u044F\u0442\u044C \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456", link: "#/b2borders" },
       { key: "b2b_clients", level: "warn", count: clientsNew?.n || 0, label: "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432 \u043D\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u0456 \u0432 CRM", link: "#/b2bclients" },
       { key: "b2b_paycheck", level: "warn", count: checks?.n || 0, label: "\u041F\u043B\u0430\u0442\u0435\u0436\u0456 B2B: \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438, \u0432 \u044F\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u0442\u0438", link: "#/payments" },
@@ -17969,7 +18006,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 38,
+  version: 39,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18291,7 +18328,8 @@ var schema11 = {
     // Коментар менеджера при скасуванні (партнер бачить на сторінці замовлення і в сповіщенні).
     ["b2b_orders", "cancel_note", "TEXT DEFAULT ''"],
     ["b2b_orders", "delivery_req", "TEXT DEFAULT ''"],
-    // запит партнера на зміну способу отримання (JSON) — чекає підтвердження менеджера
+    ["b2b_orders", "reinvoice_sent", "TEXT DEFAULT ''"],
+    // коли менеджер надіслав запит «переробити рахунок/накладну» у «Фінансові питання» // запит партнера на зміну способу отримання (JSON) — чекає підтвердження менеджера
     // етап 3а: команда партнера (роль у команді, хто додав) і видалені партнери (з замовленнями — в архіві)
     ["users", "partner_role", "TEXT DEFAULT ''"],
     ["users", "added_by", "TEXT DEFAULT ''"],

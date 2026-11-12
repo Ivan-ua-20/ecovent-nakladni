@@ -916,6 +916,27 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     return c.json({ ok: true, status });
   });
 
+  // Закупівлю змінено після рахунку: менеджер сам вирішує, коли просити бухгалтера переробити рахунок/накладну.
+  app.post('/api/b2b/orders/:id/reinvoice-request', async (c) => {
+    need(c, 'b2b.admin');
+    const o = await orderOf(c.req.param('id'));
+    if (!o.reinvoice) throw fail(400, 'Переробляти рахунок не потрібно — закупівлю після рахунку не змінювали.');
+    try { await hooks.finRequest?.(o.id, 'reinvoice'); } catch (e) { throw fail(400, e.message); }
+    const now = nowIso();
+    await db.run(`UPDATE b2b_orders SET reinvoice_sent = ? WHERE id = ?`, [now, o.id]);
+    await log(o.id, c.get('user'), `запит переробити рахунок № ${o.reinvoice} надіслано у «Фінансові питання»`);
+    return c.json({ ok: true, sent: now });
+  });
+  // Рахунок і накладну перероблено з тим самим номером (новий номер знімає позначку сам, коли його внесуть).
+  app.post('/api/b2b/orders/:id/reinvoice-done', async (c) => {
+    need(c, 'b2b.admin');
+    const o = await orderOf(c.req.param('id'));
+    if (!o.reinvoice) return c.json({ ok: true });
+    await db.run(`UPDATE b2b_orders SET reinvoice = '', reinvoice_sent = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+    await log(o.id, c.get('user'), `рахунок/накладну перероблено (№ ${o.reinvoice})`);
+    return c.json({ ok: true });
+  });
+
   // № і дата рахунку, № накладної (з сайту або з Telegram-бота): статус закупівлі, історія, сповіщення партнеру.
   async function applyNumbers(o, b, user, c, how = '') {
     const next = {
@@ -932,7 +953,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     // Відстрочка: строк оплати — від дати рахунку (або від сьогодні) + днів, зафіксованих у закупівлі.
     const dueDate = o.pay_terms === 'postpay' && next.invoice_no ? addDaysTo(next.invoice_date || today(), Number(o.pay_days) || 0) : (o.due_date || '');
     const reinvoice = next.invoice_no && next.invoice_no !== o.invoice_no ? '' : (o.reinvoice || '');
-    await db.run(`UPDATE b2b_orders SET invoice_no = ?, invoice_date = ?, waybill_no = ?, status = ?, due_date = ?, reinvoice = ?, updated_at = ? WHERE id = ?`,
+    await db.run(`UPDATE b2b_orders SET invoice_no = ?, invoice_date = ?, waybill_no = ?, status = ?, due_date = ?, reinvoice = ?, ${reinvoice ? '' : "reinvoice_sent = '', "}updated_at = ? WHERE id = ?`,
       [next.invoice_no, next.invoice_date, next.waybill_no, status, dueDate, reinvoice, nowIso(), o.id]);
     if (o.reinvoice && !reinvoice) await log(o.id, user, `рахунок перевиставлено: № ${next.invoice_no} замість ${o.reinvoice}`);
     if (o.reinvoice && !reinvoice && status === 'paid') await hooks.finPaid?.(o.id).catch(() => 0);
@@ -1140,6 +1161,14 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       const old = await db.all(`SELECT id FROM b2b_files WHERE order_id = ? AND kind = ? AND created_at < ? AND id != ?`, [o.id, kind, o.reinvoiced_at, r.lastId]);
       for (const f of old) await deleteFile(f.id);
       if (old.length) await log(o.id, u, `старий файл (${FILE_KIND[kind].toLowerCase()}) замінено новим`);
+      // Нові рахунок (і накладна, якщо вона була) після зміни — позначку «переробити» знято.
+      if (o.reinvoice) {
+        const fresh = new Set((await db.all(`SELECT DISTINCT kind FROM b2b_files WHERE order_id = ? AND kind IN ('invoice', 'waybill') AND created_at >= ?`, [o.id, o.reinvoiced_at])).map((x) => x.kind));
+        if (fresh.has('invoice') && (!o.waybill_no || fresh.has('waybill'))) {
+          await db.run(`UPDATE b2b_orders SET reinvoice = '', reinvoice_sent = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
+          await log(o.id, u, `рахунок${o.waybill_no ? ' і накладну' : ''} перероблено — додано нові файли`);
+        }
+      }
     }
     return { id: r.lastId, bytes, name, mime };
   }
