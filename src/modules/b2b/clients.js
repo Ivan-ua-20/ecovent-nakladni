@@ -26,7 +26,7 @@ const TTN_FIELDS = ['', 'additional_2', 'additional_3', 'additional_4', 'deliver
 const newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(10000 + Math.random() * 90000))}`;
 
 export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, hooks = {}, onCron = () => {} }) {
-  const { itemsTxt, itemsDiff, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h } = orders;
+  const { itemsTxt, itemsDiff, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, linePrice, aggLines, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h } = orders;
   const userName = (u) => u?.name || u?.login || '';
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files,
     (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id AND f.kind = 'label') AS labels
@@ -228,7 +228,8 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
       const r = left.get(id);
       if (!r) throw fail(400, `Товару ID ${id} немає в закупівлі ${orderNo(s.id)}.`);
       if (qty > r.left) throw fail(400, `«${r.name}»: у закупівлі ${orderNo(s.id)} залишилось ${Math.max(0, r.left)} шт.`);
-      return { product_id: id, name: r.name, article: r.article || '', qty, price: r.price, rrp: r.rrp };
+      const pr = linePrice(r.lines, r.used, qty); // кілька рядків з різною ціною — ціна тих одиниць, що підуть у це замовлення
+      return { product_id: id, name: r.name, article: r.article || '', qty, price: pr.price, rrp: pr.rrp };
     });
   }
   // Позиції замовлення. Без закупівлі — товари з каталогу йдуть у відкриту закупівлю партнера (у межах лімітів).
@@ -523,8 +524,11 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     const map = new Map();
     for (const r of rows) {
       if (!map.has(r.id)) map.set(r.id, { id: r.id, number: orderNo(r.id), status: r.status, status_name: ORDER_STATUS[r.status] || r.status, created_at: r.created_at, total: r.total, invoice_no: r.invoice_no, pay: payState({ kind: 'client', supply_id: r.id, supply_status: r.status }), items: [] });
-      map.get(r.id).items.push({ product_id: r.product_id, name: r.name, article: r.article, price: r.price, qty: r.qty, left: r.qty - r.used });
+      (map.get(r.id).rows ||= []).push(r);
     }
+    // товар у кількох рядках (різні ціни) — один рядок із загальним залишком
+    for (const sp of map.values()) { sp.items = aggLines(sp.rows.map((r) => ({ ...r, rrp: 0 }))).map((r) => ({ product_id: r.product_id, name: r.name, article: r.article, price: r.price, qty: r.qty, left: r.left })); delete sp.rows; }
+
     return c.json([...map.values()].filter((s) => s.items.some((i) => i.left > 0)));
   });
 

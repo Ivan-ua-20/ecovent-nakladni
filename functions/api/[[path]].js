@@ -7337,6 +7337,43 @@ ${link(c, `porders/${open.id}`)}`);
     if (o.kind === "client") Object.assign(out, { no_supply: !o.supply_id || o.supply_status === "open", open_supply: o.supply_status === "open", draft_supply: o.supply_status === "draft", pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : "" });
     return out;
   };
+  function linePrice(lines, from, n) {
+    let skip = Math.max(0, from || 0);
+    let got = 0;
+    let sum = 0;
+    let rrp = null;
+    const need2 = Math.max(1, n || 1);
+    for (const l of lines) {
+      const off = Math.min(skip, l.qty);
+      skip -= off;
+      const take = Math.min(l.qty - off, need2 - got);
+      if (take <= 0) continue;
+      if (rrp === null) rrp = l.rrp;
+      sum += take * l.price;
+      got += take;
+      if (got >= need2) break;
+    }
+    if (!got) {
+      const l = lines[lines.length - 1] || {};
+      return { price: l.price, rrp: l.rrp };
+    }
+    return { price: round2(sum / got), rrp };
+  }
+  function aggLines(rows) {
+    const m = /* @__PURE__ */ new Map();
+    for (const r of rows) {
+      const a = m.get(r.product_id);
+      if (a) {
+        a.qty += r.qty;
+        a.lines.push({ qty: r.qty, price: r.price, rrp: r.rrp });
+      } else m.set(r.product_id, { ...r, lines: [{ qty: r.qty, price: r.price, rrp: r.rrp }] });
+    }
+    return [...m.values()].map((a) => {
+      const used = Number(a.used) || 0;
+      const next = linePrice(a.lines, used, 1);
+      return { ...a, used, left: a.qty - used, price: next.price, rrp: next.rrp };
+    });
+  }
   async function supplyLeft(supplyId, exceptId = 0) {
     return db.all(
       `SELECT i.product_id, i.name, i.article, i.price, i.rrp, i.qty,
@@ -7344,7 +7381,7 @@ ${link(c, `porders/${open.id}`)}`);
           WHERE co.supply_id = i.order_id AND co.kind = 'client' AND co.status != 'cancelled' AND co.id != ? AND ci.product_id = i.product_id), 0) AS used
        FROM b2b_order_items i WHERE i.order_id = ? ORDER BY i.id`,
       [exceptId, supplyId]
-    ).then((rows) => rows.map((r) => ({ ...r, left: r.qty - r.used })));
+    ).then(aggLines);
   }
   async function orderDetail(o) {
     if (o.kind === "client" && o.supply_id && o.supply_status === void 0) {
@@ -7360,7 +7397,7 @@ ${link(c, `porders/${open.id}`)}`);
     const out = { order: publicOrder(o), items, files: files.map((f) => ({ ...f, kind_name: f.doc_name || FILE_KIND[f.kind] || f.kind })), history };
     if (o.kind === "supply") {
       out.clients = clients.map((x) => ({ ...x, number: orderNo(x.id), status_name: CLIENT_STATUS[x.status] || x.status }));
-      out.left = clients.length ? await supplyLeft(o.id) : items.map((i) => ({ ...i, used: 0, left: i.qty }));
+      out.left = clients.length ? await supplyLeft(o.id) : aggLines(items.map((i) => ({ ...i, used: 0 })));
       if (!["open", "cancelled"].includes(o.status) && out.left.length && out.left.every((l) => l.left <= 0)) out.order = publicOrder({ ...o, closed: 1 });
     }
     return out;
@@ -7395,6 +7432,9 @@ ${link(c, `porders/${open.id}`)}`);
     if (!["invoice_wait", "draft"].includes(o.status)) throw fail(400, "\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u0443\u0436\u0435 \u0432\u0438\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E \u2014 \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043C\u043E\u0436\u0435 \u043B\u0438\u0448\u0435 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440.");
     const isDraft = o.status === "draft";
     const b = await c.req.json();
+    if (await db.get(`SELECT product_id FROM b2b_order_items WHERE order_id = ? GROUP BY product_id HAVING COUNT(*) > 1 LIMIT 1`, [o.id])) {
+      throw fail(400, "\u0423 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0454 \u0442\u043E\u0432\u0430\u0440 \u0443 \u043A\u0456\u043B\u044C\u043A\u043E\u0445 \u0440\u044F\u0434\u043A\u0430\u0445 \u0437 \u0440\u0456\u0437\u043D\u043E\u044E \u0446\u0456\u043D\u043E\u044E \u2014 \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u0457\u0457 \u043C\u043E\u0436\u0435 \u043B\u0438\u0448\u0435 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440. \u041D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u0439\u043E\u043C\u0443, \u0449\u043E \u043F\u043E\u0442\u0440\u0456\u0431\u043D\u043E \u0437\u043C\u0456\u043D\u0438\u0442\u0438.");
+    }
     const e = await myEntity(p, b.entity_id ?? o.entity_id);
     const items = await priceItems(p, b.items);
     const total = totalOf(items);
@@ -8019,7 +8059,7 @@ ${link(c, `porders/${o.id}`)}`);
     if (!f) throw fail(404, "\u0424\u0430\u0439\u043B \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (\u0437\u0431\u0435\u0440\u0456\u0433\u0430\u044E\u0442\u044C\u0441\u044F 30 \u0434\u043D\u0456\u0432).");
     return sendFile(f);
   });
-  return { parsePickup, pickupTxt, itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, sendFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h3 };
+  return { parsePickup, pickupTxt, itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, sendFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, linePrice, aggLines, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h3 };
 }
 
 // src/modules/b2b/crm-tone.js
@@ -8043,7 +8083,7 @@ var TTN_FIELDS = ["", "additional_2", "additional_3", "additional_4", "delivery_
 var newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Math.random() * 9e4))}`;
 function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, hooks = {}, onCron = () => {
 } }) {
-  const { itemsTxt, itemsDiff, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah4, h: h8 } = orders;
+  const { itemsTxt, itemsDiff, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, linePrice, aggLines, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah4, h: h8 } = orders;
   const userName8 = (u) => u?.name || u?.login || "";
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files,
     (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id AND f.kind = 'label') AS labels
@@ -8249,7 +8289,8 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
       const r = left.get(id);
       if (!r) throw fail(400, `\u0422\u043E\u0432\u0430\u0440\u0443 ID ${id} \u043D\u0435\u043C\u0430\u0454 \u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(s.id)}.`);
       if (qty > r.left) throw fail(400, `\xAB${r.name}\xBB: \u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(s.id)} \u0437\u0430\u043B\u0438\u0448\u0438\u043B\u043E\u0441\u044C ${Math.max(0, r.left)} \u0448\u0442.`);
-      return { product_id: id, name: r.name, article: r.article || "", qty, price: r.price, rrp: r.rrp };
+      const pr = linePrice(r.lines, r.used, qty);
+      return { product_id: id, name: r.name, article: r.article || "", qty, price: pr.price, rrp: pr.rrp };
     });
   }
   async function buildItems(p, b, exceptId = 0, own = { openId: null, total: 0, draftId: null }, { skipLimits = false } = {}) {
@@ -8537,7 +8578,11 @@ ${link(base, `porders/${s.id}`)}` : ""}`);
     const map = /* @__PURE__ */ new Map();
     for (const r of rows) {
       if (!map.has(r.id)) map.set(r.id, { id: r.id, number: orderNo(r.id), status: r.status, status_name: ORDER_STATUS[r.status] || r.status, created_at: r.created_at, total: r.total, invoice_no: r.invoice_no, pay: payState({ kind: "client", supply_id: r.id, supply_status: r.status }), items: [] });
-      map.get(r.id).items.push({ product_id: r.product_id, name: r.name, article: r.article, price: r.price, qty: r.qty, left: r.qty - r.used });
+      (map.get(r.id).rows ||= []).push(r);
+    }
+    for (const sp of map.values()) {
+      sp.items = aggLines(sp.rows.map((r) => ({ ...r, rrp: 0 }))).map((r) => ({ product_id: r.product_id, name: r.name, article: r.article, price: r.price, qty: r.qty, left: r.left }));
+      delete sp.rows;
     }
     return c.json([...map.values()].filter((s) => s.items.some((i) => i.left > 0)));
   });
@@ -10673,62 +10718,101 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
   hooks.supplyPrices = async (c, supplyId, changes) => {
     const o = await orderOf(supplyId);
     const cur = await db.all(`SELECT product_id, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
-    return editSupply(c, o, { items: cur.map((i) => ({ product_id: i.product_id, qty: i.qty, price: changes.get(i.product_id)?.price ?? i.price, rrp: changes.get(i.product_id)?.rrp ?? i.rrp })) });
+    return editSupply(c, o, { items: cur.map((i, line) => ({ line, product_id: i.product_id, qty: i.qty, price: changes.get(i.product_id)?.price ?? i.price, rrp: changes.get(i.product_id)?.rrp ?? i.rrp })) });
   };
   hooks.supplyAdd = async (c, supplyId, add) => {
     const o = await orderOf(supplyId);
-    const cur = await db.all(`SELECT product_id, qty FROM b2b_order_items WHERE order_id = ?`, [o.id]);
-    const want = new Map(cur.map((i) => [i.product_id, i.qty]));
-    for (const [id, n] of add) want.set(id, (want.get(id) || 0) + n);
-    return editSupply(c, o, { items: [...want].map(([product_id, qty]) => ({ product_id, qty })) });
+    const cur = await db.all(`SELECT product_id, qty FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
+    const items = cur.map((i, line) => ({ line, product_id: i.product_id, qty: i.qty }));
+    for (const [id, n] of add) {
+      const it = items.find((x) => x.product_id === id);
+      if (it) it.qty += n;
+      else items.push({ product_id: id, qty: n });
+    }
+    return editSupply(c, o, { items });
   };
   async function editSupply(c, o, b) {
     const u = c.get("user");
     if (o.kind !== "supply") throw fail(400, "\u0426\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u2014 \u0437\u043C\u0456\u043D\u044E\u0439\u0442\u0435 \u0439\u043E\u0433\u043E \u043D\u0430 \u0441\u0442\u043E\u0440\u0456\u043D\u0446\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
     if (o.status === "cancelled") throw fail(400, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.");
     const cur = await db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
-    const curMap = new Map(cur.map((i) => [i.product_id, i]));
-    const want = /* @__PURE__ */ new Map();
+    const extraOk = !["draft", "open"].includes(o.status);
+    const money3 = (v, what2) => {
+      const raw2 = v === void 0 || v === null ? "" : String(v).replace(/\s/g, "").replace(",", ".");
+      const x = raw2 === "" ? null : round2(Number(raw2));
+      if (x !== null && !(x >= 0 && x < 1e8)) throw fail(400, `${what2} \u2014 \u0447\u0438\u0441\u043B\u043E \u0432\u0456\u0434 0.`);
+      return x;
+    };
+    const claimed = /* @__PURE__ */ new Set();
+    const asked = [];
     for (const it of Array.isArray(b.items) ? b.items : []) {
       const id = parseInt(it.product_id, 10);
       const qty = Number(it.qty);
       if (!id) continue;
       if (!Number.isInteger(qty) || qty < 0 || qty > 1e5) throw fail(400, "\u041A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C \u2014 \u0446\u0456\u043B\u0435 \u0447\u0438\u0441\u043B\u043E \u0432\u0456\u0434 0.");
-      const money3 = (v, what2) => {
-        const raw2 = v === void 0 || v === null ? "" : String(v).replace(/\s/g, "").replace(",", ".");
-        const x = raw2 === "" ? null : round2(Number(raw2));
-        if (x !== null && !(x >= 0 && x < 1e8)) throw fail(400, `${what2} \u2014 \u0447\u0438\u0441\u043B\u043E \u0432\u0456\u0434 0.`);
-        return x;
-      };
       const price = money3(it.price, "\u0426\u0456\u043D\u0430");
       const rrp = money3(it.rrp, "\u0420\u0420\u0426");
-      if (qty > 0) want.set(id, { qty: (want.get(id)?.qty || 0) + qty, price: price ?? want.get(id)?.price ?? null, rrp: rrp ?? want.get(id)?.rrp ?? null });
+      let idx = null;
+      if (it.line !== void 0 && it.line !== null && it.line !== "" && !it.extra) {
+        idx = Number(it.line);
+        if (!Number.isInteger(idx) || !cur[idx] || cur[idx].product_id !== id || claimed.has(idx)) throw fail(409, "\u0421\u043A\u043B\u0430\u0434 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0449\u043E\u0439\u043D\u043E \u0437\u043C\u0456\u043D\u0438\u0432\u0441\u044F \u2014 \u0437\u0430\u043A\u0440\u0438\u0439\u0442\u0435 \u0432\u0456\u043A\u043D\u043E, \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443 \u0439 \u0432\u043D\u0435\u0441\u0456\u0442\u044C \u0437\u043C\u0456\u043D\u0438 \u0449\u0435 \u0440\u0430\u0437.");
+      } else if (!it.extra) {
+        const same = asked.find((l) => l.product_id === id && !l.extra && l.plain);
+        if (same) {
+          same.qty += qty;
+          if (price !== null) same.price = price;
+          if (rrp !== null) same.rrp = rrp;
+          continue;
+        }
+        const k = cur.findIndex((r, n) => r.product_id === id && !claimed.has(n));
+        if (k >= 0) idx = k;
+      }
+      if (idx !== null) claimed.add(idx);
+      asked.push({ idx, product_id: id, qty, price, rrp, extra: Boolean(it.extra), plain: !it.extra && (it.line === void 0 || it.line === null || it.line === "") });
     }
-    if (!want.size) throw fail(400, "\u0423 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043C\u0430\u0454 \u043B\u0438\u0448\u0438\u0442\u0438\u0441\u044F \u0445\u043E\u0447\u0430 \u0431 \u043E\u0434\u0438\u043D \u0442\u043E\u0432\u0430\u0440. \u0429\u043E\u0431 \u043F\u0440\u0438\u0431\u0440\u0430\u0442\u0438 \u0432\u0441\u0435 \u2014 \u0432\u0438\u0434\u0430\u043B\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E.");
-    if (want.size > 300) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 300 \u043F\u043E\u0437\u0438\u0446\u0456\u0439.");
-    const newIds = [...want.keys()].filter((id) => !curMap.has(id));
+    const live = asked.filter((l) => l.qty > 0);
+    if (!live.length) throw fail(400, "\u0423 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043C\u0430\u0454 \u043B\u0438\u0448\u0438\u0442\u0438\u0441\u044F \u0445\u043E\u0447\u0430 \u0431 \u043E\u0434\u0438\u043D \u0442\u043E\u0432\u0430\u0440. \u0429\u043E\u0431 \u043F\u0440\u0438\u0431\u0440\u0430\u0442\u0438 \u0432\u0441\u0435 \u2014 \u0432\u0438\u0434\u0430\u043B\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E.");
+    if (live.length > 300) throw fail(400, "\u041D\u0435 \u0431\u0456\u043B\u044C\u0448\u0435 300 \u043F\u043E\u0437\u0438\u0446\u0456\u0439.");
+    const curOf = (id) => cur.find((r) => r.product_id === id);
+    const newIds = [...new Set(live.filter((l) => l.idx === null && !curOf(l.product_id)).map((l) => l.product_id))];
     const cat = newIds.length ? new Map((await withGrace(db, await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [o.partner_id]), await db.all(
       `SELECT c.product_id, c.name, c.article, c.rrp, ${PM_COLS} FROM b2b_catalog c LEFT JOIN b2b_margins m ON m.brand_id = c.brand_id AND m.partner_id = ? ${PM_JOIN}
        WHERE c.product_id IN (SELECT value FROM json_each(?))`,
       [o.partner_id, kyivDay(), JSON.stringify(newIds)]
     ))).map((r) => [r.product_id, r])) : /* @__PURE__ */ new Map();
-    const items = [...want].map(([id, w]) => {
-      const old = curMap.get(id);
+    let items = live.map((l) => {
+      const old = l.idx !== null ? cur[l.idx] : null;
       if (old) {
-        const rrp2 = w.rrp ?? old.rrp;
-        const price = w.price ?? (w.rrp != null && round2(w.rrp) !== round2(old.rrp) && old.rrp > 0 ? round2(old.price / old.rrp * w.rrp) : old.price);
-        return { product_id: id, name: old.name, article: old.article || "", qty: w.qty, price, rrp: rrp2 };
+        const rrp2 = l.rrp ?? old.rrp;
+        const price = l.price ?? (l.rrp != null && round2(l.rrp) !== round2(old.rrp) && old.rrp > 0 ? round2(old.price / old.rrp * l.rrp) : old.price);
+        return { product_id: l.product_id, name: old.name, article: old.article || "", qty: l.qty, price, rrp: rrp2, _idx: l.idx };
       }
-      const r = cat.get(id);
-      if (!r) throw fail(400, `\u0422\u043E\u0432\u0430\u0440\u0443 ID ${id} \u043D\u0435\u043C\u0430\u0454 \u0432 \u043A\u0430\u0442\u0430\u043B\u043E\u0437\u0456.`);
-      const rrp = w.rrp ?? r.rrp;
-      return { product_id: id, name: r.name, article: r.article || "", qty: w.qty, price: w.price ?? partnerPrice2(rrp, r.margin || 0), rrp };
+      const same = curOf(l.product_id);
+      if (same) return { product_id: l.product_id, name: same.name, article: same.article || "", qty: l.qty, price: l.price ?? same.price, rrp: l.rrp ?? same.rrp, _idx: null, _extra: true };
+      const r = cat.get(l.product_id);
+      if (!r) throw fail(400, `\u0422\u043E\u0432\u0430\u0440\u0443 ID ${l.product_id} \u043D\u0435\u043C\u0430\u0454 \u0432 \u043A\u0430\u0442\u0430\u043B\u043E\u0437\u0456.`);
+      const rrp = l.rrp ?? r.rrp;
+      return { product_id: l.product_id, name: r.name, article: r.article || "", qty: l.qty, price: l.price ?? partnerPrice2(rrp, r.margin || 0), rrp, _idx: null, _extra: l.extra };
     });
-    if (o.status === "open" && (items.length !== cur.length || items.some((i) => curMap.get(i.product_id)?.qty !== i.qty))) {
+    const merged = [];
+    const mergedIdx = /* @__PURE__ */ new Set();
+    for (const i of items) {
+      const into = merged.find((x) => x.product_id === i.product_id && round2(x.price) === round2(i.price) && round2(x.rrp) === round2(i.rrp));
+      if (into) {
+        into.qty += i.qty;
+        if (i._idx !== null) mergedIdx.add(i._idx);
+      } else merged.push({ ...i });
+    }
+    items = merged;
+    const multi = new Set(items.filter((i, n) => items.findIndex((x) => x.product_id === i.product_id) !== n).map((i) => i.product_id));
+    if (multi.size && !extraOk) throw fail(400, "\u041E\u043A\u0440\u0435\u043C\u0438\u0439 \u0440\u044F\u0434\u043E\u043A \u0442\u043E\u0432\u0430\u0440\u0443 \u0437 \u0456\u043D\u0448\u043E\u044E \u0446\u0456\u043D\u043E\u044E \u043C\u043E\u0436\u043D\u0430 \u0434\u043E\u0434\u0430\u0442\u0438 \u043B\u0438\u0448\u0435 \u0443 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u2014 \u043D\u0435 \u0432 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0439 \u043D\u0435 \u0443 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0443.");
+    if (o.status === "open" && (items.length !== cur.length || items.some((i) => i._idx === null || cur[i._idx].qty !== i.qty))) {
       throw fail(400, "\u0423 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0456\u0439 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043C\u043E\u0436\u043D\u0430 \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u043B\u0438\u0448\u0435 \u0446\u0456\u043D\u0438 \u0439 \u0420\u0420\u0426: \u0442\u043E\u0432\u0430\u0440\u0438 \u0439 \u043A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C \u0456\u0434\u0443\u0442\u044C \u0456\u0437 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u2014 \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u0457\u0445 \u0442\u0430\u043C.");
     }
+    const wantQty = /* @__PURE__ */ new Map();
+    for (const i of items) wantQty.set(i.product_id, (wantQty.get(i.product_id) || 0) + i.qty);
     for (const r of await supplyLeft(o.id)) {
-      if (r.used > (want.get(r.product_id)?.qty || 0)) throw fail(400, `\xAB${r.name}\xBB: \u043D\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u0443\u0436\u0435 \u0440\u043E\u0437\u043F\u0438\u0441\u0430\u043D\u043E ${r.used} \u0448\u0442. \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u0430\u0431\u043E \u0432\u0438\u0434\u0430\u043B\u0456\u0442\u044C \u0446\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.`);
+      if (r.used > (wantQty.get(r.product_id) || 0)) throw fail(400, `\xAB${r.name}\xBB: \u043D\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 \u0443\u0436\u0435 \u0440\u043E\u0437\u043F\u0438\u0441\u0430\u043D\u043E ${r.used} \u0448\u0442. \u2014 \u0441\u043F\u0435\u0440\u0448\u0443 \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u0430\u0431\u043E \u0432\u0438\u0434\u0430\u043B\u0456\u0442\u044C \u0446\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.`);
     }
     let ent = { id: o.entity_id, text: o.entity };
     if (b.entity_id !== void 0 && b.entity_id !== null && Number(b.entity_id) !== Number(o.entity_id)) {
@@ -10739,17 +10823,21 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
     const comment = b.comment === void 0 ? o.comment || "" : String(b.comment).trim().slice(0, 1e3);
     const total = totalOf(items);
     const changes = [];
+    const several = /* @__PURE__ */ new Set([...multi, ...cur.filter((i, n) => cur.findIndex((x) => x.product_id === i.product_id) !== n).map((i) => i.product_id)]);
+    const nm = (i, price) => several.has(i.product_id) ? `${i.name} (\u0440\u044F\u0434\u043E\u043A \u043F\u043E ${uah4(price)})` : i.name;
     for (const i of items) {
-      const old = curMap.get(i.product_id);
+      const old = i._idx !== null ? cur[i._idx] : null;
       if (!old) {
-        changes.push(`+ ${i.name} \xD7 ${i.qty} \u043F\u043E ${uah4(i.price)}`);
+        changes.push(`+ ${i.name} \xD7 ${i.qty} \u043F\u043E ${uah4(i.price)}${curOf(i.product_id) ? " (\u043E\u043A\u0440\u0435\u043C\u0438\u0439 \u0440\u044F\u0434\u043E\u043A \u2014 \u0442\u043E\u0432\u0430\u0440 \u0443\u0436\u0435 \u0454 \u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0437\u0430 \u0456\u043D\u0448\u043E\u044E \u0446\u0456\u043D\u043E\u044E)" : ""}`);
         continue;
       }
-      if (old.qty !== i.qty) changes.push(`${i.name}: ${old.qty} \u2192 ${i.qty} \u0448\u0442`);
-      if (round2(old.rrp) !== round2(i.rrp)) changes.push(`${i.name}: \u0420\u0420\u0426 ${uah4(old.rrp)} \u2192 ${uah4(i.rrp)}`);
-      if (round2(old.price) !== round2(i.price)) changes.push(`${i.name}: \u0446\u0456\u043D\u0430 ${uah4(old.price)} \u2192 ${uah4(i.price)}`);
+      if (old.qty !== i.qty) changes.push(`${nm(i, old.price)}: ${old.qty} \u2192 ${i.qty} \u0448\u0442`);
+      if (round2(old.rrp) !== round2(i.rrp)) changes.push(`${nm(i, old.price)}: \u0420\u0420\u0426 ${uah4(old.rrp)} \u2192 ${uah4(i.rrp)}`);
+      if (round2(old.price) !== round2(i.price)) changes.push(`${nm(i, old.price)}: \u0446\u0456\u043D\u0430 ${uah4(old.price)} \u2192 ${uah4(i.price)}`);
     }
-    const removed = cur.filter((i) => !want.has(i.product_id));
+    const kept = /* @__PURE__ */ new Set([...items.map((i) => i._idx).filter((x) => x !== null), ...mergedIdx]);
+    const removed = cur.filter((i, n) => !kept.has(n));
+    if (mergedIdx.size) changes.push("\u0440\u044F\u0434\u043A\u0438 \u0442\u043E\u0432\u0430\u0440\u0443 \u0437 \u043E\u0434\u043D\u0430\u043A\u043E\u0432\u043E\u044E \u0446\u0456\u043D\u043E\u044E \u043E\u0431\u2019\u0454\u0434\u043D\u0430\u043D\u043E");
     for (const i of removed) changes.push(`\u2212 ${i.name} \xD7 ${i.qty} (\u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E)`);
     if (ent.id !== o.entity_id) changes.push(`\u044E\u0440\u043E\u0441\u043E\u0431\u0430: ${firstLine(ent.text)}`);
     if (comment !== (o.comment || "")) changes.push("\u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440");
@@ -10759,6 +10847,7 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
     const paid = Number(o.paid_amount) || 0;
     const status = invoiced && paid > 0 && ["pay_wait", "partial", "paid"].includes(o.status) ? paid >= total - 4e-3 ? "paid" : "partial" : o.status;
     const now = nowIso();
+    items = items.map(({ _idx, _extra, ...i }) => i);
     const st = [[`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]], ...itemRows(o.id, items)];
     st.push(invoiced ? [
       `UPDATE b2b_orders SET total = ?, entity_id = ?, entity = ?, comment = ?, status = ?, reinvoice = ?, reinvoiced_at = ?, reinvoice_sent = '', group_done = 0, updated_at = ? WHERE id = ?`,
