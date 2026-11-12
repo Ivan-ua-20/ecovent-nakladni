@@ -20,7 +20,9 @@ export function sheetNames(names) {
 }
 
 const STYLE = { head: 1, text: 0, money: 2, pct: 3 };
-function sheetXml({ cols, rows }) {
+// first — перший (активний) аркуш: tabSelected. Без нього й без <selection> Excel із закріпленим рядком
+// при перемиканні аркушів може «домальовувати» рядки з іншого аркуша (дані у файлі правильні, лише відображення).
+function sheetXml({ cols, rows }, first = false) {
   const cell = (v, r, c, fmt) => {
     const ref = `${colName(c)}${r}`;
     if (fmt !== 'text' && typeof v === 'number' && Number.isFinite(v)) return `<c r="${ref}" s="${STYLE[fmt] ?? 0}"><v>${v}</v></c>`;
@@ -31,7 +33,7 @@ function sheetXml({ cols, rows }) {
   const last = `${colName(cols.length - 1)}${rows.length + 1}`;
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+<sheetViews><sheetView ${first ? 'tabSelected="1" ' : ''}workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>
 <cols>${cols.map((col, c) => `<col min="${c + 1}" max="${c + 1}" width="${col.width || 14}" customWidth="1"/>`).join('')}</cols>
 <sheetData>${head}${body}</sheetData>
 <autoFilter ref="A1:${last}"/>
@@ -92,14 +94,14 @@ ${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" Co
     { name: '_rels/.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
     { name: 'xl/workbook.xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView activeTab="0"/></bookViews><sheets>
 ${names.map((n, i) => `<sheet name="${xml(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>
 <definedNames>${sheets.map((s, i) => `<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">'${xml(names[i]).replace(/'/g, "''")}'!$A$1:$${colName(s.cols.length - 1)}$${s.rows.length + 1}</definedName>`).join('')}</definedNames></workbook>` },
     { name: 'xl/_rels/workbook.xml.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}
 <Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
     { name: 'xl/styles.xml', data: STYLES },
-    ...sheets.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: sheetXml(s) })),
+    ...sheets.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: sheetXml(s, i === 0) })),
   ];
   return zip(files);
 }
