@@ -867,3 +867,9 @@ tr.ps-on > td { background: #f0faf7; }
 .dr-opt input { margin-top: 3px; }
 .dr-hint { display: block; margin-top: 2px; }
 .dr-req { margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; }
+.se-add { position: relative; display: grid; gap: 4px; }
+.se-hits { position: absolute; z-index: 5; top: 100%; left: 0; right: 0; max-height: 300px; overflow: auto; background: var(--card, #fff); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12); margin-top: 4px; }
+.se-hit { display: flex; width: 100%; gap: 10px; justify-content: space-between; align-items: center; text-align: left; padding: 8px 10px; border: 0; background: none; cursor: pointer; font: inherit; color: inherit; }
+.se-hit:hover, .se-hit.on { background: var(--brand-soft, rgba(15, 118, 110, .08)); }
+tr.se-flash td { background: rgba(250, 204, 21, .25); transition: background .4s; }
+.se-add > span:first-child { font-size: 12.5px; font-weight: 600; color: var(--muted); }

@@ -375,7 +375,7 @@ export function createPartnerPages(ctx = {}) {
             <div class="small" style="white-space:pre-line"><b>Платник:</b> ${esc(o.entity || (toConfirm ? 'оберіть при підтвердженні' : '—'))}</div>
             <div class="small"><b>Отримання:</b> ${esc(o.delivery_name || '')}</div>
             ${canReq && !o.delivery_req ? '<div class="btn-row"><button class="btn sm" id="oDrAsk">🔁 Змінити спосіб отримання</button></div>' : ''}
-            ${o.reinvoice ? `<div class="alert warn small">Закупівлю змінив менеджер — рахунок № ${esc(o.reinvoice)} перевиставляється, новий надійде в Telegram і з’явиться тут.${o.paid_amount ? ` Уже оплачено: ${uah(o.paid_amount)}.` : ''}</div>` : ''}
+            ${o.reinvoice ? `<div class="alert warn small">Закупівлю змінив менеджер — рахунок № ${esc(o.reinvoice)} буде перероблено, нові документи надійдуть у Telegram і з’являться тут.${o.paid_amount ? ` Уже оплачено: ${uah(o.paid_amount)}${o.paid_amount < o.total - 0.004 ? `, до доплати ${uah(o.total - o.paid_amount)}` : ''}.` : ''}</div>` : ''}
             ${o.pay_terms === 'postpay' ? `<div class="small"><b>Оплата:</b> відстрочка ${o.pay_days} дн.${o.due_date ? ` — до <b>${esc(fmtDay(o.due_date))}</b>` : ' від дати рахунку'}${o.overdue ? ` <span class="badge bad">прострочено ${o.overdue} дн.</span>` : ''}</div>` : ''}
             ${o.invoice_no ? `<div><b>Рахунок № ${esc(o.invoice_no)}</b>${o.invoice_date ? ` від ${esc(fmtDay(o.invoice_date))}` : ''}</div>` : '<div class="muted small">Рахунок ще готується — сповістимо в Telegram.</div>'}
             ${o.waybill_no ? `<div>Накладна № ${esc(o.waybill_no)}</div>` : ''}

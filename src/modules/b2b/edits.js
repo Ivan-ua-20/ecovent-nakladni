@@ -1,6 +1,8 @@
-// Правки наших адмінів у закупівлях партнерів (у будь-якому статусі, крім відкритої й скасованої) і кошик.
-// Закупівля з рахунком після зміни знову «Очікує рахунок»: у «Фінансові питання» — «переробіть рахунок № …»,
-// новий рахунок (файл) замінює старий і йде в групу партнера; оплата, що вже надійшла, лишається.
+// Правки наших адмінів у закупівлях партнерів (у будь-якому статусі, крім скасованої; відкрита — лише ціни) і кошик.
+// Закупівля з рахунком (зокрема оплачена чи завершена) лишається у своєму статусі з тим самим рахунком і накладною:
+// вона отримує позначку «переробити рахунок/накладну». Запит у «Фінансові питання» — лише кнопкою менеджера.
+// Позначка знімається новим номером рахунку або кнопкою «Перероблено». Оплата, що вже надійшла, лишається:
+// сума зросла понад оплачене — «Частково оплачено» (завершена лишається завершеною).
 // Кошик: видалені закупівлі й замовлення клієнтів (знімок — можна відновити) і прибрані з закупівлі товари;
 // видаляють і відновлюють лише адміни, партнер бачить свій кошик (хто й коли видалив).
 import { fail, need, nowIso, round2, kyivDay } from '../../core/common.js';
@@ -135,13 +137,15 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
     if (!changes.length) return { ok: true, changed: false };
 
     const invoiced = Boolean(o.invoice_no) && INVOICED.includes(o.status);
-    const redo = invoiced ? `${o.invoice_no}${o.waybill_no ? ` (і накладну № ${o.waybill_no})` : ''}` : '';
+    const redo = invoiced ? (o.reinvoice || `${o.invoice_no}${o.waybill_no ? ` (і накладну № ${o.waybill_no})` : ''}`) : '';
+    // Оплата лишається: сума більша за оплачене — частково, покрита — оплачено (завершена й без оплати — статус той самий).
+    const paid = Number(o.paid_amount) || 0;
+    const status = invoiced && paid > 0 && ['pay_wait', 'partial', 'paid'].includes(o.status) ? (paid >= total - 0.004 ? 'paid' : 'partial') : o.status;
     const now = nowIso();
     const st = [[`DELETE FROM b2b_order_items WHERE order_id = ?`, [o.id]], ...itemRows(o.id, items)];
     st.push(invoiced
-      ? [`UPDATE b2b_orders SET total = ?, entity_id = ?, entity = ?, comment = ?, status = 'invoice_wait', reinvoice = ?, reinvoiced_at = ?,
-          invoice_no = '', invoice_date = '', waybill_no = '', due_date = '', due_notified = '', fin_done = 0, group_done = 0, updated_at = ? WHERE id = ?`,
-      [total, ent.id, ent.text, comment, redo, now, now, o.id]]
+      ? [`UPDATE b2b_orders SET total = ?, entity_id = ?, entity = ?, comment = ?, status = ?, reinvoice = ?, reinvoiced_at = ?, reinvoice_sent = '', group_done = 0, updated_at = ? WHERE id = ?`,
+      [total, ent.id, ent.text, comment, status, redo, now, now, o.id]]
       : [`UPDATE b2b_orders SET total = ?, entity_id = ?, entity = ?, comment = ?, group_done = 0, updated_at = ? WHERE id = ?`, [total, ent.id, ent.text, comment, now, o.id]]);
     for (const i of removed) {
       st.push([`INSERT INTO b2b_trash (kind, order_id, partner_id, title, total, data, deleted_by, by_partner, deleted_at) VALUES ('item', ?, ?, ?, ?, ?, ?, 0, ?)`,
@@ -149,7 +153,7 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
     }
     await db.batch(st);
     const who = userName(u) || 'менеджер';
-    await log(o.id, u, `змінив ${who}: ${changes.join('; ')} — разом ${uah(total)}${invoiced ? ` · рахунок № ${redo} треба переробити` : ''}`.slice(0, 1800));
+    await log(o.id, u, `змінив ${who}: ${changes.join('; ')} — разом ${uah(total)}${invoiced ? ` · рахунок № ${redo} треба переробити` : ''}${status !== o.status ? ` · статус: ${status === 'partial' ? '«Частково оплачено»' : '«Оплачено»'}` : ''}`.slice(0, 1800));
     // Чернетка й відкрита закупівля: замовлення клієнтів у них мають ті самі ціни — оновлюємо й їх.
     if (['draft', 'open'].includes(o.status)) await priceToClients(o, u, cur, items);
     if (o.status === 'open') await rebuildOpen(o.id);
@@ -158,10 +162,12 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
     const lines = changes.slice(0, 20).map(h).join('\n');
     const what = o.status === 'draft' ? 'Чернетку закупівлі' : o.status === 'open' ? 'Відкриту закупівлю' : 'Закупівлю';
     const text = `✏️ <b>${what} ${orderNo(o.id)} змінив ${h(who)}</b>\n${lines}\n<b>Разом: ${uah(total)}</b>`
-      + `${invoiced ? `\n\n🔁 Рахунок № ${h(o.invoice_no)} буде перевиставлено — новий рахунок надійде сюди.${Number(o.paid_amount) > 0 ? ` Оплата ${uah(o.paid_amount)} зарахована.` : ''}` : ''}`;
+      + `${invoiced ? `\n\n🔁 Рахунок № ${h(o.invoice_no)}${o.waybill_no ? ` і накладну № ${h(o.waybill_no)}` : ''} буде перероблено — нові документи надійдуть сюди.${paid > 0 ? ` Оплата ${uah(paid)} зарахована${status === 'partial' ? `, до доплати ${uah(total - paid)}` : ''}.` : ''}` : ''}`;
     await tgPartner(o.partner_id, `${text}\n${link(c, `porders/${o.id}`)}`);
     await tgGroup(o.partner_id, text);
-    if (!['draft', 'open', 'confirm'].includes(o.status)) await hooks.finRequest?.(o.id, invoiced ? 'reinvoice' : 'changed').catch(() => 0); // ще не оформлено — рахунок не просимо
+    // Рахунку ще немає («Очікує рахунок») — оновлюємо вже надісланий запит рахунку, щоб бухгалтер виставив його на новий склад.
+    // Рахунок уже є — у «Фінансові питання» нічого не йде: менеджер надсилає запит кнопкою, коли треба.
+    if (!invoiced && o.status === 'invoice_wait') await hooks.finRequest?.(o.id, 'changed').catch(() => 0);
     return { ok: true, changed: true, total, reinvoice: invoiced };
   }
 

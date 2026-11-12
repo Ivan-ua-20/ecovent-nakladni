@@ -825,7 +825,7 @@ export function createB2bPages(ctx = {}) {
       ${rows.length ? `<table class="list"><thead><tr>${selHead()}<th>№</th><th>Партнер</th><th class="hide-m">Дата</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Рахунок</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click" data-o="${o.id}">
           ${selCell(o.id)}
-          <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? '<div><span class="badge info">🚗 самовивіз</span></div>' : o.delivery === 'warehouse' ? `<div><span class="badge info">🏬 на склад${o.crm_id || o.crm_ext ? ' · в LP-CRM' : ''}</span></div>` : ''}${o.delivery_req ? '<div><span class="badge warn">🔁 просить змінити отримання</span></div>' : ''}</td>
+          <td><b>${esc(o.number)}</b>${o.delivery === 'pickup' ? '<div><span class="badge info">🚗 самовивіз</span></div>' : o.delivery === 'warehouse' ? `<div><span class="badge info">🏬 на склад${o.crm_id || o.crm_ext ? ' · в LP-CRM' : ''}</span></div>` : ''}${o.delivery_req ? '<div><span class="badge warn">🔁 просить змінити отримання</span></div>' : ''}${o.reinvoice ? '<div><span class="badge warn">✏️ змінено — переробити рахунок</span></div>' : ''}</td>
           <td>${esc(o.partner)}<div class="small muted">${esc(o.status === 'confirm' ? 'юрособу обере партнер' : o.entity.split('\n')[0].split(',')[0])}</div></td>
           <td class="small hide-m">${esc(fmtDateTime(o.created_at))}</td>
           <td class="r"><b>${uah(o.total)}</b></td>
@@ -903,7 +903,9 @@ export function createB2bPages(ctx = {}) {
       ${o.delivery_req ? `<div class="alert warn dr-req"><div>🔁 <b>Партнер просить змінити спосіб отримання:</b> ${deliveryReqText(o.delivery_req)}.
           <div class="small">Зараз: «${esc(o.delivery_name || '')}». Запит: ${esc(o.delivery_req.by)}${o.delivery_req.at ? `, ${esc(fmtDateTime(o.delivery_req.at))}` : ''}. Зміна набере чинності лише після підтвердження.</div></div>
         ${ro() ? '' : '<div class="btn-row"><button class="btn primary" id="oDrOk">✅ Підтвердити зміну</button><button class="btn danger" id="oDrNo">Відхилити</button></div>'}</div>` : ''}
-      ${o.reinvoice ? `<div class="alert warn" style="margin-bottom:12px"><b>Закупівлю змінено після рахунку</b> — потрібно переробити рахунок № ${esc(o.reinvoice)}. Запит надіслано в «Фінансові питання»; новий рахунок замінить старий файл і піде в групу партнера.${o.paid_amount ? ` Уже оплачено: ${uah(o.paid_amount)}.` : ''}</div>` : ''}
+      ${o.reinvoice ? `<div class="alert warn dr-req"><div>🔁 <b>Внесено зміни — потрібно переробити рахунок № ${esc(o.reinvoice)}</b>${o.paid_amount ? ` · оплачено ${uah(o.paid_amount)}${o.paid_amount < o.total - 0.004 ? `, <b>до доплати ${uah(o.total - o.paid_amount)}</b>` : ''}` : ''}
+          <div class="small">${o.reinvoice_sent ? `Запит у «Фінансові питання» надіслано ${esc(fmtDateTime(o.reinvoice_sent))}.` : 'У «Фінансові питання» ще не надсилали — надішліть, коли закінчите зміни.'} Позначка зніметься, коли внесете новий № рахунку або додасте нові файли рахунку${o.waybill_no ? ' й накладної' : ''}.</div></div>
+        ${ro() ? '' : `<div class="btn-row"><button class="btn ${o.reinvoice_sent ? '' : 'primary'}" id="oRiSend">${o.reinvoice_sent ? 'Надіслати запит ще раз' : '📨 Надіслати в «Фінансові питання»'}</button><button class="btn" id="oRiDone">✓ Перероблено</button></div>`}</div>` : ''}
       ${o.status === 'open' ? '<div class="alert info" style="margin-bottom:12px"><b>Відкрита закупівля</b> — сюди автоматично складаються замовлення клієнтів партнера без закупівлі. Сформуйте її («🧾 Сформувати закупівлю»): оберіть юрособу партнера й оплату — вона стане звичайною закупівлею «Очікує рахунок», а наступні замовлення без закупівлі підуть у нову відкриту.</div>' : ''}
       ${o.status === 'confirm' ? '<div class="alert warn" style="margin-bottom:12px"><b>Чекає підтвердження партнера</b> — закупівлю створили ми; партнер отримав її в кабінеті й у Telegram. Після підтвердження він обере юрособу, і в «Фінансові питання» піде запит рахунку. Склад ще можна змінити («✏️ Змінити»).</div>' : ''}
       ${o.status === 'draft' ? '<div class="alert warn" style="margin-bottom:12px"><b>Чернетка партнера</b> — команда партнера ще збирає товари. Відправити її (як від партнера) може керівник партнера або ви.</div>' : ''}
@@ -995,7 +997,7 @@ export function createB2bPages(ctx = {}) {
       if (o.invoice_no && ['pay_wait', 'partial', 'paid', 'done'].includes(o.status)
         && !(await confirmDanger(`Змінити ціни в закупівлі з рахунком № ${o.invoice_no}?`, 'Рахунок доведеться переробити: бухгалтер отримає запит у «Фінансові питання», партнер — сповіщення.', 'Зберегти ціни'))) return false;
       const r = await api('PUT', `/api/b2b/orders/${o.id}/edit`, { items: rows.map((x) => ({ product_id: x.product_id, qty: x.qty, price: x.price, rrp: x.rrp })) });
-      toast(!r.changed ? 'Змін немає' : r.reinvoice ? 'Ціни збережено — запит переробити рахунок надіслано' : 'Ціни збережено, партнеру надіслано сповіщення');
+      toast(!r.changed ? 'Змін немає' : r.reinvoice ? 'Ціни збережено — закупівля позначена «переробити рахунок/накладну»' : 'Ціни збережено, партнеру надіслано сповіщення');
       viewOrder(o.id);
     });
     $$('[data-fdel]').forEach((b) => (b.onclick = async () => {
@@ -1044,6 +1046,15 @@ export function createB2bPages(ctx = {}) {
     const setDelivery = async (delivery, ship_to) => {
       try { await api('POST', `/api/b2b/orders/${o.id}/delivery`, { delivery, ship_to }); toast('Спосіб отримання змінено — партнеру надіслано повідомлення'); viewOrder(o.id); }
       catch (er) { toast(er.message, true); if ($('#oDeliv')) $('#oDeliv').value = o.delivery; }
+    };
+    if ($('#oRiSend')) $('#oRiSend').onclick = async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try { await api('POST', `/api/b2b/orders/${o.id}/reinvoice-request`); toast('Запит надіслано у «Фінансові питання»'); viewOrder(o.id); } catch (er) { toast(er.message, true); btn.disabled = false; }
+    };
+    if ($('#oRiDone')) $('#oRiDone').onclick = async () => {
+      if (!(await confirmDanger('Рахунок і накладну перероблено?', 'Позначку «переробити рахунок/накладну» буде знято. Якщо номер рахунку новий — просто внесіть його в «Рахунок і накладна», позначка зніметься сама.', 'Так, перероблено'))) return;
+      try { await api('POST', `/api/b2b/orders/${o.id}/reinvoice-done`); toast('Позначку знято'); viewOrder(o.id); } catch (er) { toast(er.message, true); }
     };
     if ($('#oDrOk')) $('#oDrOk').onclick = async (e) => {
       e.currentTarget.disabled = true;
@@ -1381,13 +1392,13 @@ export function createB2bPages(ctx = {}) {
     const rows = items.map((i) => ({ product_id: i.product_id, name: i.name, article: i.article, qty: i.qty, price: i.price, rrp: i.rrp, was: i.qty }));
     const r2 = (x) => Math.round(x * 100) / 100;
     const m = modal(`Змінити закупівлю ${o.number}`, `<div class="form-stack">
-        ${opt.invoiced ? `<div class="alert warn small">Рахунок № <b>${esc(o.invoice_no)}</b> уже виставлено. Після збереження закупівля знову «Очікує рахунок»: у «Фінансові питання» піде запит
-          переробити рахунок № ${esc(o.invoice_no)} на новий склад, партнер отримає сповіщення; новий рахунок (файл) замінить старий і піде в групу партнера.${o.paid_amount ? ` Оплата ${uah(o.paid_amount)} лишається зарахованою.` : ''}</div>`
+        ${opt.invoiced ? `<div class="alert warn small">Рахунок № <b>${esc(o.invoice_no)}</b>${o.waybill_no ? ` і накладна № <b>${esc(o.waybill_no)}</b>` : ''} уже є. Після збереження закупівля лишиться у своєму статусі з позначкою
+          «потрібно переробити рахунок/накладну»; у «Фінансові питання» нічого не піде, поки ви не натиснете «Надіслати» на сторінці закупівлі. Партнер отримає сповіщення.${o.paid_amount ? ` Оплата ${uah(o.paid_amount)} лишається зарахованою; якщо сума зросте — «Частково оплачено».` : ''}</div>`
           : o.status === 'invoice_wait' ? '<div class="small muted">Бухгалтер отримає оновлений запит рахунку, партнер — сповіщення в бот і групу (хто й що змінив).</div>'
             : open ? '<div class="alert info small">Відкрита закупівля: тут змінюються лише ціни й РРЦ — товари й кількість ідуть із замовлень клієнтів. Нові ціни перейдуть і в ці замовлення клієнтів; партнер отримає сповіщення в бот і групу.</div>'
               : '<div class="small muted">Партнер отримає сповіщення в бот і групу (хто й що змінив); ціни в замовленнях клієнтів цієї чернетки теж оновляться.</div>'}
         <div id="seRows"></div>
-        ${open ? '' : `<label class="f"><span>Додати товар (каталог партнера)</span><input id="seQ" list="seCat" placeholder="Почніть вводити назву або ID"><datalist id="seCat">${opt.catalog.map((p) => `<option value="${p.product_id} · ${esc(p.name)}">`).join('')}</datalist></label>
+        ${open ? '' : `<div class="f se-add"><span>Додати товар (каталог партнера)</span><input id="seQ" placeholder="Назва, артикул або ID — далі оберіть зі списку" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="seHits"><div id="seHits" class="se-hits" role="listbox" hidden></div></div>
         <label class="f"><span>Юрособа (на кого рахунок)</span><select id="seEnt">${opt.entities.map((e) => `<option value="${e.id}" ${e.id === o.entity_id ? 'selected' : ''}>${esc(e.name)} · ${esc(e.code)}</option>`).join('')}</select></label>`}
         <label class="f"><span>Коментар</span><textarea id="seCom" rows="2">${esc(o.comment || '')}</textarea></label>
       </div>`, { wide: true, footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="seSave">Зберегти</button>' });
@@ -1416,24 +1427,51 @@ export function createB2bPages(ctx = {}) {
       $$('[data-sx]', m.el).forEach((b) => (b.onclick = () => { sync(); rows[Number(b.dataset.sx)].qty = 0; draw(); }));
     };
     draw();
-    if ($('#seQ', m.el)) $('#seQ', m.el).onchange = (e) => {
-      const id = parseInt(e.target.value, 10);
-      const p = cat.get(id);
-      e.target.value = '';
-      if (!p) { toast('Оберіть товар зі списку', true); return; }
-      sync();
-      const have = rows.find((r) => r.product_id === id);
-      if (have) have.qty = (have.qty || 0) + 1; else rows.push({ product_id: id, name: p.name, article: p.article, qty: 1, price: p.price, rrp: p.rrp });
-      draw();
-    };
+    // Пошук товару: список під полем, клік або Enter — додати; товар уже є — +1 до кількості (рядок підсвічується).
+    if ($('#seQ', m.el)) {
+      const q = $('#seQ', m.el); const box = $('#seHits', m.el);
+      let hits = []; let at = 0;
+      const norm = (x) => String(x || '').toLowerCase().replace(/ё/g, 'е');
+      const show = () => {
+        const words = norm(q.value).split(/\s+/).filter(Boolean);
+        hits = words.length ? opt.catalog.filter((p) => { const t = norm(`${p.product_id} ${p.name} ${p.article}`); return words.every((w) => t.includes(w)); }).slice(0, 12) : [];
+        at = 0;
+        box.hidden = !words.length; q.setAttribute('aria-expanded', String(!box.hidden));
+        box.innerHTML = hits.length ? hits.map((p, i) => { const have = rows.find((r) => r.product_id === p.product_id && r.qty > 0);
+          return `<button type="button" class="se-hit ${i === at ? 'on' : ''}" role="option" data-hit="${i}"><span>${esc(p.name)}<span class="small muted"> · ID ${p.product_id}${p.article ? ` · ${esc(p.article)}` : ''}</span></span>
+            <span class="small nowrap">${have ? `<span class="badge info">уже є: ${have.qty} шт</span> ` : ''}${uah(p.price)}</span></button>`; }).join('')
+          : '<div class="small muted" style="padding:8px 10px">Нічого не знайдено в каталозі партнера.</div>';
+        $$('[data-hit]', box).forEach((b) => (b.onmousedown = (ev) => { ev.preventDefault(); add(hits[Number(b.dataset.hit)]); }));
+      };
+      const add = (p) => {
+        if (!p) return;
+        sync();
+        let i = rows.findIndex((r) => r.product_id === p.product_id);
+        if (i >= 0) rows[i].qty = (rows[i].qty || 0) + 1; else { rows.push({ product_id: p.product_id, name: p.name, article: p.article, qty: 1, price: p.price, rrp: p.rrp }); i = rows.length - 1; }
+        draw();
+        q.value = ''; box.hidden = true; q.setAttribute('aria-expanded', 'false');
+        const tr = $(`[data-sq="${i}"]`, m.el)?.closest('tr');
+        if (tr) { tr.classList.add('se-flash'); tr.scrollIntoView({ block: 'nearest' }); setTimeout(() => tr.classList.remove('se-flash'), 1600); }
+        toast(`${rows[i].was === undefined && rows[i].qty === 1 ? 'Додано' : 'Кількість +1'}: ${p.name} — ${rows[i].qty} шт`);
+      };
+      q.oninput = show;
+      q.onkeydown = (ev) => {
+        if (box.hidden || !hits.length) return;
+        if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') { ev.preventDefault(); at = (at + (ev.key === 'ArrowDown' ? 1 : hits.length - 1)) % hits.length; $$('[data-hit]', box).forEach((b, i) => b.classList.toggle('on', i === at)); $$('[data-hit]', box)[at]?.scrollIntoView({ block: 'nearest' }); }
+        if (ev.key === 'Enter') { ev.preventDefault(); add(hits[at]); }
+        if (ev.key === 'Escape') { ev.stopPropagation(); box.hidden = true; }
+      };
+      q.onblur = () => setTimeout(() => { box.hidden = true; q.setAttribute('aria-expanded', 'false'); }, 150);
+      q.onfocus = () => q.value && show();
+    }
     $('#seSave', m.el).onclick = async (e) => {
       sync();
-      if (opt.invoiced && !(await confirmDanger(`Змінити закупівлю з рахунком № ${o.invoice_no}?`, 'Рахунок доведеться переробити: бухгалтер отримає запит у «Фінансові питання», партнер — сповіщення.', 'Зберегти зміни'))) return;
+      if (opt.invoiced && !(await confirmDanger(`Змінити закупівлю з рахунком № ${o.invoice_no}?`, 'Закупівля отримає позначку «потрібно переробити рахунок/накладну». Запит у «Фінансові питання» надішлете кнопкою на сторінці закупівлі, коли будете готові. Партнер отримає сповіщення.', 'Зберегти зміни'))) return;
       e.target.closest("button").disabled = true;
       try {
         const r = await api('PUT', `/api/b2b/orders/${o.id}/edit`, { items: rows.map((x) => ({ product_id: x.product_id, qty: x.qty, price: x.price, rrp: x.rrp })), entity_id: open ? undefined : Number($('#seEnt', m.el).value) || undefined, comment: $('#seCom', m.el).value });
         m.close();
-        toast(!r.changed ? 'Змін немає' : r.reinvoice ? 'Збережено — запит переробити рахунок надіслано' : 'Збережено');
+        toast(!r.changed ? 'Змін немає' : r.reinvoice ? 'Збережено — закупівля позначена «переробити рахунок/накладну»' : 'Збережено');
         viewOrder(o.id);
       } catch (er) { toast(er.message, true); e.target.closest('button').disabled = false; }
     };

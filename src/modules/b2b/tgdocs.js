@@ -474,7 +474,7 @@ export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
     const lines = items.slice(0, 50).map((i) => `${h(i.name)} — ${i.qty} шт — ${m2(i.price)}`);
     if (items.length > 50) lines.push(`…і ще ${items.length - 50} поз.`);
     const head = done ? `🧾 <b>Закупівля ${orderNo(o.id)}</b> · ✅ рахунок № ${h(o.invoice_no)} додано`
-      : o.reinvoice ? `🔁 <b>Переробіть рахунок № ${h(o.reinvoice)} · ${orderNo(o.id)}</b>\nЗакупівлю змінив менеджер — оновіть рахунок на цей склад${Number(o.paid_amount) > 0 ? ` (уже оплачено ${m2(o.paid_amount)} грн)` : ''}`
+      : o.reinvoice ? `🔁 <b>Переробіть рахунок № ${h(o.reinvoice)} · ${orderNo(o.id)}</b>\nЗакупівлю змінив менеджер — оновіть рахунок${o.waybill_no ? ' і накладну' : ''} на цей склад${Number(o.paid_amount) > 0 ? ` (уже оплачено ${m2(o.paid_amount)} грн${Number(o.paid_amount) < o.total - 0.004 ? `, до доплати ${m2(o.total - o.paid_amount)} грн` : ''})` : ''}`
         : `🧾 <b>Потрібен рахунок · ${orderNo(o.id)}</b>${mode === 'changed' ? ' <i>(закупівлю змінено)</i>' : ''}`;
     return `${head}\nПартнер: «${h(o.partner)}»\n\n`
       + `<b>Рахунок на:</b>\n${h(o.entity)}\n${o.delivery === 'pickup' ? '🚗 <b>Самовивіз</b> — партнер забирає всю закупівлю зі складу\n' : ''}\n<b>Товари:</b>\n${lines.join('\n')}\n\n<b>Разом: ${m2(o.total)} грн</b> (з ПДВ)`
@@ -482,16 +482,18 @@ export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
   }
   async function finRequest(orderId, mode = '') {
     const chat = await finChat();
-    if (!chat) return;
+    if (!chat) { if (mode === 'reinvoice') throw new Error('Групу «Фінансові питання» не підключено — налаштування B2B.'); return; }
     const o = await orderFull(orderId);
-    if (!o || o.kind !== 'supply' || o.status !== 'invoice_wait') return;
+    if (!o || o.kind !== 'supply') return;
+    if (mode === 'reinvoice' ? !o.reinvoice : o.status !== 'invoice_wait') return;
     const text = await reqText(o, { mode });
     // Переробити рахунок — нове повідомлення відповіддю на старий рахунок (або запит); далі документ — відповіддю на нього.
     if (mode === 'reinvoice') {
       const reply = o.fin_inv_msg || o.fin_req_msg;
       const m = await tgApi('sendMessage', { chat_id: chat, text, parse_mode: 'HTML', ...(reply ? { reply_to_message_id: reply, allow_sending_without_reply: true } : {}) }).catch(() => null);
-      if (m?.message_id) await db.run(`UPDATE b2b_orders SET fin_req_msg = ?, fin_inv_msg = NULL, fin_pay_msg = NULL, fin_done = 0 WHERE id = ?`, [m.message_id, o.id]);
-      return;
+      if (!m?.message_id) throw new Error('Не вдалося надіслати в «Фінансові питання» — перевірте групу в налаштуваннях B2B.');
+      await db.run(`UPDATE b2b_orders SET fin_req_msg = ?, fin_inv_msg = NULL, fin_pay_msg = NULL, fin_done = 0 WHERE id = ?`, [m.message_id, o.id]);
+      return true;
     }
     if (o.fin_req_msg) {
       const ok = await tgApi('editMessageText', { chat_id: chat, message_id: o.fin_req_msg, text, parse_mode: 'HTML' }).catch(() => null);
