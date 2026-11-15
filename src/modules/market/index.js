@@ -48,7 +48,7 @@ const RZ_FAILED = ['11', '12', '19', '20', '38', '85', '88'];
 const RZ_CANCEL = ['17', '18', '28', '29', '31', '33', '35', '37', '39', '40', '41', '42', '44', '45', '49', '50'];
 const RZ_CANCEL_CLIENT = ['45']; // «Скасовано покупцем» — сам у кабінеті Розетки
 const RZ_CANCEL_AUTO = ['49', '50']; // Розетка сама: повторне замовлення (дубль), не оплатив вчасно
-export const RZ_GROUPS = ['new', 'work', 'ttn', 'call', 'delivery', 'success', 'failed', 'cancelled'];
+export const RZ_GROUPS = ['new', 'work', 'ttn', 'call', 'dups', 'delivery', 'success', 'failed', 'cancelled'];
 const inList = (a) => a.map((x) => `'${x}'`).join(', ');
 const groupSql = (successSql) => `(CASE WHEN ${successSql} THEN 'success' WHEN status IN (${inList(RZ_FAILED)}) THEN 'failed'
   WHEN status_group = 3 OR (status_group = 0 AND status IN (${inList(RZ_CANCEL)})) THEN 'cancelled'
@@ -65,6 +65,12 @@ export const rzGroupOf = (status, group, okSet = new Set(), hasTtn = false) => {
   return 'work';
 };
 export const rzCancelBy = (status) => (RZ_CANCEL_CLIENT.includes(String(status)) ? 'client' : RZ_CANCEL_AUTO.includes(String(status)) ? 'auto' : 'manager');
+// «Кілька замовлень»: активні замовлення покупців, у яких зараз більше одного активного замовлення (той самий телефон).
+const DUPS_SQL = `(status_group = 1 AND phone != '' AND substr(phone, -9) IN (SELECT substr(phone, -9) FROM mp_orders WHERE mp = 'rozetka' AND status_group = 1 AND phone != '' GROUP BY substr(phone, -9) HAVING COUNT(*) > 1))`;
+const DUP_DAYS = 14; // інші замовлення того самого покупця в межах 14 днів — показуємо як можливі дублі
+// Причини скасування, які менеджер може обрати (коди статусів Розетки).
+export const RZ_CANCEL_REASONS = { 31: 'Скасування. Створено дублююче замовлення', 50: 'Клієнт не оплатив', 40: 'Клієнт передумав',
+  18: 'Не вдалося зв\'язатися', 42: 'Немає в наявності', 28: 'Неправильні контактні дані', 44: 'Скасування. Фейкове замовлення' };
 // «Потрібно зателефонувати»: повторний дзвінок; не оплачено понад добу; 4+ дні в пункті видачі; нове понад 30 хв.
 const CALL_SQL = `(status = '47' OR (status = '55' AND changed_at <= ?) OR (status = '5' AND changed_at <= ?) OR (status IN (${inList(RZ_NEW)}) AND created_at <= ?))`;
 const callParams = (nowMs = Date.now()) => [kyivDTms(nowMs - 86400e3), kyivDTms(nowMs - 4 * 86400e3), kyivDTms(nowMs - 30 * 60e3)];
@@ -109,6 +115,25 @@ const rzOther = (o) => {
   return samePhone && sameName ? { recipient: '', recipient_phone: '' } : { recipient: name, recipient_phone: phone };
 };
 
+// Розетка: адреса доставки одним рядком (місто + відділення/поштомат або вулиця, будинок, квартира).
+const rzAddress = (o) => {
+  const d = o.delivery || {};
+  const city = String(d.city?.title || d.city?.name_ua || d.city?.name || d.city?.city_name || '').trim();
+  const place = d.place_number ? `№ ${d.place_number}${d.place_street ? `, ${d.place_street}` : ''}${d.place_house ? ` ${d.place_house}` : ''}`
+    : [d.place_street, d.place_house, d.place_flat ? `кв. ${d.place_flat}` : ''].filter(Boolean).join(', ');
+  return [city, place].filter(Boolean).join(', ').slice(0, 300);
+};
+const rzPay = (o) => {
+  const p = o.payment || null;
+  const st = String(p?.payment_status?.title || '').trim();
+  return {
+    pay_type: String(p?.payment_type_title || p?.payment_method_name || '').slice(0, 120),
+    pay_status: st.slice(0, 80),
+    paid: /^оплачен/i.test(st) ? 1 : 0,
+    pay_known: o && 'payment' in o ? 1 : 0,
+  };
+};
+
 // Замовлення маркетплейсу → рядок mp_orders.
 const ROW = {
   rozetka: (o) => ({
@@ -119,6 +144,8 @@ const ROW = {
     delivery: String(o.delivery?.delivery_service_name || o.delivery_service?.name || ''), ttn: String(o.ttn || o.delivery?.ttn || ''),
     items: (o.purchases || []).map((p) => ({ id: String(p.item_id || p.item?.id || ''), name: String(p.item_name || p.item?.name || ''), qty: Number(p.quantity) || 1, price: money(p.price) })),
     ...rzOther(o),
+    ...rzPay(o),
+    address: rzAddress(o), comment: String(o.comment || '').slice(0, 1000), dup_of: o.duplicate_order_id ? String(o.duplicate_order_id) : '',
   }),
   prom: (o) => ({
     id: String(o.id), number: String(o.id), created_at: kyivDT(o.date_created), changed_at: kyivDT(o.date_modified || o.date_created),
@@ -160,27 +187,37 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     if (!rows.length) return;
     const now = nowIso();
     await db.batch(rows.map((r) => [
-      `INSERT INTO mp_orders (mp, account_id, id, number, created_at, changed_at, status, status_name, customer, phone, total, delivery, ttn, items, synced_at, search, status_group, recipient, recipient_phone)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO mp_orders (mp, account_id, id, number, created_at, changed_at, status, status_name, customer, phone, total, delivery, ttn, items, synced_at, search, status_group, recipient, recipient_phone,
+         pay_type, pay_status, paid, pay_known, address, comment, dup_of)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(mp, account_id, id) DO UPDATE SET number = excluded.number, created_at = excluded.created_at, changed_at = excluded.changed_at,
          status = excluded.status, status_name = excluded.status_name, customer = excluded.customer, phone = excluded.phone, total = excluded.total,
          delivery = excluded.delivery, ttn = excluded.ttn, items = excluded.items, synced_at = excluded.synced_at, search = excluded.search,
-         status_group = excluded.status_group, recipient = excluded.recipient, recipient_phone = excluded.recipient_phone
+         status_group = excluded.status_group, recipient = excluded.recipient, recipient_phone = excluded.recipient_phone,
+         pay_type = CASE WHEN excluded.pay_known = 1 THEN excluded.pay_type ELSE mp_orders.pay_type END,
+         pay_status = CASE WHEN excluded.pay_known = 1 THEN excluded.pay_status ELSE mp_orders.pay_status END,
+         paid = CASE WHEN excluded.pay_known = 1 THEN excluded.paid ELSE mp_orders.paid END,
+         pay_known = MAX(mp_orders.pay_known, excluded.pay_known),
+         address = CASE WHEN excluded.address != '' THEN excluded.address ELSE mp_orders.address END,
+         comment = excluded.comment, dup_of = excluded.dup_of
        WHERE mp_orders.changed_at IS NOT excluded.changed_at OR mp_orders.status IS NOT excluded.status OR mp_orders.ttn IS NOT excluded.ttn
          OR mp_orders.total IS NOT excluded.total OR mp_orders.search IS NOT excluded.search OR mp_orders.status_group IS NOT excluded.status_group
-         OR mp_orders.recipient IS NOT excluded.recipient OR mp_orders.recipient_phone IS NOT excluded.recipient_phone OR mp_orders.items IS NOT excluded.items`,
-      [mp, accountId, r.id, r.number, r.created_at, r.changed_at, r.status, r.status_name, r.customer, r.phone, r.total, r.delivery, r.ttn, JSON.stringify(r.items), now, searchOf(r), r.status_group || 0, r.recipient || '', r.recipient_phone || ''],
+         OR mp_orders.recipient IS NOT excluded.recipient OR mp_orders.recipient_phone IS NOT excluded.recipient_phone OR mp_orders.items IS NOT excluded.items
+         OR (excluded.pay_known = 1 AND (mp_orders.pay_known = 0 OR mp_orders.pay_status IS NOT excluded.pay_status OR mp_orders.pay_type IS NOT excluded.pay_type))
+         OR (excluded.address != '' AND mp_orders.address IS NOT excluded.address) OR mp_orders.comment IS NOT excluded.comment OR mp_orders.dup_of IS NOT excluded.dup_of`,
+      [mp, accountId, r.id, r.number, r.created_at, r.changed_at, r.status, r.status_name, r.customer, r.phone, r.total, r.delivery, r.ttn, JSON.stringify(r.items), now, searchOf(r), r.status_group || 0, r.recipient || '', r.recipient_phone || '',
+        r.pay_type || '', r.pay_status || '', r.paid || 0, r.pay_known || 0, r.address || '', r.comment || '', r.dup_of || ''],
     ]));
   }
 
   // Разово: історію Розетки перезавантажити з кінця її періоду (v2 — без «Успішних» і «Неуспішних» до types=1;
-  // v3 — без отримувача, коду товару й групи статусу, потрібних для відгуків). Незмінені рядки не перезаписуються.
+  // v3 — без отримувача, коду товару й групи статусу, потрібних для відгуків; v4 — без оплати, адреси й коментаря). Незмінені рядки не перезаписуються.
   async function rehistOnce() {
-    if ((await db.get(`SELECT value FROM settings WHERE key = 'mp_hist_v3'`))?.value) return;
+    if ((await db.get(`SELECT value FROM settings WHERE key = 'mp_hist_v4'`))?.value) return;
     await db.batch([
       [`UPDATE mp_sync SET hist_to = CASE WHEN hist_end != '' THEN hist_end ELSE ? END, hist_page = 1, hist_done = 0, hist_saved = 0, hist_error = ''
         WHERE mp = 'rozetka' AND hist_from != ''`, [kyivDT(new Date()).slice(0, 10)]],
-      [`INSERT INTO settings (key, value) VALUES ('mp_hist_v3', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`, []],
+      [`INSERT INTO settings (key, value) VALUES ('mp_hist_v4', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`, []],
     ]);
   }
   // Денний ліміт записів історії (спільний для всіх магазинів).
@@ -622,6 +659,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     // групи Розетки (Нові, В обробці, Потрібно зателефонувати…) і хто скасував
     const grp = rz && RZ_GROUPS.includes(c.req.query('grp')) ? c.req.query('grp') : '';
     if (grp === 'call') { where.push(CALL_SQL); params.push(...callParams()); }
+    else if (grp === 'dups') where.push(DUPS_SQL);
     else if (grp) { where.push(`${groupSql(SUCCESS_SQL)} = ?`); params.push(okIds, grp); }
     const cancel = grp === 'cancelled' ? String(c.req.query('cancel') || '') : '';
     if (cancel === 'client') where.push(`status IN (${inList(RZ_CANCEL_CLIENT)})`);
@@ -636,6 +674,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     }
     const offset = Math.max(0, Number(c.req.query('offset')) || 0);
     let callN = 0;
+    let dupsN = 0;
     const [rows, statusRows, total, rvStats, rvBy] = await Promise.all([
       db.all(`SELECT *, ${rz ? SUCCESS_SQL : '0'} AS ok FROM mp_orders WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT 301 OFFSET ?`, [...(rz ? [okIds] : []), ...params, offset]),
       db.all(`SELECT status, status_group, ttn != '' AS has_ttn, MAX(status_name) AS status_name, COUNT(*) AS n FROM mp_orders WHERE ${base.join(' AND ')} GROUP BY status, status_group, ttn != '' ORDER BY n DESC`, baseParams),
@@ -646,7 +685,8 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
         FROM (SELECT ${SUCCESS_SQL} AS ok, review_n, asked_at, changed_at FROM mp_orders WHERE ${base.join(' AND ')})`, [border, okIds, ...baseParams]) : null,
       rz ? db.all(`SELECT asked_by AS who, COUNT(*) AS n, SUM(review_n > 0) AS reviewed FROM mp_orders WHERE ${base.join(' AND ')} AND asked_at != '' GROUP BY asked_by ORDER BY n DESC`, baseParams) : [],
       rz ? db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE ${base.join(' AND ')} AND ${CALL_SQL}`, [...baseParams, ...callParams()]) : null,
-    ]).then((x) => { callN = x[5]?.n || 0; return x; });
+      rz ? db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE ${base.join(' AND ')} AND ${DUPS_SQL}`, baseParams) : null,
+    ]).then((x) => { callN = x[5]?.n || 0; dupsN = x[6]?.n || 0; return x; });
     // статуси (для фільтра) — по коду; групи й «хто скасував» — з кодів і status_group
     const okSet = new Set(JSON.parse(okIds));
     const groups = Object.fromEntries(RZ_GROUPS.map((g) => [g, 0]));
@@ -662,18 +702,40 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
       else cur.n += x.n;
     }
     const statuses = [...stMap.values()].sort((a, b) => b.n - a.n);
-    if (rz) groups.call = callN;
+    if (rz) { groups.call = callN; groups.dups = dupsN; }
     // відгуки замовлень на екрані — щоб показати, на які саме товари і хто вже залишив
     const shown = rows.slice(0, 300);
     const revs = rz && shown.some((r) => r.review_n > 0) ? await db.all(
       `SELECT account_id, order_id, goods_id, goods, mark, name, created_at FROM mp_reviews WHERE mp = 'rozetka' AND order_id IN (SELECT value FROM json_each(?)) ORDER BY created_at`,
       [JSON.stringify(shown.filter((r) => r.review_n > 0).map((r) => r.id))]) : [];
+    // інші замовлення тих самих покупців (не скасовані, ±14 днів) — можливі дублі; лише для замовлень за останні 60 днів
+    const dupsOf = new Map();
+    if (rz && shown.length) {
+      const recent = kyivDT(Date.now() - 60 * 86400e3);
+      const want = shown.filter((r) => r.created_at >= recent && String(r.phone || '').replace(/\D/g, '').length >= 9);
+      const p9s = [...new Set(want.map((r) => String(r.phone).slice(-9)))];
+      if (p9s.length) {
+        const a = accessOf(c.get('user'));
+        const accs = a?.shops ? a.shops.filter((x) => x.startsWith('rozetka:')).map((x) => Number(x.split(':')[1])) : null;
+        const others = await db.all(`SELECT account_id, id, number, created_at, status, status_name, status_group, total, pay_type, pay_status, paid, substr(phone, -9) AS p9
+          FROM mp_orders WHERE mp = 'rozetka' AND substr(phone, -9) IN (SELECT value FROM json_each(?)) AND status_group != 3
+          ${accs ? 'AND account_id IN (SELECT value FROM json_each(?))' : ''} ORDER BY created_at DESC LIMIT 2000`, accs ? [JSON.stringify(p9s), JSON.stringify(accs)] : [JSON.stringify(p9s)]);
+        const day = (x) => Date.parse(`${String(x).slice(0, 10)}T00:00:00Z`);
+        for (const r of want) {
+          const p9 = String(r.phone).slice(-9);
+          const list = others.filter((x) => x.p9 === p9 && !(x.account_id === r.account_id && x.id === r.id) && Math.abs(day(x.created_at) - day(r.created_at)) <= DUP_DAYS * 864e5)
+            .map(({ p9: _p, ...x }) => ({ ...x, grp: rzGroupOf(x.status, x.status_group, okSet) }));
+          if (list.length) dupsOf.set(`${r.account_id}:${r.id}`, list);
+        }
+      }
+    }
     // дзвінки Binotel (якщо підключено): чи дзвонив покупець до замовлення, чи дзвонив менеджер після
     const tel = rz && shown.length ? await services.telephony?.marks(shown.map((r) => ({ key: `${r.account_id}:${r.id}`, phones: [r.phone, r.recipient_phone], at: r.created_at }))) : null;
     return c.json({
       rows: shown.map((r) => ({
         ...r,
         ...(tel ? { calls: tel.get(`${r.account_id}:${r.id}`) || null } : {}),
+        ...(rz ? { dups: dupsOf.get(`${r.account_id}:${r.id}`) || [] } : {}),
         items: (() => { try { return JSON.parse(r.items || '[]'); } catch { return []; } })(),
         ...(rz ? { reviews: revs.filter((v) => v.account_id === r.account_id && v.order_id === r.id).map(({ account_id: _a, order_id: _o, ...v }) => v) } : {}),
       })),
@@ -748,6 +810,46 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     const raw = await rzCall(acc, (t) => rzGetOrder(fetchFn, t, id, expand));
     return c.json(raw);
   });
+
+  // Скасувати замовлення в Розетці з причиною (дубль, не оплатив, передумав…). Лише активні (група «у роботі»).
+  app.post('/api/mp/rz/cancel', async (c) => {
+    need(c, 'market.edit');
+    const b = await c.req.json().catch(() => ({}));
+    const reason = RZ_CANCEL_REASONS[Number(b.status)];
+    if (!reason) throw fail(400, 'Оберіть причину скасування.');
+    const o = await rzOrderOf(b, c);
+    if (Number(o.status_group) !== 1) throw fail(400, `Замовлення вже «${o.status_name || o.status}» — скасувати не можна.`);
+    const acc = await accOf('rozetka', o.account_id);
+    await rzCall(acc, (t) => rzSetOrderStatus(fetchFn, t, o.id, b.status));
+    await db.run(`UPDATE mp_orders SET status = ?, status_name = ?, status_group = 3, changed_at = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ?`,
+      [String(Number(b.status)), reason, kyivDT(new Date()), o.account_id, o.id]);
+    return c.json({ ok: true, status: String(Number(b.status)), status_name: reason });
+  });
+
+  // Оплата для активних замовлень, збережених до того, як ми почали її забирати: по 15 за запуск (окремий запит на замовлення).
+  async function payBackfill() {
+    const rows = await db.all(`SELECT account_id, id FROM mp_orders WHERE mp = 'rozetka' AND status_group = 1 AND pay_known = 0 ORDER BY created_at DESC LIMIT 15`);
+    if (!rows.length) return { done: true };
+    const shops = (await shopsOf()).rozetka || [];
+    let saved = 0;
+    for (const r of rows) {
+      const acc = shops.find((a) => a.id === r.account_id);
+      if (!acc?.active) { await db.run(`UPDATE mp_orders SET pay_known = 1 WHERE mp = 'rozetka' AND account_id = ? AND id = ?`, [r.account_id, r.id]); continue; }
+      try {
+        const raw = await rzCall(acc, (t) => rzGetOrder(fetchFn, t, r.id, 'delivery,status_data,purchases,payment'));
+        const row = ROW.rozetka(raw);
+        row.pay_known = 1;
+        await saveRows('rozetka', acc.id, [row]);
+        saved++;
+      } catch (e) {
+        if (e.pending) break;
+        // замовлення не знайдено — більше не питаємо
+        if (/не знайдено/.test(String(e.message))) await db.run(`UPDATE mp_orders SET pay_known = 1 WHERE mp = 'rozetka' AND account_id = ? AND id = ?`, [r.account_id, r.id]);
+      }
+    }
+    return { saved, left: rows.length - saved };
+  }
+  onCron('market-pay', 'Оплата активних замовлень Розетки (дозавантаження, по 15 за раз)', payBackfill);
 
   // Групова зміна статусу в Розетці: з «Нових» — в «Обробляється менеджером». До 10 замовлень за запит
   // (браузер шле частинами: ліміт зовнішніх запитів Cloudflare). Успішно змінені — одразу оновлюються в базі.

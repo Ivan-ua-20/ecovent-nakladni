@@ -13222,12 +13222,16 @@ async function rzLogin(fetchFn, username, password) {
   return { token: j.content.access_token, marketId: String(j.content.market?.id || ""), marketTitle: String(j.content.market?.title || "") };
 }
 async function rzOrdersSearch(fetchFn, token, { changedFrom = "", createdFrom = "", createdTo = "", page = 1 } = {}) {
-  const q = new URLSearchParams({ page: String(page), perPage: "100", types: "1", sort: createdFrom ? "-created" : "-changed", expand: "delivery,status_data,purchases" });
-  if (changedFrom) q.set("changed_from", changedFrom);
-  if (createdFrom) q.set("created_from", createdFrom);
-  if (createdTo) q.set("created_to", createdTo);
-  const res = await send(fetchFn, `/orders/search?${q}`, { token });
-  const j = await res.json().catch(() => null);
+  const ask = async (expand) => {
+    const q = new URLSearchParams({ page: String(page), perPage: "100", types: "1", sort: createdFrom ? "-created" : "-changed", expand });
+    if (changedFrom) q.set("changed_from", changedFrom);
+    if (createdFrom) q.set("created_from", createdFrom);
+    if (createdTo) q.set("created_to", createdTo);
+    const res = await send(fetchFn, `/orders/search?${q}`, { token });
+    return res.json().catch(() => null);
+  };
+  let j = await ask("delivery,status_data,purchases,payment");
+  if (!j?.success && !rzError(j).rzAuth) j = await ask("delivery,status_data,purchases");
   if (!j?.success) throw rzError(j);
   return {
     orders: Array.isArray(j.content?.orders) ? j.content.orders : [],
@@ -16718,7 +16722,7 @@ var RZ_FAILED = ["11", "12", "19", "20", "38", "85", "88"];
 var RZ_CANCEL = ["17", "18", "28", "29", "31", "33", "35", "37", "39", "40", "41", "42", "44", "45", "49", "50"];
 var RZ_CANCEL_CLIENT = ["45"];
 var RZ_CANCEL_AUTO = ["49", "50"];
-var RZ_GROUPS = ["new", "work", "ttn", "call", "delivery", "success", "failed", "cancelled"];
+var RZ_GROUPS = ["new", "work", "ttn", "call", "dups", "delivery", "success", "failed", "cancelled"];
 var inList = (a) => a.map((x) => `'${x}'`).join(", ");
 var groupSql = (successSql) => `(CASE WHEN ${successSql} THEN 'success' WHEN status IN (${inList(RZ_FAILED)}) THEN 'failed'
   WHEN status_group = 3 OR (status_group = 0 AND status IN (${inList(RZ_CANCEL)})) THEN 'cancelled'
@@ -16735,6 +16739,17 @@ var rzGroupOf = (status, group, okSet = /* @__PURE__ */ new Set(), hasTtn = fals
   return "work";
 };
 var rzCancelBy = (status) => RZ_CANCEL_CLIENT.includes(String(status)) ? "client" : RZ_CANCEL_AUTO.includes(String(status)) ? "auto" : "manager";
+var DUPS_SQL = `(status_group = 1 AND phone != '' AND substr(phone, -9) IN (SELECT substr(phone, -9) FROM mp_orders WHERE mp = 'rozetka' AND status_group = 1 AND phone != '' GROUP BY substr(phone, -9) HAVING COUNT(*) > 1))`;
+var DUP_DAYS = 14;
+var RZ_CANCEL_REASONS = {
+  31: "\u0421\u043A\u0430\u0441\u0443\u0432\u0430\u043D\u043D\u044F. \u0421\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0434\u0443\u0431\u043B\u044E\u044E\u0447\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F",
+  50: "\u041A\u043B\u0456\u0454\u043D\u0442 \u043D\u0435 \u043E\u043F\u043B\u0430\u0442\u0438\u0432",
+  40: "\u041A\u043B\u0456\u0454\u043D\u0442 \u043F\u0435\u0440\u0435\u0434\u0443\u043C\u0430\u0432",
+  18: "\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u0437\u0432'\u044F\u0437\u0430\u0442\u0438\u0441\u044F",
+  42: "\u041D\u0435\u043C\u0430\u0454 \u0432 \u043D\u0430\u044F\u0432\u043D\u043E\u0441\u0442\u0456",
+  28: "\u041D\u0435\u043F\u0440\u0430\u0432\u0438\u043B\u044C\u043D\u0456 \u043A\u043E\u043D\u0442\u0430\u043A\u0442\u043D\u0456 \u0434\u0430\u043D\u0456",
+  44: "\u0421\u043A\u0430\u0441\u0443\u0432\u0430\u043D\u043D\u044F. \u0424\u0435\u0439\u043A\u043E\u0432\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F"
+};
 var CALL_SQL = `(status = '47' OR (status = '55' AND changed_at <= ?) OR (status = '5' AND changed_at <= ?) OR (status IN (${inList(RZ_NEW)}) AND created_at <= ?))`;
 var callParams = (nowMs = Date.now()) => [kyivDTms(nowMs - 864e5), kyivDTms(nowMs - 4 * 864e5), kyivDTms(nowMs - 30 * 6e4)];
 var EPC_STATUS = {
@@ -16786,6 +16801,22 @@ var rzOther = (o) => {
   const sameName2 = !name || !buyer || name.toLowerCase() === buyer.toLowerCase();
   return samePhone && sameName2 ? { recipient: "", recipient_phone: "" } : { recipient: name, recipient_phone: phone };
 };
+var rzAddress = (o) => {
+  const d = o.delivery || {};
+  const city = String(d.city?.title || d.city?.name_ua || d.city?.name || d.city?.city_name || "").trim();
+  const place = d.place_number ? `\u2116 ${d.place_number}${d.place_street ? `, ${d.place_street}` : ""}${d.place_house ? ` ${d.place_house}` : ""}` : [d.place_street, d.place_house, d.place_flat ? `\u043A\u0432. ${d.place_flat}` : ""].filter(Boolean).join(", ");
+  return [city, place].filter(Boolean).join(", ").slice(0, 300);
+};
+var rzPay = (o) => {
+  const p = o.payment || null;
+  const st = String(p?.payment_status?.title || "").trim();
+  return {
+    pay_type: String(p?.payment_type_title || p?.payment_method_name || "").slice(0, 120),
+    pay_status: st.slice(0, 80),
+    paid: /^оплачен/i.test(st) ? 1 : 0,
+    pay_known: o && "payment" in o ? 1 : 0
+  };
+};
 var ROW = {
   rozetka: (o) => ({
     id: String(o.id),
@@ -16801,7 +16832,11 @@ var ROW = {
     delivery: String(o.delivery?.delivery_service_name || o.delivery_service?.name || ""),
     ttn: String(o.ttn || o.delivery?.ttn || ""),
     items: (o.purchases || []).map((p) => ({ id: String(p.item_id || p.item?.id || ""), name: String(p.item_name || p.item?.name || ""), qty: Number(p.quantity) || 1, price: money2(p.price) })),
-    ...rzOther(o)
+    ...rzOther(o),
+    ...rzPay(o),
+    address: rzAddress(o),
+    comment: String(o.comment || "").slice(0, 1e3),
+    dup_of: o.duplicate_order_id ? String(o.duplicate_order_id) : ""
   }),
   prom: (o) => ({
     id: String(o.id),
@@ -16859,24 +16894,60 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     if (!rows.length) return;
     const now = nowIso();
     await db.batch(rows.map((r) => [
-      `INSERT INTO mp_orders (mp, account_id, id, number, created_at, changed_at, status, status_name, customer, phone, total, delivery, ttn, items, synced_at, search, status_group, recipient, recipient_phone)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO mp_orders (mp, account_id, id, number, created_at, changed_at, status, status_name, customer, phone, total, delivery, ttn, items, synced_at, search, status_group, recipient, recipient_phone,
+         pay_type, pay_status, paid, pay_known, address, comment, dup_of)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(mp, account_id, id) DO UPDATE SET number = excluded.number, created_at = excluded.created_at, changed_at = excluded.changed_at,
          status = excluded.status, status_name = excluded.status_name, customer = excluded.customer, phone = excluded.phone, total = excluded.total,
          delivery = excluded.delivery, ttn = excluded.ttn, items = excluded.items, synced_at = excluded.synced_at, search = excluded.search,
-         status_group = excluded.status_group, recipient = excluded.recipient, recipient_phone = excluded.recipient_phone
+         status_group = excluded.status_group, recipient = excluded.recipient, recipient_phone = excluded.recipient_phone,
+         pay_type = CASE WHEN excluded.pay_known = 1 THEN excluded.pay_type ELSE mp_orders.pay_type END,
+         pay_status = CASE WHEN excluded.pay_known = 1 THEN excluded.pay_status ELSE mp_orders.pay_status END,
+         paid = CASE WHEN excluded.pay_known = 1 THEN excluded.paid ELSE mp_orders.paid END,
+         pay_known = MAX(mp_orders.pay_known, excluded.pay_known),
+         address = CASE WHEN excluded.address != '' THEN excluded.address ELSE mp_orders.address END,
+         comment = excluded.comment, dup_of = excluded.dup_of
        WHERE mp_orders.changed_at IS NOT excluded.changed_at OR mp_orders.status IS NOT excluded.status OR mp_orders.ttn IS NOT excluded.ttn
          OR mp_orders.total IS NOT excluded.total OR mp_orders.search IS NOT excluded.search OR mp_orders.status_group IS NOT excluded.status_group
-         OR mp_orders.recipient IS NOT excluded.recipient OR mp_orders.recipient_phone IS NOT excluded.recipient_phone OR mp_orders.items IS NOT excluded.items`,
-      [mp, accountId, r.id, r.number, r.created_at, r.changed_at, r.status, r.status_name, r.customer, r.phone, r.total, r.delivery, r.ttn, JSON.stringify(r.items), now, searchOf(r), r.status_group || 0, r.recipient || "", r.recipient_phone || ""]
+         OR mp_orders.recipient IS NOT excluded.recipient OR mp_orders.recipient_phone IS NOT excluded.recipient_phone OR mp_orders.items IS NOT excluded.items
+         OR (excluded.pay_known = 1 AND (mp_orders.pay_known = 0 OR mp_orders.pay_status IS NOT excluded.pay_status OR mp_orders.pay_type IS NOT excluded.pay_type))
+         OR (excluded.address != '' AND mp_orders.address IS NOT excluded.address) OR mp_orders.comment IS NOT excluded.comment OR mp_orders.dup_of IS NOT excluded.dup_of`,
+      [
+        mp,
+        accountId,
+        r.id,
+        r.number,
+        r.created_at,
+        r.changed_at,
+        r.status,
+        r.status_name,
+        r.customer,
+        r.phone,
+        r.total,
+        r.delivery,
+        r.ttn,
+        JSON.stringify(r.items),
+        now,
+        searchOf(r),
+        r.status_group || 0,
+        r.recipient || "",
+        r.recipient_phone || "",
+        r.pay_type || "",
+        r.pay_status || "",
+        r.paid || 0,
+        r.pay_known || 0,
+        r.address || "",
+        r.comment || "",
+        r.dup_of || ""
+      ]
     ]));
   }
   async function rehistOnce() {
-    if ((await db.get(`SELECT value FROM settings WHERE key = 'mp_hist_v3'`))?.value) return;
+    if ((await db.get(`SELECT value FROM settings WHERE key = 'mp_hist_v4'`))?.value) return;
     await db.batch([
       [`UPDATE mp_sync SET hist_to = CASE WHEN hist_end != '' THEN hist_end ELSE ? END, hist_page = 1, hist_done = 0, hist_saved = 0, hist_error = ''
         WHERE mp = 'rozetka' AND hist_from != ''`, [kyivDT(/* @__PURE__ */ new Date()).slice(0, 10)]],
-      [`INSERT INTO settings (key, value) VALUES ('mp_hist_v3', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`, []]
+      [`INSERT INTO settings (key, value) VALUES ('mp_hist_v4', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`, []]
     ]);
   }
   async function histBudget() {
@@ -17393,7 +17464,8 @@ ${items.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio 
     if (grp === "call") {
       where.push(CALL_SQL);
       params.push(...callParams());
-    } else if (grp) {
+    } else if (grp === "dups") where.push(DUPS_SQL);
+    else if (grp) {
       where.push(`${groupSql(SUCCESS_SQL)} = ?`);
       params.push(okIds, grp);
     }
@@ -17409,6 +17481,7 @@ ${items.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio 
     }
     const offset = Math.max(0, Number(c.req.query("offset")) || 0);
     let callN = 0;
+    let dupsN = 0;
     const [rows, statusRows, total, rvStats, rvBy] = await Promise.all([
       db.all(`SELECT *, ${rz ? SUCCESS_SQL : "0"} AS ok FROM mp_orders WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT 301 OFFSET ?`, [...rz ? [okIds] : [], ...params, offset]),
       db.all(`SELECT status, status_group, ttn != '' AS has_ttn, MAX(status_name) AS status_name, COUNT(*) AS n FROM mp_orders WHERE ${base.join(" AND ")} GROUP BY status, status_group, ttn != '' ORDER BY n DESC`, baseParams),
@@ -17418,9 +17491,11 @@ ${items.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio 
           SUM(asked_at != '') AS asked, SUM(asked_at != '' AND review_n > 0) AS asked_reviewed
         FROM (SELECT ${SUCCESS_SQL} AS ok, review_n, asked_at, changed_at FROM mp_orders WHERE ${base.join(" AND ")})`, [border, okIds, ...baseParams]) : null,
       rz ? db.all(`SELECT asked_by AS who, COUNT(*) AS n, SUM(review_n > 0) AS reviewed FROM mp_orders WHERE ${base.join(" AND ")} AND asked_at != '' GROUP BY asked_by ORDER BY n DESC`, baseParams) : [],
-      rz ? db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE ${base.join(" AND ")} AND ${CALL_SQL}`, [...baseParams, ...callParams()]) : null
+      rz ? db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE ${base.join(" AND ")} AND ${CALL_SQL}`, [...baseParams, ...callParams()]) : null,
+      rz ? db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE ${base.join(" AND ")} AND ${DUPS_SQL}`, baseParams) : null
     ]).then((x) => {
       callN = x[5]?.n || 0;
+      dupsN = x[6]?.n || 0;
       return x;
     });
     const okSet = new Set(JSON.parse(okIds));
@@ -17439,17 +17514,40 @@ ${items.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio 
       else cur.n += x.n;
     }
     const statuses = [...stMap.values()].sort((a, b) => b.n - a.n);
-    if (rz) groups.call = callN;
+    if (rz) {
+      groups.call = callN;
+      groups.dups = dupsN;
+    }
     const shown = rows.slice(0, 300);
     const revs = rz && shown.some((r) => r.review_n > 0) ? await db.all(
       `SELECT account_id, order_id, goods_id, goods, mark, name, created_at FROM mp_reviews WHERE mp = 'rozetka' AND order_id IN (SELECT value FROM json_each(?)) ORDER BY created_at`,
       [JSON.stringify(shown.filter((r) => r.review_n > 0).map((r) => r.id))]
     ) : [];
+    const dupsOf = /* @__PURE__ */ new Map();
+    if (rz && shown.length) {
+      const recent = kyivDT(Date.now() - 60 * 864e5);
+      const want = shown.filter((r) => r.created_at >= recent && String(r.phone || "").replace(/\D/g, "").length >= 9);
+      const p9s = [...new Set(want.map((r) => String(r.phone).slice(-9)))];
+      if (p9s.length) {
+        const a = accessOf(c.get("user"));
+        const accs = a?.shops ? a.shops.filter((x) => x.startsWith("rozetka:")).map((x) => Number(x.split(":")[1])) : null;
+        const others = await db.all(`SELECT account_id, id, number, created_at, status, status_name, status_group, total, pay_type, pay_status, paid, substr(phone, -9) AS p9
+          FROM mp_orders WHERE mp = 'rozetka' AND substr(phone, -9) IN (SELECT value FROM json_each(?)) AND status_group != 3
+          ${accs ? "AND account_id IN (SELECT value FROM json_each(?))" : ""} ORDER BY created_at DESC LIMIT 2000`, accs ? [JSON.stringify(p9s), JSON.stringify(accs)] : [JSON.stringify(p9s)]);
+        const day = (x) => Date.parse(`${String(x).slice(0, 10)}T00:00:00Z`);
+        for (const r of want) {
+          const p92 = String(r.phone).slice(-9);
+          const list = others.filter((x) => x.p9 === p92 && !(x.account_id === r.account_id && x.id === r.id) && Math.abs(day(x.created_at) - day(r.created_at)) <= DUP_DAYS * 864e5).map(({ p9: _p, ...x }) => ({ ...x, grp: rzGroupOf(x.status, x.status_group, okSet) }));
+          if (list.length) dupsOf.set(`${r.account_id}:${r.id}`, list);
+        }
+      }
+    }
     const tel = rz && shown.length ? await services.telephony?.marks(shown.map((r) => ({ key: `${r.account_id}:${r.id}`, phones: [r.phone, r.recipient_phone], at: r.created_at }))) : null;
     return c.json({
       rows: shown.map((r) => ({
         ...r,
         ...tel ? { calls: tel.get(`${r.account_id}:${r.id}`) || null } : {},
+        ...rz ? { dups: dupsOf.get(`${r.account_id}:${r.id}`) || [] } : {},
         items: (() => {
           try {
             return JSON.parse(r.items || "[]");
@@ -17527,6 +17625,46 @@ ${items.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio 
     const raw2 = await rzCall(acc, (t) => rzGetOrder(fetchFn, t, id, expand));
     return c.json(raw2);
   });
+  app.post("/api/mp/rz/cancel", async (c) => {
+    need(c, "market.edit");
+    const b = await c.req.json().catch(() => ({}));
+    const reason = RZ_CANCEL_REASONS[Number(b.status)];
+    if (!reason) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u043F\u0440\u0438\u0447\u0438\u043D\u0443 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u043D\u043D\u044F.");
+    const o = await rzOrderOf(b, c);
+    if (Number(o.status_group) !== 1) throw fail(400, `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \xAB${o.status_name || o.status}\xBB \u2014 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438 \u043D\u0435 \u043C\u043E\u0436\u043D\u0430.`);
+    const acc = await accOf("rozetka", o.account_id);
+    await rzCall(acc, (t) => rzSetOrderStatus(fetchFn, t, o.id, b.status));
+    await db.run(
+      `UPDATE mp_orders SET status = ?, status_name = ?, status_group = 3, changed_at = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ?`,
+      [String(Number(b.status)), reason, kyivDT(/* @__PURE__ */ new Date()), o.account_id, o.id]
+    );
+    return c.json({ ok: true, status: String(Number(b.status)), status_name: reason });
+  });
+  async function payBackfill() {
+    const rows = await db.all(`SELECT account_id, id FROM mp_orders WHERE mp = 'rozetka' AND status_group = 1 AND pay_known = 0 ORDER BY created_at DESC LIMIT 15`);
+    if (!rows.length) return { done: true };
+    const shops = (await shopsOf()).rozetka || [];
+    let saved = 0;
+    for (const r of rows) {
+      const acc = shops.find((a) => a.id === r.account_id);
+      if (!acc?.active) {
+        await db.run(`UPDATE mp_orders SET pay_known = 1 WHERE mp = 'rozetka' AND account_id = ? AND id = ?`, [r.account_id, r.id]);
+        continue;
+      }
+      try {
+        const raw2 = await rzCall(acc, (t) => rzGetOrder(fetchFn, t, r.id, "delivery,status_data,purchases,payment"));
+        const row = ROW.rozetka(raw2);
+        row.pay_known = 1;
+        await saveRows("rozetka", acc.id, [row]);
+        saved++;
+      } catch (e) {
+        if (e.pending) break;
+        if (/не знайдено/.test(String(e.message))) await db.run(`UPDATE mp_orders SET pay_known = 1 WHERE mp = 'rozetka' AND account_id = ? AND id = ?`, [r.account_id, r.id]);
+      }
+    }
+    return { saved, left: rows.length - saved };
+  }
+  onCron("market-pay", "\u041E\u043F\u043B\u0430\u0442\u0430 \u0430\u043A\u0442\u0438\u0432\u043D\u0438\u0445 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (\u0434\u043E\u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043D\u044F, \u043F\u043E 15 \u0437\u0430 \u0440\u0430\u0437)", payBackfill);
   const BULK_TO = { 26: { name: "\u041E\u0431\u0440\u043E\u0431\u043B\u044F\u0454\u0442\u044C\u0441\u044F \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u043E\u043C", from: RZ_NEW } };
   app.post("/api/mp/rz/status", async (c) => {
     need(c, "market.edit");
@@ -20159,7 +20297,7 @@ var schema13 = {
 // src/modules/market/schema.js
 var schema14 = {
   name: "market",
-  version: 6,
+  version: 7,
   tables: [
     // mp — rozetka | prom | epc; account_id — магазин у налаштуваннях доставки; items — JSON [{ name, qty, price }].
     `CREATE TABLE IF NOT EXISTS mp_orders (
@@ -20213,6 +20351,11 @@ var schema14 = {
   )`,
     `CREATE INDEX IF NOT EXISTS mp_reviews_order ON mp_reviews (mp, account_id, order_id)`
   ],
+  // після додавання колонок: дублі (кілька замовлень одного покупця) — пошук за останніми 9 цифрами телефону й за активними
+  after: [
+    `CREATE INDEX IF NOT EXISTS mp_orders_p9 ON mp_orders (substr(phone, -9))`,
+    `CREATE INDEX IF NOT EXISTS mp_orders_active ON mp_orders (mp, status_group)`
+  ],
   columns: [
     // Історія магазину (Розетка — за 4 роки): по місяцях назад від сьогодні за датою створення.
     // hist_from — найдавніша дата; hist_to — кінець наступного місяця-вікна; hist_page — сторінка у вікні; hist_done — усе.
@@ -20248,7 +20391,16 @@ var schema14 = {
     ["mp_sync", "rv_full", "INTEGER DEFAULT 0"],
     ["mp_sync", "rv_at", "TEXT DEFAULT ''"],
     ["mp_sync", "rv_n", "INTEGER DEFAULT 0"],
-    ["mp_sync", "rv_error", "TEXT DEFAULT ''"]
+    ["mp_sync", "rv_error", "TEXT DEFAULT ''"],
+    // Розетка: оплата з кабінету (pay_type — спосіб, pay_status — стан, paid — 1 оплачено; pay_known — дані про оплату вже отримано),
+    // адреса доставки, коментар покупця, dup_of — Розетка позначила замовлення дублем іншого.
+    ["mp_orders", "pay_type", "TEXT DEFAULT ''"],
+    ["mp_orders", "pay_status", "TEXT DEFAULT ''"],
+    ["mp_orders", "paid", "INTEGER DEFAULT 0"],
+    ["mp_orders", "pay_known", "INTEGER DEFAULT 0"],
+    ["mp_orders", "address", "TEXT DEFAULT ''"],
+    ["mp_orders", "comment", "TEXT DEFAULT ''"],
+    ["mp_orders", "dup_of", "TEXT DEFAULT ''"]
   ]
 };
 
@@ -20440,6 +20592,7 @@ async function migrate(db, modules = MODULE_SCHEMAS) {
     for (const [t, col, type] of cols) if (t === table && !existing.has(col)) alters.push([`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`, []]);
   }
   await db.batch(alters);
+  await db.batch(todo.flatMap((m) => (m.after || []).map((sql) => [sql, []])));
   for (const m of todo) if (m.seed) await m.seed(db, { fresh });
   await db.batch(todo.map((m) => [
     `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,

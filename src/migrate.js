@@ -59,6 +59,8 @@ export async function migrate(db, modules = MODULE_SCHEMAS) {
     for (const [t, col, type] of cols) if (t === table && !existing.has(col)) alters.push([`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`, []]);
   }
   await db.batch(alters);
+  // Індекси на нові колонки — після їх додавання.
+  await db.batch(todo.flatMap((m) => (m.after || []).map((sql) => [sql, []])));
   for (const m of todo) if (m.seed) await m.seed(db, { fresh });
   await db.batch(todo.map((m) => [
     `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [versionKey(m), String(m.version)],

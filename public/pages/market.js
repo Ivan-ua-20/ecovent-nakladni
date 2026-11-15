@@ -171,14 +171,23 @@ export function createMarketPages({ can }) {
     };
     // кнопка «скопіювати» біля поля (обробник — один на картку)
     const cp = (v, what = 'Скопійовано') => (v ? `<button type="button" class="mp-cp" data-copy="${esc(v)}" data-what="${esc(what)}" title="Скопіювати" aria-label="Скопіювати: ${esc(what)}">⧉</button>` : '');
+    const payTag = (o) => {
+      if (!o.pay_type && !o.pay_status) return '';
+      return o.paid ? `<span class="mp-tag ok" title="${esc(o.pay_type)}">✓ Оплачено${o.pay_type ? ` · ${esc(o.pay_type)}` : ''}</span>`
+        : `<span class="mp-tag${/карт|google|apple|pay|онлайн|кредит|частин/i.test(o.pay_type) ? ' warn' : ''}">${esc(o.pay_type || '')}${o.pay_status ? ` · ${esc(o.pay_status)}` : ''}</span>`;
+    };
+    const dupLine = (x) => `№${x.number} · ${dt(x.created_at)} · ${x.status_name || x.status} · ${uah(x.total)}${x.paid ? ' · оплачено' : x.pay_type ? ` · ${x.pay_type}` : ''}${many || x.account_id !== undefined ? ` · ${name.get(x.account_id) || ''}` : ''}`;
+    const dupTag = (o) => (o.dups?.length ? `<span class="mp-tag warn" title="${esc(`Інші замовлення цього покупця (±14 днів):\n${o.dups.map(dupLine).join('\n')}`)}">+${o.dups.length} замовл. покупця</span>` : '')
+      + (o.dup_of ? ` <span class="mp-tag warn" title="Розетка позначила це замовлення дублем">дубль №${esc(o.dup_of)}</span>` : '');
     const showRv = () => rz && (state.grp === 'success' || state.rv);
     const rowHtml = (o) => (byKey.set(keyOf(o), o), `<div class="mp-row${state.sel === keyOf(o) ? ' on' : ''}" data-ok="${esc(keyOf(o))}" tabindex="0">
           ${canPick(o) ? `<label class="mp-pick"><input type="checkbox" data-pick="${esc(keyOf(o))}" ${picked.has(keyOf(o)) ? 'checked' : ''} aria-label="Вибрати ${esc(o.number)}"></label>` : ''}
           <div class="mp-row-b">
-            <div class="mp-l1"><span><b>${esc(o.number)}</b> <span class="small muted">${esc(dt(o.created_at))}</span></span><b>${uah(o.total)}</b></div>
+            <div class="mp-l1"><span><b>${esc(o.number)}</b> <span class="small muted">${esc(dt(o.created_at))}</span> ${dupTag(o)}</span><b>${uah(o.total)}</b></div>
             <div class="mp-l2">${o.items.length ? `${esc(o.items[0].name)}${o.items[0].qty > 1 ? ` × ${o.items[0].qty}` : ''}${o.items.length > 1 ? ` <span class="muted">+${o.items.length - 1}</span>` : ''}` : '—'}</div>
             <div class="mp-l3"><span>${esc(o.customer || '—')}${o.delivery ? ` · ${esc(o.delivery)}` : ''}${o.ttn ? ` · ТТН ${esc(o.ttn)}` : ''}${many ? ` · ${esc(name.get(o.account_id) || '')}` : ''}</span>
               ${rz && String(o.status) === '1' && state.grp === 'new' ? waitOf(o) : `<span class="badge">${esc(o.status_name || o.status || '—')}</span>`}</div>
+            ${payTag(o) ? `<div class="mp-l4">${payTag(o)}</div>` : ''}
             ${callMini(o)}
             ${showRv() ? `<div class="mp-l4" data-rvcell="${esc(keyOf(o))}">${rvCell(o)}</div>` : ''}
           </div>
@@ -235,10 +244,10 @@ export function createMarketPages({ can }) {
 
     // ---------- бічна панель: групи замовлень Розетки (або статуси Prom і Епіцентру), згортання ----------
     const GROUPS = [
-      ['', 'Усі замовлення'], ['new', 'Нові', 'red'], ['work', 'В обробці'], ['ttn', 'Створено ТТН'], ['call', 'Потрібно зателефонувати', 'amber'], ['delivery', 'Доставляється'],
+      ['', 'Усі замовлення'], ['new', 'Нові', 'red'], ['work', 'В обробці'], ['ttn', 'Створено ТТН'], ['call', 'Потрібно зателефонувати', 'amber'], ['dups', 'Кілька замовлень', 'amber'], ['delivery', 'Доставляється'],
       ['success', 'Успішні'], ['failed', 'Неуспішні'], ['cancelled', 'Скасовані'],
     ];
-    const SHORT = { '': 'Усі', new: 'Нові', work: 'Обр.', ttn: 'ТТН', call: 'Дзв.', delivery: 'Дост.', success: 'Усп.', failed: 'Неусп.', cancelled: 'Скас.', 'rv-ask': 'Відг.' };
+    const SHORT = { '': 'Усі', new: 'Нові', work: 'Обр.', ttn: 'ТТН', dups: 'Дублі', call: 'Дзв.', delivery: 'Дост.', success: 'Усп.', failed: 'Неусп.', cancelled: 'Скас.', 'rv-ask': 'Відг.' };
     const fmtN = (n) => Number(n || 0).toLocaleString('uk-UA');
     function renderNav(d) {
       const nav = $('#mpNav');
@@ -277,6 +286,9 @@ export function createMarketPages({ can }) {
       if (state.grp === 'call') {
         return '<div class="card small" style="margin-bottom:10px">Потрібно зателефонувати: планується повторний дзвінок; очікує оплату понад добу; посилка 4+ дні в пункті видачі; нове замовлення понад 30 хв без обробки.</div>';
       }
+      if (state.grp === 'dups') {
+        return '<div class="card small" style="margin-bottom:10px">Покупці, у яких зараз кілька активних замовлень (той самий телефон, усі магазини). Відкрийте замовлення — у картці видно інші замовлення покупця, їх оплату, і можна скасувати зайві.</div>';
+      }
       if (state.grp !== 'cancelled') return '';
       const c = d.cancels || {};
       const all = (c.client || 0) + (c.manager || 0) + (c.auto || 0);
@@ -300,6 +312,33 @@ export function createMarketPages({ can }) {
       boxes.forEach((x) => (x.onchange = () => { if (x.checked) picked.add(x.dataset.pick); else picked.delete(x.dataset.pick); bindPick(); }));
       if ($('#mpPickNone')) $('#mpPickNone').onclick = () => { picked.clear(); boxes.forEach((x) => { x.checked = false; }); bindPick(); };
       if ($('#mpPickGo')) $('#mpPickGo').onclick = () => moveToWork([...picked]);
+    }
+    // скасування з причиною (лише активні замовлення — група «у роботі» Розетки)
+    const canCancel = (x) => rz && can('market.edit') && Number(x.status_group) === 1 && !['delivery'].includes(x.grp || '');
+    const REASONS = [[31, 'Створено дублююче замовлення (дубль)'], [50, 'Клієнт не оплатив'], [40, 'Клієнт передумав'], [18, 'Не вдалося зв\'язатися'],
+      [42, 'Немає в наявності'], [28, 'Неправильні контактні дані'], [44, 'Фейкове замовлення']];
+    function cancelModal(list, def = 40) {
+      const m = modal(list.length > 1 ? `Скасувати ${list.length} замовл.` : `Скасувати замовлення №${list[0].number}`, `
+        <div class="form-stack">
+          ${list.length > 1 ? `<div class="small">${list.map((x) => `№${esc(x.number)}`).join(', ')}</div>` : ''}
+          <label class="f"><span>Причина (так побачить Розетка)</span><select id="mpCR">${REASONS.map(([k, t]) => `<option value="${k}" ${k === def ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>
+          <div class="small muted">Статус зміниться в кабінеті Розетки. Відновити скасоване замовлення звідси не можна.</div>
+        </div>`, { footer: '<button class="btn" data-close>Не скасовувати</button><button class="btn danger" id="mpCGo">Скасувати в Розетці</button>' });
+      $('#mpCGo', m.el).onclick = async (e) => {
+        const b = e.currentTarget;
+        b.disabled = true; b.innerHTML = '<span class="spinner"></span> Скасовую…';
+        const bad = [];
+        let ok = 0;
+        for (const x of list) {
+          const [account, ...id] = x.key.split(':');
+          try { await api('POST', '/api/mp/rz/cancel', { account: Number(account), id: id.join(':'), status: Number($('#mpCR', m.el).value) }); ok++; }
+          catch (er) { bad.push(`№${x.number}: ${er.message}`); }
+        }
+        m.close();
+        if (ok) toast(`Скасовано: ${ok}`);
+        if (bad.length) modal('Не всі замовлення скасовано', `<div class="small">${bad.map(esc).join('<br>')}</div>`, { footer: '<button class="btn primary" data-close>Зрозуміло</button>' });
+        load();
+      };
     }
     async function moveToWork(keys) {
       if (!(await confirmDanger(`Перевести ${keys.length} замовл. в «Обробляється менеджером»?`, 'Статус зміниться в кабінеті Розетки — покупець побачить, що замовлення обробляється. Повернути «Нове» не можна.', 'Перевести'))) return;
@@ -359,18 +398,31 @@ export function createMarketPages({ can }) {
           <span class="badge info">${esc(o.status_name || o.status || '—')}</span>
           <button type="button" class="btn sm" id="mpDClose" aria-label="Закрити картку">✕</button></div>
         <div class="mp-d-body">
-          ${canPick(o) ? '<div class="mp-wide-box"><button type="button" class="btn primary" id="mpDTake">Взяти в обробку</button> <span class="small muted">→ «Обробляється менеджером» у Розетці</span></div>' : ''}
+          ${canPick(o) || canCancel(o) ? `<div class="mp-wide-box btn-row" style="align-items:center">${canPick(o) ? '<button type="button" class="btn primary" id="mpDTake">Взяти в обробку</button> <span class="small muted">→ «Обробляється менеджером» у Розетці</span>' : ''}
+            ${canCancel(o) ? '<button type="button" class="btn danger" id="mpDCancel" style="margin-left:auto">Скасувати замовлення…</button>' : ''}</div>` : ''}
           <div class="mp-box"><div class="mp-cap">Покупець</div><b>${esc(o.customer || '—')}</b>${cp(o.customer, 'ПІБ')}
             ${ph ? `<div class="btn-row" style="margin-top:4px;flex-wrap:wrap;align-items:center"><span>${esc(ph)}</span>${cp(ph, 'Телефон')}<a class="btn sm" href="tel:${esc(ph)}">Подзвонити</a></div>` : ''}
             ${o.recipient ? `<div class="small" style="margin-top:4px"><span class="muted">Отримувач:</span> ${esc(o.recipient)}${cp(o.recipient, 'ПІБ отримувача')}${o.recipient_phone ? ` · ${esc(o.recipient_phone)}${cp(intlPhone(o.recipient_phone), 'Телефон отримувача')}` : ''}</div>` : ''}
             ${callsHtml(o)}</div>
-          <div class="mp-box"><div class="mp-cap">Доставка</div>${esc(o.delivery || '—')}${o.ttn ? `<div>ТТН <b>${esc(o.ttn)}</b>${cp(o.ttn, 'ТТН')}</div>` : ''}</div>
+          <div class="mp-box"><div class="mp-cap">Доставка</div>${esc(o.delivery || '—')}${o.address ? `<div>${esc(o.address)}${cp(o.address, 'Адресу')}</div>` : ''}${o.ttn ? `<div>ТТН <b>${esc(o.ttn)}</b>${cp(o.ttn, 'ТТН')}</div>` : ''}</div>
+          ${rz ? `<div class="mp-box"><div class="mp-cap">Оплата</div>${o.pay_type || o.pay_status ? `${esc(o.pay_type || '—')}<div>${o.paid ? '<b style="color:var(--ok)">✓ Оплачено</b>' : esc(o.pay_status || 'не оплачено')}</div>` : '<span class="muted">ще не отримано з Розетки</span>'}</div>` : ''}
+          ${o.comment ? `<div class="mp-box"><div class="mp-cap">Коментар покупця</div>${esc(o.comment)}${cp(o.comment, 'Коментар')}</div>` : ''}
+          ${o.dups?.length || o.dup_of ? `<div class="mp-box mp-wide-box"><div class="mp-cap">Інші замовлення цього покупця</div>
+            ${o.dup_of ? `<div class="small" style="margin-bottom:6px">Розетка позначила це замовлення дублем №${esc(o.dup_of)}${cp(o.dup_of, 'Номер')}</div>` : ''}
+            ${(o.dups || []).map((x) => `<div class="mp-dup"><span><b>№${esc(x.number)}</b>${cp(x.number, 'Номер замовлення')} <span class="small muted">${esc(dt(x.created_at))}${many ? ` · ${esc(name.get(x.account_id) || '')}` : ''}</span></span>
+              <span class="badge">${esc(x.status_name || x.status)}</span><b>${uah(x.total)}</b>${payTag(x) || '<span class="mp-tag">оплата —</span>'}
+              <span class="btn-row" style="margin-left:auto">${byKey.has(`${x.account_id}:${x.id}`) ? `<button type="button" class="btn sm" data-dopen="${esc(`${x.account_id}:${x.id}`)}">Відкрити</button>` : ''}${canCancel(x) ? `<button type="button" class="btn sm danger" data-dcancel="${esc(`${x.account_id}:${x.id}`)}" data-dnum="${esc(x.number)}">Скасувати…</button>` : ''}</span></div>`).join('')}
+            ${(o.dups || []).filter((x) => canCancel(x) && !x.paid).length > 1 ? `<div style="margin-top:8px"><button type="button" class="btn sm danger" id="mpDCancelUnpaid">Скасувати неоплачені (${(o.dups || []).filter((x) => canCancel(x) && !x.paid).length})…</button></div>` : ''}</div>` : ''}
           <div class="mp-box mp-wide-box"><div class="mp-cap">Товари</div>${items}<div class="mp-goods" style="border-top:1px solid var(--line);padding-top:6px;margin-top:4px"><span>Разом</span><b>${uah(o.total)}${cp(String(o.total), 'Сума')}</b></div></div>
           ${rz ? `<div class="mp-box mp-wide-box"><div class="mp-cap">Відгук</div><div class="small">${rvCell(o)}</div></div>` : ''}
           ${rz && o.calls ? '<div class="mp-box mp-wide-box"><div class="mp-cap">Дзвінки Binotel з цим номером</div><div id="mpDCalls" class="small muted"><span class="spinner"></span></div></div>' : ''}
         </div>`;
       $('#mpDClose').onclick = closeDetail;
       if ($('#mpDTake')) $('#mpDTake').onclick = () => moveToWork([keyOf(o)]);
+      if ($('#mpDCancel')) $('#mpDCancel').onclick = () => cancelModal([{ key: keyOf(o), number: o.number }], o.dups?.length || o.dup_of ? 31 : 40);
+      $$('[data-dcancel]', box).forEach((b) => (b.onclick = () => cancelModal([{ key: b.dataset.dcancel, number: b.dataset.dnum }], 31)));
+      $$('[data-dopen]', box).forEach((b) => (b.onclick = () => showDetail(byKey.get(b.dataset.dopen))));
+      if ($('#mpDCancelUnpaid')) $('#mpDCancelUnpaid').onclick = () => cancelModal(o.dups.filter((x) => canCancel(x) && !x.paid).map((x) => ({ key: `${x.account_id}:${x.id}`, number: x.number })), 31);
       $$('[data-copy]', box).forEach((b) => (b.onclick = async () => { if (await copyText(b.dataset.copy)) toast(`${b.dataset.what} скопійовано`); }));
       $$('[data-rvask]', box).forEach((b) => (b.onclick = () => askModal(byKey.get(b.dataset.rvask))));
       if ($('#mpDCalls')) {

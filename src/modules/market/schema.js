@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'market',
-  version: 6,
+  version: 7,
   tables: [
   // mp — rozetka | prom | epc; account_id — магазин у налаштуваннях доставки; items — JSON [{ name, qty, price }].
   `CREATE TABLE IF NOT EXISTS mp_orders (
@@ -26,6 +26,7 @@ export const schema = {
   )`,
   `CREATE INDEX IF NOT EXISTS mp_orders_list ON mp_orders (mp, account_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS mp_orders_created ON mp_orders (created_at)`,
+
   // Стан синхронізації магазину: since — з якого часу брати зміни; незавершений прохід (кілька сторінок за раз) —
   // cursor (наступна сторінка), run_from і run_started — його межі; остання помилка.
   `CREATE TABLE IF NOT EXISTS mp_sync (
@@ -56,6 +57,11 @@ export const schema = {
     PRIMARY KEY (mp, account_id, id)
   )`,
   `CREATE INDEX IF NOT EXISTS mp_reviews_order ON mp_reviews (mp, account_id, order_id)`,
+  ],
+  // після додавання колонок: дублі (кілька замовлень одного покупця) — пошук за останніми 9 цифрами телефону й за активними
+  after: [
+    `CREATE INDEX IF NOT EXISTS mp_orders_p9 ON mp_orders (substr(phone, -9))`,
+    `CREATE INDEX IF NOT EXISTS mp_orders_active ON mp_orders (mp, status_group)`,
   ],
   columns: [
     // Історія магазину (Розетка — за 4 роки): по місяцях назад від сьогодні за датою створення.
@@ -93,5 +99,14 @@ export const schema = {
     ['mp_sync', 'rv_at', "TEXT DEFAULT ''"],
     ['mp_sync', 'rv_n', 'INTEGER DEFAULT 0'],
     ['mp_sync', 'rv_error', "TEXT DEFAULT ''"],
+    // Розетка: оплата з кабінету (pay_type — спосіб, pay_status — стан, paid — 1 оплачено; pay_known — дані про оплату вже отримано),
+    // адреса доставки, коментар покупця, dup_of — Розетка позначила замовлення дублем іншого.
+    ['mp_orders', 'pay_type', "TEXT DEFAULT ''"],
+    ['mp_orders', 'pay_status', "TEXT DEFAULT ''"],
+    ['mp_orders', 'paid', 'INTEGER DEFAULT 0'],
+    ['mp_orders', 'pay_known', 'INTEGER DEFAULT 0'],
+    ['mp_orders', 'address', "TEXT DEFAULT ''"],
+    ['mp_orders', 'comment', "TEXT DEFAULT ''"],
+    ['mp_orders', 'dup_of', "TEXT DEFAULT ''"],
   ],
 };
