@@ -162,18 +162,33 @@ export async function listReceipts(fetchFn, fop, fromIso, toIso, offset = 0) {
   const qs = new URLSearchParams({ from_date: fromIso, to_date: toIso, limit: '100', offset: String(offset), self_receipts: 'false' });
   const r = await authed(fetchFn, fop, `/receipts/search?${qs}`);
   const results = Array.isArray(r?.results) ? r.results : [];
-  const rows = results.map((rc) => {
-    const text = [rc.header, rc.footer, rc.barcode, rc.order_id, rc.external_id, ...(rc.goods || []).map((g) => g.good?.code || '')].filter(Boolean).join(' ');
-    const refs = [...new Set(String(text).match(/\d{5,20}/g) || [])].slice(0, 20).join(' ');
-    return {
-      id: String(rc.id || ''),
-      type: String(rc.type || ''),
-      at: String(rc.fiscal_date || rc.created_at || ''),
-      total: rc.total_sum != null ? rc.total_sum / 100 : 0,
-      fiscal: String(rc.fiscal_code || ''),
-      pays: (rc.payments || []).map((p) => ({ type: String(p.type || ''), label: String(p.label || ''), value: p.value != null ? p.value / 100 : 0 })),
-      refs,
-    };
-  }).filter((x) => x.id);
+  const rows = results.map(receiptRow).filter((x) => x.id);
   return { rows, more: results.length >= 100 };
+}
+
+// Чек Checkbox → рядок для звірки.
+function receiptRow(rc) {
+  const text = [rc.header, rc.footer, rc.barcode, rc.order_id, rc.external_id, ...(rc.goods || []).map((g) => g.good?.code || '')].filter(Boolean).join(' ');
+  const refs = [...new Set(String(text).match(/\d{5,20}/g) || [])].slice(0, 20).join(' ');
+  return {
+    id: String(rc.id || ''),
+    type: String(rc.type || ''),
+    at: String(rc.fiscal_date || rc.created_at || ''),
+    total: rc.total_sum != null ? rc.total_sum / 100 : 0,
+    fiscal: String(rc.fiscal_code || ''),
+    pays: (rc.payments || []).map((p) => ({ type: String(p.type || ''), label: String(p.label || ''), value: p.value != null ? p.value / 100 : 0 })),
+    refs,
+  };
+}
+
+// Один чек за його номером (UUID, як прив'язано в замовленні LP-CRM). null — у цій організації (ФОП) такого чека немає.
+export async function getReceipt(fetchFn, fop, id) {
+  try {
+    const rc = await authed(fetchFn, fop, `/receipts/${encodeURIComponent(id)}`);
+    return rc?.id ? receiptRow(rc) : null;
+  } catch (e) {
+    if (e.pending) throw e;
+    if ([400, 403, 404, 422].includes(e.status)) return null;
+    throw e;
+  }
 }

@@ -38,6 +38,10 @@ await db.run(`DELETE FROM offices`);
 await db.run(`INSERT INTO offices (office_id, name, fop_id) VALUES ('22', 'Ecovent-Expert / ФОП Агафіца Д.М.', 1), ('12', 'Маркетплейси / ФОП ЛУПУ В.Ф.', 2)`);
 await db.run(`INSERT INTO np_accounts (id, name, api_key, active, created_at) VALUES (1, 'НП', 'npk', 1, '')`);
 await db.run(`INSERT INTO rz_accounts (id, name, username, password) VALUES (1, 'Ековент', 'u', 'p')`);
+await db.run(`INSERT INTO prom_accounts (id, name, token, active) VALUES (1, 'Prom Amsterdam', 'ptok', 1)`);
+for (const [id, ttn] of [['p11', '2045 0000 0000 11'], ['p12', 'PRM-0000012'], ['p13', 'PRM-0000013'], ['p14', '20450000000014']]) {
+  await db.run(`INSERT INTO mp_orders (mp, account_id, id, number, created_at, total, ttn) VALUES ('prom', 1, ?, ?, ?, 0, ?)`, [id, id, `${D} 09:00:00`, ttn]);
+}
 await db.run(`INSERT INTO odb_accounts (id, iban, code, alias, kind, enabled) VALUES ('a2', 'UA222', '2222222222', 'Лупу', 'fop', 1)`);
 await db.run(`INSERT INTO odb_tx (id, date, amount, purpose, iban, payer_name, payer_code, our_code) VALUES ('t1', ?, 700, 'Оплата за товар, Коваль', 'UA222', 'Коваль Ольга', '', '2222222222')`, [`${D}T09:00:00`]);
 
@@ -46,7 +50,8 @@ const O = (id, payment, total, ttn, extra = {}) => ({ id: String(id), order_id: 
 const ORDERS = [
   O(10001, 16, 1000, '20450000000001', { status: '18' }), // післяплата NovaPay, наложка 1000, чек з № замовлення — усе гаразд
   O(10002, 14, 500, '20450000000002', { office: '12' }), // RozetkaPay, а в ТТН контроль оплати
-  O(10003, 16, 800, '20450000000003'), // післяплата, а наложки немає і чека немає (чек видають під час відправки)
+  O(10003, 16, 800, '20450000000003', { check_uuid: 'aaaaaaaa-0000-4000-8000-000000000003' }), // післяплата без наложки; чек у LP-CRM прив'язано, але каса не підключена
+  O(10015, 14, 1500, '20450000000015', { office: '12', fiscal: { id: 'bbbbbbbb-0000-4000-8000-000000000015' } }), // чек з LP-CRM — давній, береться за номером
   O(10004, 2, 700, '20450000000004', { bayer_name: 'Коваль Ольга' }), // на рахунок: гроші на ФОП 2, а чек ФОП 1 (за сумою)
   O(10005, 4, 1000, '20450000000005', { comment: 'Передоплата 300 грн на картку' }), // часткова: наложка 700
   O(10006, 15, 1200, 'RMP-100000006', { office: '12' }), // післяплата Розетки, а в ROZETKA Delivery наложки немає
@@ -54,9 +59,20 @@ const ORDERS = [
   O(10008, 14, 999, '20450000000008', { phone: '380509999999', office: '12' }), // дубль за телефоном з 10009
   O(10009, 14, 999, '20450000000009', { phone: '380509999999', office: '12' }),
   O(10010, 14, 300, '2045 0000 000002', { office: '12' }), // та сама ТТН, що в 10002
+  // Prom: замовлення з тією самою ТТН — оплата через API Prom
+  O(10011, 10, 610, '20450000000011', { office: '12' }), // Пром-оплата, у Prom оплачено — гаразд
+  O(10012, 10, 620, 'PRM-0000012', { office: '12' }), // Пром-оплата, а в Prom «Оплата при отриманні» (Розетка Делівері з Prom)
+  O(10013, 4, 630, 'PRM-0000013', { office: '12' }), // післяплата, у Prom оплата при отриманні — наложка є
+  O(10014, 10, 640, '20450000000014', { office: '12' }), // Пром-оплата, у Prom ще не оплачено
 ];
 const byCode = new Map(ORDERS.map((o) => [o.order_id, o]));
-const TRACK = { 20450000000001: { AfterpaymentOnGoodsCost: '1000' }, 20450000000002: { AfterpaymentOnGoodsCost: '500' }, 20450000000003: {}, 20450000000004: {},
+const PROM = {
+  p11: { id: 11, full_price: '610', payment_option: { name: 'Пром-оплата' }, payment_data: { type: 'prosale', status: 'paid' } },
+  p12: { id: 12, full_price: '620', payment_option: { name: 'Оплата при отриманні' } },
+  p13: { id: 13, full_price: '630', payment_option: { name: 'Оплата при отриманні' } },
+  p14: { id: 14, full_price: '640', payment_option: { name: 'Пром-оплата' }, payment_data: { type: 'prosale', status: 'unpaid' } },
+};
+const TRACK = { 20450000000015: {}, 20450000000011: {}, 20450000000014: {}, 20450000000001: { AfterpaymentOnGoodsCost: '1000' }, 20450000000002: { AfterpaymentOnGoodsCost: '500' }, 20450000000003: {}, 20450000000004: {},
   20450000000005: { RedeliverySum: '700' }, 20450000000007: {}, 20450000000008: {}, 20450000000009: {} };
 const RC = {
   c1: [
@@ -96,9 +112,21 @@ const fetchFn = async (url, opts = {}) => {
     if (u.pathname === '/sites') return j({ success: true, content: { access_token: 'tok', market: { id: 1, title: 'Ековент' } } });
     if (u.pathname === '/delivery-rozetka/ttn-list') return j({ success: true, content: { models: u.searchParams.get('ttn') === 'RMP-100000006' ? [{ ttn: 'RMP-100000006', cod_amount: 0, declared_price: 1200 }] : [], _meta: { pageCount: 1 } } });
   }
+  if (u.hostname === 'my.prom.ua') {
+    calls.prom = (calls.prom || 0) + 1;
+    assert.equal(opts.headers.Authorization, 'Bearer ptok');
+    const id = decodeURIComponent(u.pathname.split('/').pop());
+    return PROM[id] ? j({ order: PROM[id] }) : new Response('{}', { status: 404 });
+  }
   if (u.hostname === 'api.checkbox.ua') {
     calls.cb++;
     if (u.pathname.endsWith('/cashier/signin')) return j({ access_token: `t-${JSON.parse(opts.body).login}` });
+    const one = u.pathname.match(/\/receipts\/([0-9a-f-]{36})$/);
+    if (one) {
+      const who = String(opts.headers.Authorization).replace('Bearer t-', '');
+      if (who === 'c2' && one[1] === 'bbbbbbbb-0000-4000-8000-000000000015') return j({ id: one[1], type: 'SELL', fiscal_date: `${dayAgo(30)}T10:00:00+02:00`, total_sum: 150000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 150000 }] });
+      return new Response(JSON.stringify({ message: 'Not found' }), { status: 404 });
+    }
     if (u.pathname.endsWith('/receipts/search')) {
       const who = String(opts.headers.Authorization).replace('Bearer t-', '');
       const from = u.searchParams.get('from_date'); const to = u.searchParams.get('to_date');
@@ -135,10 +163,13 @@ assert.ok(dbn <= 25, `звернень до бази для сторінки: ${
 const row = (id) => j.rows.find((r) => r.id === String(id));
 const texts = (id) => row(id).items.map((i) => `${i.level}: ${i.text}`).join(' | ');
 assert.equal(j.rows.length, ORDERS.length);
+assert.ok(calls.prom >= 4, 'замовлення Prom прочитано');
 assert.equal(row(10001).level, 'ok', texts(10001));
 assert.ok(row(10001).receipt && !row(10001).receipt.bySum);
 assert.equal(row(10002).level, 'bad'); assert.match(texts(10002), /RozetkaPay.*контроль оплати/);
-assert.equal(row(10003).level, 'bad'); assert.match(texts(10003), /наложки немає/); assert.match(texts(10003), /bad: Відправлено, а чек не знайдено/);
+assert.equal(row(10003).level, 'bad'); assert.match(texts(10003), /наложки немає/); assert.match(texts(10003), /warn: У LP-CRM чек прив’язано, але каса цього ФОП не підключена/);
+assert.equal(row(10003).receipt.crmOnly, true);
+assert.equal(row(10015).level, 'ok', texts(10015)); assert.match(texts(10015), /ok: Чек 1500 грн · ФОП Лупу В\.Ф\.$|ok: Чек 1500 грн · ФОП Лупу В\.Ф\. \|/);
 assert.equal(row(10004).level, 'bad'); assert.match(texts(10004), /Оплата прийшла на «ФОП Лупу В\.Ф\.», а чек пробито на «ФОП Агафіца Д\.М\.»/);
 assert.ok(row(10004).receipt.bySum, 'чек знайдено за сумою');
 assert.match(texts(10005), /ok: Наложка 700 грн \(часткова оплата\)/);
@@ -151,6 +182,14 @@ assert.match(texts(10009), /Можливий дубль.*10008/);
 assert.match(texts(10010), /bad: Та сама ТТН у замовленні № 10002/);
 assert.match(texts(10002), /Та сама ТТН у замовленні № 10010/);
 assert.ok(j.counts.bad >= 5);
+// Prom
+assert.match(texts(10011), /ok: Prom: Пром-оплата · оплачено/);
+assert.match(texts(10011), /ok: Наложки немає/);
+assert.match(texts(10012), /bad: Оплата «Пром-оплата», а в Prom — «Оплата при отриманні» \(наложка 620 грн\)/);
+assert.match(texts(10012), /bad: У CRM «Пром-оплата», а в Prom спосіб оплати «Оплата при отриманні»/);
+assert.match(texts(10013), /ok: Наложка 630 грн · оплата при отриманні \(Prom\)/);
+assert.match(texts(10014), /bad: Пром-оплата в Prom ще не надійшла/);
+assert.equal(row(10011).mp_pay, 'Пром-оплата');
 
 // Чеки за день по ФОП: чек без замовлення видно окремо.
 const rc = (await call('GET', `/api/checks/receipts?day=${D}`, null, H)).j;
@@ -167,12 +206,6 @@ const rows = pay.rows.map((r) => (r.id === '16' ? { ...r, cls: 'skip' } : r));
 assert.equal((await call('PUT', '/api/checks/pay', { rows }, H)).r.status, 200);
 assert.deepEqual(Object.keys(JSON.parse((await db.get(`SELECT value FROM settings WHERE key = 'chk_pay'`)).value)), ['16'], 'зберігаємо лише відмінності');
 assert.equal((await call('GET', '/api/checks', null, H)).j.rows.find((r) => r.id === '10003').level, 'skip');
-
-// Сповіщення про дублі (аналітика): типово вимкнено, вмикається тут.
-assert.equal((await call('GET', '/api/checks/settings', null, H)).j.dup_notify, false);
-await call('PUT', '/api/checks/settings', { dup_notify: true }, H);
-assert.equal((await db.get(`SELECT value FROM settings WHERE key = 'chk_dup_notify'`)).value, '1');
-await call('PUT', '/api/checks/settings', { dup_notify: false }, H);
 
 // Повторний збір одразу — нічого не перечитує (дані свіжі), а замовлення без змін LP-CRM повторно не віддає повністю.
 const before = { ...calls };

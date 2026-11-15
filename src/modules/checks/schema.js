@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'checks',
-  version: 1,
+  version: 3,
   tables: [
   // Замовлення LP-CRM у статусах «відправлено / очікує викупу / завершено» за останні CHECK_DAYS днів.
   // listed_at — коли востаннє бачили в цих статусах (зникло зі списку — більше не показуємо);
@@ -58,5 +58,15 @@ export const schema = {
     PRIMARY KEY (fop_id, day)
   )`,
   ],
-  columns: [],
+  columns: [
+    // Замовлення Prom з тією самою ТТН (знайдено серед замовлень маркетплейсів): спосіб оплати в Prom —
+    // mp_pay: prosale_paid | prosale_unpaid | cod | other; mp_pay_name — як у кабінеті Prom; mp_at — коли перевірено.
+    ['chk_orders', 'mp_pay', "TEXT DEFAULT ''"],
+    ['chk_orders', 'mp_pay_name', "TEXT DEFAULT ''"],
+    ['chk_orders', 'mp_at', "TEXT DEFAULT ''"],
+    // Чек, прив'язаний до замовлення в LP-CRM (номер чека Checkbox, UUID); ref_state: '' — ще не шукали,
+    // ok — чек є серед завантажених, nofop — жодна каса, підключена в сервісі, цього чека не бачить.
+    ['chk_orders', 'receipt_ref', "TEXT DEFAULT ''"],
+    ['chk_orders', 'ref_state', "TEXT DEFAULT ''"],
+  ],
 };
