@@ -17634,12 +17634,15 @@ function evaluate(o, ctx) {
   const add = (level2, text) => items.push({ level: level2, text });
   const rule = ctx.rules[String(o.payment)] || null;
   const fopName = (id) => ctx.fops[String(id)] || `\u0424\u041E\u041F ${id}`;
-  if (!rule) add("warn", o.payment ? `\u0412\u0438\u0434 \u043E\u043F\u043B\u0430\u0442\u0438 ${o.payment} \u043D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u043A\u043B\u0430\u0441 \u0443 \xAB\u0412\u0438\u0434\u0438 \u043E\u043F\u043B\u0430\u0442\xBB.` : "\u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E \u0432\u0438\u0434 \u043E\u043F\u043B\u0430\u0442\u0438.");
+  const noPay = !o.payment || o.payment === "0";
+  if (!rule) add("warn", noPay ? "\u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E \u0432\u0438\u0434 \u043E\u043F\u043B\u0430\u0442\u0438." : `\u0412\u0438\u0434 \u043E\u043F\u043B\u0430\u0442\u0438 ${o.payment} \u043D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C, \u0449\u043E \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u044F\u0442\u0438, \u0443 \xAB\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430 \u2192 \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\xBB.`);
   const cls = rule?.cls || "";
   if (cls === "skip") return { level: "skip", items: [{ level: "skip", text: `\xAB${rule.name}\xBB \u2014 \u043D\u0435 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u044F\u0454\u043C\u043E` }] };
   const part = cls === "cod" ? o.prepayment > 0 ? { sum: o.prepayment } : partialOf(o.comment) : null;
   const expCod = part ? part.sum ? o.total - part.sum : null : o.total;
+  const retail = /riteil|рітейл|ритейл|retail/i.test(o.channel || "");
   if (!o.ttn) add("warn", "\u041D\u0435\u043C\u0430\u0454 \u0422\u0422\u041D \u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.");
+  else if (retail) add("info", "\u0420\u0456\u0442\u0435\u0439\u043B \u0420\u043E\u0437\u0435\u0442\u043A\u0438: \u043D\u0430\u043B\u043E\u0436\u043A\u0443 \u0432 \u0422\u0422\u041D \u0441\u0442\u0430\u0432\u0438\u0442\u044C \u0420\u043E\u0437\u0435\u0442\u043A\u0430 (\u0437\u0430 \u0441\u0432\u043E\u0454\u044E \u0446\u0456\u043D\u043E\u044E) \u2014 \u043D\u0435 \u0437\u0432\u0456\u0440\u044F\u0454\u043C\u043E.");
   else if (o.carrier === "np" || o.carrier === "rd" || o.carrier === "prm" && o.ttn_at) {
     if (!o.ttn_at) add("wait", "\u0422\u0422\u041D \u0449\u0435 \u043D\u0435 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043D\u043E \u2014 \u0434\u0430\u043D\u0456 \u0437\u2019\u044F\u0432\u043B\u044F\u0442\u044C\u0441\u044F \u043F\u0456\u0441\u043B\u044F \u043D\u0430\u0441\u0442\u0443\u043F\u043D\u043E\u0433\u043E \u043E\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
     else if (o.ttn_err) add("warn", `\u0422\u0422\u041D: ${o.ttn_err}`);
@@ -17931,14 +17934,18 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     await db.batch(ups);
     return { more };
   }
-  async function syncReceipts(budget) {
-    const fops = (await db.all(`SELECT * FROM fops WHERE active = 1 ORDER BY id`)).filter(hasCheckbox);
+  const cbFails = (s) => Object.fromEntries(Object.entries(fromS(s, "chk_cb_fail")).filter(([, v]) => Date.now() - Date.parse(v.at) < 6 * 36e5));
+  async function syncReceipts(budget, s) {
+    const fails0 = cbFails(s);
+    const fops = (await db.all(`SELECT * FROM fops WHERE active = 1 ORDER BY id`)).filter((f) => hasCheckbox(f) && !fails0[f.id]);
     if (!fops.length) return { skipped: "\u043D\u0435\u043C\u0430\u0454 \u0424\u041E\u041F \u0437 \u0434\u043E\u0441\u0442\u0443\u043F\u043E\u043C \u0434\u043E Checkbox" };
     const today3 = kyivDay();
     const from = addDays7(today3, -CHECK_DAYS);
     const days2 = await db.all(`SELECT fop_id, day, done, at FROM chk_days WHERE day >= ?`, [from]);
     const have = new Map(days2.map((d) => [`${d.fop_id}|${d.day}`, d]));
     const errors = {};
+    const fails = cbFails(s);
+    budget.cbFail = fails;
     const stmts = [];
     const flush = async () => {
       for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
@@ -17956,6 +17963,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         try {
           for (; ; ) {
             if (budget.cb >= CB_MAX) {
+              stmts.push([`INSERT INTO settings (key, value) VALUES ('chk_cb_fail', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(fails)]]);
               await flush();
               return { more: true, errors };
             }
@@ -17971,6 +17979,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
             throw e;
           }
           errors[f.short_name] = e.message;
+          if (e.status === 401 || e.status === 403) fails[f.id] = { at: nowIso(), msg: e.message.replace(/^Checkbox \d+: /, "") };
           break;
         }
         rows = rows.filter((r) => kyivDayOf3(r.at) === d);
@@ -17985,6 +17994,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         ]);
       }
     }
+    stmts.push([`INSERT INTO settings (key, value) VALUES ('chk_cb_fail', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(fails)]]);
     await flush();
     return { errors };
   }
@@ -18000,7 +18010,8 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       await db.batch([mark]);
       return {};
     }
-    const fops = (await db.all(`SELECT * FROM fops WHERE active = 1 ORDER BY id`)).filter(hasCheckbox);
+    const failed = { ...cbFails(s), ...budget.cbFail || {} };
+    const fops = (await db.all(`SELECT * FROM fops WHERE active = 1 ORDER BY id`)).filter((f) => hasCheckbox(f) && !failed[f.id]);
     const tried = fromS(s, "chk_ref_tried");
     const ups = [mark];
     let more = false;
@@ -18077,7 +18088,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         if (e.pending) throw e;
         return { error: e.message };
       });
-      res.cb = await syncReceipts(budget).catch((e) => {
+      res.cb = await syncReceipts(budget, s).catch((e) => {
         if (e.pending) throw e;
         return { error: e.message };
       });
@@ -18113,6 +18124,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const recFrom = from;
     const recTo = addDays7(to, 20);
     const listed = (await getJson2("chk_state", {})).listed || "";
+    const cbFailRaw = (await db.get(`SELECT value FROM settings WHERE key = 'chk_cb_fail'`))?.value || "{}";
     const [rs, orders, receipts, fopsAll, offices, channels, accounts, txs, stNames] = await Promise.all([
       rules(),
       db.all(`SELECT * FROM chk_orders WHERE listed_at != '' AND listed_at >= ? AND day BETWEEN ? AND ? ORDER BY day DESC, code DESC`, [listed, from, to]),
@@ -18126,8 +18138,10 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       getJson2("chk_statuses", {})
     ]);
     const fops = Object.fromEntries(fopsAll.map((f) => [String(f.id), f.short_name]));
-    const cbFops = new Set(fopsAll.filter(hasCheckbox).map((f) => String(f.id)));
-    const allCb = fopsAll.filter((f) => f.active).every(hasCheckbox);
+    const failed = cbFails(Object.fromEntries([["chk_cb_fail", cbFailRaw]]));
+    const okCb = (f) => hasCheckbox(f) && !failed[f.id];
+    const cbFops = new Set(fopsAll.filter(okCb).map((f) => String(f.id)));
+    const allCb = fopsAll.filter((f) => f.active).every(okCb);
     const fopByIpn = new Map(fopsAll.filter((f) => f.ipn).map((f) => [String(f.ipn).trim(), f.id]));
     const fopByIban = new Map(fopsAll.filter((f) => f.iban).map((f) => [String(f.iban).replace(/\s/g, "").toUpperCase(), f.id]));
     const accByIban = new Map(accounts.map((a) => [String(a.iban).toUpperCase(), a]));
@@ -18202,7 +18216,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         items: ev.items
       };
     });
-    return { rows, recs, matched, orders, fops };
+    return { rows, recs, matched, orders, fops, failed: Object.entries(failed).map(([id, v]) => `${fops[id] || id} \u2014 ${v.msg}`) };
   }
   const period = (c) => {
     const today3 = kyivDay();
@@ -18216,14 +18230,14 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
   app.get("/api/checks", async (c) => {
     need(c, "users");
     const { from, to } = period(c);
-    const { rows } = await build(from, to);
+    const { rows, failed } = await build(from, to);
     const counts = rows.reduce((a, r) => {
       a[r.level] = (a[r.level] || 0) + 1;
       return a;
     }, {});
     const noCb = (await db.all(`SELECT short_name, checkbox_login, checkbox_password, checkbox_license, checkbox_pin FROM fops WHERE active = 1`)).filter((f) => !hasCheckbox(f)).map((f) => f.short_name);
     const state = await getJson2("chk_state", {});
-    return c.json({ from, to, rows, counts, no_checkbox: noCb, state: { at: state.at || "", finished: state.finished || "", more: Boolean(state.more), errors: state.errors || [] } });
+    return c.json({ from, to, rows, counts, no_checkbox: noCb, cb_failed: failed, state: { at: state.at || "", finished: state.finished || "", more: Boolean(state.more), errors: state.errors || [] } });
   });
   app.get("/api/checks/receipts", async (c) => {
     need(c, "users");
