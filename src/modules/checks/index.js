@@ -324,6 +324,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     if (!lock.changes) return { busy: true };
     // Нові поля замовлення (версія даних) — один раз перечитати повні дані всіх замовлень.
     if (state.data_v !== 4) { await db.run(`UPDATE chk_orders SET fetched_status = 0`); state.data_v = 4; }
+    if (state.prom_v !== 2) { await db.run(`UPDATE chk_orders SET mp_at = '' WHERE mp_pay = 'other'`); state.prom_v = 2; }
     const budget = { lp: 0, np: 0, rd: 0, prom: 0, cb: 0 };
     const res = {};
     try {

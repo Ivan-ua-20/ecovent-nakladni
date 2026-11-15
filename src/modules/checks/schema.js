@@ -60,7 +60,7 @@ export const schema = {
   ],
   columns: [
     // Замовлення Prom з тією самою ТТН (знайдено серед замовлень маркетплейсів): спосіб оплати в Prom —
-    // mp_pay: prosale_paid | prosale_unpaid | cod | other; mp_pay_name — як у кабінеті Prom; mp_at — коли перевірено.
+    // mp_pay: prosale_paid | prosale_unpaid | credit (частинами через Prom) | cod | other; mp_pay_name — як у кабінеті Prom; mp_at — коли перевірено.
     ['chk_orders', 'mp_pay', "TEXT DEFAULT ''"],
     ['chk_orders', 'mp_pay_name', "TEXT DEFAULT ''"],
     ['chk_orders', 'mp_at', "TEXT DEFAULT ''"],

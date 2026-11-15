@@ -199,10 +199,10 @@ export function evaluate(o, ctx) {
     const isProsale = /пром[\s-]*оплат/i.test(rule?.name || '');
     const pn = o.mp_pay_name || '';
     if (isProsale && o.mp_pay === 'prosale_unpaid') add('bad', 'Пром-оплата в Prom ще не надійшла (не оплачено).');
-    else if (isProsale && !o.mp_pay.startsWith('prosale')) add('bad', `У CRM «${rule.name}», а в Prom спосіб оплати «${pn}».`);
-    else if (cls === 'cod' && o.mp_pay === 'prosale_paid') add('bad', `У Prom уже оплачено Пром-оплатою, а в CRM «${rule.name}».`);
+    else if (isProsale && !o.mp_pay.startsWith('prosale') && o.mp_pay !== 'credit') add('bad', `У CRM «${rule.name}», а в Prom спосіб оплати «${pn}».`);
+    else if (cls === 'cod' && (o.mp_pay === 'prosale_paid' || o.mp_pay === 'credit')) add('bad', `У Prom оплачено через Prom («${pn}»), а в CRM «${rule.name}».`);
     else if ((cls === 'prepay' || cls === 'bank') && o.mp_pay === 'cod' && o.carrier !== 'prm') add('bad', `У CRM «${rule.name}», а в Prom — «${pn}» (оплата при отриманні).`);
-    else add('ok', `Prom: ${pn}${o.mp_pay === 'prosale_paid' ? ' · оплачено' : o.mp_pay === 'prosale_unpaid' ? ' · не оплачено' : ''}`);
+    else add('ok', `Prom: ${pn}${o.mp_pay === 'prosale_paid' ? ' · оплачено' : o.mp_pay === 'prosale_unpaid' ? ' · не оплачено' : o.mp_pay === 'credit' ? ' · через Prom' : ''}`);
   }
 
   // 2) Чек
