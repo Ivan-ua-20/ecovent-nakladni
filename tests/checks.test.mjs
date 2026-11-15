@@ -46,7 +46,7 @@ const O = (id, payment, total, ttn, extra = {}) => ({ id: String(id), order_id: 
 const ORDERS = [
   O(10001, 16, 1000, '20450000000001', { status: '18' }), // післяплата NovaPay, наложка 1000, чек з № замовлення — усе гаразд
   O(10002, 14, 500, '20450000000002', { office: '12' }), // RozetkaPay, а в ТТН контроль оплати
-  O(10003, 16, 800, '20450000000003'), // післяплата, а наложки немає; чек ще не має бути (не завершено)
+  O(10003, 16, 800, '20450000000003'), // післяплата, а наложки немає і чека немає (чек видають під час відправки)
   O(10004, 2, 700, '20450000000004', { bayer_name: 'Коваль Ольга' }), // на рахунок: гроші на ФОП 2, а чек ФОП 1 (за сумою)
   O(10005, 4, 1000, '20450000000005', { comment: 'Передоплата 300 грн на картку' }), // часткова: наложка 700
   O(10006, 15, 1200, 'RMP-100000006', { office: '12' }), // післяплата Розетки, а в ROZETKA Delivery наложки немає
@@ -137,10 +137,11 @@ assert.equal(j.rows.length, ORDERS.length);
 assert.equal(row(10001).level, 'ok', texts(10001));
 assert.ok(row(10001).receipt && !row(10001).receipt.bySum);
 assert.equal(row(10002).level, 'bad'); assert.match(texts(10002), /RozetkaPay.*контроль оплати 500/);
-assert.equal(row(10003).level, 'bad'); assert.match(texts(10003), /наложки немає/); assert.match(texts(10003), /wait: Чек — після отримання/);
+assert.equal(row(10003).level, 'bad'); assert.match(texts(10003), /наложки немає/); assert.match(texts(10003), /bad: Відправлено, а чек не знайдено/);
 assert.equal(row(10004).level, 'bad'); assert.match(texts(10004), /Оплата прийшла на «ФОП Лупу В\.Ф\.», а чек пробито на «ФОП Агафіца Д\.М\.»/);
 assert.ok(row(10004).receipt.bySum, 'чек знайдено за сумою');
 assert.match(texts(10005), /ok: Наложка 700 грн \(часткова оплата\)/);
+assert.match(texts(10005), /bad: Відправлено, а чек не знайдено/);
 assert.equal(row(10006).level, 'bad'); assert.match(texts(10006), /Післяплата Rozetka.*наложки немає/);
 assert.match(texts(10007), /bad: У чеку спосіб оплати «Готівка», а для «Оплата на картку» має бути «Картка»/);
 assert.match(texts(10007), /warn: Чек пробито на «ФОП Агафіца Д\.М\.», а за відділом/);

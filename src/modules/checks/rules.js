@@ -183,12 +183,9 @@ export function evaluate(o, ctx) {
 
   // 2) Чек
   const r = ctx.receipt;
-  if (!r) {
-    const done = /заверш|викон/i.test(o.status_name || '');
-    if (cls === 'cod' && !done) add('wait', 'Чек — після отримання посилки.');
-    else if (o.day < ctx.today) add('bad', 'Чек не знайдено в жодному Checkbox.');
-    else add('wait', 'Чек ще не знайдено (замовлення сьогоднішнє).');
-  } else {
+  // Чек видають під час відправки (і для післяплати теж): відправлене замовлення без чека — помилка.
+  if (!r) add('bad', 'Відправлено, а чек не знайдено в жодному Checkbox.');
+  else {
     const how = r.bySum ? ' (знайдено за сумою)' : '';
     if (!part && !near(r.total, o.total)) add('bad', `Чек на ${fmt(r.total)}, а замовлення на ${fmt(o.total)}${how}.`);
     else add('ok', `Чек ${fmt(r.total)} · ${fopName(r.fop_id)}${how}`);
