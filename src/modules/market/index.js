@@ -4,7 +4,7 @@
 // синхронізації — по кілька сторінок за раз; незавершений прохід продовжується з наступної сторінки.
 import { fail, need, nowIso } from '../../core/common.js';
 import { shopAllowed, accessOf } from '../../core/auth.js';
-import { rzOrdersSearch, rzItemComments, rzSuccessStatuses, rzOrderChat, rzSendMessage, rzMessageCounts, rzUnreadChats } from '../../integrations/rozetka.js';
+import { rzOrdersSearch, rzItemComments, rzSuccessStatuses, rzOrderChat, rzSendMessage, rzMessageCounts, rzUnreadChats, rzSetOrderStatus } from '../../integrations/rozetka.js';
 import { promOrders } from '../../integrations/prom.js';
 import { epcOrdersPage } from '../../integrations/epicentr.js';
 
@@ -732,6 +732,36 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     if (!chat?.id || !chat.userId) throw fail(400, 'Розетка не дала чат цього замовлення — напишіть покупцю у Viber або Telegram.');
     await rzCall(acc, (t) => rzSendMessage(fetchFn, t, { chatId: chat.id, receiverId: chat.userId, body: text }));
     return c.json(await markAsked(o, c.get('user'), 'chat'));
+  });
+
+  // Групова зміна статусу в Розетці: з «Нових» — в «Обробляється менеджером». До 10 замовлень за запит
+  // (браузер шле частинами: ліміт зовнішніх запитів Cloudflare). Успішно змінені — одразу оновлюються в базі.
+  const BULK_TO = { 26: { name: 'Обробляється менеджером', from: RZ_NEW } };
+  app.post('/api/mp/rz/status', async (c) => {
+    need(c, 'market.edit');
+    const b = await c.req.json().catch(() => ({}));
+    const to = BULK_TO[Number(b.status)];
+    if (!to) throw fail(400, 'Цей статус не можна ставити групою.');
+    const list = Array.isArray(b.orders) ? b.orders.slice(0, 10) : [];
+    if (!list.length) throw fail(400, 'Оберіть замовлення.');
+    const done = [];
+    const failed = [];
+    for (const x of list) {
+      const key = `${Number(x.account) || 0}:${String(x.id || '')}`;
+      try {
+        const o = await rzOrderOf(x, c);
+        if (!to.from.includes(String(o.status))) { failed.push({ key, error: `уже «${o.status_name || o.status}»` }); continue; }
+        const acc = await accOf('rozetka', o.account_id);
+        await rzCall(acc, (t) => rzSetOrderStatus(fetchFn, t, o.id, b.status));
+        await db.run(`UPDATE mp_orders SET status = ?, status_name = ?, status_group = 1, changed_at = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ?`,
+          [String(b.status), to.name, kyivDT(new Date()), o.account_id, o.id]);
+        done.push(key);
+      } catch (e) {
+        if (e.pending) { failed.push({ key, error: 'не встигли — спробуйте ще раз', retry: true }); break; }
+        failed.push({ key, error: String(e.message || e).slice(0, 200) });
+      }
+    }
+    return c.json({ done, failed });
   });
 
   // Оновити магазин зараз (кнопка на сторінці).

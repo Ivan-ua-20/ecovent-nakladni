@@ -935,3 +935,8 @@ table.list tr.on td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
   .mp-nav-top, .mp-sec { display: none; }
   .mp-item { width: auto; }
 }
+
+.mp-bulk { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: #f8faf9; }
+.mp-bulk.on { background: var(--accent-soft); border-color: #b9dccf; }
+.mp-pick { display: inline-flex; margin-right: 8px; vertical-align: middle; }
+.mp-pick input { width: 16px; height: 16px; }
