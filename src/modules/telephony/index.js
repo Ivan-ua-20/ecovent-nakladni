@@ -121,6 +121,18 @@ export function mountTelephony(app, { db, fetchFn, onCron = () => {}, onCleanup 
     return c.json({ ...r, ...(await state()) });
   });
 
+  // Дзвінки з номерами (замовника й отримувача) — для картки замовлення; останні 50.
+  app.get('/api/tel/calls', async (c) => {
+    need(c, 'market.view');
+    const cur = await creds();
+    if (!cur.key || !cur.secret) return c.json({ configured: false, calls: [] });
+    const phones = [...new Set(String(c.req.query('phones') || '').split(',').map(phone9).filter(Boolean))].slice(0, 4);
+    const calls = phones.length ? await db.all(
+      `SELECT at, dir, disp, billsec, who FROM tel_calls WHERE phone9 IN (SELECT value FROM json_each(?)) ORDER BY at DESC LIMIT 50`, [JSON.stringify(phones)],
+    ) : [];
+    return c.json({ configured: true, calls });
+  });
+
   // Позначки дзвінків для замовлень: list — [{ key, phones: [...], at: 'YYYY-MM-DD HH:MM:SS' (створення) }].
   // Повертає null, якщо Binotel не налаштовано; інакше Map key → { before, after }, де кожне —
   // { n, answered, last: { at, dir, disp, billsec, who } | null }.

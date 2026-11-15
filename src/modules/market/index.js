@@ -38,6 +38,34 @@ export const MARKETS = [
   { key: 'prom', title: 'Prom' },
   { key: 'epc', title: 'Епіцентр' },
 ];
+// Розетка: групи замовлень як у кабінеті продавця. Статус — код Розетки; status_group (з Розетки): 1 — у роботі, 2 — успішні, 3 — неуспішні.
+// Неуспішні ділимо на «Неуспішні» (після відправки: не забрав, відмова, повернення) і «Скасовані» (до відправки).
+// Для старих рядків без status_group (0) — за кодами.
+const RZ_NEW = ['1'];
+const RZ_DELIVERY = ['3', '4', '5', '82'];
+const RZ_FAILED = ['11', '12', '19', '20', '38', '85', '88'];
+const RZ_CANCEL = ['17', '18', '28', '29', '31', '33', '35', '37', '39', '40', '41', '42', '44', '45', '49', '50'];
+const RZ_CANCEL_CLIENT = ['45']; // «Скасовано покупцем» — сам у кабінеті Розетки
+const RZ_CANCEL_AUTO = ['49', '50']; // Розетка сама: повторне замовлення (дубль), не оплатив вчасно
+export const RZ_GROUPS = ['new', 'work', 'call', 'delivery', 'success', 'failed', 'cancelled'];
+const inList = (a) => a.map((x) => `'${x}'`).join(', ');
+const groupSql = (successSql) => `(CASE WHEN ${successSql} THEN 'success' WHEN status IN (${inList(RZ_FAILED)}) THEN 'failed'
+  WHEN status_group = 3 OR (status_group = 0 AND status IN (${inList(RZ_CANCEL)})) THEN 'cancelled'
+  WHEN status IN (${inList(RZ_NEW)}) THEN 'new' WHEN status IN (${inList(RZ_DELIVERY)}) THEN 'delivery' ELSE 'work' END)`;
+export const rzGroupOf = (status, group, okSet = new Set()) => {
+  const st = String(status);
+  if (Number(group) === 2 || (!Number(group) && okSet.has(st))) return 'success';
+  if (RZ_FAILED.includes(st)) return 'failed';
+  if (Number(group) === 3 || (!Number(group) && RZ_CANCEL.includes(st))) return 'cancelled';
+  if (RZ_NEW.includes(st)) return 'new';
+  if (RZ_DELIVERY.includes(st)) return 'delivery';
+  return 'work';
+};
+export const rzCancelBy = (status) => (RZ_CANCEL_CLIENT.includes(String(status)) ? 'client' : RZ_CANCEL_AUTO.includes(String(status)) ? 'auto' : 'manager');
+// «Потрібно зателефонувати»: повторний дзвінок; не оплачено понад добу; 4+ дні в пункті видачі; нове понад 30 хв.
+const CALL_SQL = `(status = '47' OR (status = '55' AND changed_at <= ?) OR (status = '5' AND changed_at <= ?) OR (status IN (${inList(RZ_NEW)}) AND created_at <= ?))`;
+const callParams = (nowMs = Date.now()) => [kyivDTms(nowMs - 86400e3), kyivDTms(nowMs - 4 * 86400e3), kyivDTms(nowMs - 30 * 60e3)];
+
 const EPC_STATUS = {
   new: 'Новий', confirmed_by_merchant: 'Підтверджено продавцем', confirmed: 'Підтверджений', sent: 'Відправлено', delivered: 'Готовий до видачі',
   completed: 'Завершено', closed: 'Закрито', canceled: 'Скасовано', returned: 'Повернено', return_requested: 'Запит на повернення',
@@ -54,6 +82,7 @@ const kyivDT = (v) => {
   if (Number.isNaN(d.getTime())) return String(v || '').slice(0, 19).replace('T', ' ');
   return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(d);
 };
+const kyivDTms = (ms) => kyivDT(new Date(ms));
 const money = (v) => {
   if (typeof v === 'number') return v;
   const n = Number(String(v ?? '').replace(/[^\d,.-]/g, '').replace(',', '.'));
@@ -587,6 +616,14 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     if (rv === 'has') where.push('review_n > 0');
     const status = c.req.query('status') || '';
     if (status) { where.push('status = ?'); params.push(status); }
+    // групи Розетки (Нові, В обробці, Потрібно зателефонувати…) і хто скасував
+    const grp = rz && RZ_GROUPS.includes(c.req.query('grp')) ? c.req.query('grp') : '';
+    if (grp === 'call') { where.push(CALL_SQL); params.push(...callParams()); }
+    else if (grp) { where.push(`${groupSql(SUCCESS_SQL)} = ?`); params.push(okIds, grp); }
+    const cancel = grp === 'cancelled' ? String(c.req.query('cancel') || '') : '';
+    if (cancel === 'client') where.push(`status IN (${inList(RZ_CANCEL_CLIENT)})`);
+    if (cancel === 'auto') where.push(`status IN (${inList(RZ_CANCEL_AUTO)})`);
+    if (cancel === 'manager') where.push(`status NOT IN (${inList([...RZ_CANCEL_CLIENT, ...RZ_CANCEL_AUTO])})`);
     const q = String(c.req.query('q') || '').trim();
     if (q) {
       const digits = q.replace(/\D/g, '');
@@ -595,16 +632,32 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
       params.push(`%${q.toLowerCase()}%`, `%${q}%`, `%${q}%`, `%${q}%`, ...(digits.length >= 5 ? [`%${digits.slice(-9)}%`, `%${digits.slice(-9)}%`] : []));
     }
     const offset = Math.max(0, Number(c.req.query('offset')) || 0);
-    const [rows, statuses, total, rvStats, rvBy] = await Promise.all([
+    let callN = 0;
+    const [rows, statusRows, total, rvStats, rvBy] = await Promise.all([
       db.all(`SELECT *, ${rz ? SUCCESS_SQL : '0'} AS ok FROM mp_orders WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT 301 OFFSET ?`, [...(rz ? [okIds] : []), ...params, offset]),
-      db.all(`SELECT status, MAX(status_name) AS status_name, COUNT(*) AS n FROM mp_orders WHERE ${base.join(' AND ')} GROUP BY status ORDER BY n DESC`, baseParams),
+      db.all(`SELECT status, status_group, MAX(status_name) AS status_name, COUNT(*) AS n FROM mp_orders WHERE ${base.join(' AND ')} GROUP BY status, status_group ORDER BY n DESC`, baseParams),
       db.get(`SELECT COUNT(*) AS n, SUM(total) AS sum FROM mp_orders WHERE ${where.join(' AND ')}`, params),
       // відгуки за період і магазин (без фільтрів статусу й пошуку): виконані, з відгуком, кому вже можна нагадати, кому нагадали
       rz ? db.get(`SELECT SUM(ok) AS done, SUM(ok AND review_n > 0) AS reviewed, SUM(ok AND review_n = 0 AND asked_at = '' AND changed_at <= ?) AS toask,
           SUM(asked_at != '') AS asked, SUM(asked_at != '' AND review_n > 0) AS asked_reviewed
         FROM (SELECT ${SUCCESS_SQL} AS ok, review_n, asked_at, changed_at FROM mp_orders WHERE ${base.join(' AND ')})`, [border, okIds, ...baseParams]) : null,
       rz ? db.all(`SELECT asked_by AS who, COUNT(*) AS n, SUM(review_n > 0) AS reviewed FROM mp_orders WHERE ${base.join(' AND ')} AND asked_at != '' GROUP BY asked_by ORDER BY n DESC`, baseParams) : [],
-    ]);
+      rz ? db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE ${base.join(' AND ')} AND ${CALL_SQL}`, [...baseParams, ...callParams()]) : null,
+    ]).then((x) => { callN = x[5]?.n || 0; return x; });
+    // статуси (для фільтра) — по коду; групи й «хто скасував» — з кодів і status_group
+    const okSet = new Set(JSON.parse(okIds));
+    const groups = Object.fromEntries(RZ_GROUPS.map((g) => [g, 0]));
+    const cancels = { client: 0, manager: 0, auto: 0 };
+    const stMap = new Map();
+    for (const x of statusRows) {
+      const g = rzGroupOf(x.status, x.status_group, okSet);
+      if (rz) { groups[g] += x.n; if (g === 'cancelled') cancels[rzCancelBy(x.status)] += x.n; }
+      const cur = stMap.get(x.status);
+      if (!cur) stMap.set(x.status, { status: x.status, status_name: x.status_name, n: x.n, grp: rz ? g : '', top: x.n });
+      else { cur.n += x.n; if (x.n > cur.top && rz) { cur.grp = g; cur.top = x.n; } }
+    }
+    const statuses = [...stMap.values()].sort((a, b) => b.n - a.n).map(({ top: _t, ...x }) => x);
+    if (rz) groups.call = callN;
     // відгуки замовлень на екрані — щоб показати, на які саме товари і хто вже залишив
     const shown = rows.slice(0, 300);
     const revs = rz && shown.some((r) => r.review_n > 0) ? await db.all(
@@ -622,6 +675,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
       more: rows.length > 300,
       total: { n: total?.n || 0, sum: Math.round((total?.sum || 0) * 100) / 100 },
       statuses,
+      ...(rz ? { groups, cancels } : {}),
       ...(rz ? { reviews: { days: rvs.days, stats: Object.fromEntries(Object.entries(rvStats || {}).map(([k, v]) => [k, v || 0])), by: rvBy } } : {}),
     });
   });

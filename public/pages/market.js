@@ -43,13 +43,18 @@ async function copyText(text) {
 }
 
 export function createMarketPages({ can }) {
-  const state = { status: '', q: '', from: '', to: '', rv: '' };
+  const state = { status: '', q: '', from: '', to: '', rv: '', grp: '', cancel: '', sel: '' };
+  // Бічна панель: згорнуті групи і вузький режим — пам'ятаємо в цьому браузері.
+  const pref = {
+    get(k, d) { try { return JSON.parse(localStorage.getItem(`mp.${k}`)) ?? d; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(`mp.${k}`, JSON.stringify(v)); } catch { /* приватний режим */ } },
+  };
   let lastMp = '';
   let pump = 0; // id «швидшого» завантаження історії (зупиняється, коли пішли зі сторінки)
 
   async function viewMarket(mp, account = '') {
     // за замовчуванням — останні 30 днів (історія Розетки — десятки тисяч замовлень, «Увесь час» — кнопкою)
-    if (mp !== lastMp) { Object.assign(state, { status: '', q: '', from: addDays(todayKyiv(), -30), to: '', rv: '' }); lastMp = mp; }
+    if (mp !== lastMp) { Object.assign(state, { status: '', q: '', from: addDays(todayKyiv(), -30), to: '', rv: '', grp: '', cancel: '', sel: '' }); lastMp = mp; }
     pump++;
     const rz = mp === 'rozetka';
     const [all, rvSet] = await Promise.all([api('GET', '/api/mp/shops'), rz ? api('GET', '/api/mp/review/settings') : null]);
@@ -94,17 +99,24 @@ export function createMarketPages({ can }) {
       ${(acc ? [acc] : shops).filter((s) => s.active && s.reviews).map((s) => (s.reviews.error ? `<div class="alert warn small" style="margin-bottom:6px">Відгуки «${esc(s.name)}»: ${esc(s.reviews.error)}</div>`
     : !s.reviews.full ? `<div class="small muted" style="margin-bottom:6px">⏳ Відгуки «${esc(s.name)}» завантажуються у фоні${s.reviews.n ? '' : ' — перші з\'являться за кілька хвилин'}.</div>` : '')).join('')}
       <div class="small muted" style="margin-bottom:10px">${acc ? syncInfo(acc) : `Нові й змінені замовлення оновлюються самі кожні кілька хвилин${mp === 'rozetka' ? '' : ' (зберігаються 45 днів)'}.`}</div>
+      <div class="mp-shell${pref.get('rail', false) ? ' rail' : ''}" id="mpShell">
+      <aside class="mp-nav" id="mpNav" aria-label="Розділи замовлень"></aside>
+      <section class="mp-main">
       <div class="btn-row" style="margin-bottom:10px;flex-wrap:wrap">
         <label class="sr-only" for="mpQ">Пошук</label><input id="mpQ" type="search" placeholder="№ замовлення, клієнт, телефон або ТТН" value="${esc(state.q)}" style="max-width:320px">
         <label class="small muted">з <input type="date" id="mpFrom" value="${esc(state.from)}"></label>
         <label class="small muted">по <input type="date" id="mpTo" value="${esc(state.to)}"></label>
         <button class="btn sm" data-per="30">30 днів</button>${mp === 'rozetka' ? '<button class="btn sm" data-per="365">Рік</button>' : ''}<button class="btn sm" data-per="">Увесь час</button>
       </div>
-      ${rz ? `<div class="btn-row" style="margin-bottom:6px;flex-wrap:wrap;align-items:center"><span class="small muted">Відгуки:</span><span id="mpRv" class="f-chips"></span>
-        ${can('api') ? '<button class="btn sm" id="mpRvSet">Текст нагадування</button>' : ''}</div><div id="mpRvStats" class="small muted" style="margin-bottom:10px"></div>` : ''}
+      ${rz ? `<div id="mpRvBox"><div class="btn-row" style="margin-bottom:6px;flex-wrap:wrap;align-items:center"><span class="small muted">Відгуки:</span><span id="mpRv" class="f-chips"></span>
+        ${can('api') ? '<button class="btn sm" id="mpRvSet">Текст нагадування</button>' : ''}</div><div id="mpRvStats" class="small muted" style="margin-bottom:10px"></div></div>` : ''}
+      <div id="mpGrpHead"></div>
       <div id="mpStatuses" class="f-chips" style="margin-bottom:10px"></div>
       <div id="mpTotal" class="small" style="margin-bottom:8px"></div>
-      <div id="mpList"><div class="card empty"><span class="spinner"></span> Завантажую…</div></div>`;
+      <div id="mpList"><div class="card empty"><span class="spinner"></span> Завантажую…</div></div>
+      </section>
+      <aside class="mp-detail" id="mpDetail" hidden aria-label="Замовлення"></aside>
+      </div>`;
 
     const name = new Map(shops.map((s) => [s.id, s.name]));
     const byKey = new Map(); // замовлення на екрані — для вікна нагадування
@@ -134,25 +146,33 @@ export function createMarketPages({ can }) {
       if (!can('market.edit')) return `${twoNote}${asked}`;
       return `${twoNote}${asked}<button class="btn sm ${o.asked_at ? '' : 'primary'}" data-rvask="${esc(o.account_id)}:${esc(o.id)}">${o.asked_at ? 'Ще раз' : 'Нагадати'}</button>`;
     };
-    const rowHtml = (o) => `<tr>
+    const keyOf = (o) => `${o.account_id}:${o.id}`;
+    const rowHtml = (o) => (byKey.set(keyOf(o), o), `<tr class="click${state.sel === keyOf(o) ? ' on' : ''}" data-ok="${esc(keyOf(o))}">
           <td><b>${esc(o.number)}</b><div class="small muted">${esc(dt(o.created_at))}</div></td>
-          ${acc ? '' : `<td class="small">${esc(name.get(o.account_id) || '')}</td>`}
+          ${acc ? '' : `<td class="small mp-opt">${esc(name.get(o.account_id) || '')}</td>`}
           <td>${esc(o.customer || '—')}<div class="small muted">${esc(o.phone || '')}</div>${o.recipient ? `<div class="small muted">отримувач: ${esc(o.recipient)}${o.recipient_phone ? ` · ${esc(o.recipient_phone)}` : ''}</div>` : ''}${callsHtml(o)}</td>
           <td class="small">${o.items.length ? `${esc(o.items[0].name)}${o.items[0].qty > 1 ? ` × ${o.items[0].qty}` : ''}${o.items.length > 1 ? ` <span class="muted">+${o.items.length - 1}</span>` : ''}` : '—'}</td>
           <td class="r"><b>${uah(o.total)}</b></td>
-          <td class="small">${esc(o.delivery || '—')}${o.ttn ? `<div class="muted">ТТН ${esc(o.ttn)}</div>` : ''}</td>
+          <td class="small mp-opt">${esc(o.delivery || '—')}${o.ttn ? `<div class="muted">ТТН ${esc(o.ttn)}</div>` : ''}</td>
           <td><span class="badge">${esc(o.status_name || o.status || '—')}</span></td>
           ${rz ? `<td class="small" data-rvcell="${esc(o.account_id)}:${esc(o.id)}">${rvCell(o)}</td>` : ''}
-        </tr>`;
+        </tr>`);
     let offset = 0;
     const load = async (more = false) => {
       offset = more ? offset + 300 : 0;
       const qs = new URLSearchParams({ mp, offset: String(offset), ...(acc ? { account: acc.id } : {}), ...(state.status ? { status: state.status } : {}),
-        ...(state.q ? { q: state.q } : {}), ...(state.from ? { from: state.from } : {}), ...(state.to ? { to: state.to } : {}), ...(state.rv ? { rv: state.rv } : {}) });
+        ...(state.q ? { q: state.q } : {}), ...(state.from ? { from: state.from } : {}), ...(state.to ? { to: state.to } : {}), ...(state.rv ? { rv: state.rv } : {}),
+        ...(state.grp ? { grp: state.grp } : {}), ...(state.cancel ? { cancel: state.cancel } : {}) });
       const d = await api('GET', `/api/mp/orders?${qs}`);
-      const sum = d.statuses.reduce((a, s) => a + s.n, 0);
-      $('#mpStatuses').innerHTML = `<button class="chip ${state.status ? '' : 'on'}" data-st="">Усі · ${sum}</button>${d.statuses.map((s) => `<button class="chip ${state.status === s.status ? 'on' : ''}" data-st="${esc(s.status)}">${esc(s.status_name || s.status || '—')} · ${s.n}</button>`).join('')}`;
-      $$('[data-st]').forEach((b) => (b.onclick = () => { state.status = b.dataset.st; load(); }));
+      renderNav(d);
+      // підстатуси: у групі Розетки — лише її статуси; Prom і Епіцентр — статуси в бічній панелі
+      const inGrp = rz ? d.statuses.filter((x) => !state.grp || state.grp === 'call' || x.grp === state.grp) : [];
+      const grpSum = inGrp.reduce((a, x) => a + x.n, 0);
+      $('#mpStatuses').innerHTML = rz && state.grp !== 'call' && inGrp.length > 1 ? `<button class="chip ${state.status ? '' : 'on'}" data-st="">Усі · ${grpSum}</button>${inGrp.map((x) => `<button class="chip ${state.status === x.status ? 'on' : ''}" data-st="${esc(x.status)}">${esc(x.status_name || x.status || '—')} · ${x.n}</button>`).join('')}` : '';
+      $$('#mpStatuses [data-st]').forEach((b) => (b.onclick = () => { state.status = b.dataset.st; load(); }));
+      $('#mpGrpHead').innerHTML = grpHead(d);
+      $$('#mpGrpHead [data-cancel]').forEach((b) => (b.onclick = () => { state.cancel = b.dataset.cancel; state.status = ''; load(); }));
+      if ($('#mpRvBox')) $('#mpRvBox').hidden = Boolean(state.grp && state.grp !== 'success');
       if (rz && d.reviews) {
         const s = d.reviews.stats;
         const pct = s.done ? Math.round((s.reviewed / s.done) * 100) : 0;
@@ -171,13 +191,117 @@ export function createMarketPages({ can }) {
         $('#mpMore')?.parentElement.remove();
         $('#mpList').insertAdjacentHTML('beforeend', moreBtn);
       } else {
-        $('#mpList').innerHTML = d.rows.length ? `<table class="list"><thead><tr><th>Замовлення</th>${acc ? '' : '<th>Магазин</th>'}<th>Клієнт</th><th>Товари</th><th class="r">Сума</th><th>Доставка</th><th>Статус</th>${rz ? '<th>Відгук</th>' : ''}</tr></thead><tbody>
+        $('#mpList').innerHTML = d.rows.length ? `<table class="list"><thead><tr><th>Замовлення</th>${acc ? '' : '<th class="mp-opt">Магазин</th>'}<th>Клієнт</th><th>Товари</th><th class="r">Сума</th><th class="mp-opt">Доставка</th><th>Статус</th>${rz ? '<th>Відгук</th>' : ''}</tr></thead><tbody>
           ${d.rows.map(rowHtml).join('')}</tbody></table>${moreBtn}`
           : `<div class="card empty">${state.q || state.status || state.from || state.to || state.rv ? 'Нічого не знайдено.' : 'Замовлень ще немає — вони з\'являться після першого оновлення (кілька хвилин).'}</div>`;
       }
       if ($('#mpMore')) $('#mpMore').onclick = () => load(true);
       if (!more) bindAsk();
+      bindRows();
+      if (state.sel && !more) { if (byKey.has(state.sel)) showDetail(byKey.get(state.sel)); else closeDetail(); }
     };
+
+    // ---------- бічна панель: групи замовлень Розетки (або статуси Prom і Епіцентру), згортання ----------
+    const GROUPS = [
+      ['', 'Усі замовлення'], ['new', 'Нові', 'red'], ['work', 'В обробці'], ['call', 'Потрібно зателефонувати', 'amber'], ['delivery', 'Доставляється'],
+      ['success', 'Успішні'], ['failed', 'Неуспішні'], ['cancelled', 'Скасовані'],
+    ];
+    const SHORT = { '': 'Усі', new: 'Нові', work: 'Обр.', call: 'Дзв.', delivery: 'Дост.', success: 'Усп.', failed: 'Неусп.', cancelled: 'Скас.', 'rv-ask': 'Відг.' };
+    const fmtN = (n) => Number(n || 0).toLocaleString('uk-UA');
+    function renderNav(d) {
+      const nav = $('#mpNav');
+      const closed = pref.get('closed', []);
+      const rail = $('#mpShell').classList.contains('rail');
+      const total = d.statuses.reduce((a, x) => a + x.n, 0);
+      const items = rz ? GROUPS.map(([k, t, kind]) => ({ k, t, kind, n: k ? d.groups?.[k] || 0 : total, on: state.grp === k && !(k === 'success' && state.rv === 'ask') }))
+        : [{ k: '', t: 'Усі', n: total, on: !state.status }, ...d.statuses.map((x) => ({ k: x.status, t: x.status_name || x.status || '—', n: x.n, on: state.status === x.status }))];
+      const sections = [{ id: 'orders', title: rz ? 'Замовлення' : 'Статуси', items }];
+      if (rz && d.reviews) sections.push({ id: 'talk', title: 'Спілкування', items: [{ k: 'rv-ask', t: 'Відгуки: можна нагадати', kind: 'amber', n: d.reviews.stats.toask || 0, on: state.grp === 'success' && state.rv === 'ask' }] });
+      const pill = (it) => (it.n && it.kind && !it.on ? `<span class="mp-pill ${it.kind}">${fmtN(it.n)}</span>` : `<span class="mp-n">${fmtN(it.n)}</span>`);
+      nav.innerHTML = `<div class="mp-nav-top">${rail ? '' : `<span>${esc(acc ? acc.name : m.title)}</span>`}
+          <button type="button" class="mp-nav-btn" id="mpRail" aria-label="${rail ? 'Розгорнути панель' : 'Згорнути панель'}" title="${rail ? 'Розгорнути панель' : 'Згорнути панель'}">${rail ? '›' : '‹'}</button></div>
+        ${sections.map((sec) => {
+    const shut = !rail && closed.includes(sec.id) && window.innerWidth > 760; // на телефоні заголовків груп немає — завжди розгорнуто
+    const hot = sec.items.filter((it) => it.kind).reduce((a, it) => a + it.n, 0);
+    return `${rail ? '' : `<button type="button" class="mp-sec" data-sec="${sec.id}" aria-expanded="${!shut}"><span class="mp-chev${shut ? ' shut' : ''}" aria-hidden="true">▾</span><span style="flex:1">${esc(sec.title)}</span>${shut && hot ? `<span class="mp-pill red">${fmtN(hot)}</span>` : ''}</button>`}
+          ${shut ? '' : sec.items.map((it) => `<button type="button" class="mp-item${it.on ? ' on' : ''}" data-nav="${esc(it.k)}" title="${esc(it.t)}">${rail ? `<span>${esc(SHORT[it.k] ?? it.t.slice(0, 5))}</span>` : `<span class="mp-t">${esc(it.t)}</span>`}${pill(it)}</button>`).join('')}`;
+  }).join('')}`;
+      $('#mpRail').onclick = () => { const on = !$('#mpShell').classList.contains('rail'); $('#mpShell').classList.toggle('rail', on); pref.set('rail', on); renderNav(d); };
+      $$('[data-sec]', nav).forEach((b) => (b.onclick = () => {
+        const c = pref.get('closed', []);
+        pref.set('closed', c.includes(b.dataset.sec) ? c.filter((x) => x !== b.dataset.sec) : [...c, b.dataset.sec]);
+        renderNav(d);
+      }));
+      $$('[data-nav]', nav).forEach((b) => (b.onclick = () => {
+        const k = b.dataset.nav;
+        if (!rz) state.status = k;
+        else if (k === 'rv-ask') Object.assign(state, { grp: 'success', rv: 'ask', status: '', cancel: '' });
+        else Object.assign(state, { grp: k, status: '', cancel: '', rv: '' });
+        load();
+      }));
+    }
+    function grpHead(d) {
+      if (!rz) return '';
+      if (state.grp === 'call') {
+        return '<div class="card small" style="margin-bottom:10px">Потрібно зателефонувати: планується повторний дзвінок; очікує оплату понад добу; посилка 4+ дні в пункті видачі; нове замовлення понад 30 хв без обробки.</div>';
+      }
+      if (state.grp !== 'cancelled') return '';
+      const c = d.cancels || {};
+      const all = (c.client || 0) + (c.manager || 0) + (c.auto || 0);
+      return `<div class="f-chips" style="margin-bottom:8px"><span class="small muted" style="align-self:center">Хто скасував:</span>
+        ${[['', `Усі · ${all}`, 'Усі скасовані'], ['client', `Покупцем · ${c.client || 0}`, 'Покупець скасував сам у Розетці'], ['manager', `Менеджером · ${c.manager || 0}`, 'Менеджер скасував з причиною (передумав, немає в наявності, не вдалося зв\'язатися…)'], ['auto', `Автоматично · ${c.auto || 0}`, 'Розетка сама: не оплатив вчасно, повторне замовлення (дубль)']]
+    .map(([k, t, tip]) => `<button class="chip ${state.cancel === k ? 'on' : ''}" data-cancel="${k}" title="${esc(tip)}">${esc(t)}</button>`).join('')}</div>`;
+    }
+
+    // ---------- картка замовлення праворуч ----------
+    function bindRows() {
+      $$('#mpList tr[data-ok]').forEach((tr) => (tr.onclick = (e) => {
+        if (e.target.closest('button, a, input, select, label')) return;
+        const o = byKey.get(tr.dataset.ok);
+        if (o) showDetail(o);
+      }));
+    }
+    function closeDetail() {
+      state.sel = '';
+      $('#mpDetail').hidden = true;
+      $('#mpShell').classList.remove('detail');
+      $$('#mpList tr.on').forEach((x) => x.classList.remove('on'));
+    }
+    async function showDetail(o) {
+      state.sel = keyOf(o);
+      $$('#mpList tr[data-ok]').forEach((x) => x.classList.toggle('on', x.dataset.ok === state.sel));
+      const box = $('#mpDetail');
+      box.hidden = false;
+      $('#mpShell').classList.add('detail');
+      const ph = intlPhone(o.phone);
+      const items = o.items.map((it) => `<div class="mp-goods"><span>${esc(it.name)}${it.qty > 1 ? ` <span class="muted">× ${it.qty}</span>` : ''}</span><b>${it.price ? uah(it.price * (it.qty || 1)) : ''}</b></div>`).join('') || '<div class="muted">—</div>';
+      box.innerHTML = `<div class="mp-d-head"><div><b>Замовлення ${esc(o.number)}</b><div class="small muted">${esc(dt(o.created_at))} · ${esc(name.get(o.account_id) || '')}</div></div>
+          <button type="button" class="btn sm" id="mpDClose" aria-label="Закрити картку">✕</button></div>
+        <div class="mp-d-body">
+          <div><span class="badge">${esc(o.status_name || o.status || '—')}</span>${o.changed_at ? ` <span class="small muted">змінено ${esc(dt(o.changed_at))}</span>` : ''}</div>
+          <div class="mp-box"><div class="mp-cap">Покупець</div><b>${esc(o.customer || '—')}</b>
+            ${ph ? `<div class="btn-row" style="margin-top:4px;flex-wrap:wrap;align-items:center"><span>${esc(ph)}</span><a class="btn sm" href="tel:${esc(ph)}">Подзвонити</a><button type="button" class="btn sm" id="mpDCopy">Копіювати</button></div>` : ''}
+            ${o.recipient ? `<div class="small muted" style="margin-top:4px">Отримувач: ${esc(o.recipient)}${o.recipient_phone ? ` · ${esc(o.recipient_phone)}` : ''}</div>` : ''}
+            ${callsHtml(o)}</div>
+          <div class="mp-box"><div class="mp-cap">Доставка</div>${esc(o.delivery || '—')}${o.ttn ? `<div class="small">ТТН <b>${esc(o.ttn)}</b></div>` : ''}</div>
+          <div class="mp-box"><div class="mp-cap">Товари</div>${items}<div class="mp-goods" style="border-top:1px solid var(--line);padding-top:6px;margin-top:4px"><span>Разом</span><b>${uah(o.total)}</b></div></div>
+          ${rz ? `<div class="mp-box"><div class="mp-cap">Відгук</div><div class="small">${rvCell(o)}</div></div>` : ''}
+          ${rz && o.calls ? '<div class="mp-box"><div class="mp-cap">Дзвінки Binotel з цим номером</div><div id="mpDCalls" class="small muted"><span class="spinner"></span></div></div>' : ''}
+        </div>`;
+      $('#mpDClose').onclick = closeDetail;
+      if ($('#mpDCopy')) $('#mpDCopy').onclick = async () => { if (await copyText(ph)) toast('Телефон скопійовано'); };
+      $$('[data-rvask]', box).forEach((b) => (b.onclick = () => askModal(byKey.get(b.dataset.rvask))));
+      if ($('#mpDCalls')) {
+        const key = state.sel;
+        try {
+          const r = await api('GET', `/api/tel/calls?${new URLSearchParams({ phones: [o.phone, o.recipient_phone].filter(Boolean).join(',') })}`);
+          if (state.sel !== key || !$('#mpDCalls')) return;
+          $('#mpDCalls').classList.remove('muted');
+          $('#mpDCalls').innerHTML = r.calls.length ? r.calls.map((x) => `<div class="mp-call${x.at > o.created_at ? '' : ' pre'}">${esc(callLine(x))}${x.at <= o.created_at ? ' <span class="muted">· до замовлення</span>' : ''}</div>`).join('')
+            : '<span class="muted">Дзвінків з цим номером не було</span>';
+        } catch (er) { if ($('#mpDCalls')) $('#mpDCalls').textContent = er.message; }
+      }
+    }
 
     // ---------- нагадування про відгук ----------
     function bindAsk() {
