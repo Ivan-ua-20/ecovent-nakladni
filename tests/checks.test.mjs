@@ -41,7 +41,7 @@ await db.run(`INSERT INTO offices (office_id, name, fop_id) VALUES ('22', 'Ecove
 await db.run(`INSERT INTO np_accounts (id, name, api_key, active, created_at) VALUES (1, 'НП', 'npk', 1, '')`);
 await db.run(`INSERT INTO rz_accounts (id, name, username, password) VALUES (1, 'Ековент', 'u', 'p')`);
 await db.run(`INSERT INTO prom_accounts (id, name, token, active) VALUES (1, 'Prom Amsterdam', 'ptok', 1)`);
-for (const [id, ttn] of [['p11', '2045 0000 0000 11'], ['p12', 'PRM-0000012'], ['p13', 'PRM-0000013'], ['p14', '20450000000014']]) {
+for (const [id, ttn] of [['p11', '2045 0000 0000 11'], ['p12', 'PRM-0000012'], ['p13', 'PRM-0000013'], ['p14', '20450000000014'], ['p21', '20450000000021']]) {
   await db.run(`INSERT INTO mp_orders (mp, account_id, id, number, created_at, total, ttn) VALUES ('prom', 1, ?, ?, ?, 0, ?)`, [id, id, `${D} 09:00:00`, ttn]);
 }
 await db.run(`INSERT INTO odb_accounts (id, iban, code, alias, kind, enabled) VALUES ('a2', 'UA222', '2222222222', 'Лупу', 'fop', 1)`);
@@ -71,15 +71,17 @@ const ORDERS = [
   O(10012, 10, 620, 'PRM-0000012', { office: '12' }), // Пром-оплата, а в Prom «Оплата при отриманні» (Розетка Делівері з Prom)
   O(10013, 4, 630, 'PRM-0000013', { office: '12' }), // післяплата, у Prom оплата при отриманні — наложка є
   O(10014, 10, 640, '20450000000014', { office: '12' }), // Пром-оплата, у Prom ще не оплачено
+  O(10021, 10, 650, '20450000000021', { office: '12' }), // Пром-оплата, у Prom «Оплатить частями» — гроші теж через Prom
 ];
 const byCode = new Map(ORDERS.map((o) => [o.order_id, o]));
 const PROM = {
   p11: { id: 11, full_price: '610', payment_option: { name: 'Пром-оплата' }, payment_data: { type: 'prosale', status: 'paid' } },
   p12: { id: 12, full_price: '620', payment_option: { name: 'Оплата при отриманні' } },
   p13: { id: 13, full_price: '630', payment_option: { name: 'Оплата при отриманні' } },
+  p21: { id: 21, full_price: '650', payment_option: { name: 'Оплатить частями' } },
   p14: { id: 14, full_price: '640', payment_option: { name: 'Пром-оплата' }, payment_data: { type: 'prosale', status: 'unpaid' } },
 };
-const TRACK = { 20450000000018: {}, 20450000000019: { AfterpaymentOnGoodsCost: '1000' }, 20450000000020: {}, 20450000000016: { AfterpaymentOnGoodsCost: '2989' }, 20450000000017: { AfterpaymentOnGoodsCost: '800' }, 20450000000015: {}, 20450000000011: {}, 20450000000014: {}, 20450000000001: { AfterpaymentOnGoodsCost: '1000' }, 20450000000002: { AfterpaymentOnGoodsCost: '500' }, 20450000000003: {}, 20450000000004: {},
+const TRACK = { 20450000000021: {}, 20450000000018: {}, 20450000000019: { AfterpaymentOnGoodsCost: '1000' }, 20450000000020: {}, 20450000000016: { AfterpaymentOnGoodsCost: '2989' }, 20450000000017: { AfterpaymentOnGoodsCost: '800' }, 20450000000015: {}, 20450000000011: {}, 20450000000014: {}, 20450000000001: { AfterpaymentOnGoodsCost: '1000' }, 20450000000002: { AfterpaymentOnGoodsCost: '500' }, 20450000000003: {}, 20450000000004: {},
   20450000000005: { RedeliverySum: '700' }, 20450000000007: {}, 20450000000008: {}, 20450000000009: {} };
 const RC = {
   c1: [
@@ -208,6 +210,7 @@ assert.match(texts(10012), /bad: Оплата «Пром-оплата», а в P
 assert.match(texts(10012), /bad: У CRM «Пром-оплата», а в Prom спосіб оплати «Оплата при отриманні»/);
 assert.match(texts(10013), /ok: Наложка 630 грн · оплата при отриманні \(Prom\)/);
 assert.match(texts(10014), /bad: Пром-оплата в Prom ще не надійшла/);
+assert.match(texts(10021), /ok: Prom: Оплатить частями · через Prom/); assert.doesNotMatch(texts(10021), /спосіб оплати/);
 assert.equal(row(10011).mp_pay, 'Пром-оплата');
 
 // Чеки за день по ФОП: чек без замовлення видно окремо.
