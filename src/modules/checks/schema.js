@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'checks',
-  version: 3,
+  version: 4,
   tables: [
   // Замовлення LP-CRM у статусах «відправлено / очікує викупу / завершено» за останні CHECK_DAYS днів.
   // listed_at — коли востаннє бачили в цих статусах (зникло зі списку — більше не показуємо);
@@ -68,5 +68,7 @@ export const schema = {
     // ok — чек є серед завантажених, nofop — жодна каса, підключена в сервісі, цього чека не бачить.
     ['chk_orders', 'receipt_ref', "TEXT DEFAULT ''"],
     ['chk_orders', 'ref_state', "TEXT DEFAULT ''"],
+    // Передоплата з LP-CRM (поле prepayment): часткова оплата — наложка має бути на суму мінус передоплата.
+    ['chk_orders', 'prepayment', 'REAL NOT NULL DEFAULT 0'],
   ],
 };
