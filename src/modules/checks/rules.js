@@ -162,15 +162,18 @@ export function evaluate(o, ctx) {
   const add = (level, text) => items.push({ level, text });
   const rule = ctx.rules[String(o.payment)] || null;
   const fopName = (id) => ctx.fops[String(id)] || `ФОП ${id}`;
-  if (!rule) add('warn', o.payment ? `Вид оплати ${o.payment} невідомий — оберіть його клас у «Види оплат».` : 'У замовленні не вказано вид оплати.');
+  const noPay = !o.payment || o.payment === '0';
+  if (!rule) add('warn', noPay ? 'У замовленні не вказано вид оплати.' : `Вид оплати ${o.payment} невідомий — оберіть, що перевіряти, у «Перевірка → Налаштування».`);
   const cls = rule?.cls || '';
   if (cls === 'skip') return { level: 'skip', items: [{ level: 'skip', text: `«${rule.name}» — не перевіряємо` }] };
   // Часткова оплата: поле «передоплата» LP-CRM, інакше — сума з коментаря.
   const part = cls === 'cod' ? (o.prepayment > 0 ? { sum: o.prepayment } : partialOf(o.comment)) : null;
   const expCod = part ? (part.sum ? o.total - part.sum : null) : o.total;
 
-  // 1) Наложка в ТТН
+  // 1) Наложка в ТТН. Рітейл Розетки (дропшипінг): наложку (контроль оплати за ціною Розетки) ставить Розетка — не звіряємо.
+  const retail = /riteil|рітейл|ритейл|retail/i.test(o.channel || '');
   if (!o.ttn) add('warn', 'Немає ТТН у замовленні.');
+  else if (retail) add('info', 'Рітейл Розетки: наложку в ТТН ставить Розетка (за своєю ціною) — не звіряємо.');
   else if (o.carrier === 'np' || o.carrier === 'rd' || (o.carrier === 'prm' && o.ttn_at)) {
     if (!o.ttn_at) add('wait', 'ТТН ще не перевірено — дані з’являться після наступного оновлення.');
     else if (o.ttn_err) add('warn', `ТТН: ${o.ttn_err}`);

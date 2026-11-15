@@ -222,14 +222,19 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
   }
 
   // ---------------------------------------------------------------- 3) Checkbox
-  async function syncReceipts(budget) {
-    const fops = (await db.all(`SELECT * FROM fops WHERE active = 1 ORDER BY id`)).filter(hasCheckbox);
+  // ФОП, до каси яких Checkbox не пускає (за останні 6 год): { fopId: { at, msg } }.
+  const cbFails = (s) => Object.fromEntries(Object.entries(fromS(s, 'chk_cb_fail')).filter(([, v]) => Date.now() - Date.parse(v.at) < 6 * 3600e3));
+  async function syncReceipts(budget, s) {
+    const fails0 = cbFails(s);
+    const fops = (await db.all(`SELECT * FROM fops WHERE active = 1 ORDER BY id`)).filter((f) => hasCheckbox(f) && !fails0[f.id]);
     if (!fops.length) return { skipped: 'немає ФОП з доступом до Checkbox' };
     const today = kyivDay();
     const from = addDays(today, -CHECK_DAYS);
     const days = (await db.all(`SELECT fop_id, day, done, at FROM chk_days WHERE day >= ?`, [from]));
     const have = new Map(days.map((d) => [`${d.fop_id}|${d.day}`, d]));
     const errors = {};
+    const fails = cbFails(s);
+    budget.cbFail = fails; // той самий об'єкт — щоб пошук чеків за номером у цьому ж кроці теж оминув цю касу
     const stmts = []; // усе — одним пакетом наприкінці (ліміт звернень до бази на запит)
     const flush = async () => { for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100)); stmts.length = 0; };
     for (const f of fops) {
@@ -245,7 +250,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         let rows = [];
         try {
           for (;;) {
-            if (budget.cb >= CB_MAX) { await flush(); return { more: true, errors }; }
+            if (budget.cb >= CB_MAX) { stmts.push([`INSERT INTO settings (key, value) VALUES ('chk_cb_fail', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(fails)]]); await flush(); return { more: true, errors }; }
             budget.cb++;
             const page = await listReceipts(fetchFn, f, fromIso, toIso, offset);
             rows.push(...page.rows);
@@ -255,6 +260,8 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         } catch (e) {
           if (e.pending) { await flush(); throw e; }
           errors[f.short_name] = e.message;
+          // Checkbox не пускає (невірний логін / пароль, забагато спроб) — не стукаємо 6 год, щоб не заблокувати касу.
+          if (e.status === 401 || e.status === 403) fails[f.id] = { at: nowIso(), msg: e.message.replace(/^Checkbox \d+: /, '') };
           break; // цей ФОП — наступного разу
         }
         rows = rows.filter((r) => kyivDayOf(r.at) === d);
@@ -265,6 +272,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
           [f.id, d, d < addDays(today, -1) ? 1 : 0, nowIso()]]);
       }
     }
+    stmts.push([`INSERT INTO settings (key, value) VALUES ('chk_cb_fail', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(fails)]]);
     await flush();
     return { errors };
   }
@@ -277,7 +285,8 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const rows = await db.all(`SELECT o.code, o.receipt_ref FROM chk_orders o WHERE o.listed_at != '' AND o.receipt_ref != '' AND o.ref_state = ''
       AND NOT EXISTS (SELECT 1 FROM chk_receipts r WHERE r.id = o.receipt_ref) ORDER BY o.day DESC LIMIT 20`);
     if (!rows.length) { await db.batch([mark]); return {}; }
-    const fops = (await db.all(`SELECT * FROM fops WHERE active = 1 ORDER BY id`)).filter(hasCheckbox);
+    const failed = { ...cbFails(s), ...(budget.cbFail || {}) };
+    const fops = (await db.all(`SELECT * FROM fops WHERE active = 1 ORDER BY id`)).filter((f) => hasCheckbox(f) && !failed[f.id]);
     const tried = fromS(s, 'chk_ref_tried'); // чек → ФОП, де вже шукали
     const ups = [mark];
     let more = false;
@@ -324,7 +333,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       res.np = await syncNp(budget).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
       res.rd = await syncRd(budget, s).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
       res.prom = await syncProm(budget).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
-      res.cb = await syncReceipts(budget).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
+      res.cb = await syncReceipts(budget, s).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
       res.refs = await syncReceiptRefs(budget, s).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
     } catch (e) {
       if (!e.pending) throw e;
@@ -356,6 +365,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const recFrom = from; const recTo = addDays(to, 20);
     // Останній завершений прохід списків (state.listed): замовлення, яких у ньому немає, вийшли з цих статусів.
     const listed = (await getJson('chk_state', {})).listed || '';
+    const cbFailRaw = (await db.get(`SELECT value FROM settings WHERE key = 'chk_cb_fail'`))?.value || '{}';
     const [rs, orders, receipts, fopsAll, offices, channels, accounts, txs, stNames] = await Promise.all([
       rules(),
       db.all(`SELECT * FROM chk_orders WHERE listed_at != '' AND listed_at >= ? AND day BETWEEN ? AND ? ORDER BY day DESC, code DESC`, [listed, from, to]),
@@ -369,8 +379,10 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       getJson('chk_statuses', {}),
     ]);
     const fops = Object.fromEntries(fopsAll.map((f) => [String(f.id), f.short_name]));
-    const cbFops = new Set(fopsAll.filter(hasCheckbox).map((f) => String(f.id)));
-    const allCb = fopsAll.filter((f) => f.active).every(hasCheckbox);
+    const failed = cbFails(Object.fromEntries([['chk_cb_fail', cbFailRaw]]));
+    const okCb = (f) => hasCheckbox(f) && !failed[f.id];
+    const cbFops = new Set(fopsAll.filter(okCb).map((f) => String(f.id)));
+    const allCb = fopsAll.filter((f) => f.active).every(okCb);
     const fopByIpn = new Map(fopsAll.filter((f) => f.ipn).map((f) => [String(f.ipn).trim(), f.id]));
     const fopByIban = new Map(fopsAll.filter((f) => f.iban).map((f) => [String(f.iban).replace(/\s/g, '').toUpperCase(), f.id]));
     const accByIban = new Map(accounts.map((a) => [String(a.iban).toUpperCase(), a]));
@@ -416,7 +428,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         level: ev.level, items: ev.items,
       };
     });
-    return { rows, recs, matched, orders, fops };
+    return { rows, recs, matched, orders, fops, failed: Object.entries(failed).map(([id, v]) => `${fops[id] || id} — ${v.msg}`) };
   }
 
   const period = (c) => {
@@ -432,13 +444,13 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
   app.get('/api/checks', async (c) => {
     need(c, 'users');
     const { from, to } = period(c);
-    const { rows } = await build(from, to);
+    const { rows, failed } = await build(from, to);
     const counts = rows.reduce((a, r) => { a[r.level] = (a[r.level] || 0) + 1; return a; }, {});
     // ФОП, чеки яких не можемо звірити: каса не підключена (немає доступу Checkbox у «ФОПи накладних»).
     const noCb = (await db.all(`SELECT short_name, checkbox_login, checkbox_password, checkbox_license, checkbox_pin FROM fops WHERE active = 1`))
       .filter((f) => !hasCheckbox(f)).map((f) => f.short_name);
     const state = await getJson('chk_state', {});
-    return c.json({ from, to, rows, counts, no_checkbox: noCb, state: { at: state.at || '', finished: state.finished || '', more: Boolean(state.more), errors: state.errors || [] } });
+    return c.json({ from, to, rows, counts, no_checkbox: noCb, cb_failed: failed, state: { at: state.at || '', finished: state.finished || '', more: Boolean(state.more), errors: state.errors || [] } });
   });
 
   // Чеки за день по ФОП (замість зошита): кожен чек — з яким замовленням зіставлено; без замовлення — окремо.

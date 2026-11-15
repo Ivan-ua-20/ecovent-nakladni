@@ -56,6 +56,7 @@ export function createChecksPages() {
         <button class="btn" id="chkRefresh">🔄 Оновити зараз</button><button class="btn" id="chkXls">⬇ Excel</button></div></div>
       <div class="small muted" style="margin-bottom:10px">Відправлені замовлення LP-CRM за ${dmy(d.from)}–${dmy(d.to)}: вид оплати ↔ наложка в ТТН, чек Checkbox, оплата на рахунок.
         ${st.finished ? `Дані оновлено ${esc(fmtDateTime(st.finished))}` : 'Дані ще збираються'}${st.more ? ' · збір триває…' : ''} · оновлюється само раз на 10 хв.</div>
+      ${(d.cb_failed || []).length ? `<div class="alert warn small" style="margin-bottom:10px">Checkbox не пускає (чеки цих ФОП не звіряємо, повторимо через кілька годин): ${d.cb_failed.map(esc).join('; ')}. Перевірте логін і пароль каси в «Налаштування → ФОПи накладних».</div>` : ''}
       ${(d.no_checkbox || []).length ? `<div class="alert warn small" style="margin-bottom:10px">Без доступу до Checkbox (чеки цих ФОП не звіряємо): ${d.no_checkbox.map(esc).join(', ')}. Логін і пароль каси вносяться в «Налаштування → ФОПи накладних».</div>` : ''}
       ${(st.errors || []).length ? `<div class="alert warn small" style="margin-bottom:10px">Не все вдалося зібрати: ${st.errors.map(esc).join('; ')}</div>` : ''}
       ${fpLayout(fpGroup('Результат', LEVELS.map(([k, v, hint]) => fpBtn(`<span class="ret-st"><span>${esc(v)}</span>${hint ? `<span class="small muted">${esc(hint)}</span>` : ''}</span><b class="small ${k === 'bad' && lvN[k] ? 'ret-bad' : ''}">${lvN[k] || ''}</b>`, f.lv === k, `data-clv="${k}"`)).join(''))
