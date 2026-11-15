@@ -2495,20 +2495,31 @@ async function listReceipts(fetchFn, fop, fromIso, toIso, offset = 0) {
   const qs = new URLSearchParams({ from_date: fromIso, to_date: toIso, limit: "100", offset: String(offset), self_receipts: "false" });
   const r = await authed(fetchFn, fop, `/receipts/search?${qs}`);
   const results = Array.isArray(r?.results) ? r.results : [];
-  const rows = results.map((rc) => {
-    const text = [rc.header, rc.footer, rc.barcode, rc.order_id, rc.external_id, ...(rc.goods || []).map((g) => g.good?.code || "")].filter(Boolean).join(" ");
-    const refs = [...new Set(String(text).match(/\d{5,20}/g) || [])].slice(0, 20).join(" ");
-    return {
-      id: String(rc.id || ""),
-      type: String(rc.type || ""),
-      at: String(rc.fiscal_date || rc.created_at || ""),
-      total: rc.total_sum != null ? rc.total_sum / 100 : 0,
-      fiscal: String(rc.fiscal_code || ""),
-      pays: (rc.payments || []).map((p) => ({ type: String(p.type || ""), label: String(p.label || ""), value: p.value != null ? p.value / 100 : 0 })),
-      refs
-    };
-  }).filter((x) => x.id);
+  const rows = results.map(receiptRow).filter((x) => x.id);
   return { rows, more: results.length >= 100 };
+}
+function receiptRow(rc) {
+  const text = [rc.header, rc.footer, rc.barcode, rc.order_id, rc.external_id, ...(rc.goods || []).map((g) => g.good?.code || "")].filter(Boolean).join(" ");
+  const refs = [...new Set(String(text).match(/\d{5,20}/g) || [])].slice(0, 20).join(" ");
+  return {
+    id: String(rc.id || ""),
+    type: String(rc.type || ""),
+    at: String(rc.fiscal_date || rc.created_at || ""),
+    total: rc.total_sum != null ? rc.total_sum / 100 : 0,
+    fiscal: String(rc.fiscal_code || ""),
+    pays: (rc.payments || []).map((p) => ({ type: String(p.type || ""), label: String(p.label || ""), value: p.value != null ? p.value / 100 : 0 })),
+    refs
+  };
+}
+async function getReceipt(fetchFn, fop, id) {
+  try {
+    const rc = await authed(fetchFn, fop, `/receipts/${encodeURIComponent(id)}`);
+    return rc?.id ? receiptRow(rc) : null;
+  } catch (e) {
+    if (e.pending) throw e;
+    if ([400, 403, 404, 422].includes(e.status)) return null;
+    throw e;
+  }
 }
 
 // src/modules/refs/index.js
@@ -4843,7 +4854,6 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const names = await getJson2("an_status_names") || {};
     const users = await db.all(`SELECT tg_chat_id, crm_logins FROM users WHERE active = 1 AND tg_chat_id != '' AND crm_logins != ''`);
     const owners = (await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'owner'`)).map((u) => u.tg_chat_id);
-    const notifyOn = (await db.get(`SELECT value FROM settings WHERE key = 'chk_dup_notify'`))?.value === "1";
     const esc2 = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     let n = 0;
     const recent = addDays(kyivDay(), -recentDays);
@@ -4860,7 +4870,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
 `) + list.map((r) => `\u2022 \u2116 <b>${esc2(r.code)}</b> \xB7 ${esc2(names[r.status] || `\u0441\u0442\u0430\u0442\u0443\u0441 ${r.status}`)} \xB7 ${esc2(r.day.split("-").reverse().join("."))}${r.buyer ? ` \xB7 ${esc2(r.buyer)}` : ""}${r.user ? ` \xB7 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 ${esc2(r.user)}` : ""}`).join("\n") + (tel ? "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0434\u0432\u0456\u0447\u0456." : "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u043F\u043E\u043C\u0438\u043B\u043A\u0430 (\u043E\u0434\u043D\u0430 \u043F\u043E\u0441\u0438\u043B\u043A\u0430 \u043D\u0430 \u0434\u0432\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F).");
       const logins = new Set(list.map((r) => r.user).filter(Boolean));
       const chats = [.../* @__PURE__ */ new Set([...users.filter((u) => crmLogins(u.crm_logins).some((l) => logins.has(l))).map((u) => u.tg_chat_id), ...owners])];
-      if (chats.length && notifyOn) await services.notify?.sendText({ chatIds: chats }, text).catch(() => 0);
+      if (chats.length) await services.notify?.sendText({ chatIds: chats }, text).catch(() => 0);
       await db.run(`INSERT INTO an_ttn_dups (ttn, codes, at) VALUES (?, ?, ?) ON CONFLICT(ttn) DO UPDATE SET codes = excluded.codes, at = excluded.at`, [ttn, codes, nowIso()]);
       n++;
     }
@@ -13360,12 +13370,27 @@ async function promOrders(fetchFn, token, { limit = 20, dateFrom = "", status = 
   if (lastId) q.set("last_id", String(lastId));
   return (await send2(fetchFn, token, `/orders/list?${q}`)).orders || [];
 }
+async function promOrder(fetchFn, token, id) {
+  return (await send2(fetchFn, token, `/orders/${encodeURIComponent(id)}`)).order || null;
+}
 var promDelivery = (o) => ({
   option: String(o?.delivery_option?.name || ""),
   provider: String(o?.delivery_provider_data?.provider || ""),
   ttn: String(o?.delivery_provider_data?.declaration_number || ""),
   ttn_status: String(o?.delivery_provider_data?.unified_status || "")
 });
+function promPayment(o) {
+  const name = String(o?.payment_option?.name || "").trim();
+  const type = String(o?.payment_data?.type || "").toLowerCase();
+  const status = String(o?.payment_data?.status || "").toLowerCase();
+  const prosale = type.includes("prosale") || /пром[\s-]*оплат|prom[\s-]*оплат|prom[\s-]*pay/i.test(name);
+  const cod = !prosale && /(при отриманн|при получени|наложен|накладен|післяплат|послеоплат|оплата при|cash on delivery)/i.test(name);
+  const num5 = (v) => {
+    const x = Number(String(v ?? "").replace(/[^\d.,]/g, "").replace(",", "."));
+    return Number.isFinite(x) ? x : 0;
+  };
+  return { kind: prosale ? "prosale" : cod ? "cod" : "other", paid: prosale && /^(paid|оплач)/.test(status), name: name || (prosale ? "\u041F\u0440\u043E\u043C-\u043E\u043F\u043B\u0430\u0442\u0430" : ""), status, total: num5(o?.full_price ?? o?.price) };
+}
 
 // src/integrations/epicentr.js
 var EPC_API = "https://merchant-api.epicentrm.com.ua";
@@ -17550,7 +17575,13 @@ function matchReceipts(orders, receipts) {
     if (!refIndex.has(x)) refIndex.set(x, []);
     refIndex.get(x).push(r);
   }
+  const byId = new Map(receipts.map((r) => [String(r.id).toLowerCase(), r]));
   for (const o of orders) {
+    const r = o.receipt_ref && byId.get(String(o.receipt_ref).toLowerCase());
+    if (r && !used.has(r.id)) take(o, { ...r, byRef: true });
+  }
+  for (const o of orders) {
+    if (byOrder.has(o.code)) continue;
     const hit = (refIndex.get(o.code) || []).find((r) => !used.has(r.id)) || (refIndex.get(String(o.id)) || []).find((r) => !used.has(r.id) && near(r.total, o.total));
     if (hit) take(o, hit);
   }
@@ -17613,24 +17644,35 @@ function evaluate(o, ctx) {
     if (!o.ttn_at) add("wait", "\u0422\u0422\u041D \u0449\u0435 \u043D\u0435 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043D\u043E \u2014 \u0434\u0430\u043D\u0456 \u0437\u2019\u044F\u0432\u043B\u044F\u0442\u044C\u0441\u044F \u043F\u0456\u0441\u043B\u044F \u043D\u0430\u0441\u0442\u0443\u043F\u043D\u043E\u0433\u043E \u043E\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
     else if (o.ttn_err) add("warn", `\u0422\u0422\u041D: ${o.ttn_err}`);
     else if (cls === "cod") {
-      if (!(o.cod > 0)) add("bad", `\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 \u0437\u0430 CRM (\xAB${rule.name}\xBB), \u0430 \u0432 \u0422\u0422\u041D \u043D\u0430\u043B\u043E\u0436\u043A\u0438 \u043D\u0435\u043C\u0430\u0454.`);
+      if (!(o.cod > 0)) add("bad", o.carrier === "prm" ? `\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 \u0437\u0430 CRM (\xAB${rule.name}\xBB), \u0430 \u0432 Prom \u2014 \xAB${o.mp_pay_name || "\u0431\u0435\u0437 \u043E\u043F\u043B\u0430\u0442\u0438 \u043F\u0440\u0438 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u0456"}\xBB.` : `\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 \u0437\u0430 CRM (\xAB${rule.name}\xBB), \u0430 \u0432 \u0422\u0422\u041D \u043D\u0430\u043B\u043E\u0436\u043A\u0438 \u043D\u0435\u043C\u0430\u0454.`);
       else if (part) {
         if (part.sum && !near(o.cod, expCod)) add("bad", `\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430: \u043D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)}, \u0430 \u043C\u0430\u0454 \u0431\u0443\u0442\u0438 ${fmt(expCod)} (${fmt(o.total)} \u2212 \u043F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0430 ${fmt(part.sum)}).`);
         else if (!part.sum && o.cod >= o.total - 0.5) add("warn", "\u0423 \u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440\u0456 \u0437\u0433\u0430\u0434\u0430\u043D\u043E \u043F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0443, \u0430\u043B\u0435 \u043D\u0430\u043B\u043E\u0436\u043A\u0430 \u2014 \u043D\u0430 \u0432\u0441\u044E \u0441\u0443\u043C\u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
         else add("ok", `\u041D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)} (\u0447\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430)`);
       } else if (!near(o.cod, o.total)) add("bad", `\u041D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)}, \u0430 \u0441\u0443\u043C\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${fmt(o.total)}.`);
-      else add("ok", `\u041D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)}${o.cod_kind === "ctrl" ? " \xB7 \u043A\u043E\u043D\u0442\u0440\u043E\u043B\u044C \u043E\u043F\u043B\u0430\u0442\u0438" : o.cod_kind === "redelivery" ? " \xB7 \u0433\u0440\u043E\u0448\u043E\u0432\u0438\u0439 \u043F\u0435\u0440\u0435\u043A\u0430\u0437" : ""}`);
+      else add("ok", `\u041D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)}${o.cod_kind === "ctrl" ? " \xB7 \u043A\u043E\u043D\u0442\u0440\u043E\u043B\u044C \u043E\u043F\u043B\u0430\u0442\u0438" : o.cod_kind === "redelivery" ? " \xB7 \u0433\u0440\u043E\u0448\u043E\u0432\u0438\u0439 \u043F\u0435\u0440\u0435\u043A\u0430\u0437" : o.cod_kind === "prom" ? " \xB7 \u043E\u043F\u043B\u0430\u0442\u0430 \u043F\u0440\u0438 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u0456 (Prom)" : ""}`);
     } else if (cls === "prepay" || cls === "bank") {
-      if (o.cod > 0) add("bad", `\u041E\u043F\u043B\u0430\u0442\u0430 \xAB${rule.name}\xBB, \u0430 \u0432 \u0422\u0422\u041D \u0441\u0442\u043E\u0457\u0442\u044C ${o.cod_kind === "ctrl" ? "\u043A\u043E\u043D\u0442\u0440\u043E\u043B\u044C \u043E\u043F\u043B\u0430\u0442\u0438" : "\u043D\u0430\u043B\u043E\u0436\u043A\u0430"} ${fmt(o.cod)}.`);
+      if (o.cod > 0) add("bad", o.cod_kind === "prom" ? `\u041E\u043F\u043B\u0430\u0442\u0430 \xAB${rule.name}\xBB, \u0430 \u0432 Prom \u2014 \xAB${o.mp_pay_name || "\u043E\u043F\u043B\u0430\u0442\u0430 \u043F\u0440\u0438 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u0456"}\xBB (\u043D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)}).` : `\u041E\u043F\u043B\u0430\u0442\u0430 \xAB${rule.name}\xBB, \u0430 \u0432 \u0422\u0422\u041D \u0441\u0442\u043E\u0457\u0442\u044C ${o.cod_kind === "ctrl" ? "\u043A\u043E\u043D\u0442\u0440\u043E\u043B\u044C \u043E\u043F\u043B\u0430\u0442\u0438" : "\u043D\u0430\u043B\u043E\u0436\u043A\u0430"} ${fmt(o.cod)}.`);
       else add("ok", "\u041D\u0430\u043B\u043E\u0436\u043A\u0438 \u043D\u0435\u043C\u0430\u0454 \u2014 \u044F\u043A \u0456 \u043C\u0430\u0454 \u0431\u0443\u0442\u0438");
     }
   } else if (o.carrier === "meest") add("info", "Meest: \u043D\u0430\u043B\u043E\u0436\u043A\u0443 \u043F\u043E\u043A\u0438 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u044F\u0439\u0442\u0435 \u0432\u0440\u0443\u0447\u043D\u0443.");
-  else if (o.carrier === "prm") add(o.ttn_err ? "info" : "wait", o.ttn_err ? "\u0422\u0422\u041D Prom: \u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0430\u0445 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0432\u0440\u0443\u0447\u043D\u0443." : "\u0422\u0422\u041D Prom \u0449\u0435 \u043D\u0435 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043D\u043E.");
+  else if (o.carrier === "prm") add(o.day < ctx.today ? "info" : "wait", o.day < ctx.today ? "\u0422\u0422\u041D Prom: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0437 \u0446\u0456\u0454\u044E \u0422\u0422\u041D \u0441\u0435\u0440\u0435\u0434 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C Prom \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0432\u0440\u0443\u0447\u043D\u0443." : "\u0422\u0422\u041D Prom: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 Prom \u0449\u0435 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
   else add("info", `${CARRIERS[o.carrier] || "\u0421\u043B\u0443\u0436\u0431\u0430 \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0438"}: \u043D\u0430\u043B\u043E\u0436\u043A\u0430 \u043D\u0435 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u044F\u0454\u0442\u044C\u0441\u044F.`);
+  if (o.mp_pay && cls) {
+    const isProsale = /пром[\s-]*оплат/i.test(rule?.name || "");
+    const pn = o.mp_pay_name || "";
+    if (isProsale && o.mp_pay === "prosale_unpaid") add("bad", "\u041F\u0440\u043E\u043C-\u043E\u043F\u043B\u0430\u0442\u0430 \u0432 Prom \u0449\u0435 \u043D\u0435 \u043D\u0430\u0434\u0456\u0439\u0448\u043B\u0430 (\u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E).");
+    else if (isProsale && !o.mp_pay.startsWith("prosale")) add("bad", `\u0423 CRM \xAB${rule.name}\xBB, \u0430 \u0432 Prom \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u043F\u043B\u0430\u0442\u0438 \xAB${pn}\xBB.`);
+    else if (cls === "cod" && o.mp_pay === "prosale_paid") add("bad", `\u0423 Prom \u0443\u0436\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E \u041F\u0440\u043E\u043C-\u043E\u043F\u043B\u0430\u0442\u043E\u044E, \u0430 \u0432 CRM \xAB${rule.name}\xBB.`);
+    else if ((cls === "prepay" || cls === "bank") && o.mp_pay === "cod" && o.carrier !== "prm") add("bad", `\u0423 CRM \xAB${rule.name}\xBB, \u0430 \u0432 Prom \u2014 \xAB${pn}\xBB (\u043E\u043F\u043B\u0430\u0442\u0430 \u043F\u0440\u0438 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u0456).`);
+    else add("ok", `Prom: ${pn}${o.mp_pay === "prosale_paid" ? " \xB7 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E" : o.mp_pay === "prosale_unpaid" ? " \xB7 \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E" : ""}`);
+  }
   const r = ctx.receipt;
-  if (!r) add("bad", "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E, \u0430 \u0447\u0435\u043A \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 \u0436\u043E\u0434\u043D\u043E\u043C\u0443 Checkbox.");
+  if (!r && o.receipt_ref && o.ref_state === "nofop") add("warn", "\u0423 LP-CRM \u0447\u0435\u043A \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u043E, \u0430\u043B\u0435 \u043A\u0430\u0441\u0430 \u0446\u044C\u043E\u0433\u043E \u0424\u041E\u041F \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0430 \u0434\u043E \u0441\u0435\u0440\u0432\u0456\u0441\u0443 \u2014 \u0434\u043E\u0434\u0430\u0439\u0442\u0435 \u0434\u043E\u0441\u0442\u0443\u043F Checkbox \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0424\u041E\u041F\u0438 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0438\u0445\xBB, \u0449\u043E\u0431 \u0437\u0432\u0456\u0440\u0438\u0442\u0438 \u0441\u0443\u043C\u0443 \u0439 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u043F\u043B\u0430\u0442\u0438.");
+  else if (!r && o.receipt_ref) add("wait", "\u0423 LP-CRM \u0447\u0435\u043A \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u043E \u2014 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0443\u0454\u043C\u043E \u0439\u043E\u0433\u043E \u0437 Checkbox.");
+  else if (!r) add("bad", "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E, \u0430 \u0447\u0435\u043A \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E: \u0443 LP-CRM \u043D\u0435 \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u043E \u0456 \u0432 Checkbox \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
   else {
-    const how = r.bySum ? " (\u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0437\u0430 \u0441\u0443\u043C\u043E\u044E)" : "";
+    const how = r.bySum ? " (\u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0437\u0430 \u0441\u0443\u043C\u043E\u044E)" : r.byRef ? "" : " (\u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0437\u0430 \u2116 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F)";
     if (!part && !near(r.total, o.total)) add("bad", `\u0427\u0435\u043A \u043D\u0430 ${fmt(r.total)}, \u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0430 ${fmt(o.total)}${how}.`);
     else add("ok", `\u0427\u0435\u043A ${fmt(r.total)} \xB7 ${fopName(r.fop_id)}${how}`);
     const labels = (r.pays || []).map((p) => p.label).filter(Boolean);
@@ -17664,6 +17706,8 @@ var RECEIPT_KEEP_DAYS = 45;
 var LP_MAX = 5;
 var CB_MAX = 12;
 var RD_MAX = 8;
+var PROM_MAX = 8;
+var PROM_RECHECK_MS = 36e5;
 var NP_RECHECK_MS = 12 * 36e5;
 var STATUS_RE = /^(отправлен|відправлен|ожидает выкупа|очікує викупу|завершено|виконано)/i;
 var STATUS_FALLBACK = [14, 53, 18];
@@ -17671,6 +17715,21 @@ var addDays7 = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864e5).
 var kyivDayOf3 = (iso) => /(Z|[+-]\d\d:\d\d)$/.test(String(iso)) ? kyivDay(new Date(iso)) : String(iso || "").slice(0, 10);
 var nameOf = (v) => String(v && typeof v === "object" ? v.name ?? "" : v ?? "").trim();
 var p9 = (v) => String(v || "").replace(/\D/g, "").slice(-9);
+var UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
+function receiptRefOf(raw2, depth = 0) {
+  if (!raw2 || typeof raw2 !== "object" || depth > 2) return "";
+  for (const [k, v] of Object.entries(raw2)) {
+    if (k === "products" || k === "goods" || k === "items") continue;
+    if (typeof v === "string") {
+      const m = v.match(UUID_RE);
+      if (m) return m[0].toLowerCase();
+    } else if (v && typeof v === "object") {
+      const r = receiptRefOf(v, depth + 1);
+      if (r) return r;
+    }
+  }
+  return "";
+}
 function normalizeCheckOrder(raw2) {
   const code = String(raw2.order_id || "").trim();
   const day = String(raw2.datetime || "").slice(0, 10);
@@ -17693,7 +17752,8 @@ function normalizeCheckOrder(raw2) {
     phone: p9(raw2.phone),
     buyer: String(raw2.bayer_name || "").trim().slice(0, 120),
     user: String(raw2.user || "").trim().slice(0, 40),
-    comment: String(raw2.comment || "").trim().slice(0, 500)
+    comment: String(raw2.comment || "").trim().slice(0, 500),
+    receipt_ref: receiptRefOf(raw2)
   };
 }
 function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
@@ -17760,9 +17820,10 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         await db.batch(got.map((o) => [
           `UPDATE chk_orders SET id = ?, day = ?, fetched_status = status, payment = ?, total = ?, office = ?, channel = ?, site = ?,
           delivery = ?, phone = ?, buyer = ?, user = ?, comment = ?,
+          ref_state = CASE WHEN receipt_ref = ? THEN ref_state ELSE '' END, receipt_ref = ?,
           ttn_at = CASE WHEN ttn = ? THEN ttn_at ELSE '' END, cod = CASE WHEN ttn = ? THEN cod ELSE 0 END, cod_kind = CASE WHEN ttn = ? THEN cod_kind ELSE '' END,
           ttn_err = CASE WHEN ttn = ? THEN ttn_err ELSE '' END, ttn = ?, carrier = ? WHERE code = ?`,
-          [o.id, o.day, o.payment, o.total, o.office, o.channel, o.site, o.delivery, o.phone, o.buyer, o.user, o.comment, o.ttn, o.ttn, o.ttn, o.ttn, o.ttn, o.carrier, o.code]
+          [o.id, o.day, o.payment, o.total, o.office, o.channel, o.site, o.delivery, o.phone, o.buyer, o.user, o.comment, o.receipt_ref, o.receipt_ref, o.ttn, o.ttn, o.ttn, o.ttn, o.ttn, o.carrier, o.code]
         ]));
       }
       const seen = new Set(got.map((o) => o.code));
@@ -17795,7 +17856,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
   async function syncRd(budget, s) {
     const accs = await db.all(`SELECT * FROM rz_accounts WHERE active = 1 ORDER BY id`).catch(() => []);
     if (!accs.length || !services.marking?.rozetkaToken) return { skipped: "\u043D\u0435\u043C\u0430\u0454 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456\u0432 \u0420\u043E\u0437\u0435\u0442\u043A\u0438" };
-    const rows = await db.all(`SELECT code, ttn FROM chk_orders WHERE carrier IN ('rd', 'prm') AND listed_at != '' AND ttn_at = '' AND ttn_err = '' ORDER BY day DESC LIMIT 10`);
+    const rows = await db.all(`SELECT code, ttn FROM chk_orders WHERE carrier = 'rd' AND listed_at != '' AND ttn_at = '' AND ttn_err = '' ORDER BY day DESC LIMIT 10`);
     const tried = fromS(s, "chk_rd_tried");
     const ups = [];
     for (const r of rows) {
@@ -17819,13 +17880,53 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       }
       const now = nowIso();
       if (found) ups.push([`UPDATE chk_orders SET ttn_at = ?, ttn_err = '', cod = ?, cod_kind = ? WHERE code = ?`, [now, found.cod || 0, found.cod > 0 ? "cod" : "", r.code]]);
-      else if (r.ttn.toUpperCase().startsWith("PRM-")) ups.push([`UPDATE chk_orders SET ttn_err = '\u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0430\u0445 \u0420\u043E\u0437\u0435\u0442\u043A\u0438' WHERE code = ?`, [r.code]]);
       else ups.push([`UPDATE chk_orders SET ttn_at = ?, ttn_err = '\u0422\u0422\u041D \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 \u0436\u043E\u0434\u043D\u043E\u043C\u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438' WHERE code = ?`, [now, r.code]]);
       delete tried[r.ttn];
     }
     await db.batch(ups);
     await setJson("chk_rd_tried", tried);
     return {};
+  }
+  async function syncProm(budget) {
+    const accs = new Map((await db.all(`SELECT id, token FROM prom_accounts WHERE active = 1`).catch(() => [])).map((a) => [a.id, a.token]));
+    if (!accs.size) return { skipped: "\u043D\u0435\u043C\u0430\u0454 \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0456\u0432 Prom" };
+    const from = addDays7(kyivDay(), -CHECK_DAYS - 30);
+    const mp = await db.all(`SELECT account_id, id, ttn FROM mp_orders WHERE mp = 'prom' AND created_at >= ? AND ttn != ''`, [from]).catch(() => []);
+    const byTtn = new Map(mp.map((m) => [String(m.ttn).replace(/\s/g, "").toUpperCase(), m]));
+    if (!byTtn.size) return {};
+    const hourAgo = new Date(Date.now() - PROM_RECHECK_MS).toISOString();
+    const rows = (await db.all(`SELECT code, ttn, carrier, total FROM chk_orders WHERE listed_at != '' AND ttn != '' AND (mp_at = '' OR (mp_pay = 'prosale_unpaid' AND mp_at < ?))
+      ORDER BY day DESC LIMIT 400`, [hourAgo])).filter((r) => byTtn.has(String(r.ttn).replace(/\s/g, "").toUpperCase()));
+    const ups = [];
+    let more = false;
+    for (const r of rows) {
+      const m = byTtn.get(String(r.ttn).replace(/\s/g, "").toUpperCase());
+      const token = accs.get(m.account_id);
+      if (!token) continue;
+      if (budget.prom >= PROM_MAX) {
+        more = true;
+        break;
+      }
+      budget.prom++;
+      let o = null;
+      try {
+        o = await promOrder(fetchFn, token, m.id);
+      } catch (e) {
+        if (e.pending) {
+          await db.batch(ups);
+          throw e;
+        }
+        continue;
+      }
+      if (!o) continue;
+      const p = promPayment(o);
+      const pay = p.kind === "prosale" ? p.paid ? "prosale_paid" : "prosale_unpaid" : p.kind;
+      const now = nowIso();
+      ups.push([`UPDATE chk_orders SET mp_pay = ?, mp_pay_name = ?, mp_at = ? WHERE code = ?`, [pay, p.name.slice(0, 80), now, r.code]]);
+      if (r.carrier === "prm") ups.push([`UPDATE chk_orders SET ttn_at = ?, ttn_err = '', cod = ?, cod_kind = ? WHERE code = ?`, [now, p.kind === "cod" ? p.total || r.total : 0, p.kind === "cod" ? "prom" : "", r.code]]);
+    }
+    await db.batch(ups);
+    return { more };
   }
   async function syncReceipts(budget) {
     const fops = (await db.all(`SELECT * FROM fops WHERE active = 1 ORDER BY id`)).filter(hasCheckbox);
@@ -17884,6 +17985,60 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     await flush();
     return { errors };
   }
+  async function syncReceiptRefs(budget, s) {
+    const mark = [`UPDATE chk_orders SET ref_state = 'ok' WHERE ref_state = '' AND receipt_ref != '' AND receipt_ref IN (SELECT id FROM chk_receipts)`, []];
+    if (budget.cb >= CB_MAX) {
+      await db.batch([mark]);
+      return { more: true };
+    }
+    const rows = await db.all(`SELECT o.code, o.receipt_ref FROM chk_orders o WHERE o.listed_at != '' AND o.receipt_ref != '' AND o.ref_state = ''
+      AND NOT EXISTS (SELECT 1 FROM chk_receipts r WHERE r.id = o.receipt_ref) ORDER BY o.day DESC LIMIT 20`);
+    if (!rows.length) {
+      await db.batch([mark]);
+      return {};
+    }
+    const fops = (await db.all(`SELECT * FROM fops WHERE active = 1 ORDER BY id`)).filter(hasCheckbox);
+    const tried = fromS(s, "chk_ref_tried");
+    const ups = [mark];
+    let more = false;
+    for (const r of rows) {
+      let got = null;
+      let fopId = null;
+      for (const f of fops) {
+        if ((tried[r.receipt_ref] || []).includes(f.id)) continue;
+        if (budget.cb >= CB_MAX) {
+          more = true;
+          break;
+        }
+        budget.cb++;
+        try {
+          got = await getReceipt(fetchFn, f, r.receipt_ref);
+        } catch (e) {
+          if (e.pending) {
+            more = true;
+            break;
+          }
+        }
+        (tried[r.receipt_ref] ||= []).push(f.id);
+        if (got) {
+          fopId = f.id;
+          break;
+        }
+      }
+      if (more) break;
+      if (got) {
+        ups.push([
+          `INSERT INTO chk_receipts (id, fop_id, day, at, type, total, fiscal, pays, refs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+          [got.id, fopId, kyivDayOf3(got.at) || kyivDay(), got.at, got.type, got.total, got.fiscal, JSON.stringify(got.pays), got.refs]
+        ]);
+        ups.push([`UPDATE chk_orders SET ref_state = 'ok' WHERE code = ?`, [r.code]]);
+      } else ups.push([`UPDATE chk_orders SET ref_state = 'nofop' WHERE code = ?`, [r.code]]);
+      delete tried[r.receipt_ref];
+    }
+    ups.push([`INSERT INTO settings (key, value) VALUES ('chk_ref_tried', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(tried)]]);
+    await db.batch(ups);
+    return { more };
+  }
   async function step({ force = false } = {}) {
     const s = await loadSettings(db);
     if (!s.lpcrm_subdomain || !s.lpcrm_key) return { skipped: "LP-CRM \u043D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E" };
@@ -17894,7 +18049,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       [nowIso(), new Date(Date.now() - 5 * 6e4).toISOString()]
     );
     if (!lock.changes) return { busy: true };
-    const budget = { lp: 0, np: 0, rd: 0, cb: 0 };
+    const budget = { lp: 0, np: 0, rd: 0, prom: 0, cb: 0 };
     const res = {};
     try {
       const cr = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
@@ -17911,7 +18066,15 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         if (e.pending) throw e;
         return { error: e.message };
       });
+      res.prom = await syncProm(budget).catch((e) => {
+        if (e.pending) throw e;
+        return { error: e.message };
+      });
       res.cb = await syncReceipts(budget).catch((e) => {
+        if (e.pending) throw e;
+        return { error: e.message };
+      });
+      res.refs = await syncReceiptRefs(budget, s).catch((e) => {
         if (e.pending) throw e;
         return { error: e.message };
       });
@@ -17919,8 +18082,8 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       if (!e.pending) throw e;
       res.more = true;
     } finally {
-      const more = Boolean(res.more || res.crm?.more || res.rd?.more || res.cb?.more);
-      const errs = [res.crm?.error, res.np?.error, res.rd?.error, res.cb?.error, ...Object.entries(res.cb?.errors || {}).map(([k, v]) => `Checkbox ${k}: ${v}`)].filter(Boolean);
+      const more = Boolean(res.more || res.crm?.more || res.rd?.more || res.prom?.more || res.cb?.more || res.refs?.more);
+      const errs = [res.crm?.error, res.np?.error, res.rd?.error, res.prom?.error && `Prom: ${res.prom.error}`, res.cb?.error, ...Object.entries(res.cb?.errors || {}).map(([k, v]) => `Checkbox ${k}: ${v}`)].filter(Boolean);
       Object.assign(state, { more, finished: more ? state.finished : nowIso(), at: nowIso(), errors: errs.slice(0, 5) });
       const fin = [];
       if (state.pruned !== kyivDay()) {
@@ -17946,7 +18109,8 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const [rs, orders, receipts, fopsAll, offices, channels, accounts, txs, stNames] = await Promise.all([
       rules(),
       db.all(`SELECT * FROM chk_orders WHERE listed_at != '' AND listed_at >= ? AND day BETWEEN ? AND ? ORDER BY day DESC, code DESC`, [listed, from, to]),
-      db.all(`SELECT * FROM chk_receipts WHERE day BETWEEN ? AND ?`, [recFrom, recTo]),
+      // чеки за період + прив'язані в LP-CRM до замовлень періоду (можуть бути з іншого дня)
+      db.all(`SELECT * FROM chk_receipts WHERE day BETWEEN ? AND ? OR id IN (SELECT receipt_ref FROM chk_orders WHERE receipt_ref != '' AND day BETWEEN ? AND ?)`, [recFrom, recTo, from, to]),
       db.all(`SELECT id, short_name, ipn, iban FROM fops`),
       db.all(`SELECT office_id, name, fop_id FROM offices`),
       db.all(`SELECT name, fop_id FROM channels`),
@@ -18021,7 +18185,8 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         carrier: CARRIERS[o.carrier] || "",
         cod: o.cod,
         cod_kind: o.cod_kind,
-        receipt: receipt ? { id: receipt.id, total: receipt.total, fop: fops[String(receipt.fop_id)] || "", at: receipt.at, pays: receipt.pays.map((p) => p.label || p.type).filter(Boolean), bySum: Boolean(receipt.bySum), url: `https://check.checkbox.ua/${receipt.id}` } : null,
+        mp_pay: o.mp_pay ? o.mp_pay_name || o.mp_pay : "",
+        receipt: receipt ? { id: receipt.id, total: receipt.total, fop: fops[String(receipt.fop_id)] || "", at: receipt.at, pays: receipt.pays.map((p) => p.label || p.type).filter(Boolean), bySum: Boolean(receipt.bySum), url: `https://check.checkbox.ua/${receipt.id}` } : o.receipt_ref ? { id: o.receipt_ref, total: null, fop: "", at: "", pays: [], bySum: false, url: `https://check.checkbox.ua/${o.receipt_ref}`, crmOnly: true } : null,
         expected_fop: o.fopId ? fops[String(o.fopId)] || "" : "",
         level: ev.level,
         items: ev.items
@@ -18046,8 +18211,9 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       a[r.level] = (a[r.level] || 0) + 1;
       return a;
     }, {});
+    const noCb = (await db.all(`SELECT short_name, checkbox_login, checkbox_password, checkbox_license, checkbox_pin FROM fops WHERE active = 1`)).filter((f) => !hasCheckbox(f)).map((f) => f.short_name);
     const state = await getJson2("chk_state", {});
-    return c.json({ from, to, rows, counts, state: { at: state.at || "", finished: state.finished || "", more: Boolean(state.more), errors: state.errors || [] } });
+    return c.json({ from, to, rows, counts, no_checkbox: noCb, state: { at: state.at || "", finished: state.finished || "", more: Boolean(state.more), errors: state.errors || [] } });
   });
   app.get("/api/checks/receipts", async (c) => {
     need(c, "users");
@@ -18088,17 +18254,6 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       saved[id] = row;
     }
     await setJson("chk_pay", saved);
-    return c.json({ ok: true });
-  });
-  app.get("/api/checks/settings", async (c) => {
-    need(c, "users");
-    const v = (await db.get(`SELECT value FROM settings WHERE key = 'chk_dup_notify'`))?.value;
-    return c.json({ dup_notify: v === "1" });
-  });
-  app.put("/api/checks/settings", async (c) => {
-    need(c, "users");
-    const b = await c.req.json();
-    await db.run(`INSERT INTO settings (key, value) VALUES ('chk_dup_notify', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [b.dup_notify ? "1" : "0"]);
     return c.json({ ok: true });
   });
   app.post("/api/checks/refresh", async (c) => {
@@ -19778,7 +19933,7 @@ var schema15 = {
 // src/modules/checks/schema.js
 var schema16 = {
   name: "checks",
-  version: 1,
+  version: 3,
   tables: [
     // Замовлення LP-CRM у статусах «відправлено / очікує викупу / завершено» за останні CHECK_DAYS днів.
     // listed_at — коли востаннє бачили в цих статусах (зникло зі списку — більше не показуємо);
@@ -19833,7 +19988,17 @@ var schema16 = {
     PRIMARY KEY (fop_id, day)
   )`
   ],
-  columns: []
+  columns: [
+    // Замовлення Prom з тією самою ТТН (знайдено серед замовлень маркетплейсів): спосіб оплати в Prom —
+    // mp_pay: prosale_paid | prosale_unpaid | cod | other; mp_pay_name — як у кабінеті Prom; mp_at — коли перевірено.
+    ["chk_orders", "mp_pay", "TEXT DEFAULT ''"],
+    ["chk_orders", "mp_pay_name", "TEXT DEFAULT ''"],
+    ["chk_orders", "mp_at", "TEXT DEFAULT ''"],
+    // Чек, прив'язаний до замовлення в LP-CRM (номер чека Checkbox, UUID); ref_state: '' — ще не шукали,
+    // ok — чек є серед завантажених, nofop — жодна каса, підключена в сервісі, цього чека не бачить.
+    ["chk_orders", "receipt_ref", "TEXT DEFAULT ''"],
+    ["chk_orders", "ref_state", "TEXT DEFAULT ''"]
+  ]
 };
 
 // src/migrate.js
