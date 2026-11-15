@@ -1,6 +1,6 @@
 // «Перевірка»: автоматична звірка відправлених замовлень LP-CRM — вид оплати ↔ наложка в ТТН, чек Checkbox (сума, спосіб
 // оплати, ФОП), оплата на рахунок ↔ ФОП чека, можливі дублі. Окрема вкладка «Чеки за день» — замість зошита: кожен чек ФОП
-// з замовленням, до якого його зіставлено. «Налаштування» — сповіщення про дублі й що очікувати для кожного виду оплати LP-CRM.
+// з замовленням, до якого його зіставлено. «Налаштування» — що очікувати для кожного виду оплати LP-CRM.
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, fmtDateTime, todayKyiv } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
@@ -31,8 +31,8 @@ export function createChecksPages() {
     <td class="nowrap"><b>№ ${esc(r.id || r.code)}</b><div class="small muted">${dmy(r.day)} · ${esc(r.status)}</div><div class="small muted">${esc(r.user || '')}</div></td>
     <td>${esc(r.buyer || '—')}${r.phone ? `<div class="small muted">${phoneFmt(r.phone)}</div>` : ''}<div class="small muted">${esc(r.channel || r.office || '')}</div></td>
     <td class="nowrap"><b>${uah(r.total)}</b><div class="small">${esc(r.payment)}</div><div class="small muted">${esc(CLS_NAME[r.cls] || '')}${r.partial ? ' · часткова' : ''}</div></td>
-    <td class="nowrap">${r.ttn ? `<b>${esc(r.ttn)}</b>` : '<span class="muted">—</span>'}<div class="small muted">${esc(r.carrier)}</div>${r.cod ? `<div class="small">наложка ${uah(r.cod)}${r.cod_kind === 'ctrl' ? ' · контроль оплати' : ''}</div>` : ''}</td>
-    <td>${r.receipt ? `<a href="${esc(r.receipt.url)}" target="_blank" rel="noopener">${uah(r.receipt.total)}</a><div class="small">${esc(r.receipt.fop)}</div><div class="small muted">${esc(r.receipt.pays.join(', '))}${r.receipt.bySum ? ' · за сумою' : ''}</div>`
+    <td class="nowrap">${r.ttn ? `<b>${esc(r.ttn)}</b>` : '<span class="muted">—</span>'}<div class="small muted">${esc(r.carrier)}</div>${r.cod ? `<div class="small">наложка ${uah(r.cod)}${r.cod_kind === 'ctrl' ? ' · контроль оплати' : ''}</div>` : ''}${r.mp_pay ? `<div class="small muted">Prom: ${esc(r.mp_pay)}</div>` : ''}</td>
+    <td>${r.receipt?.crmOnly ? `<a href="${esc(r.receipt.url)}" target="_blank" rel="noopener">чек з LP-CRM</a><div class="small muted">суму не звірено</div>` : r.receipt ? `<a href="${esc(r.receipt.url)}" target="_blank" rel="noopener">${uah(r.receipt.total)}</a><div class="small">${esc(r.receipt.fop)}</div><div class="small muted">${esc(r.receipt.pays.join(', '))}${r.receipt.bySum ? ' · за сумою' : ''}</div>`
     : '<span class="muted">—</span>'}${r.expected_fop && (!r.receipt || r.receipt.fop !== r.expected_fop) ? `<div class="small muted">за відділом: ${esc(r.expected_fop)}</div>` : ''}</td>
     <td style="min-width:260px"><span class="badge ${LV[r.level]?.[0] || ''}">${LV[r.level]?.[1] || ''}</span>${items(r)}${r.comment ? `<div class="small muted chk-com">Коментар: ${esc(r.comment)}</div>` : ''}</td>
   </tr>`;
@@ -56,6 +56,7 @@ export function createChecksPages() {
         <button class="btn" id="chkRefresh">🔄 Оновити зараз</button><button class="btn" id="chkXls">⬇ Excel</button></div></div>
       <div class="small muted" style="margin-bottom:10px">Відправлені замовлення LP-CRM за ${dmy(d.from)}–${dmy(d.to)}: вид оплати ↔ наложка в ТТН, чек Checkbox, оплата на рахунок.
         ${st.finished ? `Дані оновлено ${esc(fmtDateTime(st.finished))}` : 'Дані ще збираються'}${st.more ? ' · збір триває…' : ''} · оновлюється само раз на 10 хв.</div>
+      ${(d.no_checkbox || []).length ? `<div class="alert warn small" style="margin-bottom:10px">Без доступу до Checkbox (чеки цих ФОП не звіряємо): ${d.no_checkbox.map(esc).join(', ')}. Логін і пароль каси вносяться в «Налаштування → ФОПи накладних».</div>` : ''}
       ${(st.errors || []).length ? `<div class="alert warn small" style="margin-bottom:10px">Не все вдалося зібрати: ${st.errors.map(esc).join('; ')}</div>` : ''}
       ${fpLayout(fpGroup('Результат', LEVELS.map(([k, v, hint]) => fpBtn(`<span class="ret-st"><span>${esc(v)}</span>${hint ? `<span class="small muted">${esc(hint)}</span>` : ''}</span><b class="small ${k === 'bad' && lvN[k] ? 'ret-bad' : ''}">${lvN[k] || ''}</b>`, f.lv === k, `data-clv="${k}"`)).join(''))
         + fpGroup('Період', `<div class="an7-dates ${f.from || f.to ? 'on' : ''}"><input id="chkFrom" type="date" value="${esc(f.from)}" aria-label="З дати"><input id="chkTo" type="date" value="${esc(f.to)}" aria-label="По дату"></div>`),
@@ -120,12 +121,9 @@ export function createChecksPages() {
 
   // Види оплат LP-CRM: клас перевірки і слово, яке має бути в способі оплати чека.
   async function viewPay() {
-    const [d, cfg] = await Promise.all([api('GET', '/api/checks/pay'), api('GET', '/api/checks/settings')]);
+    const d = await api('GET', '/api/checks/pay');
     main.innerHTML = `
       <div class="head-row"><h2>Налаштування перевірки</h2></div>
-      <div class="card"><label class="chk-sw"><input type="checkbox" id="dupNotify" ${cfg.dup_notify ? 'checked' : ''}>
-        <span><b>Сповіщення в Telegram про дублі</b><span class="small muted"> — та сама ТТН у кількох замовленнях LP-CRM або той самий телефон серед «Принят» за 7 днів (менеджерам цих замовлень і власнику).
-        Вимкнено — дублі видно лише у вкладці «Замовлення».</span></span></label></div>
       <div class="head-row"><h3>Види оплат</h3><div class="btn-row"><button class="btn primary" id="payKeep">Зберегти види оплат</button></div></div>
       <div class="small muted" style="margin-bottom:10px">Що очікувати для кожного виду оплати LP-CRM: <b>післяплата</b> — у ТТН має бути наложка на суму замовлення;
         <b>через сервіс</b> (RozetkaPay, Пром-оплата) і <b>на рахунок ФОП</b> — наложки бути не повинно; для «на рахунок» ще шукаємо надходження в Opendatabot.
@@ -135,9 +133,6 @@ export function createChecksPages() {
         <td><select data-pcls aria-label="Що перевіряти для «${esc(r.name)}»">${Object.entries(d.classes).map(([k, v]) => `<option value="${k}" ${r.cls === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></td>
         <td><input data-pcb value="${esc(r.cb || '')}" placeholder="напр. NovaPay" aria-label="Спосіб оплати в чеку для «${esc(r.name)}»"></td></tr>`).join('')}
       </tbody></table></div>`;
-    $('#dupNotify').onchange = async (e) => {
-      try { await api('PUT', '/api/checks/settings', { dup_notify: e.target.checked }); toast(e.target.checked ? 'Сповіщення про дублі ввімкнено' : 'Сповіщення про дублі вимкнено'); } catch (err) { toast(err.message, true); e.target.checked = !e.target.checked; }
-    };
     $('#payKeep').onclick = async () => {
       const rows = $$('[data-pid]').map((tr) => ({ id: tr.dataset.pid, name: d.rows.find((x) => x.id === tr.dataset.pid)?.name, cls: $('[data-pcls]', tr).value, cb: $('[data-pcb]', tr).value }));
       try { await api('PUT', '/api/checks/pay', { rows }); toast('Збережено'); viewPay(); } catch (e) { toast(e.message, true); }

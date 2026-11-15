@@ -416,7 +416,6 @@ await db.run(`INSERT INTO settings (key, value) VALUES ('an_ttn_check_at', ?) ON
   const flip = (o) => { o.status = String(trackedSt.find((x) => String(x) !== o.status)); };
   await db.batch([
     [`INSERT INTO settings (key, value) VALUES ('tg_token', '1:x') ON CONFLICT(key) DO UPDATE SET value = excluded.value`, []],
-    [`INSERT INTO settings (key, value) VALUES ('chk_dup_notify', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value`, []],
     [`UPDATE users SET tg_chat_id = '42', crm_logins = ? WHERE login = 'o'`, [c2.user]],
   ]);
   a.ttn = '20450000001111'; b.ttn = '20 4500 0000 1111'; flip(a); flip(b);
@@ -494,14 +493,6 @@ await db.run(`INSERT INTO settings (key, value) VALUES ('an_ttn_check_at', ?) ON
   tgSent.length = 0;
   await req('POST', '/api/an/ttn-check');
   assert.ok(tgSent.some((t) => /Дубль ТТН 20451111222233/.test(t.text) && String(t.chat_id) === '44'), 'ТТН-дубль — і власнику');
-  // Сповіщення про дублі вимкнено («Перевірка → Налаштування») — дубль знайдено, але в Telegram не йде.
-  await db.run(`UPDATE settings SET value = '0' WHERE key = 'chk_dup_notify'`);
-  p.ttn = '20451111222244'; q.ttn = '20451111222244';
-  await db.run(`DELETE FROM an_ttn_recent WHERE code IN (?, ?)`, [p.order_id, q.order_id]);
-  tgSent.length = 0;
-  await req('POST', '/api/an/ttn-check');
-  assert.equal(tgSent.filter((t) => /Дубль/.test(t.text)).length, 0, 'вимкнено — без сповіщень');
-  assert.ok(await db.get(`SELECT 1 FROM an_ttn_dups WHERE ttn = '20451111222244'`), 'але дубль запам’ятовано (після ввімкнення не прийде старе)');
   await db.run(`UPDATE users SET tg_chat_id = '', crm_logins = '' WHERE login IN ('o', 'man')`);
 }
 

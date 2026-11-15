@@ -4,16 +4,19 @@
 //  1) LP-CRM: номери замовлень у статусах «Отправлен / Ожидает выкупа / Завершено» за CHECK_DAYS днів, повні дані — лише нових
 //     і тих, у кого змінився статус (вид оплати, сума, відділ, поле 1, ТТН, коментар);
 //  2) ТТН: Нова пошта — відстеження пакетами по 100 (контроль оплати / грошовий переказ і сума); ROZETKA Delivery — сума
-//     накладеного платежу (по кожному кабінету Розетки, поки не знайдемо ТТН);
+//     накладеного платежу (по кожному кабінету Розетки, поки не знайдемо ТТН); Prom — замовлення Prom з тією самою ТТН
+//     (з уже завантажених замовлень маркетплейсів) і його оплата через API Prom: Пром-оплата (оплачено чи ні) або при отриманні.
+//     ТТН «PRM-…» (Розетка Делівері, створені в Prom) перевіряємо саме так;
 //  3) Checkbox: усі чеки кожного ФОП за ці дні (день, що минув, читаємо один раз; сьогодні й учора — повторно).
 // Надходження на рахунки беремо з модуля платежів (Opendatabot) — він уже збирає їх сам.
-// Сповіщень у Telegram модуль не надсилає; тут же вимикач сповіщень про дублі ТТН / телефонів з аналітики (chk_dup_notify).
+// Сповіщень у Telegram модуль не надсилає (сповіщення про дублі ТТН / телефонів, як і раніше, надсилає аналітика).
 // Висновки (що не так із замовленням) не зберігаємо: рахуємо під час показу сторінки з rules.js — завжди за свіжими даними.
 import { need, nowIso, kyivDay, num, round2, loadSettings } from '../../core/common.js';
 import { getOrderCodesByStatus, getOrdersBatch, getStatuses, lpcrmBusy } from '../../integrations/lpcrm.js';
 import { npTrackMany } from '../../integrations/novaposhta.js';
 import { rzDeliveryList } from '../../integrations/rozetka.js';
-import { hasCheckbox, listReceipts } from '../../integrations/checkbox.js';
+import { promOrder, promPayment } from '../../integrations/prom.js';
+import { hasCheckbox, listReceipts, getReceipt } from '../../integrations/checkbox.js';
 import { ttnOf } from '../analytics/index.js';
 import { payRules, carrierOf, matchReceipts, findPayment, evaluate, partialOf, CLASSES, CARRIERS, PAY_DEFAULTS } from './rules.js';
 
@@ -23,6 +26,8 @@ const RECEIPT_KEEP_DAYS = 45;
 const LP_MAX = 5; // запитів до LP-CRM за крок (кожен — з паузою 1,5 с)
 const CB_MAX = 12; // запитів до Checkbox за крок
 const RD_MAX = 8; // запитів до Розетки за крок
+const PROM_MAX = 8; // запитів до Prom за крок
+const PROM_RECHECK_MS = 3600e3; // неоплачену Пром-оплату перевіряємо щогодини
 const NP_RECHECK_MS = 12 * 3600e3; // наложку в ТТН НП перечитуємо раз на 12 год (ТТН могли змінити)
 // Статуси, які перевіряємо (за назвою LP-CRM; запасні номери — як у LP-CRM Ековенту).
 const STATUS_RE = /^(отправлен|відправлен|ожидает выкупа|очікує викупу|завершено|виконано)/i;
@@ -32,6 +37,19 @@ const addDays = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864000
 const kyivDayOf = (iso) => (/(Z|[+-]\d\d:\d\d)$/.test(String(iso)) ? kyivDay(new Date(iso)) : String(iso || '').slice(0, 10));
 const nameOf = (v) => String(v && typeof v === 'object' ? v.name ?? '' : v ?? '').trim();
 const p9 = (v) => String(v || '').replace(/\D/g, '').slice(-9);
+
+// Номер чека Checkbox (UUID), прив'язаний до замовлення в LP-CRM: шукаємо в усіх полях замовлення (крім товарів),
+// бо назва поля в API може відрізнятися.
+const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
+export function receiptRefOf(raw, depth = 0) {
+  if (!raw || typeof raw !== 'object' || depth > 2) return '';
+  for (const [k, v] of Object.entries(raw)) {
+    if (k === 'products' || k === 'goods' || k === 'items') continue;
+    if (typeof v === 'string') { const m = v.match(UUID_RE); if (m) return m[0].toLowerCase(); }
+    else if (v && typeof v === 'object') { const r = receiptRefOf(v, depth + 1); if (r) return r; }
+  }
+  return '';
+}
 
 // Замовлення LP-CRM → рядок chk_orders.
 export function normalizeCheckOrder(raw) {
@@ -47,6 +65,7 @@ export function normalizeCheckOrder(raw) {
     site: String(raw.site || '').trim().slice(0, 80), delivery, ttn, carrier: carrierOf(ttn, delivery),
     phone: p9(raw.phone), buyer: String(raw.bayer_name || '').trim().slice(0, 120), user: String(raw.user || '').trim().slice(0, 40),
     comment: String(raw.comment || '').trim().slice(0, 500),
+    receipt_ref: receiptRefOf(raw),
   };
 }
 
@@ -103,9 +122,10 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       if (got.length) {
         await db.batch(got.map((o) => [`UPDATE chk_orders SET id = ?, day = ?, fetched_status = status, payment = ?, total = ?, office = ?, channel = ?, site = ?,
           delivery = ?, phone = ?, buyer = ?, user = ?, comment = ?,
+          ref_state = CASE WHEN receipt_ref = ? THEN ref_state ELSE '' END, receipt_ref = ?,
           ttn_at = CASE WHEN ttn = ? THEN ttn_at ELSE '' END, cod = CASE WHEN ttn = ? THEN cod ELSE 0 END, cod_kind = CASE WHEN ttn = ? THEN cod_kind ELSE '' END,
           ttn_err = CASE WHEN ttn = ? THEN ttn_err ELSE '' END, ttn = ?, carrier = ? WHERE code = ?`,
-        [o.id, o.day, o.payment, o.total, o.office, o.channel, o.site, o.delivery, o.phone, o.buyer, o.user, o.comment, o.ttn, o.ttn, o.ttn, o.ttn, o.ttn, o.carrier, o.code]]));
+        [o.id, o.day, o.payment, o.total, o.office, o.channel, o.site, o.delivery, o.phone, o.buyer, o.user, o.comment, o.receipt_ref, o.receipt_ref, o.ttn, o.ttn, o.ttn, o.ttn, o.ttn, o.carrier, o.code]]));
       }
       // Замовлення, яких LP-CRM не віддала (видалені тощо), — щоб не просити їх щоразу.
       const seen = new Set(got.map((o) => o.code));
@@ -141,7 +161,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
   async function syncRd(budget, s) {
     const accs = await db.all(`SELECT * FROM rz_accounts WHERE active = 1 ORDER BY id`).catch(() => []);
     if (!accs.length || !services.marking?.rozetkaToken) return { skipped: 'немає кабінетів Розетки' };
-    const rows = await db.all(`SELECT code, ttn FROM chk_orders WHERE carrier IN ('rd', 'prm') AND listed_at != '' AND ttn_at = '' AND ttn_err = '' ORDER BY day DESC LIMIT 10`);
+    const rows = await db.all(`SELECT code, ttn FROM chk_orders WHERE carrier = 'rd' AND listed_at != '' AND ttn_at = '' AND ttn_err = '' ORDER BY day DESC LIMIT 10`);
     const tried = fromS(s, 'chk_rd_tried'); // ТТН → кабінети, де вже шукали
     const ups = [];
     for (const r of rows) {
@@ -159,13 +179,45 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       }
       const now = nowIso();
       if (found) ups.push([`UPDATE chk_orders SET ttn_at = ?, ttn_err = '', cod = ?, cod_kind = ? WHERE code = ?`, [now, found.cod || 0, found.cod > 0 ? 'cod' : '', r.code]]);
-      else if (r.ttn.toUpperCase().startsWith('PRM-')) ups.push([`UPDATE chk_orders SET ttn_err = 'не знайдено в кабінетах Розетки' WHERE code = ?`, [r.code]]);
       else ups.push([`UPDATE chk_orders SET ttn_at = ?, ttn_err = 'ТТН не знайдено в жодному кабінеті Розетки' WHERE code = ?`, [now, r.code]]);
       delete tried[r.ttn];
     }
     await db.batch(ups);
     await setJson('chk_rd_tried', tried);
     return {};
+  }
+
+  // Prom: замовлення з тією самою ТТН (серед уже завантажених замовлень маркетплейсів) → оплата через API Prom.
+  async function syncProm(budget) {
+    const accs = new Map((await db.all(`SELECT id, token FROM prom_accounts WHERE active = 1`).catch(() => [])).map((a) => [a.id, a.token]));
+    if (!accs.size) return { skipped: 'немає магазинів Prom' };
+    const from = addDays(kyivDay(), -CHECK_DAYS - 30);
+    const mp = await db.all(`SELECT account_id, id, ttn FROM mp_orders WHERE mp = 'prom' AND created_at >= ? AND ttn != ''`, [from]).catch(() => []);
+    const byTtn = new Map(mp.map((m) => [String(m.ttn).replace(/\s/g, '').toUpperCase(), m]));
+    if (!byTtn.size) return {};
+    const hourAgo = new Date(Date.now() - PROM_RECHECK_MS).toISOString();
+    const rows = (await db.all(`SELECT code, ttn, carrier, total FROM chk_orders WHERE listed_at != '' AND ttn != '' AND (mp_at = '' OR (mp_pay = 'prosale_unpaid' AND mp_at < ?))
+      ORDER BY day DESC LIMIT 400`, [hourAgo])).filter((r) => byTtn.has(String(r.ttn).replace(/\s/g, '').toUpperCase()));
+    const ups = [];
+    let more = false;
+    for (const r of rows) {
+      const m = byTtn.get(String(r.ttn).replace(/\s/g, '').toUpperCase());
+      const token = accs.get(m.account_id);
+      if (!token) continue;
+      if (budget.prom >= PROM_MAX) { more = true; break; }
+      budget.prom++;
+      let o = null;
+      try { o = await promOrder(fetchFn, token, m.id); } catch (e) { if (e.pending) { await db.batch(ups); throw e; } continue; }
+      if (!o) continue;
+      const p = promPayment(o);
+      const pay = p.kind === 'prosale' ? (p.paid ? 'prosale_paid' : 'prosale_unpaid') : p.kind;
+      const now = nowIso();
+      ups.push([`UPDATE chk_orders SET mp_pay = ?, mp_pay_name = ?, mp_at = ? WHERE code = ?`, [pay, p.name.slice(0, 80), now, r.code]]);
+      // ТТН «PRM-…»: наложку бачимо лише через спосіб оплати в Prom (при отриманні — наложка на суму замовлення Prom).
+      if (r.carrier === 'prm') ups.push([`UPDATE chk_orders SET ttn_at = ?, ttn_err = '', cod = ?, cod_kind = ? WHERE code = ?`, [now, p.kind === 'cod' ? (p.total || r.total) : 0, p.kind === 'cod' ? 'prom' : '', r.code]]);
+    }
+    await db.batch(ups);
+    return { more };
   }
 
   // ---------------------------------------------------------------- 3) Checkbox
@@ -216,6 +268,41 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     return { errors };
   }
 
+  // Чеки, прив'язані до замовлень у LP-CRM, яких немає серед завантажених (інший день, інша каса): беремо за номером
+  // з кожного ФОП з доступом до Checkbox. Жоден не бачить — каса цього ФОП не підключена в сервісі (ref_state = nofop).
+  async function syncReceiptRefs(budget, s) {
+    const mark = [`UPDATE chk_orders SET ref_state = 'ok' WHERE ref_state = '' AND receipt_ref != '' AND receipt_ref IN (SELECT id FROM chk_receipts)`, []];
+    if (budget.cb >= CB_MAX) { await db.batch([mark]); return { more: true }; }
+    const rows = await db.all(`SELECT o.code, o.receipt_ref FROM chk_orders o WHERE o.listed_at != '' AND o.receipt_ref != '' AND o.ref_state = ''
+      AND NOT EXISTS (SELECT 1 FROM chk_receipts r WHERE r.id = o.receipt_ref) ORDER BY o.day DESC LIMIT 20`);
+    if (!rows.length) { await db.batch([mark]); return {}; }
+    const fops = (await db.all(`SELECT * FROM fops WHERE active = 1 ORDER BY id`)).filter(hasCheckbox);
+    const tried = fromS(s, 'chk_ref_tried'); // чек → ФОП, де вже шукали
+    const ups = [mark];
+    let more = false;
+    for (const r of rows) {
+      let got = null; let fopId = null;
+      for (const f of fops) {
+        if ((tried[r.receipt_ref] || []).includes(f.id)) continue;
+        if (budget.cb >= CB_MAX) { more = true; break; }
+        budget.cb++;
+        try { got = await getReceipt(fetchFn, f, r.receipt_ref); } catch (e) { if (e.pending) { more = true; break; } }
+        (tried[r.receipt_ref] ||= []).push(f.id);
+        if (got) { fopId = f.id; break; }
+      }
+      if (more) break;
+      if (got) {
+        ups.push([`INSERT INTO chk_receipts (id, fop_id, day, at, type, total, fiscal, pays, refs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+          [got.id, fopId, kyivDayOf(got.at) || kyivDay(), got.at, got.type, got.total, got.fiscal, JSON.stringify(got.pays), got.refs]]);
+        ups.push([`UPDATE chk_orders SET ref_state = 'ok' WHERE code = ?`, [r.code]]);
+      } else ups.push([`UPDATE chk_orders SET ref_state = 'nofop' WHERE code = ?`, [r.code]]);
+      delete tried[r.receipt_ref];
+    }
+    ups.push([`INSERT INTO settings (key, value) VALUES ('chk_ref_tried', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(tried)]]);
+    await db.batch(ups);
+    return { more };
+  }
+
   // Один крок збору (фонова задача або кнопка «Оновити зараз»). Замок — щоб два звернення не робили одне й те саме.
   async function step({ force = false } = {}) {
     const s = await loadSettings(db);
@@ -225,7 +312,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const lock = await db.run(`INSERT INTO settings (key, value) VALUES ('chk_lock', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
       [nowIso(), new Date(Date.now() - 5 * 60e3).toISOString()]);
     if (!lock.changes) return { busy: true };
-    const budget = { lp: 0, np: 0, rd: 0, cb: 0 };
+    const budget = { lp: 0, np: 0, rd: 0, prom: 0, cb: 0 };
     const res = {};
     try {
       const cr = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
@@ -233,13 +320,15 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       else res.crm = await syncCrm(cr, budget, state, s).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
       res.np = await syncNp(budget).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
       res.rd = await syncRd(budget, s).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
+      res.prom = await syncProm(budget).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
       res.cb = await syncReceipts(budget).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
+      res.refs = await syncReceiptRefs(budget, s).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
     } catch (e) {
       if (!e.pending) throw e;
       res.more = true;
     } finally {
-      const more = Boolean(res.more || res.crm?.more || res.rd?.more || res.cb?.more);
-      const errs = [res.crm?.error, res.np?.error, res.rd?.error, res.cb?.error, ...Object.entries(res.cb?.errors || {}).map(([k, v]) => `Checkbox ${k}: ${v}`)].filter(Boolean);
+      const more = Boolean(res.more || res.crm?.more || res.rd?.more || res.prom?.more || res.cb?.more || res.refs?.more);
+      const errs = [res.crm?.error, res.np?.error, res.rd?.error, res.prom?.error && `Prom: ${res.prom.error}`, res.cb?.error, ...Object.entries(res.cb?.errors || {}).map(([k, v]) => `Checkbox ${k}: ${v}`)].filter(Boolean);
       Object.assign(state, { more, finished: more ? state.finished : nowIso(), at: nowIso(), errors: errs.slice(0, 5) });
       // Стан, зняття замка і (раз на добу) чистка старих даних — одним пакетом.
       const fin = [];
@@ -267,7 +356,8 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const [rs, orders, receipts, fopsAll, offices, channels, accounts, txs, stNames] = await Promise.all([
       rules(),
       db.all(`SELECT * FROM chk_orders WHERE listed_at != '' AND listed_at >= ? AND day BETWEEN ? AND ? ORDER BY day DESC, code DESC`, [listed, from, to]),
-      db.all(`SELECT * FROM chk_receipts WHERE day BETWEEN ? AND ?`, [recFrom, recTo]),
+      // чеки за період + прив'язані в LP-CRM до замовлень періоду (можуть бути з іншого дня)
+      db.all(`SELECT * FROM chk_receipts WHERE day BETWEEN ? AND ? OR id IN (SELECT receipt_ref FROM chk_orders WHERE receipt_ref != '' AND day BETWEEN ? AND ?)`, [recFrom, recTo, from, to]),
       db.all(`SELECT id, short_name, ipn, iban FROM fops`),
       db.all(`SELECT office_id, name, fop_id FROM offices`),
       db.all(`SELECT name, fop_id FROM channels`),
@@ -312,8 +402,9 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         code: o.code, id: o.id, day: o.day, status: o.status_name || String(o.status), total: o.total,
         payment: rule?.name || (o.payment ? `Оплата ${o.payment}` : '—'), cls: rule?.cls || '', partial: Boolean(part),
         office: officeName.get(String(o.office)) || o.office, channel: o.channel, site: o.site, buyer: o.buyer, phone: o.phone, user: o.user, comment: o.comment,
-        ttn: o.ttn, carrier: CARRIERS[o.carrier] || '', cod: o.cod, cod_kind: o.cod_kind,
-        receipt: receipt ? { id: receipt.id, total: receipt.total, fop: fops[String(receipt.fop_id)] || '', at: receipt.at, pays: receipt.pays.map((p) => p.label || p.type).filter(Boolean), bySum: Boolean(receipt.bySum), url: `https://check.checkbox.ua/${receipt.id}` } : null,
+        ttn: o.ttn, carrier: CARRIERS[o.carrier] || '', cod: o.cod, cod_kind: o.cod_kind, mp_pay: o.mp_pay ? o.mp_pay_name || o.mp_pay : '',
+        receipt: receipt ? { id: receipt.id, total: receipt.total, fop: fops[String(receipt.fop_id)] || '', at: receipt.at, pays: receipt.pays.map((p) => p.label || p.type).filter(Boolean), bySum: Boolean(receipt.bySum), url: `https://check.checkbox.ua/${receipt.id}` }
+          : o.receipt_ref ? { id: o.receipt_ref, total: null, fop: '', at: '', pays: [], bySum: false, url: `https://check.checkbox.ua/${o.receipt_ref}`, crmOnly: true } : null,
         expected_fop: o.fopId ? fops[String(o.fopId)] || '' : '',
         level: ev.level, items: ev.items,
       };
@@ -336,8 +427,11 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const { from, to } = period(c);
     const { rows } = await build(from, to);
     const counts = rows.reduce((a, r) => { a[r.level] = (a[r.level] || 0) + 1; return a; }, {});
+    // ФОП, чеки яких не можемо звірити: каса не підключена (немає доступу Checkbox у «ФОПи накладних»).
+    const noCb = (await db.all(`SELECT short_name, checkbox_login, checkbox_password, checkbox_license, checkbox_pin FROM fops WHERE active = 1`))
+      .filter((f) => !hasCheckbox(f)).map((f) => f.short_name);
     const state = await getJson('chk_state', {});
-    return c.json({ from, to, rows, counts, state: { at: state.at || '', finished: state.finished || '', more: Boolean(state.more), errors: state.errors || [] } });
+    return c.json({ from, to, rows, counts, no_checkbox: noCb, state: { at: state.at || '', finished: state.finished || '', more: Boolean(state.more), errors: state.errors || [] } });
   });
 
   // Чеки за день по ФОП (замість зошита): кожен чек — з яким замовленням зіставлено; без замовлення — окремо.
@@ -381,19 +475,6 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       saved[id] = row;
     }
     await setJson('chk_pay', saved);
-    return c.json({ ok: true });
-  });
-
-  // Налаштування перевірки: сповіщення в Telegram про дублі ТТН і телефонів (з аналітики) — поки типово вимкнено.
-  app.get('/api/checks/settings', async (c) => {
-    need(c, 'users');
-    const v = (await db.get(`SELECT value FROM settings WHERE key = 'chk_dup_notify'`))?.value;
-    return c.json({ dup_notify: v === '1' });
-  });
-  app.put('/api/checks/settings', async (c) => {
-    need(c, 'users');
-    const b = await c.req.json();
-    await db.run(`INSERT INTO settings (key, value) VALUES ('chk_dup_notify', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [b.dup_notify ? '1' : '0']);
     return c.json({ ok: true });
   });
 

@@ -3,6 +3,7 @@
 // Що звіряємо для кожного відправленого замовлення LP-CRM:
 //  1) вид оплати в CRM ↔ наложка в ТТН (Нова пошта: «Контроль оплати» або «Грошовий переказ»; ROZETKA Delivery — сума
 //     накладеного платежу): післяплата — наложка має бути і на суму замовлення; передоплата — наложки бути не повинно;
+//  1б) Prom: Пром-оплата отримана / оплата при отриманні — проти виду оплати в CRM (ТТН «PRM-…» — лише так);
 //  2) чек Checkbox: є, на суму замовлення, спосіб оплати в чеку відповідає виду оплати, ФОП чека — як за відділом / полем 1;
 //  3) оплата на рахунок (Opendatabot): гроші прийшли на того ж ФОП, на кого чек (ТТН може бути від іншого ФОП — це не помилка);
 //  4) дублі: та сама ТТН у кількох замовленнях; той самий телефон, обидва замовлення відправлені за кілька днів.
@@ -102,7 +103,7 @@ const fmt = (n) => `${Math.round(Number(n) * 100) / 100} грн`;
 const kyivDayOf = (iso) => (/(Z|[+-]\d\d:\d\d)$/.test(String(iso)) ? new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv' }).format(new Date(iso)) : String(iso || '').slice(0, 10));
 const addDays = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 
-// Чеки ↔ замовлення: спершу за номером замовлення в чеку (16-значний код або № разом із сумою),
+// Чеки ↔ замовлення: спершу чек, прив'язаний у LP-CRM; далі за номером замовлення в чеку (16-значний код або № разом із сумою),
 // потім — за сумою: чек продажу на ту саму суму від дня замовлення до +20 днів, лише якщо збіг однозначний.
 export function matchReceipts(orders, receipts) {
   const sells = receipts.filter((r) => !/RETURN/i.test(r.type));
@@ -111,7 +112,14 @@ export function matchReceipts(orders, receipts) {
   const take = (o, r) => { byOrder.set(o.code, r); used.add(r.id); };
   const refIndex = new Map();
   for (const r of sells) for (const x of String(r.refs || '').split(' ').filter(Boolean)) { if (!refIndex.has(x)) refIndex.set(x, []); refIndex.get(x).push(r); }
+  // 1) Чек, прив'язаний до замовлення в LP-CRM (номер чека Checkbox), — найнадійніше.
+  const byId = new Map(receipts.map((r) => [String(r.id).toLowerCase(), r]));
   for (const o of orders) {
+    const r = o.receipt_ref && byId.get(String(o.receipt_ref).toLowerCase());
+    if (r && !used.has(r.id)) take(o, { ...r, byRef: true });
+  }
+  for (const o of orders) {
+    if (byOrder.has(o.code)) continue;
     const hit = (refIndex.get(o.code) || []).find((r) => !used.has(r.id))
       || (refIndex.get(String(o.id)) || []).find((r) => !used.has(r.id) && near(r.total, o.total));
     if (hit) take(o, hit);
@@ -166,27 +174,40 @@ export function evaluate(o, ctx) {
     if (!o.ttn_at) add('wait', 'ТТН ще не перевірено — дані з’являться після наступного оновлення.');
     else if (o.ttn_err) add('warn', `ТТН: ${o.ttn_err}`);
     else if (cls === 'cod') {
-      if (!(o.cod > 0)) add('bad', `Післяплата за CRM («${rule.name}»), а в ТТН наложки немає.`);
+      if (!(o.cod > 0)) add('bad', o.carrier === 'prm' ? `Післяплата за CRM («${rule.name}»), а в Prom — «${o.mp_pay_name || 'без оплати при отриманні'}».` : `Післяплата за CRM («${rule.name}»), а в ТТН наложки немає.`);
       else if (part) {
         if (part.sum && !near(o.cod, expCod)) add('bad', `Часткова оплата: наложка ${fmt(o.cod)}, а має бути ${fmt(expCod)} (${fmt(o.total)} − передоплата ${fmt(part.sum)}).`);
         else if (!part.sum && o.cod >= o.total - 0.5) add('warn', 'У коментарі згадано передоплату, але наложка — на всю суму замовлення.');
         else add('ok', `Наложка ${fmt(o.cod)} (часткова оплата)`);
       } else if (!near(o.cod, o.total)) add('bad', `Наложка ${fmt(o.cod)}, а сума замовлення ${fmt(o.total)}.`);
-      else add('ok', `Наложка ${fmt(o.cod)}${o.cod_kind === 'ctrl' ? ' · контроль оплати' : o.cod_kind === 'redelivery' ? ' · грошовий переказ' : ''}`);
+      else add('ok', `Наложка ${fmt(o.cod)}${o.cod_kind === 'ctrl' ? ' · контроль оплати' : o.cod_kind === 'redelivery' ? ' · грошовий переказ' : o.cod_kind === 'prom' ? ' · оплата при отриманні (Prom)' : ''}`);
     } else if (cls === 'prepay' || cls === 'bank') {
-      if (o.cod > 0) add('bad', `Оплата «${rule.name}», а в ТТН стоїть ${o.cod_kind === 'ctrl' ? 'контроль оплати' : 'наложка'} ${fmt(o.cod)}.`);
+      if (o.cod > 0) add('bad', o.cod_kind === 'prom' ? `Оплата «${rule.name}», а в Prom — «${o.mp_pay_name || 'оплата при отриманні'}» (наложка ${fmt(o.cod)}).` : `Оплата «${rule.name}», а в ТТН стоїть ${o.cod_kind === 'ctrl' ? 'контроль оплати' : 'наложка'} ${fmt(o.cod)}.`);
       else add('ok', 'Наложки немає — як і має бути');
     }
   } else if (o.carrier === 'meest') add('info', 'Meest: наложку поки перевіряйте вручну.');
-  else if (o.carrier === 'prm') add(o.ttn_err ? 'info' : 'wait', o.ttn_err ? 'ТТН Prom: у кабінетах Розетки не знайдено — перевірте вручну.' : 'ТТН Prom ще не перевірено.');
+  else if (o.carrier === 'prm') add(o.day < ctx.today ? 'info' : 'wait', o.day < ctx.today ? 'ТТН Prom: замовлення з цією ТТН серед замовлень Prom не знайдено — перевірте вручну.' : 'ТТН Prom: замовлення в Prom ще не знайдено.');
   else add('info', `${CARRIERS[o.carrier] || 'Служба доставки'}: наложка не перевіряється.`);
+
+  // 1б) Оплата в Prom (замовлення Prom з тією самою ТТН): Пром-оплата отримана / ні / при отриманні — проти виду оплати в CRM.
+  if (o.mp_pay && cls) {
+    const isProsale = /пром[\s-]*оплат/i.test(rule?.name || '');
+    const pn = o.mp_pay_name || '';
+    if (isProsale && o.mp_pay === 'prosale_unpaid') add('bad', 'Пром-оплата в Prom ще не надійшла (не оплачено).');
+    else if (isProsale && !o.mp_pay.startsWith('prosale')) add('bad', `У CRM «${rule.name}», а в Prom спосіб оплати «${pn}».`);
+    else if (cls === 'cod' && o.mp_pay === 'prosale_paid') add('bad', `У Prom уже оплачено Пром-оплатою, а в CRM «${rule.name}».`);
+    else if ((cls === 'prepay' || cls === 'bank') && o.mp_pay === 'cod' && o.carrier !== 'prm') add('bad', `У CRM «${rule.name}», а в Prom — «${pn}» (оплата при отриманні).`);
+    else add('ok', `Prom: ${pn}${o.mp_pay === 'prosale_paid' ? ' · оплачено' : o.mp_pay === 'prosale_unpaid' ? ' · не оплачено' : ''}`);
+  }
 
   // 2) Чек
   const r = ctx.receipt;
   // Чек видають під час відправки (і для післяплати теж): відправлене замовлення без чека — помилка.
-  if (!r) add('bad', 'Відправлено, а чек не знайдено в жодному Checkbox.');
+  if (!r && o.receipt_ref && o.ref_state === 'nofop') add('warn', 'У LP-CRM чек прив’язано, але каса цього ФОП не підключена до сервісу — додайте доступ Checkbox у «Налаштування → ФОПи накладних», щоб звірити суму й спосіб оплати.');
+  else if (!r && o.receipt_ref) add('wait', 'У LP-CRM чек прив’язано — завантажуємо його з Checkbox.');
+  else if (!r) add('bad', 'Відправлено, а чек не знайдено: у LP-CRM не прив’язано і в Checkbox не знайдено.');
   else {
-    const how = r.bySum ? ' (знайдено за сумою)' : '';
+    const how = r.bySum ? ' (знайдено за сумою)' : r.byRef ? '' : ' (знайдено за № замовлення)';
     if (!part && !near(r.total, o.total)) add('bad', `Чек на ${fmt(r.total)}, а замовлення на ${fmt(o.total)}${how}.`);
     else add('ok', `Чек ${fmt(r.total)} · ${fopName(r.fop_id)}${how}`);
     const labels = (r.pays || []).map((p) => p.label).filter(Boolean);
