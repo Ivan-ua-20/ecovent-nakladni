@@ -890,3 +890,48 @@ tr.chk-done td { color: var(--muted, #6b7280); }
 .ret-f.chk-chk { flex-direction: row; align-items: center; gap: 8px; align-self: flex-end; min-height: 38px; }
 .ret-f.chk-chk input { width: auto; flex: 0 0 auto; margin: 0; }
 .ret-f.chk-chk span { font-size: 14px; color: inherit; font-weight: 500; }
+
+/* Маркетплейси: бічна панель груп (згортається), список і картка замовлення праворуч */
+.mp-shell { display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 16px; align-items: start; }
+.mp-shell.rail { grid-template-columns: 64px minmax(0, 1fr); }
+.mp-shell.detail { grid-template-columns: 236px minmax(0, 1fr) 380px; }
+.mp-shell.rail.detail { grid-template-columns: 64px minmax(0, 1fr) 380px; }
+.mp-nav { position: sticky; top: 12px; background: #12201c; color: #cfe0db; border-radius: var(--radius); padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; max-height: calc(100vh - 24px); overflow: auto; }
+.mp-nav-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 0 4px 6px; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: #8fb3aa; }
+.mp-shell.rail .mp-nav-top { justify-content: center; }
+.mp-nav-btn { width: 28px; height: 28px; border: 0; border-radius: 6px; background: #1c2f2a; color: #cfe0db; cursor: pointer; font-size: 16px; line-height: 1; }
+.mp-sec { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; cursor: pointer; font: inherit; font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: #8fb3aa; padding: 10px 8px 4px; text-align: left; }
+.mp-chev { display: inline-block; transition: transform .15s; }
+.mp-chev.shut { transform: rotate(-90deg); }
+.mp-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%; border: 0; background: none; color: #cfe0db; font: inherit; font-size: 13.5px; padding: 7px 10px; border-radius: 8px; cursor: pointer; text-align: left; }
+.mp-item:hover { background: #1c2f2a; }
+.mp-item.on { background: var(--accent); color: #fff; font-weight: 600; }
+.mp-item .mp-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-shell.rail .mp-item { flex-direction: column; gap: 1px; padding: 6px 2px; font-size: 11px; text-align: center; }
+.mp-n { color: #8fb3aa; font-size: 12px; }
+.mp-item.on .mp-n { color: #e3f2ef; }
+.mp-pill { padding: 0 7px; border-radius: 9px; font-size: 11px; line-height: 18px; font-weight: 600; letter-spacing: 0; }
+.mp-pill.red { background: #e5484d; color: #fff; }
+.mp-pill.amber { background: #fcd34d; color: #5c3b00; }
+table.list tr.on td { background: var(--accent-soft); }
+.mp-shell.detail table.list .mp-opt { display: none; }
+table.list tr.on td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.mp-detail { position: sticky; top: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); max-height: calc(100vh - 24px); overflow: auto; }
+.mp-d-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.mp-d-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; font-size: 13.5px; }
+.mp-box { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.mp-cap { font-size: 11px; font-weight: 600; letter-spacing: .04em; color: var(--muted); text-transform: uppercase; margin-bottom: 4px; }
+.mp-goods { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+.mp-call { padding: 3px 0; border-bottom: 1px dashed var(--line); }
+.mp-call:last-child { border-bottom: 0; }
+@media (max-width: 1150px) {
+  .mp-shell.detail { grid-template-columns: 236px minmax(0, 1fr); }
+  .mp-shell.rail.detail { grid-template-columns: 64px minmax(0, 1fr); }
+  .mp-detail { position: fixed; top: 0; right: 0; bottom: 0; width: min(420px, 100vw); max-height: none; border-radius: 0; z-index: 50; box-shadow: -8px 0 24px rgba(0,0,0,.15); }
+}
+@media (max-width: 760px) {
+  .mp-shell, .mp-shell.rail, .mp-shell.detail { grid-template-columns: minmax(0, 1fr); }
+  .mp-nav { position: static; max-height: none; flex-direction: row; flex-wrap: wrap; }
+  .mp-nav-top, .mp-sec { display: none; }
+  .mp-item { width: auto; }
+}
