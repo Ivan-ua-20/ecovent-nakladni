@@ -111,6 +111,8 @@ export async function npTrackMany(fetchFn, apiKey, docs) {
       storage: n(d.StorageAmount), basis: s(d.LastCreatedOnTheBasisNumber, 40), basisType: s(d.LastCreatedOnTheBasisDocumentType, 40),
       recipient: s(d.RecipientFullName || d.RecipientFullNameEW, 120), recipientPhone: s(d.PhoneRecipient, 20),
       cargo: s(d.CargoDescriptionString, 200), cost: n(d.AnnouncedPrice), cod: n(d.AfterpaymentOnGoodsCost) || n(d.RedeliverySum),
+      // Окремо: «Контроль оплати» (AfterpaymentOnGoodsCost) і «Грошовий переказ / накладений платіж» (RedeliverySum).
+      ctrl: n(d.AfterpaymentOnGoodsCost), redelivery: n(d.RedeliverySum),
     });
   }
   return out;

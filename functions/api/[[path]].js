@@ -2491,6 +2491,25 @@ async function testCheckbox(fetchFn, fop) {
   const me = await authed(fetchFn, fop, "/cashier/me");
   return { cashier: me?.full_name || "", organization: me?.organization?.title || "" };
 }
+async function listReceipts(fetchFn, fop, fromIso, toIso, offset = 0) {
+  const qs = new URLSearchParams({ from_date: fromIso, to_date: toIso, limit: "100", offset: String(offset), self_receipts: "false" });
+  const r = await authed(fetchFn, fop, `/receipts/search?${qs}`);
+  const results = Array.isArray(r?.results) ? r.results : [];
+  const rows = results.map((rc) => {
+    const text = [rc.header, rc.footer, rc.barcode, rc.order_id, rc.external_id, ...(rc.goods || []).map((g) => g.good?.code || "")].filter(Boolean).join(" ");
+    const refs = [...new Set(String(text).match(/\d{5,20}/g) || [])].slice(0, 20).join(" ");
+    return {
+      id: String(rc.id || ""),
+      type: String(rc.type || ""),
+      at: String(rc.fiscal_date || rc.created_at || ""),
+      total: rc.total_sum != null ? rc.total_sum / 100 : 0,
+      fiscal: String(rc.fiscal_code || ""),
+      pays: (rc.payments || []).map((p) => ({ type: String(p.type || ""), label: String(p.label || ""), value: p.value != null ? p.value / 100 : 0 })),
+      refs
+    };
+  }).filter((x) => x.id);
+  return { rows, more: results.length >= 100 };
+}
 
 // src/modules/refs/index.js
 var SECRET_FOP_FIELDS = ["checkbox_password", "checkbox_pin", "checkbox_license"];
@@ -4306,7 +4325,7 @@ function compactQuery(q) {
     lastSync: q.lastSync
   };
 }
-function mountAnalyticsAi(app, { db, fetchFn, kyivDay: kyivDay2, addDays: addDays6, remap: remap2, rebrand: rebrand2, bump, getSt }) {
+function mountAnalyticsAi(app, { db, fetchFn, kyivDay: kyivDay2, addDays: addDays8, remap: remap2, rebrand: rebrand2, bump, getSt }) {
   const getVal = async (key) => (await db.get(`SELECT value FROM settings WHERE key = ?`, [key]))?.value || "";
   const setVal = (key, value) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]);
   const modelOf = async () => {
@@ -4411,7 +4430,7 @@ function mountAnalyticsAi(app, { db, fetchFn, kyivDay: kyivDay2, addDays: addDay
     while (hist.length && hist[0].role !== "user") hist.shift();
     if (!hist.length || hist[hist.length - 1].role !== "user") throw fail(400, "\u041D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u043F\u0438\u0442\u0430\u043D\u043D\u044F.");
     const today3 = kyivDay2();
-    const base = await inner(c, "POST", "/api/an/query", { from: addDays6(today3, -6), to: today3 });
+    const base = await inner(c, "POST", "/api/an/query", { from: addDays8(today3, -6), to: today3 });
     const o = base.options || {};
     const list = (a, f) => (a || []).map(f).join("; ");
     const system = [
@@ -4824,6 +4843,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const names = await getJson2("an_status_names") || {};
     const users = await db.all(`SELECT tg_chat_id, crm_logins FROM users WHERE active = 1 AND tg_chat_id != '' AND crm_logins != ''`);
     const owners = (await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'owner'`)).map((u) => u.tg_chat_id);
+    const notifyOn = (await db.get(`SELECT value FROM settings WHERE key = 'chk_dup_notify'`))?.value === "1";
     const esc2 = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     let n = 0;
     const recent = addDays(kyivDay(), -recentDays);
@@ -4840,7 +4860,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
 `) + list.map((r) => `\u2022 \u2116 <b>${esc2(r.code)}</b> \xB7 ${esc2(names[r.status] || `\u0441\u0442\u0430\u0442\u0443\u0441 ${r.status}`)} \xB7 ${esc2(r.day.split("-").reverse().join("."))}${r.buyer ? ` \xB7 ${esc2(r.buyer)}` : ""}${r.user ? ` \xB7 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 ${esc2(r.user)}` : ""}`).join("\n") + (tel ? "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0434\u0432\u0456\u0447\u0456." : "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u043F\u043E\u043C\u0438\u043B\u043A\u0430 (\u043E\u0434\u043D\u0430 \u043F\u043E\u0441\u0438\u043B\u043A\u0430 \u043D\u0430 \u0434\u0432\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F).");
       const logins = new Set(list.map((r) => r.user).filter(Boolean));
       const chats = [.../* @__PURE__ */ new Set([...users.filter((u) => crmLogins(u.crm_logins).some((l) => logins.has(l))).map((u) => u.tg_chat_id), ...owners])];
-      if (chats.length) await services.notify?.sendText({ chatIds: chats }, text).catch(() => 0);
+      if (chats.length && notifyOn) await services.notify?.sendText({ chatIds: chats }, text).catch(() => 0);
       await db.run(`INSERT INTO an_ttn_dups (ttn, codes, at) VALUES (?, ?, ?) ON CONFLICT(ttn) DO UPDATE SET codes = excluded.codes, at = excluded.at`, [ttn, codes, nowIso()]);
       n++;
     }
@@ -9454,13 +9474,13 @@ function mountB2bStats(app, { db, myPartner }) {
     const delivered = q.delivered === "1";
     const byItems = fBrands.size > 0 || fCats.size > 0;
     const okOrder = (o) => o.kind === "client" && (!delivered || crmTone(o.crm_status) === "ok");
-    const facet = (keyOf, nameOf, other) => {
+    const facet = (keyOf, nameOf2, other) => {
       const ok = new Set(cur.filter(okOrder).map((o) => o.id));
       const m = /* @__PURE__ */ new Map();
       for (const i of items) {
         if (!ok.has(i.order_id) || other.size && !other.has(other === fBrands ? brandOf2(i) : catOf(i))) continue;
         const k = keyOf(i);
-        const r = m.get(k) || { id: k, name: nameOf(k), units: 0 };
+        const r = m.get(k) || { id: k, name: nameOf2(k), units: 0 };
         r.units += i.qty;
         m.set(k, r);
       }
@@ -9531,11 +9551,11 @@ function mountB2bStats(app, { db, myPartner }) {
     const weekdays = [0, 0, 0, 0, 0, 0, 0];
     for (const o of curF) weekdays[((/* @__PURE__ */ new Date(`${o.day}T12:00:00Z`)).getUTCDay() + 6) % 7]++;
     const clientItems = curF.flatMap((o) => o.fitems);
-    const agg = (keyOf, nameOf) => {
+    const agg = (keyOf, nameOf2) => {
       const m = /* @__PURE__ */ new Map();
       for (const i of clientItems) {
         const k = keyOf(i);
-        const r = m.get(k) || { key: k, name: nameOf(i, k), units: 0, sum: 0, rrp: 0, orders: /* @__PURE__ */ new Set() };
+        const r = m.get(k) || { key: k, name: nameOf2(i, k), units: 0, sum: 0, rrp: 0, orders: /* @__PURE__ */ new Set() };
         r.units += i.qty;
         r.sum += i.price * i.qty;
         r.rrp += (i.rrp || i.price) * i.qty;
@@ -13107,7 +13127,10 @@ async function npTrackMany(fetchFn, apiKey, docs) {
       recipientPhone: s(d.PhoneRecipient, 20),
       cargo: s(d.CargoDescriptionString, 200),
       cost: n(d.AnnouncedPrice),
-      cod: n(d.AfterpaymentOnGoodsCost) || n(d.RedeliverySum)
+      cod: n(d.AfterpaymentOnGoodsCost) || n(d.RedeliverySum),
+      // Окремо: «Контроль оплати» (AfterpaymentOnGoodsCost) і «Грошовий переказ / накладений платіж» (RedeliverySum).
+      ctrl: n(d.AfterpaymentOnGoodsCost),
+      redelivery: n(d.RedeliverySum)
     });
   }
   return out;
@@ -15251,7 +15274,7 @@ function mountReturns(app, { db, fetchFn, onCron, services = {} }) {
     const now = nowIso();
     const today3 = kyivDay();
     const stuckBorder = new Date(Date.now() - STUCK_DAYS * 864e5).toISOString();
-    const p9 = (p) => String(p || "").replace(/\D/g, "").slice(-9);
+    const p92 = (p) => String(p || "").replace(/\D/g, "").slice(-9);
     const seen = /* @__PURE__ */ new Set();
     const stmts = [];
     const owners = new Map((await db.all(`SELECT ret_ttn, orig_ttn FROM ret_items WHERE ret_ttn != ''`)).map((x) => [x.ret_ttn, x.orig_ttn]));
@@ -15282,7 +15305,7 @@ function mountReturns(app, { db, fetchFn, onCron, services = {} }) {
             a.id,
             x.orderId,
             x.customer,
-            p9(x.phone),
+            p92(x.phone),
             x.cargo,
             x.cost,
             x.cod,
@@ -15291,7 +15314,7 @@ function mountReturns(app, { db, fetchFn, onCron, services = {} }) {
             Number(x.status) || 0,
             x.statusTitle,
             x.to,
-            p9(x.toPhone),
+            p92(x.toPhone),
             x.toAddress,
             note,
             now,
@@ -15366,7 +15389,7 @@ function mountReturns(app, { db, fetchFn, onCron, services = {} }) {
           a.id,
           x.id,
           [x.buyer_surname, x.buyer_name].filter(Boolean).join(" ").slice(0, 120),
-          p9(x.buyer_phone),
+          p92(x.buyer_phone),
           String(x.item_name || "").slice(0, 200),
           at,
           got ? prev?.got_at || (prev ? now : at) : "",
@@ -17434,6 +17457,658 @@ ${items.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio 
   return { syncAll };
 }
 
+// src/modules/checks/rules.js
+var CLASSES = { cod: "\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430", prepay: "\u041E\u043F\u043B\u0430\u0442\u0430 \u0447\u0435\u0440\u0435\u0437 \u0441\u0435\u0440\u0432\u0456\u0441", bank: "\u041E\u043F\u043B\u0430\u0442\u0430 \u043D\u0430 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u0424\u041E\u041F", skip: "\u041D\u0435 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u044F\u0442\u0438" };
+var PAY_DEFAULTS = {
+  4: { name: "\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430", cls: "cod" },
+  9: { name: "\u041E\u043F\u043B\u0430\u0442\u0430 \u0433\u043E\u0442\u0456\u0432\u043A\u043E\u044E", cls: "skip", cb: "\u0413\u043E\u0442\u0456\u0432\u043A\u0430" },
+  6: { name: "\u041E\u043F\u043B\u0430\u0442\u0430 \u043D\u0430 \u043A\u0430\u0440\u0442\u043A\u0443", cls: "bank", cb: "\u041A\u0430\u0440\u0442\u043A\u0430" },
+  2: { name: "\u041F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0430", cls: "bank" },
+  7: { name: "\u041F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0430 \u043D\u0430 \u043A\u0430\u0440\u0442\u043A\u0443", cls: "bank", cb: "LiqPay" },
+  10: { name: "\u041F\u0440\u043E\u043C-\u043E\u043F\u043B\u0430\u0442\u0430", cls: "prepay", cb: "RozetkaPay" },
+  11: { name: "\u041E\u043D\u043B\u0430\u0439\u043D-\u043E\u043F\u043B\u0430\u0442\u0430", cls: "prepay", cb: "mono" },
+  12: { name: "OLX \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0430", cls: "prepay" },
+  1: { name: "\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E", cls: "prepay", cb: "\u0435\u043A\u0432\u0430\u0439\u0440\u0438\u043D\u0433" },
+  8: { name: "\u041F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u043A\u043E\u0448\u0442\u0456\u0432", cls: "skip" },
+  5: { name: "\u041E\u0431\u043C\u0456\u043D", cls: "skip" },
+  3: { name: "POS-\u0442\u0435\u0440\u043C\u0456\u043D\u0430\u043B", cls: "skip" },
+  13: { name: "\u041F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0430 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u0430", cls: "bank" },
+  14: { name: "RozetkaPay", cls: "prepay", cb: "RozetkaPay" },
+  15: { name: "\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 Rozetka", cls: "cod", cb: "RozetkaPay" },
+  16: { name: "\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 NovaPay", cls: "cod", cb: "NovaPay" },
+  17: { name: "\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 \u0423\u043A\u0440\u043F\u043E\u0448\u0442\u0430", cls: "cod" },
+  18: { name: "\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 Meest", cls: "cod" },
+  19: { name: "Apple Pay", cls: "prepay" },
+  20: { name: "Google Pay", cls: "prepay" },
+  21: { name: "Mastercard", cls: "prepay" },
+  22: { name: "VISA", cls: "prepay" },
+  23: { name: "PayPal", cls: "prepay" },
+  24: { name: "\u041F\u0420\u041E\u0421\u0422\u0406\u0420", cls: "prepay" },
+  25: { name: "\u041A\u0440\u0435\u0434\u0438\u0442", cls: "prepay" },
+  26: { name: "\u041E\u043F\u043B\u0430\u0442\u0430 \u0447\u0430\u0441\u0442\u0438\u043D\u0430\u043C\u0438", cls: "prepay" },
+  27: { name: "\u0420\u043E\u0437\u0441\u0442\u0440\u043E\u0447\u043A\u0430", cls: "prepay" },
+  28: { name: "Portmone", cls: "prepay" },
+  29: { name: "whitepay", cls: "prepay" },
+  30: { name: "LiqPay", cls: "prepay", cb: "LiqPay" },
+  31: { name: "\u041F\u0440\u0438\u0432\u0430\u044224", cls: "bank" },
+  32: { name: "\u041F\u0440\u0438\u0432\u0430\u0442\u0411\u0430\u043D\u043A", cls: "bank" },
+  33: { name: "Western Union", cls: "bank" },
+  34: { name: "monobank", cls: "bank" },
+  35: { name: "\u041E\u0449\u0430\u0434\u0431\u0430\u043D\u043A", cls: "bank" },
+  36: { name: "UKRSIBBANK", cls: "bank" },
+  37: { name: "\u0423\u043A\u0440\u0435\u043A\u0441\u0456\u043C\u0431\u0430\u043D\u043A", cls: "bank" },
+  38: { name: "\u0423\u043A\u0440\u0433\u0430\u0437\u0431\u0430\u043D\u043A", cls: "bank" },
+  39: { name: "\u041A\u0440\u0435\u0434\u0456 \u0410\u0433\u0440\u0456\u043A\u043E\u043B\u044C \u0411\u0430\u043D\u043A", cls: "bank" },
+  40: { name: "\u041F\u0456\u0432\u0434\u0435\u043D\u043D\u0438\u0439", cls: "bank" },
+  41: { name: "Universal Bank", cls: "bank" },
+  42: { name: "\u041F\u0423\u041C\u0411", cls: "bank" },
+  43: { name: "Forward Bank", cls: "bank" },
+  44: { name: "\u0430\u0431\u0430\u043D\u043A", cls: "bank" },
+  45: { name: "Raiffeisen Bank", cls: "bank" },
+  46: { name: "OTP Bank", cls: "bank" },
+  47: { name: "sense bank", cls: "bank" }
+};
+function payRules(saved = {}) {
+  const out = {};
+  for (const [id, d] of Object.entries(PAY_DEFAULTS)) out[id] = { ...d, ...saved[id] || {} };
+  for (const [id, d] of Object.entries(saved)) if (!out[id] && d && CLASSES[d.cls]) out[id] = { name: d.name || `\u041E\u043F\u043B\u0430\u0442\u0430 ${id}`, cls: d.cls, cb: d.cb || "" };
+  return out;
+}
+function carrierOf(ttn, delivery = "") {
+  const t = String(ttn || "").replace(/\s/g, "").toUpperCase();
+  if (!t) return "";
+  if (/^\d{14}$/.test(t)) return "np";
+  if (/^RMP-/.test(t)) return "rd";
+  if (/^PRM-/.test(t)) return "prm";
+  if (/meest|міст/i.test(delivery)) return "meest";
+  if (/укрпошт/i.test(delivery)) return "up";
+  return "other";
+}
+var CARRIERS = { np: "\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430", rd: "\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u0414\u0435\u043B\u0456\u0432\u0435\u0440\u0456", prm: "Prom (\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u0414\u0435\u043B\u0456\u0432\u0435\u0440\u0456)", meest: "Meest", up: "\u0423\u043A\u0440\u043F\u043E\u0448\u0442\u0430", other: "\u0406\u043D\u0448\u0430 \u0441\u043B\u0443\u0436\u0431\u0430" };
+var PART_RE = /(передоплат|предоплат|частков|аванс|завдат)/i;
+function partialOf(comment) {
+  const c = String(comment || "");
+  if (!PART_RE.test(c)) return null;
+  const m = c.match(/(?:передоплат|предоплат|частков\S*\s+оплат|аванс|завдат)\S*\D{0,12}?(\d[\d\s]{0,7}(?:[.,]\d{1,2})?)/i);
+  const sum = m ? Number(m[1].replace(/\s/g, "").replace(",", ".")) : 0;
+  return { sum: sum > 0 ? sum : 0 };
+}
+var near = (a, b) => Math.abs(Number(a || 0) - Number(b || 0)) < 1.005;
+var fmt = (n) => `${Math.round(Number(n) * 100) / 100} \u0433\u0440\u043D`;
+var kyivDayOf2 = (iso) => /(Z|[+-]\d\d:\d\d)$/.test(String(iso)) ? new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv" }).format(new Date(iso)) : String(iso || "").slice(0, 10);
+var addDays6 = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+function matchReceipts(orders, receipts) {
+  const sells = receipts.filter((r) => !/RETURN/i.test(r.type));
+  const byOrder = /* @__PURE__ */ new Map();
+  const used = /* @__PURE__ */ new Set();
+  const take = (o, r) => {
+    byOrder.set(o.code, r);
+    used.add(r.id);
+  };
+  const refIndex = /* @__PURE__ */ new Map();
+  for (const r of sells) for (const x of String(r.refs || "").split(" ").filter(Boolean)) {
+    if (!refIndex.has(x)) refIndex.set(x, []);
+    refIndex.get(x).push(r);
+  }
+  for (const o of orders) {
+    const hit = (refIndex.get(o.code) || []).find((r) => !used.has(r.id)) || (refIndex.get(String(o.id)) || []).find((r) => !used.has(r.id) && near(r.total, o.total));
+    if (hit) take(o, hit);
+  }
+  const free = sells.filter((r) => !used.has(r.id));
+  const key = (n) => Math.round(Number(n) * 100);
+  const rcBySum = /* @__PURE__ */ new Map();
+  for (const r of free) {
+    const k = key(r.total);
+    if (!rcBySum.has(k)) rcBySum.set(k, []);
+    rcBySum.get(k).push(r);
+  }
+  const left = orders.filter((o) => !byOrder.has(o.code) && o.total > 0);
+  const ordBySum = /* @__PURE__ */ new Map();
+  for (const o of left) {
+    const k = key(o.total);
+    if (!ordBySum.has(k)) ordBySum.set(k, []);
+    ordBySum.get(k).push(o);
+  }
+  for (const [k, list] of ordBySum) {
+    const rcs = rcBySum.get(k) || [];
+    for (const o of list) {
+      const inWin = (r) => {
+        const d = kyivDayOf2(r.at);
+        return d >= o.day && d <= addDays6(o.day, 20);
+      };
+      const cands = rcs.filter((r) => !used.has(r.id) && inWin(r) && (!o.fopId || String(r.fop_id) === String(o.fopId) || list.length === 1));
+      const rivals = list.filter((x) => x !== o && cands.some((r) => {
+        const d = kyivDayOf2(r.at);
+        return d >= x.day && d <= addDays6(x.day, 20);
+      }));
+      if (cands.length === 1 && !rivals.length) take(o, { ...cands[0], bySum: true });
+    }
+  }
+  return byOrder;
+}
+function findPayment(o, txs, expected) {
+  const surname = String(o.buyer || "").trim().split(/\s+/)[0]?.toLowerCase() || "";
+  const from = addDays6(o.day, -7);
+  const to = addDays6(o.day, 2);
+  const cands = txs.filter((t) => near(t.amount, expected) && t.day >= from && t.day <= to);
+  if (!cands.length) return null;
+  const score = (t) => {
+    const p = String(t.purpose || "").toLowerCase() + " " + String(t.payer_name || "").toLowerCase();
+    return (p.includes(String(o.id)) || p.includes(o.code) ? 2 : 0) + (surname.length > 2 && p.includes(surname) ? 1 : 0);
+  };
+  return cands.sort((a, b) => score(b) - score(a))[0];
+}
+function evaluate(o, ctx) {
+  const items = [];
+  const add = (level2, text) => items.push({ level: level2, text });
+  const rule = ctx.rules[String(o.payment)] || null;
+  const fopName = (id) => ctx.fops[String(id)] || `\u0424\u041E\u041F ${id}`;
+  if (!rule) add("warn", o.payment ? `\u0412\u0438\u0434 \u043E\u043F\u043B\u0430\u0442\u0438 ${o.payment} \u043D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u043A\u043B\u0430\u0441 \u0443 \xAB\u0412\u0438\u0434\u0438 \u043E\u043F\u043B\u0430\u0442\xBB.` : "\u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E \u0432\u0438\u0434 \u043E\u043F\u043B\u0430\u0442\u0438.");
+  const cls = rule?.cls || "";
+  if (cls === "skip") return { level: "skip", items: [{ level: "skip", text: `\xAB${rule.name}\xBB \u2014 \u043D\u0435 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u044F\u0454\u043C\u043E` }] };
+  const part = cls === "cod" ? partialOf(o.comment) : null;
+  const expCod = part ? part.sum ? o.total - part.sum : null : o.total;
+  if (!o.ttn) add("warn", "\u041D\u0435\u043C\u0430\u0454 \u0422\u0422\u041D \u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.");
+  else if (o.carrier === "np" || o.carrier === "rd" || o.carrier === "prm" && o.ttn_at) {
+    if (!o.ttn_at) add("wait", "\u0422\u0422\u041D \u0449\u0435 \u043D\u0435 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043D\u043E \u2014 \u0434\u0430\u043D\u0456 \u0437\u2019\u044F\u0432\u043B\u044F\u0442\u044C\u0441\u044F \u043F\u0456\u0441\u043B\u044F \u043D\u0430\u0441\u0442\u0443\u043F\u043D\u043E\u0433\u043E \u043E\u043D\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
+    else if (o.ttn_err) add("warn", `\u0422\u0422\u041D: ${o.ttn_err}`);
+    else if (cls === "cod") {
+      if (!(o.cod > 0)) add("bad", `\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 \u0437\u0430 CRM (\xAB${rule.name}\xBB), \u0430 \u0432 \u0422\u0422\u041D \u043D\u0430\u043B\u043E\u0436\u043A\u0438 \u043D\u0435\u043C\u0430\u0454.`);
+      else if (part) {
+        if (part.sum && !near(o.cod, expCod)) add("bad", `\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430: \u043D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)}, \u0430 \u043C\u0430\u0454 \u0431\u0443\u0442\u0438 ${fmt(expCod)} (${fmt(o.total)} \u2212 \u043F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0430 ${fmt(part.sum)}).`);
+        else if (!part.sum && o.cod >= o.total - 0.5) add("warn", "\u0423 \u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440\u0456 \u0437\u0433\u0430\u0434\u0430\u043D\u043E \u043F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0443, \u0430\u043B\u0435 \u043D\u0430\u043B\u043E\u0436\u043A\u0430 \u2014 \u043D\u0430 \u0432\u0441\u044E \u0441\u0443\u043C\u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
+        else add("ok", `\u041D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)} (\u0447\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430)`);
+      } else if (!near(o.cod, o.total)) add("bad", `\u041D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)}, \u0430 \u0441\u0443\u043C\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${fmt(o.total)}.`);
+      else add("ok", `\u041D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)}${o.cod_kind === "ctrl" ? " \xB7 \u043A\u043E\u043D\u0442\u0440\u043E\u043B\u044C \u043E\u043F\u043B\u0430\u0442\u0438" : o.cod_kind === "redelivery" ? " \xB7 \u0433\u0440\u043E\u0448\u043E\u0432\u0438\u0439 \u043F\u0435\u0440\u0435\u043A\u0430\u0437" : ""}`);
+    } else if (cls === "prepay" || cls === "bank") {
+      if (o.cod > 0) add("bad", `\u041E\u043F\u043B\u0430\u0442\u0430 \xAB${rule.name}\xBB, \u0430 \u0432 \u0422\u0422\u041D \u0441\u0442\u043E\u0457\u0442\u044C ${o.cod_kind === "ctrl" ? "\u043A\u043E\u043D\u0442\u0440\u043E\u043B\u044C \u043E\u043F\u043B\u0430\u0442\u0438" : "\u043D\u0430\u043B\u043E\u0436\u043A\u0430"} ${fmt(o.cod)}.`);
+      else add("ok", "\u041D\u0430\u043B\u043E\u0436\u043A\u0438 \u043D\u0435\u043C\u0430\u0454 \u2014 \u044F\u043A \u0456 \u043C\u0430\u0454 \u0431\u0443\u0442\u0438");
+    }
+  } else if (o.carrier === "meest") add("info", "Meest: \u043D\u0430\u043B\u043E\u0436\u043A\u0443 \u043F\u043E\u043A\u0438 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u044F\u0439\u0442\u0435 \u0432\u0440\u0443\u0447\u043D\u0443.");
+  else if (o.carrier === "prm") add(o.ttn_err ? "info" : "wait", o.ttn_err ? "\u0422\u0422\u041D Prom: \u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0430\u0445 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0432\u0440\u0443\u0447\u043D\u0443." : "\u0422\u0422\u041D Prom \u0449\u0435 \u043D\u0435 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043D\u043E.");
+  else add("info", `${CARRIERS[o.carrier] || "\u0421\u043B\u0443\u0436\u0431\u0430 \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0438"}: \u043D\u0430\u043B\u043E\u0436\u043A\u0430 \u043D\u0435 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u044F\u0454\u0442\u044C\u0441\u044F.`);
+  const r = ctx.receipt;
+  if (!r) add("bad", "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E, \u0430 \u0447\u0435\u043A \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 \u0436\u043E\u0434\u043D\u043E\u043C\u0443 Checkbox.");
+  else {
+    const how = r.bySum ? " (\u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0437\u0430 \u0441\u0443\u043C\u043E\u044E)" : "";
+    if (!part && !near(r.total, o.total)) add("bad", `\u0427\u0435\u043A \u043D\u0430 ${fmt(r.total)}, \u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0430 ${fmt(o.total)}${how}.`);
+    else add("ok", `\u0427\u0435\u043A ${fmt(r.total)} \xB7 ${fopName(r.fop_id)}${how}`);
+    const labels = (r.pays || []).map((p) => p.label).filter(Boolean);
+    if (rule?.cb && labels.length && !labels.some((l) => l.toLowerCase().includes(rule.cb.toLowerCase()))) {
+      add("bad", `\u0423 \u0447\u0435\u043A\u0443 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u043F\u043B\u0430\u0442\u0438 \xAB${labels.join(", ")}\xBB, \u0430 \u0434\u043B\u044F \xAB${rule.name}\xBB \u043C\u0430\u0454 \u0431\u0443\u0442\u0438 \xAB${rule.cb}\xBB.`);
+    }
+    if (ctx.expectedFop && String(ctx.expectedFop) !== String(r.fop_id)) {
+      add("warn", `\u0427\u0435\u043A \u043F\u0440\u043E\u0431\u0438\u0442\u043E \u043D\u0430 \xAB${fopName(r.fop_id)}\xBB, \u0430 \u0437\u0430 \u0432\u0456\u0434\u0434\u0456\u043B\u043E\u043C / \u043F\u043E\u043B\u0435\u043C 1 \u2014 \xAB${fopName(ctx.expectedFop)}\xBB`);
+    }
+  }
+  if (cls === "bank") {
+    const p = ctx.payment;
+    if (!p) add("warn", "\u041D\u0430\u0434\u0445\u043E\u0434\u0436\u0435\u043D\u043D\u044F \u043D\u0430 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u0424\u041E\u041F \u043D\u0430 \u0446\u044E \u0441\u0443\u043C\u0443 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (Opendatabot).");
+    else {
+      const payFop = p.fop_id ? fopName(p.fop_id) : p.account || "\u0440\u0430\u0445\u0443\u043D\u043E\u043A";
+      if (r && p.fop_id && String(p.fop_id) !== String(r.fop_id)) add("bad", `\u041E\u043F\u043B\u0430\u0442\u0430 \u043F\u0440\u0438\u0439\u0448\u043B\u0430 \u043D\u0430 \xAB${payFop}\xBB, \u0430 \u0447\u0435\u043A \u043F\u0440\u043E\u0431\u0438\u0442\u043E \u043D\u0430 \xAB${fopName(r.fop_id)}\xBB`);
+      else add("ok", `\u041E\u043F\u043B\u0430\u0442\u0430 ${fmt(p.amount)} \u043D\u0430 \xAB${payFop}\xBB \xB7 ${p.day.split("-").reverse().join(".")}`);
+    }
+  }
+  if (ctx.dupTtn?.length) add("bad", `\u0422\u0430 \u0441\u0430\u043C\u0430 \u0422\u0422\u041D \u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u2116 ${ctx.dupTtn.join(", \u2116 ")} \u2014 \u043E\u0434\u043D\u0430 \u043F\u043E\u0441\u0438\u043B\u043A\u0430 \u043D\u0430 \u043A\u0456\u043B\u044C\u043A\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C?`);
+  if (ctx.dup?.length) add("warn", `\u041C\u043E\u0436\u043B\u0438\u0432\u0438\u0439 \u0434\u0443\u0431\u043B\u044C: \u0442\u043E\u0439 \u0441\u0430\u043C\u0438\u0439 \u0442\u0435\u043B\u0435\u0444\u043E\u043D \u0443 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E\u043C\u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u2116 ${ctx.dup.join(", \u2116 ")}.`);
+  const order2 = ["bad", "warn", "wait", "info", "ok"];
+  const level = items.reduce((lv, it) => order2.indexOf(it.level) < order2.indexOf(lv) ? it.level : lv, "ok");
+  return { level: level === "info" ? "ok" : level, items };
+}
+
+// src/modules/checks/index.js
+var CHECK_DAYS = 14;
+var EVERY_MS = 10 * 6e4;
+var RECEIPT_KEEP_DAYS = 45;
+var LP_MAX = 5;
+var CB_MAX = 12;
+var RD_MAX = 8;
+var NP_RECHECK_MS = 12 * 36e5;
+var STATUS_RE = /^(отправлен|відправлен|ожидает выкупа|очікує викупу|завершено|виконано)/i;
+var STATUS_FALLBACK = [14, 53, 18];
+var addDays7 = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+var kyivDayOf3 = (iso) => /(Z|[+-]\d\d:\d\d)$/.test(String(iso)) ? kyivDay(new Date(iso)) : String(iso || "").slice(0, 10);
+var nameOf = (v) => String(v && typeof v === "object" ? v.name ?? "" : v ?? "").trim();
+var p9 = (v) => String(v || "").replace(/\D/g, "").slice(-9);
+function normalizeCheckOrder(raw2) {
+  const code = String(raw2.order_id || "").trim();
+  const day = String(raw2.datetime || "").slice(0, 10);
+  if (!code || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const ttn = ttnOf(raw2);
+  const delivery = String(raw2.delivery_name || raw2.delivery || "").trim().slice(0, 60);
+  return {
+    code,
+    id: String(raw2.id || ""),
+    day,
+    status: parseInt(raw2.status, 10) || 0,
+    payment: String(raw2.payment ?? raw2.payment_id ?? "").trim(),
+    total: round2(num(raw2.total)),
+    office: String(raw2.office ?? ""),
+    channel: String(raw2.additional_1 || "").trim().slice(0, 80),
+    site: String(raw2.site || "").trim().slice(0, 80),
+    delivery,
+    ttn,
+    carrier: carrierOf(ttn, delivery),
+    phone: p9(raw2.phone),
+    buyer: String(raw2.bayer_name || "").trim().slice(0, 120),
+    user: String(raw2.user || "").trim().slice(0, 40),
+    comment: String(raw2.comment || "").trim().slice(0, 500)
+  };
+}
+function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
+  const getJson2 = async (key, dflt = {}) => {
+    try {
+      return JSON.parse((await db.get(`SELECT value FROM settings WHERE key = ?`, [key]))?.value || "null") ?? dflt;
+    } catch {
+      return dflt;
+    }
+  };
+  const fromS = (s, key, dflt = {}) => {
+    try {
+      return JSON.parse(s[key] || "null") ?? dflt;
+    } catch {
+      return dflt;
+    }
+  };
+  const setJson = (key, v) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, JSON.stringify(v)]);
+  const rules = async () => payRules(await getJson2("chk_pay", {}));
+  async function statuses(cr, budget, s) {
+    const st = fromS(s, "chk_statuses");
+    if (st.day === kyivDay() && st.ids?.length) return st;
+    if (budget.lp >= LP_MAX) return st.ids?.length ? st : { ids: STATUS_FALLBACK, names: {} };
+    budget.lp++;
+    const data = await getStatuses(fetchFn, cr).catch(() => ({}));
+    const names = Object.fromEntries(Object.entries(data).map(([id, v]) => [id, nameOf(v)]).filter(([, n]) => n));
+    const ids = Object.entries(names).filter(([, n]) => STATUS_RE.test(n)).map(([id]) => Number(id));
+    const out = { day: kyivDay(), ids: ids.length ? ids : STATUS_FALLBACK, names };
+    await setJson("chk_statuses", out);
+    return out;
+  }
+  async function syncCrm(cr, budget, state, s) {
+    const st = await statuses(cr, budget, s);
+    const today3 = kyivDay();
+    const from = addDays7(today3, -CHECK_DAYS);
+    if (!state.listed || Date.now() - Date.parse(state.listed) >= EVERY_MS - 3e4) {
+      const pass = state.pass && state.pass.at && Date.now() - Date.parse(state.pass.at) < EVERY_MS ? state.pass : { at: nowIso(), done: [] };
+      const stmts = [];
+      for (const sid of st.ids) {
+        if (pass.done.includes(sid)) continue;
+        if (budget.lp >= LP_MAX) {
+          await db.batch(stmts);
+          state.pass = pass;
+          return { more: true };
+        }
+        budget.lp++;
+        const codes = await getOrderCodesByStatus(fetchFn, cr, sid, from, today3);
+        for (let i = 0; i < codes.length; i += 200) {
+          stmts.push([`INSERT INTO chk_orders (code, status, listed_at) SELECT value, ?, ? FROM json_each(?) WHERE true
+            ON CONFLICT(code) DO UPDATE SET status = excluded.status, listed_at = excluded.listed_at`, [sid, pass.at, JSON.stringify(codes.slice(i, i + 200))]]);
+        }
+        pass.done.push(sid);
+      }
+      await db.batch(stmts);
+      state.listed = pass.at;
+      state.pass = null;
+    }
+    const todo = (await db.all(`SELECT code FROM chk_orders WHERE listed_at >= ? AND fetched_status != status ORDER BY listed_at DESC LIMIT 300`, [state.listed])).map((r) => r.code);
+    const room = Math.min(todo.length, (LP_MAX - budget.lp) * 100);
+    if (room > 0) {
+      budget.lp += Math.ceil(room / 100);
+      const got = (await getOrdersBatch(fetchFn, cr, todo.slice(0, room))).map(normalizeCheckOrder).filter(Boolean);
+      if (got.length) {
+        await db.batch(got.map((o) => [
+          `UPDATE chk_orders SET id = ?, day = ?, fetched_status = status, payment = ?, total = ?, office = ?, channel = ?, site = ?,
+          delivery = ?, phone = ?, buyer = ?, user = ?, comment = ?,
+          ttn_at = CASE WHEN ttn = ? THEN ttn_at ELSE '' END, cod = CASE WHEN ttn = ? THEN cod ELSE 0 END, cod_kind = CASE WHEN ttn = ? THEN cod_kind ELSE '' END,
+          ttn_err = CASE WHEN ttn = ? THEN ttn_err ELSE '' END, ttn = ?, carrier = ? WHERE code = ?`,
+          [o.id, o.day, o.payment, o.total, o.office, o.channel, o.site, o.delivery, o.phone, o.buyer, o.user, o.comment, o.ttn, o.ttn, o.ttn, o.ttn, o.ttn, o.carrier, o.code]
+        ]));
+      }
+      const seen = new Set(got.map((o) => o.code));
+      const lost = todo.slice(0, room).filter((c) => !seen.has(c));
+      if (lost.length) await db.run(`UPDATE chk_orders SET fetched_status = status WHERE code IN (SELECT value FROM json_each(?))`, [JSON.stringify(lost)]);
+      if (todo.length > room) return { more: true };
+    } else if (todo.length) return { more: true };
+    return {};
+  }
+  async function syncNp(budget) {
+    const acc = await db.get(`SELECT api_key FROM np_accounts WHERE active = 1 ORDER BY id LIMIT 1`).catch(() => null);
+    if (!acc?.api_key) return { skipped: "\u043D\u0435\u043C\u0430\u0454 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0443 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438" };
+    const border = new Date(Date.now() - NP_RECHECK_MS).toISOString();
+    const rows = await db.all(`SELECT code, ttn, phone FROM chk_orders WHERE carrier = 'np' AND listed_at != '' AND (ttn_at = '' OR ttn_at < ?)
+      ORDER BY ttn_at, day DESC LIMIT 200`, [border]);
+    for (let i = 0; i < rows.length && budget.np < 2; i += 100) {
+      budget.np++;
+      const part = rows.slice(i, i + 100);
+      const map = await npTrackMany(fetchFn, acc.api_key, part.map((r) => ({ ttn: r.ttn, phone: r.phone })));
+      const now = nowIso();
+      await db.batch(part.map((r) => {
+        const t = map.get(r.ttn);
+        if (!t) return [`UPDATE chk_orders SET ttn_at = ?, ttn_err = '\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430 \u043D\u0435 \u0437\u043D\u0430\u0439\u0448\u043B\u0430 \u0422\u0422\u041D' WHERE code = ?`, [now, r.code]];
+        const kind = t.ctrl > 0 ? "ctrl" : t.redelivery > 0 ? "redelivery" : "";
+        return [`UPDATE chk_orders SET ttn_at = ?, ttn_err = '', cod = ?, cod_kind = ? WHERE code = ?`, [now, t.ctrl || t.redelivery || 0, kind, r.code]];
+      }));
+    }
+    return {};
+  }
+  async function syncRd(budget, s) {
+    const accs = await db.all(`SELECT * FROM rz_accounts WHERE active = 1 ORDER BY id`).catch(() => []);
+    if (!accs.length || !services.marking?.rozetkaToken) return { skipped: "\u043D\u0435\u043C\u0430\u0454 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456\u0432 \u0420\u043E\u0437\u0435\u0442\u043A\u0438" };
+    const rows = await db.all(`SELECT code, ttn FROM chk_orders WHERE carrier IN ('rd', 'prm') AND listed_at != '' AND ttn_at = '' AND ttn_err = '' ORDER BY day DESC LIMIT 10`);
+    const tried = fromS(s, "chk_rd_tried");
+    const ups = [];
+    for (const r of rows) {
+      let found = null;
+      for (const a of accs) {
+        if ((tried[r.ttn] || []).includes(a.id)) continue;
+        if (budget.rd >= RD_MAX) {
+          await db.batch(ups);
+          await setJson("chk_rd_tried", tried);
+          return { more: true };
+        }
+        budget.rd++;
+        try {
+          const tok = await services.marking.rozetkaToken(a);
+          found = (await rzDeliveryList(fetchFn, tok, { ttn: r.ttn })).rows.find((x) => x.ttn.toUpperCase() === r.ttn.toUpperCase()) || null;
+        } catch (e) {
+          if (e.pending) throw e;
+        }
+        (tried[r.ttn] ||= []).push(a.id);
+        if (found) break;
+      }
+      const now = nowIso();
+      if (found) ups.push([`UPDATE chk_orders SET ttn_at = ?, ttn_err = '', cod = ?, cod_kind = ? WHERE code = ?`, [now, found.cod || 0, found.cod > 0 ? "cod" : "", r.code]]);
+      else if (r.ttn.toUpperCase().startsWith("PRM-")) ups.push([`UPDATE chk_orders SET ttn_err = '\u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0430\u0445 \u0420\u043E\u0437\u0435\u0442\u043A\u0438' WHERE code = ?`, [r.code]]);
+      else ups.push([`UPDATE chk_orders SET ttn_at = ?, ttn_err = '\u0422\u0422\u041D \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 \u0436\u043E\u0434\u043D\u043E\u043C\u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438' WHERE code = ?`, [now, r.code]]);
+      delete tried[r.ttn];
+    }
+    await db.batch(ups);
+    await setJson("chk_rd_tried", tried);
+    return {};
+  }
+  async function syncReceipts(budget) {
+    const fops = (await db.all(`SELECT * FROM fops WHERE active = 1 ORDER BY id`)).filter(hasCheckbox);
+    if (!fops.length) return { skipped: "\u043D\u0435\u043C\u0430\u0454 \u0424\u041E\u041F \u0437 \u0434\u043E\u0441\u0442\u0443\u043F\u043E\u043C \u0434\u043E Checkbox" };
+    const today3 = kyivDay();
+    const from = addDays7(today3, -CHECK_DAYS);
+    const days2 = await db.all(`SELECT fop_id, day, done, at FROM chk_days WHERE day >= ?`, [from]);
+    const have = new Map(days2.map((d) => [`${d.fop_id}|${d.day}`, d]));
+    const errors = {};
+    const stmts = [];
+    const flush = async () => {
+      for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
+      stmts.length = 0;
+    };
+    for (const f of fops) {
+      for (let d = today3; d >= from; d = addDays7(d, -1)) {
+        const h8 = have.get(`${f.id}|${d}`);
+        if (h8?.done) continue;
+        if (h8 && d >= addDays7(today3, -1) && Date.now() - Date.parse(h8.at || 0) < EVERY_MS - 3e4) continue;
+        const fromIso = new Date(Date.parse(`${d}T00:00:00Z`) - 3 * 36e5).toISOString();
+        const toIso = new Date(Date.parse(`${d}T00:00:00Z`) + 27 * 36e5).toISOString();
+        let offset = 0;
+        let rows = [];
+        try {
+          for (; ; ) {
+            if (budget.cb >= CB_MAX) {
+              await flush();
+              return { more: true, errors };
+            }
+            budget.cb++;
+            const page = await listReceipts(fetchFn, f, fromIso, toIso, offset);
+            rows.push(...page.rows);
+            if (!page.more) break;
+            offset += 100;
+          }
+        } catch (e) {
+          if (e.pending) {
+            await flush();
+            throw e;
+          }
+          errors[f.short_name] = e.message;
+          break;
+        }
+        rows = rows.filter((r) => kyivDayOf3(r.at) === d);
+        stmts.push(...rows.map((r) => [
+          `INSERT INTO chk_receipts (id, fop_id, day, at, type, total, fiscal, pays, refs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET type = excluded.type, total = excluded.total, pays = excluded.pays, refs = excluded.refs`,
+          [r.id, f.id, d, r.at, r.type, r.total, r.fiscal, JSON.stringify(r.pays), r.refs]
+        ]));
+        stmts.push([
+          `INSERT INTO chk_days (fop_id, day, done, at) VALUES (?, ?, ?, ?) ON CONFLICT(fop_id, day) DO UPDATE SET done = excluded.done, at = excluded.at`,
+          [f.id, d, d < addDays7(today3, -1) ? 1 : 0, nowIso()]
+        ]);
+      }
+    }
+    await flush();
+    return { errors };
+  }
+  async function step({ force = false } = {}) {
+    const s = await loadSettings(db);
+    if (!s.lpcrm_subdomain || !s.lpcrm_key) return { skipped: "LP-CRM \u043D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E" };
+    const state = fromS(s, "chk_state");
+    if (!force && state.finished && Date.now() - Date.parse(state.finished) < EVERY_MS - 3e4 && !state.more) return { fresh: true };
+    const lock = await db.run(
+      `INSERT INTO settings (key, value) VALUES ('chk_lock', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
+      [nowIso(), new Date(Date.now() - 5 * 6e4).toISOString()]
+    );
+    if (!lock.changes) return { busy: true };
+    const budget = { lp: 0, np: 0, rd: 0, cb: 0 };
+    const res = {};
+    try {
+      const cr = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
+      if (!force && lpcrmBusy()) res.crm = { busy: true };
+      else res.crm = await syncCrm(cr, budget, state, s).catch((e) => {
+        if (e.pending) throw e;
+        return { error: e.message };
+      });
+      res.np = await syncNp(budget).catch((e) => {
+        if (e.pending) throw e;
+        return { error: e.message };
+      });
+      res.rd = await syncRd(budget, s).catch((e) => {
+        if (e.pending) throw e;
+        return { error: e.message };
+      });
+      res.cb = await syncReceipts(budget).catch((e) => {
+        if (e.pending) throw e;
+        return { error: e.message };
+      });
+    } catch (e) {
+      if (!e.pending) throw e;
+      res.more = true;
+    } finally {
+      const more = Boolean(res.more || res.crm?.more || res.rd?.more || res.cb?.more);
+      const errs = [res.crm?.error, res.np?.error, res.rd?.error, res.cb?.error, ...Object.entries(res.cb?.errors || {}).map(([k, v]) => `Checkbox ${k}: ${v}`)].filter(Boolean);
+      Object.assign(state, { more, finished: more ? state.finished : nowIso(), at: nowIso(), errors: errs.slice(0, 5) });
+      const fin = [];
+      if (state.pruned !== kyivDay()) {
+        const border = addDays7(kyivDay(), -RECEIPT_KEEP_DAYS);
+        fin.push([`DELETE FROM chk_orders WHERE (day != '' AND day < ?) OR listed_at < ?`, [addDays7(kyivDay(), -CHECK_DAYS - 7), border]], [`DELETE FROM chk_receipts WHERE day < ?`, [border]], [`DELETE FROM chk_days WHERE day < ?`, [border]]);
+        state.pruned = kyivDay();
+      }
+      fin.push(
+        [`INSERT INTO settings (key, value) VALUES ('chk_state', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(state)]],
+        [`UPDATE settings SET value = '' WHERE key = 'chk_lock'`, []]
+      );
+      await db.batch(fin);
+      res.more = more;
+    }
+    res.budget = budget;
+    return res;
+  }
+  onCron("checks", "\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430: \u043E\u043F\u043B\u0430\u0442\u0438, \u043D\u0430\u043B\u043E\u0436\u043A\u0430 \u0439 \u0447\u0435\u043A\u0438 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u0445 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C (\u0440\u0430\u0437 \u043D\u0430 10 \u0445\u0432)", () => step());
+  async function build(from, to) {
+    const recFrom = from;
+    const recTo = addDays7(to, 20);
+    const listed = (await getJson2("chk_state", {})).listed || "";
+    const [rs, orders, receipts, fopsAll, offices, channels, accounts, txs, stNames] = await Promise.all([
+      rules(),
+      db.all(`SELECT * FROM chk_orders WHERE listed_at != '' AND listed_at >= ? AND day BETWEEN ? AND ? ORDER BY day DESC, code DESC`, [listed, from, to]),
+      db.all(`SELECT * FROM chk_receipts WHERE day BETWEEN ? AND ?`, [recFrom, recTo]),
+      db.all(`SELECT id, short_name, ipn, iban FROM fops`),
+      db.all(`SELECT office_id, name, fop_id FROM offices`),
+      db.all(`SELECT name, fop_id FROM channels`),
+      db.all(`SELECT iban, code, name, alias FROM odb_accounts`).catch(() => []),
+      db.all(`SELECT id, date, amount, purpose, iban, payer_name, our_code FROM odb_tx WHERE date >= ? AND date < ?`, [addDays7(from, -7), addDays7(to, 3)]).catch(() => []),
+      getJson2("chk_statuses", {})
+    ]);
+    const fops = Object.fromEntries(fopsAll.map((f) => [String(f.id), f.short_name]));
+    const fopByIpn = new Map(fopsAll.filter((f) => f.ipn).map((f) => [String(f.ipn).trim(), f.id]));
+    const fopByIban = new Map(fopsAll.filter((f) => f.iban).map((f) => [String(f.iban).replace(/\s/g, "").toUpperCase(), f.id]));
+    const accByIban = new Map(accounts.map((a) => [String(a.iban).toUpperCase(), a]));
+    const officeFop = new Map(offices.map((o) => [String(o.office_id), o.fop_id]));
+    const officeName = new Map(offices.map((o) => [String(o.office_id), o.name]));
+    const chanFop = new Map(channels.map((c) => [c.name.trim().toLowerCase(), c.fop_id]));
+    const names = stNames.names || {};
+    for (const o of orders) {
+      o.status_name = names[o.status] || "";
+      o.fopId = o.channel && chanFop.get(o.channel.toLowerCase()) || officeFop.get(String(o.office)) || null;
+    }
+    const recs = receipts.map((r) => ({ ...r, pays: (() => {
+      try {
+        return JSON.parse(r.pays);
+      } catch {
+        return [];
+      }
+    })() }));
+    const matched = matchReceipts(orders, recs);
+    const txRows = txs.map((t) => {
+      const iban = String(t.iban || "").toUpperCase();
+      const acc = accByIban.get(iban);
+      return { ...t, day: String(t.date).slice(0, 10), fop_id: fopByIban.get(iban) || fopByIpn.get(String(t.our_code || acc?.code || "").trim()) || null, account: acc?.alias || acc?.name || iban.slice(-8) };
+    });
+    const byPhone = /* @__PURE__ */ new Map();
+    for (const o of orders) if (o.phone.length === 9) {
+      if (!byPhone.has(o.phone)) byPhone.set(o.phone, []);
+      byPhone.get(o.phone).push(o);
+    }
+    const byTtn = /* @__PURE__ */ new Map();
+    for (const o of orders) {
+      const t = String(o.ttn || "").replace(/\s/g, "").toUpperCase();
+      if (t) {
+        if (!byTtn.has(t)) byTtn.set(t, []);
+        byTtn.get(t).push(o);
+      }
+    }
+    const today3 = kyivDay();
+    const rows = orders.map((o) => {
+      const rule = rs[String(o.payment)];
+      const part = rule?.cls === "cod" ? partialOf(o.comment) : null;
+      const dup = (byPhone.get(o.phone) || []).filter((x) => x !== o && Math.abs(Date.parse(x.day) - Date.parse(o.day)) <= 3 * 864e5).map((x) => x.id || x.code);
+      const receipt = matched.get(o.code) || null;
+      const payment = rule?.cls === "bank" ? findPayment(o, txRows, o.total) : null;
+      const dupTtn = (byTtn.get(String(o.ttn || "").replace(/\s/g, "").toUpperCase()) || []).filter((x) => x !== o).map((x) => x.id || x.code);
+      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today: today3, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn });
+      return {
+        code: o.code,
+        id: o.id,
+        day: o.day,
+        status: o.status_name || String(o.status),
+        total: o.total,
+        payment: rule?.name || (o.payment ? `\u041E\u043F\u043B\u0430\u0442\u0430 ${o.payment}` : "\u2014"),
+        cls: rule?.cls || "",
+        partial: Boolean(part),
+        office: officeName.get(String(o.office)) || o.office,
+        channel: o.channel,
+        site: o.site,
+        buyer: o.buyer,
+        phone: o.phone,
+        user: o.user,
+        comment: o.comment,
+        ttn: o.ttn,
+        carrier: CARRIERS[o.carrier] || "",
+        cod: o.cod,
+        cod_kind: o.cod_kind,
+        receipt: receipt ? { id: receipt.id, total: receipt.total, fop: fops[String(receipt.fop_id)] || "", at: receipt.at, pays: receipt.pays.map((p) => p.label || p.type).filter(Boolean), bySum: Boolean(receipt.bySum), url: `https://check.checkbox.ua/${receipt.id}` } : null,
+        expected_fop: o.fopId ? fops[String(o.fopId)] || "" : "",
+        level: ev.level,
+        items: ev.items
+      };
+    });
+    return { rows, recs, matched, orders, fops };
+  }
+  const period = (c) => {
+    const today3 = kyivDay();
+    const ok = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d || "");
+    let from = ok(c.req.query("from")) ? c.req.query("from") : addDays7(today3, -CHECK_DAYS);
+    let to = ok(c.req.query("to")) ? c.req.query("to") : today3;
+    if (from < addDays7(today3, -CHECK_DAYS - 7)) from = addDays7(today3, -CHECK_DAYS - 7);
+    if (to < from) to = from;
+    return { from, to };
+  };
+  app.get("/api/checks", async (c) => {
+    need(c, "users");
+    const { from, to } = period(c);
+    const { rows } = await build(from, to);
+    const counts = rows.reduce((a, r) => {
+      a[r.level] = (a[r.level] || 0) + 1;
+      return a;
+    }, {});
+    const state = await getJson2("chk_state", {});
+    return c.json({ from, to, rows, counts, state: { at: state.at || "", finished: state.finished || "", more: Boolean(state.more), errors: state.errors || [] } });
+  });
+  app.get("/api/checks/receipts", async (c) => {
+    need(c, "users");
+    const day = /^\d{4}-\d{2}-\d{2}$/.test(c.req.query("day") || "") ? c.req.query("day") : kyivDay();
+    const { recs, matched, orders, fops } = await build(addDays7(day, -20), day);
+    const byReceipt = new Map([...matched].map(([code, r]) => [r.id, orders.find((o) => o.code === code)]));
+    const list = recs.filter((r) => r.day === day).sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    const groups = /* @__PURE__ */ new Map();
+    for (const r of list) {
+      const k = String(r.fop_id);
+      if (!groups.has(k)) groups.set(k, { fop: fops[k] || `\u0424\u041E\u041F ${k}`, rows: [], sum: 0, ret: 0, free: 0 });
+      const g = groups.get(k);
+      const o = byReceipt.get(r.id);
+      const isRet = /RETURN/i.test(r.type);
+      g.rows.push({ id: r.id, at: r.at, total: r.total, fiscal: r.fiscal, ret: isRet, pays: r.pays.map((p) => p.label || p.type).filter(Boolean), order: o ? { id: o.id, code: o.code, total: o.total, buyer: o.buyer } : null, url: `https://check.checkbox.ua/${r.id}` });
+      if (isRet) g.ret = round2(g.ret + r.total);
+      else g.sum = round2(g.sum + r.total);
+      if (!o && !isRet) g.free++;
+    }
+    const done = await db.all(`SELECT fop_id, done, at FROM chk_days WHERE day = ?`, [day]);
+    return c.json({ day, groups: [...groups.values()], loaded: done.length });
+  });
+  app.get("/api/checks/pay", async (c) => {
+    need(c, "users");
+    const rs = await rules();
+    return c.json({ classes: CLASSES, rows: Object.entries(rs).map(([id, r]) => ({ id, ...r, changed: JSON.stringify(PAY_DEFAULTS[id] || {}) !== JSON.stringify({ name: r.name, cls: r.cls, ...r.cb ? { cb: r.cb } : {} }) })).sort((a, b) => Number(a.id) - Number(b.id)) });
+  });
+  app.put("/api/checks/pay", async (c) => {
+    need(c, "users");
+    const b = await c.req.json();
+    const saved = {};
+    for (const x of Array.isArray(b.rows) ? b.rows.slice(0, 200) : []) {
+      const id = String(x.id || "").trim();
+      if (!/^\d{1,4}$/.test(id) || !CLASSES[x.cls]) continue;
+      const row = { name: String(x.name || PAY_DEFAULTS[id]?.name || `\u041E\u043F\u043B\u0430\u0442\u0430 ${id}`).trim().slice(0, 60), cls: x.cls, cb: String(x.cb || "").trim().slice(0, 40) };
+      const d = PAY_DEFAULTS[id];
+      if (d && d.name === row.name && d.cls === row.cls && (d.cb || "") === row.cb) continue;
+      saved[id] = row;
+    }
+    await setJson("chk_pay", saved);
+    return c.json({ ok: true });
+  });
+  app.get("/api/checks/settings", async (c) => {
+    need(c, "users");
+    const v = (await db.get(`SELECT value FROM settings WHERE key = 'chk_dup_notify'`))?.value;
+    return c.json({ dup_notify: v === "1" });
+  });
+  app.put("/api/checks/settings", async (c) => {
+    need(c, "users");
+    const b = await c.req.json();
+    await db.run(`INSERT INTO settings (key, value) VALUES ('chk_dup_notify', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [b.dup_notify ? "1" : "0"]);
+    return c.json({ ok: true });
+  });
+  app.post("/api/checks/refresh", async (c) => {
+    need(c, "users");
+    const r = await step({ force: true });
+    return c.json({ more: Boolean(r.more), busy: Boolean(r.busy), skipped: r.skipped || "" });
+  });
+  return { step };
+}
+
 // src/app.js
 function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, odbBase = ODB_BASE, shared: shared2 = {} }) {
   const app = new Hono3();
@@ -17500,6 +18175,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
   services.market = mountMarket(app, ctx);
   services.returns = mountReturns(app, ctx);
   services.analytics = mountAnalytics(app, ctx);
+  services.checks = mountChecks(app, ctx);
   services.notify = mountTg(app, ctx);
   mountHome(app, ctx);
   services.payments = mountOdb(app, { ...ctx, base: odbBase, notify: (...a) => services.notify.notify(...a), onTx: (ids, origin) => services.b2b?.onPayments?.(ids, origin) });
@@ -19099,8 +19775,69 @@ var schema15 = {
   ]
 };
 
+// src/modules/checks/schema.js
+var schema16 = {
+  name: "checks",
+  version: 1,
+  tables: [
+    // Замовлення LP-CRM у статусах «відправлено / очікує викупу / завершено» за останні CHECK_DAYS днів.
+    // listed_at — коли востаннє бачили в цих статусах (зникло зі списку — більше не показуємо);
+    // fetched_status — статус, з яким уже прочитано повні дані (змінився — перечитати).
+    // ТТН: carrier (np | rd | prm | meest | up | other), cod — сума наложки, cod_kind (ctrl — контроль оплати, redelivery — переказ),
+    // ttn_at — коли перевірено, ttn_err — що завадило.
+    `CREATE TABLE IF NOT EXISTS chk_orders (
+    code TEXT PRIMARY KEY,
+    id TEXT DEFAULT '',
+    day TEXT NOT NULL DEFAULT '',
+    status INTEGER NOT NULL DEFAULT 0,
+    fetched_status INTEGER NOT NULL DEFAULT 0,
+    listed_at TEXT DEFAULT '',
+    payment TEXT DEFAULT '',
+    total REAL NOT NULL DEFAULT 0,
+    office TEXT DEFAULT '',
+    channel TEXT DEFAULT '',
+    site TEXT DEFAULT '',
+    delivery TEXT DEFAULT '',
+    ttn TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    buyer TEXT DEFAULT '',
+    user TEXT DEFAULT '',
+    comment TEXT DEFAULT '',
+    carrier TEXT DEFAULT '',
+    cod REAL NOT NULL DEFAULT 0,
+    cod_kind TEXT DEFAULT '',
+    ttn_at TEXT DEFAULT '',
+    ttn_err TEXT DEFAULT ''
+  )`,
+    `CREATE INDEX IF NOT EXISTS chk_orders_day ON chk_orders (day)`,
+    `CREATE INDEX IF NOT EXISTS chk_orders_ttn ON chk_orders (carrier, ttn_at)`,
+    // Чеки Checkbox по ФОП (усі каси організації ФОП): сума, спосіб оплати, числа з чека для пошуку № замовлення.
+    `CREATE TABLE IF NOT EXISTS chk_receipts (
+    id TEXT PRIMARY KEY,
+    fop_id INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    at TEXT DEFAULT '',
+    type TEXT DEFAULT '',
+    total REAL NOT NULL DEFAULT 0,
+    fiscal TEXT DEFAULT '',
+    pays TEXT NOT NULL DEFAULT '[]',
+    refs TEXT DEFAULT ''
+  )`,
+    `CREATE INDEX IF NOT EXISTS chk_receipts_day ON chk_receipts (day)`,
+    // Які дні чеків по кожному ФОП уже прочитано повністю (done = 1 — день минув і прочитаний до кінця).
+    `CREATE TABLE IF NOT EXISTS chk_days (
+    fop_id INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0,
+    at TEXT DEFAULT '',
+    PRIMARY KEY (fop_id, day)
+  )`
+  ],
+  columns: []
+};
+
 // src/migrate.js
-var MODULE_SCHEMAS = [schema, schema2, schema3, schema4, schema5, schema6, schema7, schema8, schema9, schema10, schema11, schema12, schema13, schema14, schema15];
+var MODULE_SCHEMAS = [schema, schema2, schema3, schema4, schema5, schema6, schema7, schema8, schema9, schema10, schema11, schema12, schema13, schema14, schema15, schema16];
 var versionKey = (m) => `schema:${m.name}`;
 async function migrate(db, modules = MODULE_SCHEMAS) {
   let have = {};
