@@ -7,6 +7,7 @@
 //     накладеного платежу (по кожному кабінету Розетки, поки не знайдемо ТТН);
 //  3) Checkbox: усі чеки кожного ФОП за ці дні (день, що минув, читаємо один раз; сьогодні й учора — повторно).
 // Надходження на рахунки беремо з модуля платежів (Opendatabot) — він уже збирає їх сам.
+// Сповіщень у Telegram модуль не надсилає; тут же вимикач сповіщень про дублі ТТН / телефонів з аналітики (chk_dup_notify).
 // Висновки (що не так із замовленням) не зберігаємо: рахуємо під час показу сторінки з rules.js — завжди за свіжими даними.
 import { need, nowIso, kyivDay, num, round2, loadSettings } from '../../core/common.js';
 import { getOrderCodesByStatus, getOrdersBatch, getStatuses, lpcrmBusy } from '../../integrations/lpcrm.js';
@@ -296,6 +297,8 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     // Можливі дублі: той самий телефон у кількох відправлених замовленнях, створених у межах 3 днів.
     const byPhone = new Map();
     for (const o of orders) if (o.phone.length === 9) { if (!byPhone.has(o.phone)) byPhone.set(o.phone, []); byPhone.get(o.phone).push(o); }
+    const byTtn = new Map();
+    for (const o of orders) { const t = String(o.ttn || '').replace(/\s/g, '').toUpperCase(); if (t) { if (!byTtn.has(t)) byTtn.set(t, []); byTtn.get(t).push(o); } }
     const today = kyivDay();
     const rows = orders.map((o) => {
       const rule = rs[String(o.payment)];
@@ -303,7 +306,8 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       const dup = (byPhone.get(o.phone) || []).filter((x) => x !== o && Math.abs(Date.parse(x.day) - Date.parse(o.day)) <= 3 * 86400e3).map((x) => x.id || x.code);
       const receipt = matched.get(o.code) || null;
       const payment = rule?.cls === 'bank' ? findPayment(o, txRows, o.total) : null;
-      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today, dup });
+      const dupTtn = (byTtn.get(String(o.ttn || '').replace(/\s/g, '').toUpperCase()) || []).filter((x) => x !== o).map((x) => x.id || x.code);
+      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn });
       return {
         code: o.code, id: o.id, day: o.day, status: o.status_name || String(o.status), total: o.total,
         payment: rule?.name || (o.payment ? `Оплата ${o.payment}` : '—'), cls: rule?.cls || '', partial: Boolean(part),
@@ -377,6 +381,19 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       saved[id] = row;
     }
     await setJson('chk_pay', saved);
+    return c.json({ ok: true });
+  });
+
+  // Налаштування перевірки: сповіщення в Telegram про дублі ТТН і телефонів (з аналітики) — поки типово вимкнено.
+  app.get('/api/checks/settings', async (c) => {
+    need(c, 'users');
+    const v = (await db.get(`SELECT value FROM settings WHERE key = 'chk_dup_notify'`))?.value;
+    return c.json({ dup_notify: v === '1' });
+  });
+  app.put('/api/checks/settings', async (c) => {
+    need(c, 'users');
+    const b = await c.req.json();
+    await db.run(`INSERT INTO settings (key, value) VALUES ('chk_dup_notify', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [b.dup_notify ? '1' : '0']);
     return c.json({ ok: true });
   });
 

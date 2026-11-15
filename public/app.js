@@ -90,7 +90,7 @@ const SECTIONS = [
   { id: 'returns', label: 'Повернення', perm: 'returns.view', home: 'returns', tabs: [{ id: 'returns', label: 'Повернення' }] },
   // Звірка оплат, наложки й чеків відправлених замовлень LP-CRM (власник і адміністратори).
   { id: 'checks', label: 'Перевірка', perm: 'users', home: 'checks', tabs: [
-    { id: 'checks', label: 'Замовлення' }, { id: 'chkreceipts', label: 'Чеки за день' }, { id: 'chkpay', label: 'Види оплат' },
+    { id: 'checks', label: 'Замовлення' }, { id: 'chkreceipts', label: 'Чеки за день' }, { id: 'chkpay', label: 'Налаштування' },
   ] },
   // Усі налаштування — в одному розділі: щоденна робота — в інших, рідкісні налаштування — тут.
   { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [

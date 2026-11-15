@@ -383,6 +383,7 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
     const names = (await getJson('an_status_names')) || {};
     const users = await db.all(`SELECT tg_chat_id, crm_logins FROM users WHERE active = 1 AND tg_chat_id != '' AND crm_logins != ''`);
     const owners = (await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'owner'`)).map((u) => u.tg_chat_id);
+    const notifyOn = (await db.get(`SELECT value FROM settings WHERE key = 'chk_dup_notify'`))?.value === '1';
     const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     let n = 0;
     const recent = addDays(kyivDay(), -recentDays);
@@ -398,10 +399,11 @@ export function mountAnalytics(app, { db, fetchFn, services = {}, shared = {}, o
         : `⚠️ <b>Дубль ТТН ${esc(ttn)}</b> у LP-CRM — ця ТТН є в ${list.length} замовленнях:\n`)
         + list.map((r) => `• № <b>${esc(r.code)}</b> · ${esc(names[r.status] || `статус ${r.status}`)} · ${esc(r.day.split('-').reverse().join('.'))}${r.buyer ? ` · ${esc(r.buyer)}` : ''}${r.user ? ` · менеджер ${esc(r.user)}` : ''}`).join('\n')
         + (tel ? '\n\nПеревірте, чи не створено замовлення двічі.' : '\n\nПеревірте, чи не помилка (одна посилка на два замовлення).');
-      // Менеджерам цих замовлень (за логіном LP-CRM) і власнику.
+      // Менеджерам цих замовлень (за логіном LP-CRM) і власнику — якщо сповіщення про дублі ввімкнено
+      // («Перевірка → Налаштування»; поки типово вимкнено — дублі видно у вкладці «Перевірка»).
       const logins = new Set(list.map((r) => r.user).filter(Boolean));
       const chats = [...new Set([...users.filter((u) => crmLogins(u.crm_logins).some((l) => logins.has(l))).map((u) => u.tg_chat_id), ...owners])];
-      if (chats.length) await services.notify?.sendText({ chatIds: chats }, text).catch(() => 0);
+      if (chats.length && notifyOn) await services.notify?.sendText({ chatIds: chats }, text).catch(() => 0);
       await db.run(`INSERT INTO an_ttn_dups (ttn, codes, at) VALUES (?, ?, ?) ON CONFLICT(ttn) DO UPDATE SET codes = excluded.codes, at = excluded.at`, [ttn, codes, nowIso()]);
       n++;
     }

@@ -1,6 +1,6 @@
 // «Перевірка»: автоматична звірка відправлених замовлень LP-CRM — вид оплати ↔ наложка в ТТН, чек Checkbox (сума, спосіб
 // оплати, ФОП), оплата на рахунок ↔ ФОП чека, можливі дублі. Окрема вкладка «Чеки за день» — замість зошита: кожен чек ФОП
-// з замовленням, до якого його зіставлено. «Види оплат» — що очікувати для кожного виду оплати LP-CRM.
+// з замовленням, до якого його зіставлено. «Налаштування» — сповіщення про дублі й що очікувати для кожного виду оплати LP-CRM.
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, fmtDateTime, todayKyiv } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
@@ -120,9 +120,13 @@ export function createChecksPages() {
 
   // Види оплат LP-CRM: клас перевірки і слово, яке має бути в способі оплати чека.
   async function viewPay() {
-    const d = await api('GET', '/api/checks/pay');
+    const [d, cfg] = await Promise.all([api('GET', '/api/checks/pay'), api('GET', '/api/checks/settings')]);
     main.innerHTML = `
-      <div class="head-row"><h2>Види оплат</h2><div class="btn-row"><button class="btn primary" id="payKeep">Зберегти</button></div></div>
+      <div class="head-row"><h2>Налаштування перевірки</h2></div>
+      <div class="card"><label class="chk-sw"><input type="checkbox" id="dupNotify" ${cfg.dup_notify ? 'checked' : ''}>
+        <span><b>Сповіщення в Telegram про дублі</b><span class="small muted"> — та сама ТТН у кількох замовленнях LP-CRM або той самий телефон серед «Принят» за 7 днів (менеджерам цих замовлень і власнику).
+        Вимкнено — дублі видно лише у вкладці «Замовлення».</span></span></label></div>
+      <div class="head-row"><h3>Види оплат</h3><div class="btn-row"><button class="btn primary" id="payKeep">Зберегти види оплат</button></div></div>
       <div class="small muted" style="margin-bottom:10px">Що очікувати для кожного виду оплати LP-CRM: <b>післяплата</b> — у ТТН має бути наложка на суму замовлення;
         <b>через сервіс</b> (RozetkaPay, Пром-оплата) і <b>на рахунок ФОП</b> — наложки бути не повинно; для «на рахунок» ще шукаємо надходження в Opendatabot.
         «У чеку має бути» — слово зі способу оплати в чеку Checkbox (як у модулі Checkbox LP-CRM); порожньо — не перевіряти.</div>
@@ -131,6 +135,9 @@ export function createChecksPages() {
         <td><select data-pcls aria-label="Що перевіряти для «${esc(r.name)}»">${Object.entries(d.classes).map(([k, v]) => `<option value="${k}" ${r.cls === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></td>
         <td><input data-pcb value="${esc(r.cb || '')}" placeholder="напр. NovaPay" aria-label="Спосіб оплати в чеку для «${esc(r.name)}»"></td></tr>`).join('')}
       </tbody></table></div>`;
+    $('#dupNotify').onchange = async (e) => {
+      try { await api('PUT', '/api/checks/settings', { dup_notify: e.target.checked }); toast(e.target.checked ? 'Сповіщення про дублі ввімкнено' : 'Сповіщення про дублі вимкнено'); } catch (err) { toast(err.message, true); e.target.checked = !e.target.checked; }
+    };
     $('#payKeep').onclick = async () => {
       const rows = $$('[data-pid]').map((tr) => ({ id: tr.dataset.pid, name: d.rows.find((x) => x.id === tr.dataset.pid)?.name, cls: $('[data-pcls]', tr).value, cb: $('[data-pcb]', tr).value }));
       try { await api('PUT', '/api/checks/pay', { rows }); toast('Збережено'); viewPay(); } catch (e) { toast(e.message, true); }

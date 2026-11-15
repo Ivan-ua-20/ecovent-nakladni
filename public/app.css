@@ -890,3 +890,5 @@ tr.chk-done td { color: var(--muted, #6b7280); }
 .ret-f.chk-chk { flex-direction: row; align-items: center; gap: 8px; align-self: flex-end; min-height: 38px; }
 .ret-f.chk-chk input { width: auto; flex: 0 0 auto; margin: 0; }
 .ret-f.chk-chk span { font-size: 14px; color: inherit; font-weight: 500; }
+.chk-sw { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.chk-sw input { margin-top: 3px; width: 18px; height: 18px; flex: 0 0 auto; }

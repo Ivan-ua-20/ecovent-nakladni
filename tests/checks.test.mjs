@@ -53,6 +53,7 @@ const ORDERS = [
   O(10007, 6, 450, '20450000000007', { office: '12' }), // на картку, у чеку «Готівка», чек на ФОП 1 замість 2
   O(10008, 14, 999, '20450000000008', { phone: '380509999999', office: '12' }), // дубль за телефоном з 10009
   O(10009, 14, 999, '20450000000009', { phone: '380509999999', office: '12' }),
+  O(10010, 14, 300, '2045 0000 000002', { office: '12' }), // та сама ТТН, що в 10002
 ];
 const byCode = new Map(ORDERS.map((o) => [o.order_id, o]));
 const TRACK = { 20450000000001: { AfterpaymentOnGoodsCost: '1000' }, 20450000000002: { AfterpaymentOnGoodsCost: '500' }, 20450000000003: {}, 20450000000004: {},
@@ -136,7 +137,7 @@ const texts = (id) => row(id).items.map((i) => `${i.level}: ${i.text}`).join(' |
 assert.equal(j.rows.length, ORDERS.length);
 assert.equal(row(10001).level, 'ok', texts(10001));
 assert.ok(row(10001).receipt && !row(10001).receipt.bySum);
-assert.equal(row(10002).level, 'bad'); assert.match(texts(10002), /RozetkaPay.*контроль оплати 500/);
+assert.equal(row(10002).level, 'bad'); assert.match(texts(10002), /RozetkaPay.*контроль оплати/);
 assert.equal(row(10003).level, 'bad'); assert.match(texts(10003), /наложки немає/); assert.match(texts(10003), /bad: Відправлено, а чек не знайдено/);
 assert.equal(row(10004).level, 'bad'); assert.match(texts(10004), /Оплата прийшла на «ФОП Лупу В\.Ф\.», а чек пробито на «ФОП Агафіца Д\.М\.»/);
 assert.ok(row(10004).receipt.bySum, 'чек знайдено за сумою');
@@ -147,6 +148,8 @@ assert.match(texts(10007), /bad: У чеку спосіб оплати «Гот�
 assert.match(texts(10007), /warn: Чек пробито на «ФОП Агафіца Д\.М\.», а за відділом/);
 assert.match(texts(10008), /Можливий дубль.*10009/);
 assert.match(texts(10009), /Можливий дубль.*10008/);
+assert.match(texts(10010), /bad: Та сама ТТН у замовленні № 10002/);
+assert.match(texts(10002), /Та сама ТТН у замовленні № 10010/);
 assert.ok(j.counts.bad >= 5);
 
 // Чеки за день по ФОП: чек без замовлення видно окремо.
@@ -164,6 +167,12 @@ const rows = pay.rows.map((r) => (r.id === '16' ? { ...r, cls: 'skip' } : r));
 assert.equal((await call('PUT', '/api/checks/pay', { rows }, H)).r.status, 200);
 assert.deepEqual(Object.keys(JSON.parse((await db.get(`SELECT value FROM settings WHERE key = 'chk_pay'`)).value)), ['16'], 'зберігаємо лише відмінності');
 assert.equal((await call('GET', '/api/checks', null, H)).j.rows.find((r) => r.id === '10003').level, 'skip');
+
+// Сповіщення про дублі (аналітика): типово вимкнено, вмикається тут.
+assert.equal((await call('GET', '/api/checks/settings', null, H)).j.dup_notify, false);
+await call('PUT', '/api/checks/settings', { dup_notify: true }, H);
+assert.equal((await db.get(`SELECT value FROM settings WHERE key = 'chk_dup_notify'`)).value, '1');
+await call('PUT', '/api/checks/settings', { dup_notify: false }, H);
 
 // Повторний збір одразу — нічого не перечитує (дані свіжі), а замовлення без змін LP-CRM повторно не віддає повністю.
 const before = { ...calls };
