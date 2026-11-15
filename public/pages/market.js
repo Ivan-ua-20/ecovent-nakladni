@@ -169,13 +169,15 @@ export function createMarketPages({ can }) {
       const a = o.calls.after;
       return `<div class="mp-l4">${b.n ? '<span class="mp-tag ok">📞 був дзвінок до замовлення</span>' : '<span class="mp-tag">без дзвінка до замовлення</span>'}${a.n ? ` <span class="muted">☎ менеджер: ${esc(dt(a.last.at))}${a.answered ? '' : ' · без відповіді'}</span>` : ''}</div>`;
     };
+    // кнопка «скопіювати» біля поля (обробник — один на картку)
+    const cp = (v, what = 'Скопійовано') => (v ? `<button type="button" class="mp-cp" data-copy="${esc(v)}" data-what="${esc(what)}" title="Скопіювати" aria-label="Скопіювати: ${esc(what)}">⧉</button>` : '');
     const showRv = () => rz && (state.grp === 'success' || state.rv);
     const rowHtml = (o) => (byKey.set(keyOf(o), o), `<div class="mp-row${state.sel === keyOf(o) ? ' on' : ''}" data-ok="${esc(keyOf(o))}" tabindex="0">
           ${canPick(o) ? `<label class="mp-pick"><input type="checkbox" data-pick="${esc(keyOf(o))}" ${picked.has(keyOf(o)) ? 'checked' : ''} aria-label="Вибрати ${esc(o.number)}"></label>` : ''}
           <div class="mp-row-b">
             <div class="mp-l1"><span><b>${esc(o.number)}</b> <span class="small muted">${esc(dt(o.created_at))}</span></span><b>${uah(o.total)}</b></div>
             <div class="mp-l2">${o.items.length ? `${esc(o.items[0].name)}${o.items[0].qty > 1 ? ` × ${o.items[0].qty}` : ''}${o.items.length > 1 ? ` <span class="muted">+${o.items.length - 1}</span>` : ''}` : '—'}</div>
-            <div class="mp-l3"><span>${esc(o.customer || '—')}${o.delivery ? ` · ${esc(o.delivery)}` : ''}${many ? ` · ${esc(name.get(o.account_id) || '')}` : ''}</span>
+            <div class="mp-l3"><span>${esc(o.customer || '—')}${o.delivery ? ` · ${esc(o.delivery)}` : ''}${o.ttn ? ` · ТТН ${esc(o.ttn)}` : ''}${many ? ` · ${esc(name.get(o.account_id) || '')}` : ''}</span>
               ${rz && String(o.status) === '1' && state.grp === 'new' ? waitOf(o) : `<span class="badge">${esc(o.status_name || o.status || '—')}</span>`}</div>
             ${callMini(o)}
             ${showRv() ? `<div class="mp-l4" data-rvcell="${esc(keyOf(o))}">${rvCell(o)}</div>` : ''}
@@ -233,10 +235,10 @@ export function createMarketPages({ can }) {
 
     // ---------- бічна панель: групи замовлень Розетки (або статуси Prom і Епіцентру), згортання ----------
     const GROUPS = [
-      ['', 'Усі замовлення'], ['new', 'Нові', 'red'], ['work', 'В обробці'], ['call', 'Потрібно зателефонувати', 'amber'], ['delivery', 'Доставляється'],
+      ['', 'Усі замовлення'], ['new', 'Нові', 'red'], ['work', 'В обробці'], ['ttn', 'Створено ТТН'], ['call', 'Потрібно зателефонувати', 'amber'], ['delivery', 'Доставляється'],
       ['success', 'Успішні'], ['failed', 'Неуспішні'], ['cancelled', 'Скасовані'],
     ];
-    const SHORT = { '': 'Усі', new: 'Нові', work: 'Обр.', call: 'Дзв.', delivery: 'Дост.', success: 'Усп.', failed: 'Неусп.', cancelled: 'Скас.', 'rv-ask': 'Відг.' };
+    const SHORT = { '': 'Усі', new: 'Нові', work: 'Обр.', ttn: 'ТТН', call: 'Дзв.', delivery: 'Дост.', success: 'Усп.', failed: 'Неусп.', cancelled: 'Скас.', 'rv-ask': 'Відг.' };
     const fmtN = (n) => Number(n || 0).toLocaleString('uk-UA');
     function renderNav(d) {
       const nav = $('#mpNav');
@@ -352,24 +354,24 @@ export function createMarketPages({ can }) {
       const box = $('#mpDetail');
       $('#mpShell').classList.add('detail');
       const ph = intlPhone(o.phone);
-      const items = o.items.map((it) => `<div class="mp-goods"><span>${esc(it.name)}${it.qty > 1 ? ` <span class="muted">× ${it.qty}</span>` : ''}</span><b>${it.price ? uah(it.price * (it.qty || 1)) : ''}</b></div>`).join('') || '<div class="muted">—</div>';
-      box.innerHTML = `<div class="mp-d-head"><div style="flex:1"><b style="font-size:16px">Замовлення ${esc(o.number)}</b><div class="small muted">${esc(dt(o.created_at))} · ${esc(name.get(o.account_id) || '')}${o.changed_at ? ` · змінено ${esc(dt(o.changed_at))}` : ''}</div></div>
+      const items = o.items.map((it) => `<div class="mp-goods"><span>${esc(it.name)}${cp(it.name, 'Назва товару')}${it.id ? ` <span class="small muted">код ${esc(it.id)}</span>${cp(it.id, 'Код товару')}` : ''}${it.qty > 1 ? ` <span class="muted">× ${it.qty}</span>` : ''}</span><b>${it.price ? uah(it.price * (it.qty || 1)) : ''}</b></div>`).join('') || '<div class="muted">—</div>';
+      box.innerHTML = `<div class="mp-d-head"><div style="flex:1"><b style="font-size:16px">Замовлення ${esc(o.number)}</b>${cp(o.number, 'Номер замовлення')}<div class="small muted">${esc(dt(o.created_at))} · ${esc(name.get(o.account_id) || '')}${o.changed_at ? ` · змінено ${esc(dt(o.changed_at))}` : ''}</div></div>
           <span class="badge info">${esc(o.status_name || o.status || '—')}</span>
           <button type="button" class="btn sm" id="mpDClose" aria-label="Закрити картку">✕</button></div>
         <div class="mp-d-body">
           ${canPick(o) ? '<div class="mp-wide-box"><button type="button" class="btn primary" id="mpDTake">Взяти в обробку</button> <span class="small muted">→ «Обробляється менеджером» у Розетці</span></div>' : ''}
-          <div class="mp-box"><div class="mp-cap">Покупець</div><b>${esc(o.customer || '—')}</b>
-            ${ph ? `<div class="btn-row" style="margin-top:4px;flex-wrap:wrap;align-items:center"><span>${esc(ph)}</span><a class="btn sm" href="tel:${esc(ph)}">Подзвонити</a><button type="button" class="btn sm" id="mpDCopy">Копіювати</button></div>` : ''}
-            ${o.recipient ? `<div class="small muted" style="margin-top:4px">Отримувач: ${esc(o.recipient)}${o.recipient_phone ? ` · ${esc(o.recipient_phone)}` : ''}</div>` : ''}
+          <div class="mp-box"><div class="mp-cap">Покупець</div><b>${esc(o.customer || '—')}</b>${cp(o.customer, 'ПІБ')}
+            ${ph ? `<div class="btn-row" style="margin-top:4px;flex-wrap:wrap;align-items:center"><span>${esc(ph)}</span>${cp(ph, 'Телефон')}<a class="btn sm" href="tel:${esc(ph)}">Подзвонити</a></div>` : ''}
+            ${o.recipient ? `<div class="small" style="margin-top:4px"><span class="muted">Отримувач:</span> ${esc(o.recipient)}${cp(o.recipient, 'ПІБ отримувача')}${o.recipient_phone ? ` · ${esc(o.recipient_phone)}${cp(intlPhone(o.recipient_phone), 'Телефон отримувача')}` : ''}</div>` : ''}
             ${callsHtml(o)}</div>
-          <div class="mp-box"><div class="mp-cap">Доставка</div>${esc(o.delivery || '—')}${o.ttn ? `<div class="small">ТТН <b>${esc(o.ttn)}</b></div>` : ''}</div>
-          <div class="mp-box mp-wide-box"><div class="mp-cap">Товари</div>${items}<div class="mp-goods" style="border-top:1px solid var(--line);padding-top:6px;margin-top:4px"><span>Разом</span><b>${uah(o.total)}</b></div></div>
+          <div class="mp-box"><div class="mp-cap">Доставка</div>${esc(o.delivery || '—')}${o.ttn ? `<div>ТТН <b>${esc(o.ttn)}</b>${cp(o.ttn, 'ТТН')}</div>` : ''}</div>
+          <div class="mp-box mp-wide-box"><div class="mp-cap">Товари</div>${items}<div class="mp-goods" style="border-top:1px solid var(--line);padding-top:6px;margin-top:4px"><span>Разом</span><b>${uah(o.total)}${cp(String(o.total), 'Сума')}</b></div></div>
           ${rz ? `<div class="mp-box mp-wide-box"><div class="mp-cap">Відгук</div><div class="small">${rvCell(o)}</div></div>` : ''}
           ${rz && o.calls ? '<div class="mp-box mp-wide-box"><div class="mp-cap">Дзвінки Binotel з цим номером</div><div id="mpDCalls" class="small muted"><span class="spinner"></span></div></div>' : ''}
         </div>`;
       $('#mpDClose').onclick = closeDetail;
       if ($('#mpDTake')) $('#mpDTake').onclick = () => moveToWork([keyOf(o)]);
-      if ($('#mpDCopy')) $('#mpDCopy').onclick = async () => { if (await copyText(ph)) toast('Телефон скопійовано'); };
+      $$('[data-copy]', box).forEach((b) => (b.onclick = async () => { if (await copyText(b.dataset.copy)) toast(`${b.dataset.what} скопійовано`); }));
       $$('[data-rvask]', box).forEach((b) => (b.onclick = () => askModal(byKey.get(b.dataset.rvask))));
       if ($('#mpDCalls')) {
         const key = state.sel;

@@ -4,7 +4,7 @@
 // синхронізації — по кілька сторінок за раз; незавершений прохід продовжується з наступної сторінки.
 import { fail, need, nowIso } from '../../core/common.js';
 import { shopAllowed, accessOf } from '../../core/auth.js';
-import { rzOrdersSearch, rzItemComments, rzSuccessStatuses, rzOrderChat, rzSendMessage, rzMessageCounts, rzUnreadChats, rzSetOrderStatus } from '../../integrations/rozetka.js';
+import { rzOrdersSearch, rzItemComments, rzSuccessStatuses, rzOrderChat, rzSendMessage, rzMessageCounts, rzUnreadChats, rzSetOrderStatus, rzGetOrder } from '../../integrations/rozetka.js';
 import { promOrders } from '../../integrations/prom.js';
 import { epcOrdersPage } from '../../integrations/epicentr.js';
 
@@ -42,23 +42,26 @@ export const MARKETS = [
 // Неуспішні ділимо на «Неуспішні» (після відправки: не забрав, відмова, повернення) і «Скасовані» (до відправки).
 // Для старих рядків без status_group (0) — за кодами.
 const RZ_NEW = ['1'];
-const RZ_DELIVERY = ['3', '4', '5', '82'];
+const RZ_DELIVERY = ['3', '4', '5', '81', '82']; // 81 «Прийнято від продавця» — посилку вже забрали, вона в дорозі
+const RZ_TTN = ['61', '80']; // «Створено ТТН»: заплановано передачу перевізникові, очікує отримання від продавця (+ будь-яке «в обробці» з ТТН)
 const RZ_FAILED = ['11', '12', '19', '20', '38', '85', '88'];
 const RZ_CANCEL = ['17', '18', '28', '29', '31', '33', '35', '37', '39', '40', '41', '42', '44', '45', '49', '50'];
 const RZ_CANCEL_CLIENT = ['45']; // «Скасовано покупцем» — сам у кабінеті Розетки
 const RZ_CANCEL_AUTO = ['49', '50']; // Розетка сама: повторне замовлення (дубль), не оплатив вчасно
-export const RZ_GROUPS = ['new', 'work', 'call', 'delivery', 'success', 'failed', 'cancelled'];
+export const RZ_GROUPS = ['new', 'work', 'ttn', 'call', 'delivery', 'success', 'failed', 'cancelled'];
 const inList = (a) => a.map((x) => `'${x}'`).join(', ');
 const groupSql = (successSql) => `(CASE WHEN ${successSql} THEN 'success' WHEN status IN (${inList(RZ_FAILED)}) THEN 'failed'
   WHEN status_group = 3 OR (status_group = 0 AND status IN (${inList(RZ_CANCEL)})) THEN 'cancelled'
-  WHEN status IN (${inList(RZ_NEW)}) THEN 'new' WHEN status IN (${inList(RZ_DELIVERY)}) THEN 'delivery' ELSE 'work' END)`;
-export const rzGroupOf = (status, group, okSet = new Set()) => {
+  WHEN status IN (${inList(RZ_NEW)}) THEN 'new' WHEN status IN (${inList(RZ_DELIVERY)}) THEN 'delivery'
+  WHEN status IN (${inList(RZ_TTN)}) OR ttn != '' THEN 'ttn' ELSE 'work' END)`;
+export const rzGroupOf = (status, group, okSet = new Set(), hasTtn = false) => {
   const st = String(status);
   if (Number(group) === 2 || (!Number(group) && okSet.has(st))) return 'success';
   if (RZ_FAILED.includes(st)) return 'failed';
   if (Number(group) === 3 || (!Number(group) && RZ_CANCEL.includes(st))) return 'cancelled';
   if (RZ_NEW.includes(st)) return 'new';
   if (RZ_DELIVERY.includes(st)) return 'delivery';
+  if (RZ_TTN.includes(st) || hasTtn) return 'ttn';
   return 'work';
 };
 export const rzCancelBy = (status) => (RZ_CANCEL_CLIENT.includes(String(status)) ? 'client' : RZ_CANCEL_AUTO.includes(String(status)) ? 'auto' : 'manager');
@@ -635,7 +638,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     let callN = 0;
     const [rows, statusRows, total, rvStats, rvBy] = await Promise.all([
       db.all(`SELECT *, ${rz ? SUCCESS_SQL : '0'} AS ok FROM mp_orders WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT 301 OFFSET ?`, [...(rz ? [okIds] : []), ...params, offset]),
-      db.all(`SELECT status, status_group, MAX(status_name) AS status_name, COUNT(*) AS n FROM mp_orders WHERE ${base.join(' AND ')} GROUP BY status, status_group ORDER BY n DESC`, baseParams),
+      db.all(`SELECT status, status_group, ttn != '' AS has_ttn, MAX(status_name) AS status_name, COUNT(*) AS n FROM mp_orders WHERE ${base.join(' AND ')} GROUP BY status, status_group, ttn != '' ORDER BY n DESC`, baseParams),
       db.get(`SELECT COUNT(*) AS n, SUM(total) AS sum FROM mp_orders WHERE ${where.join(' AND ')}`, params),
       // відгуки за період і магазин (без фільтрів статусу й пошуку): виконані, з відгуком, кому вже можна нагадати, кому нагадали
       rz ? db.get(`SELECT SUM(ok) AS done, SUM(ok AND review_n > 0) AS reviewed, SUM(ok AND review_n = 0 AND asked_at = '' AND changed_at <= ?) AS toask,
@@ -650,13 +653,15 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     const cancels = { client: 0, manager: 0, auto: 0 };
     const stMap = new Map();
     for (const x of statusRows) {
-      const g = rzGroupOf(x.status, x.status_group, okSet);
+      const g = rz ? rzGroupOf(x.status, x.status_group, okSet, Boolean(x.has_ttn)) : '';
       if (rz) { groups[g] += x.n; if (g === 'cancelled') cancels[rzCancelBy(x.status)] += x.n; }
-      const cur = stMap.get(x.status);
-      if (!cur) stMap.set(x.status, { status: x.status, status_name: x.status_name, n: x.n, grp: rz ? g : '', top: x.n });
-      else { cur.n += x.n; if (x.n > cur.top && rz) { cur.grp = g; cur.top = x.n; } }
+      // фільтр статусів — окремо в кожній групі (той самий статус може бути і «в обробці», і «створено ТТН»)
+      const k = `${x.status}|${g}`;
+      const cur = stMap.get(k);
+      if (!cur) stMap.set(k, { status: x.status, status_name: x.status_name, n: x.n, grp: g });
+      else cur.n += x.n;
     }
-    const statuses = [...stMap.values()].sort((a, b) => b.n - a.n).map(({ top: _t, ...x }) => x);
+    const statuses = [...stMap.values()].sort((a, b) => b.n - a.n);
     if (rz) groups.call = callN;
     // відгуки замовлень на екрані — щоб показати, на які саме товари і хто вже залишив
     const shown = rows.slice(0, 300);
@@ -732,6 +737,16 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     if (!chat?.id || !chat.userId) throw fail(400, 'Розетка не дала чат цього замовлення — напишіть покупцю у Viber або Telegram.');
     await rzCall(acc, (t) => rzSendMessage(fetchFn, t, { chatId: chat.id, receiverId: chat.userId, body: text }));
     return c.json(await markAsked(o, c.get('user'), 'chat'));
+  });
+
+  // Діагностика (адміністратор): «сире» замовлення з кабінету Розетки — подивитись, які поля віддає API (оплата тощо).
+  app.get('/api/mp/rz/raw/:account/:id', async (c) => {
+    need(c, 'api');
+    const acc = await accOf('rozetka', c.req.param('account'));
+    const expand = String(c.req.query('expand') || 'delivery,status_data,purchases,payment').replace(/[^a-z_,]/gi, '').slice(0, 200);
+    const id = String(c.req.param('id')).replace(/\D/g, '').slice(0, 20);
+    const raw = await rzCall(acc, (t) => rzGetOrder(fetchFn, t, id, expand));
+    return c.json(raw);
   });
 
   // Групова зміна статусу в Розетці: з «Нових» — в «Обробляється менеджером». До 10 замовлень за запит

@@ -13296,6 +13296,9 @@ async function rzOrderChat(fetchFn, token, orderId) {
 async function rzSendMessage(fetchFn, token, { chatId, receiverId, body }) {
   return getContent(fetchFn, token, "/messages/create", { method: "POST", body: { chat_id: chatId, receiver_id: receiverId, body, sendEmailUser: 1 } });
 }
+async function rzGetOrder(fetchFn, token, orderId, expand = "") {
+  return getContent(fetchFn, token, `/orders/${encodeURIComponent(orderId)}${expand ? `?${new URLSearchParams({ expand })}` : ""}`);
+}
 async function rzSetOrderStatus(fetchFn, token, orderId, status) {
   return getContent(fetchFn, token, `/orders/${encodeURIComponent(orderId)}`, { method: "PUT", body: { status: Number(status) } });
 }
@@ -16709,23 +16712,26 @@ var MARKETS = [
   { key: "epc", title: "\u0415\u043F\u0456\u0446\u0435\u043D\u0442\u0440" }
 ];
 var RZ_NEW = ["1"];
-var RZ_DELIVERY = ["3", "4", "5", "82"];
+var RZ_DELIVERY = ["3", "4", "5", "81", "82"];
+var RZ_TTN = ["61", "80"];
 var RZ_FAILED = ["11", "12", "19", "20", "38", "85", "88"];
 var RZ_CANCEL = ["17", "18", "28", "29", "31", "33", "35", "37", "39", "40", "41", "42", "44", "45", "49", "50"];
 var RZ_CANCEL_CLIENT = ["45"];
 var RZ_CANCEL_AUTO = ["49", "50"];
-var RZ_GROUPS = ["new", "work", "call", "delivery", "success", "failed", "cancelled"];
+var RZ_GROUPS = ["new", "work", "ttn", "call", "delivery", "success", "failed", "cancelled"];
 var inList = (a) => a.map((x) => `'${x}'`).join(", ");
 var groupSql = (successSql) => `(CASE WHEN ${successSql} THEN 'success' WHEN status IN (${inList(RZ_FAILED)}) THEN 'failed'
   WHEN status_group = 3 OR (status_group = 0 AND status IN (${inList(RZ_CANCEL)})) THEN 'cancelled'
-  WHEN status IN (${inList(RZ_NEW)}) THEN 'new' WHEN status IN (${inList(RZ_DELIVERY)}) THEN 'delivery' ELSE 'work' END)`;
-var rzGroupOf = (status, group, okSet = /* @__PURE__ */ new Set()) => {
+  WHEN status IN (${inList(RZ_NEW)}) THEN 'new' WHEN status IN (${inList(RZ_DELIVERY)}) THEN 'delivery'
+  WHEN status IN (${inList(RZ_TTN)}) OR ttn != '' THEN 'ttn' ELSE 'work' END)`;
+var rzGroupOf = (status, group, okSet = /* @__PURE__ */ new Set(), hasTtn = false) => {
   const st = String(status);
   if (Number(group) === 2 || !Number(group) && okSet.has(st)) return "success";
   if (RZ_FAILED.includes(st)) return "failed";
   if (Number(group) === 3 || !Number(group) && RZ_CANCEL.includes(st)) return "cancelled";
   if (RZ_NEW.includes(st)) return "new";
   if (RZ_DELIVERY.includes(st)) return "delivery";
+  if (RZ_TTN.includes(st) || hasTtn) return "ttn";
   return "work";
 };
 var rzCancelBy = (status) => RZ_CANCEL_CLIENT.includes(String(status)) ? "client" : RZ_CANCEL_AUTO.includes(String(status)) ? "auto" : "manager";
@@ -17405,7 +17411,7 @@ ${items.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio 
     let callN = 0;
     const [rows, statusRows, total, rvStats, rvBy] = await Promise.all([
       db.all(`SELECT *, ${rz ? SUCCESS_SQL : "0"} AS ok FROM mp_orders WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT 301 OFFSET ?`, [...rz ? [okIds] : [], ...params, offset]),
-      db.all(`SELECT status, status_group, MAX(status_name) AS status_name, COUNT(*) AS n FROM mp_orders WHERE ${base.join(" AND ")} GROUP BY status, status_group ORDER BY n DESC`, baseParams),
+      db.all(`SELECT status, status_group, ttn != '' AS has_ttn, MAX(status_name) AS status_name, COUNT(*) AS n FROM mp_orders WHERE ${base.join(" AND ")} GROUP BY status, status_group, ttn != '' ORDER BY n DESC`, baseParams),
       db.get(`SELECT COUNT(*) AS n, SUM(total) AS sum FROM mp_orders WHERE ${where.join(" AND ")}`, params),
       // відгуки за період і магазин (без фільтрів статусу й пошуку): виконані, з відгуком, кому вже можна нагадати, кому нагадали
       rz ? db.get(`SELECT SUM(ok) AS done, SUM(ok AND review_n > 0) AS reviewed, SUM(ok AND review_n = 0 AND asked_at = '' AND changed_at <= ?) AS toask,
@@ -17422,22 +17428,17 @@ ${items.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio 
     const cancels = { client: 0, manager: 0, auto: 0 };
     const stMap = /* @__PURE__ */ new Map();
     for (const x of statusRows) {
-      const g = rzGroupOf(x.status, x.status_group, okSet);
+      const g = rz ? rzGroupOf(x.status, x.status_group, okSet, Boolean(x.has_ttn)) : "";
       if (rz) {
         groups[g] += x.n;
         if (g === "cancelled") cancels[rzCancelBy(x.status)] += x.n;
       }
-      const cur = stMap.get(x.status);
-      if (!cur) stMap.set(x.status, { status: x.status, status_name: x.status_name, n: x.n, grp: rz ? g : "", top: x.n });
-      else {
-        cur.n += x.n;
-        if (x.n > cur.top && rz) {
-          cur.grp = g;
-          cur.top = x.n;
-        }
-      }
+      const k = `${x.status}|${g}`;
+      const cur = stMap.get(k);
+      if (!cur) stMap.set(k, { status: x.status, status_name: x.status_name, n: x.n, grp: g });
+      else cur.n += x.n;
     }
-    const statuses = [...stMap.values()].sort((a, b) => b.n - a.n).map(({ top: _t, ...x }) => x);
+    const statuses = [...stMap.values()].sort((a, b) => b.n - a.n);
     if (rz) groups.call = callN;
     const shown = rows.slice(0, 300);
     const revs = rz && shown.some((r) => r.review_n > 0) ? await db.all(
@@ -17517,6 +17518,14 @@ ${items.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio 
     if (!chat?.id || !chat.userId) throw fail(400, "\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u043D\u0435 \u0434\u0430\u043B\u0430 \u0447\u0430\u0442 \u0446\u044C\u043E\u0433\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2014 \u043D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u043F\u043E\u043A\u0443\u043F\u0446\u044E \u0443 Viber \u0430\u0431\u043E Telegram.");
     await rzCall(acc, (t) => rzSendMessage(fetchFn, t, { chatId: chat.id, receiverId: chat.userId, body: text }));
     return c.json(await markAsked(o, c.get("user"), "chat"));
+  });
+  app.get("/api/mp/rz/raw/:account/:id", async (c) => {
+    need(c, "api");
+    const acc = await accOf("rozetka", c.req.param("account"));
+    const expand = String(c.req.query("expand") || "delivery,status_data,purchases,payment").replace(/[^a-z_,]/gi, "").slice(0, 200);
+    const id = String(c.req.param("id")).replace(/\D/g, "").slice(0, 20);
+    const raw2 = await rzCall(acc, (t) => rzGetOrder(fetchFn, t, id, expand));
+    return c.json(raw2);
   });
   const BULK_TO = { 26: { name: "\u041E\u0431\u0440\u043E\u0431\u043B\u044F\u0454\u0442\u044C\u0441\u044F \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u043E\u043C", from: RZ_NEW } };
   app.post("/api/mp/rz/status", async (c) => {

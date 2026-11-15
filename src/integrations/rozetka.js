@@ -129,6 +129,11 @@ export async function rzSendMessage(fetchFn, token, { chatId, receiverId, body }
   return getContent(fetchFn, token, '/messages/create', { method: 'POST', body: { chat_id: chatId, receiver_id: receiverId, body, sendEmailUser: 1 } });
 }
 
+// Одне замовлення з потрібними розширеннями (expand) — для діагностики полів.
+export async function rzGetOrder(fetchFn, token, orderId, expand = '') {
+  return getContent(fetchFn, token, `/orders/${encodeURIComponent(orderId)}${expand ? `?${new URLSearchParams({ expand })}` : ''}`);
+}
+
 // Змінити статус замовлення (напр. 26 — «Обробляється менеджером»). Розетка перевіряє, чи дозволено перехід.
 export async function rzSetOrderStatus(fetchFn, token, orderId, status) {
   return getContent(fetchFn, token, `/orders/${encodeURIComponent(orderId)}`, { method: 'PUT', body: { status: Number(status) } });

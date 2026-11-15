@@ -970,3 +970,6 @@ main.mp-wide { max-width: none; }
 .mp-bulk.on { background: var(--accent-soft); border-color: #b9dccf; }
 .mp-pick { display: inline-flex; margin-right: 8px; vertical-align: middle; }
 .mp-pick input { width: 16px; height: 16px; }
+
+.mp-cp { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: 13px; line-height: 1; vertical-align: baseline; border-radius: 4px; }
+.mp-cp:hover { color: var(--accent); background: var(--accent-soft); }

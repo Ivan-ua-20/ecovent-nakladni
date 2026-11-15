@@ -34,11 +34,13 @@ const ROWS = [
   ['16', '50', 3, 900, 800], // не оплатив — автоматично
   ['17', '49', 3, 900, 800], // повторне замовлення (дубль) — автоматично, НЕ нове
   ['18', '18', 0, 900, 800], // не вдалося зв'язатися, старий рядок — скасовані
-  ['19', '61', 1, 900, 800], // заплановано передачу перевізнику — в обробці
+  ['19', '61', 1, 900, 800], // заплановано передачу перевізнику — створено ТТН
+  ['20', '26', 1, 900, 800, '20450000000001'], // обробляється менеджером, але ТТН уже є — створено ТТН
+  ['21', '81', 1, 900, 800, '20450000000002'], // прийнято від продавця — доставляється
 ];
-for (const [id, st, g, c, ch] of ROWS) {
-  await db.run(`INSERT INTO mp_orders (mp, account_id, id, number, created_at, changed_at, status, status_name, customer, phone, total, items, status_group)
-    VALUES ('rozetka', 1, ?, ?, ?, ?, ?, ?, 'Клієнт', '380671112233', 100, '[]', ?)`, [id, id, ago(c), ago(ch), st, `Статус ${st}`, g]);
+for (const [id, st, g, c, ch, ttn = ''] of ROWS) {
+  await db.run(`INSERT INTO mp_orders (mp, account_id, id, number, created_at, changed_at, status, status_name, customer, phone, total, items, status_group, ttn)
+    VALUES ('rozetka', 1, ?, ?, ?, ?, ?, ?, 'Клієнт', '380671112233', 100, '[]', ?, ?)`, [id, id, ago(c), ago(ch), st, `Статус ${st}`, g, ttn]);
 }
 const mk = () => createApp({ db, fetchFn: async (u) => { throw new Error(`неочікуваний запит ${u}`); } });
 const setup = await mk().request('/api/auth/setup', { method: 'POST', body: JSON.stringify({ login: 'owner', password: 'secret123' }), headers: { 'Content-Type': 'application/json' } });
@@ -48,15 +50,17 @@ const ids = (d) => d.rows.map((r) => Number(r.id)).sort((a, b) => a - b);
 
 // ---------- лічильники груп ----------
 const all = await get('');
-assert.deepEqual(all.groups, { new: 2, work: 5, call: 4, delivery: 3, success: 2, failed: 1, cancelled: 6 });
+assert.deepEqual(all.groups, { new: 2, work: 4, ttn: 2, call: 4, delivery: 4, success: 2, failed: 1, cancelled: 6 });
 assert.deepEqual(all.cancels, { client: 1, manager: 3, auto: 2 });
 assert.equal(all.statuses.find((x) => x.status === '6').n, 2, 'один статус з різними status_group — один рядок фільтра');
+assert.deepEqual(all.statuses.filter((x) => x.status === '26').map((x) => `${x.grp}:${x.n}`).sort(), ['ttn:1', 'work:1'], 'той самий статус — окремо в кожній групі');
 assert.equal(all.statuses.find((x) => x.status === '49').grp, 'cancelled');
 
 // ---------- фільтр за групою ----------
 assert.deepEqual(ids(await get('grp=new')), [1, 2]);
-assert.deepEqual(ids(await get('grp=work')), [3, 4, 5, 6, 19]);
-assert.deepEqual(ids(await get('grp=delivery')), [7, 8, 9]);
+assert.deepEqual(ids(await get('grp=work')), [3, 4, 5, 6]);
+assert.deepEqual(ids(await get('grp=ttn')), [19, 20]);
+assert.deepEqual(ids(await get('grp=delivery')), [7, 8, 9, 21]);
 assert.deepEqual(ids(await get('grp=success')), [10, 11]);
 assert.deepEqual(ids(await get('grp=failed')), [12]);
 assert.deepEqual(ids(await get('grp=cancelled')), [13, 14, 15, 16, 17, 18]);
@@ -71,8 +75,8 @@ assert.deepEqual((await get('grp=new')).groups, all.groups);
 
 // ---------- JS і SQL групують однаково ----------
 const ok = new Set(['6', '87']);
-for (const [id, st, g] of ROWS) {
-  const grp = rzGroupOf(st, g, ok);
+for (const [id, st, g, , , ttn = ''] of ROWS) {
+  const grp = rzGroupOf(st, g, ok, Boolean(ttn));
   assert.ok(ids(await get(`grp=${grp}`)).includes(Number(id)), `замовлення ${id} (статус ${st}) — у групі ${grp}`);
 }
 assert.equal(rzCancelBy('45'), 'client');
