@@ -390,6 +390,7 @@ async function route() {
   document.body.classList.toggle('an-mode', sec.id === 'an');
   // Лише перегляд (напр., B2B для менеджера): кнопки змін сховані, сервер зміни й так не прийме.
   main.classList.toggle('ro', Boolean(sec.edit && can(sec.perm) && !can(sec.edit)));
+  main.classList.toggle('mp-wide', ['mprz', 'mpprom', 'mpepc'].includes(name)); // маркетплейси — на всю ширину, як кабінет Розетки
   renderNav(name);
   // На телефоні меню гортається вбік — активний пункт має бути видно
   for (const a of $$('.main-tabs a.active, .subnav a.active')) a.scrollIntoView({ block: 'nearest', inline: 'center' });

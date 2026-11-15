@@ -76,11 +76,12 @@ export function createMarketPages({ can }) {
       const h = s.history;
       if (!h) return '';
       if (!h.started) {
-        return can('api') ? `<div class="card small" style="margin-bottom:10px">Історія «${esc(s.name)}»: зараз лише останні 30 днів.
-          <button class="btn sm primary" data-hstart="${s.id}" style="margin-left:8px">Завантажити історію…</button></div>` : '';
+        return can('api') ? `<div class="small muted mp-note">Історія «${esc(s.name)}»: зараз лише останні 30 днів.
+          <button class="btn sm" data-hstart="${s.id}">Завантажити історію…</button></div>` : '';
       }
       const other = can('api') ? ` <button class="btn sm" data-hstart="${s.id}">${h.done ? 'Завантажити інший період' : 'Змінити період'}</button>` : '';
-      if (h.done) return `<div class="small muted" style="margin-bottom:6px">✅ Історія «${esc(s.name)}» завантажена за ${esc(dDay(h.from))} – ${esc(dDay(h.end))} · ${h.saved} замовлень${other}</div>`;
+      if (h.done && !acc) return ''; // завантажену історію показуємо лише на сторінці магазину
+      if (h.done) return `<div class="small muted mp-note">✅ Історія «${esc(s.name)}» завантажена за ${esc(dDay(h.from))} – ${esc(dDay(h.end))} · ${h.saved} замовлень${other}</div>`;
       const pausedNote = h.paused ? '<div class="small muted" style="margin:4px 0">На сьогодні денну норму завантажено — продовжиться завтра автоматично (щоб не перевищити ліміт бази для решти сайту).</div>' : '';
       return `<div class="card small" style="margin-bottom:10px">
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>⏳ Історія «${esc(s.name)}» за ${esc(dDay(h.from))} – ${esc(dDay(h.end))}: завантажено до ${esc(dDay(h.to))} · ${h.saved} замовлень${other}</span><b>${h.pct}%</b></div>
@@ -88,36 +89,40 @@ export function createMarketPages({ can }) {
         ${h.error ? `<div class="alert warn small" style="margin:6px 0">Остання спроба: ${esc(h.error)}</div>` : ''}${pausedNote}
         ${h.paused ? '' : `<span class="muted">Вантажиться у фоні (кожні 3 хв). </span><button class="btn sm" data-hfast="${s.id}">Вантажити швидше, поки сторінка відкрита</button>`}</div>`;
     };
+    const many = !acc && shops.length > 1;
     main.innerHTML = `
-      <div class="head-row"><h2>${esc(m.title)}${acc ? ` · ${esc(acc.name)}` : ''}</h2>
-        <div class="btn-row">${acc && can('api') ? '<button class="btn sm" id="mpRename">Перейменувати</button>' : ''}${acc && can('market.edit') ? `<button class="btn sm" id="mpSync" ${acc.active ? '' : 'disabled'}>Оновити зараз</button>` : ''}</div></div>
-      <div class="f-chips" style="margin-bottom:10px">
-        <a class="chip ${acc ? '' : 'on'}" href="#/${route}">Усі магазини · ${total}</a>
-        ${shops.map((s) => `<a class="chip ${acc?.id === s.id ? 'on' : ''}" href="#/${route}/${s.id}" title="${esc(syncInfo(s))}">${esc(s.name)} · ${s.orders}${s.error ? ' ⚠️' : ''}</a>`).join('')}
+      <div class="mp-top">
+        <nav class="f-chips mp-shops" aria-label="Магазини">
+          <a class="chip ${acc ? '' : 'on'}" href="#/${route}">Усі магазини · ${total}</a>
+          ${shops.map((s) => `<a class="chip ${acc?.id === s.id ? 'on' : ''}" href="#/${route}/${s.id}" title="${esc(syncInfo(s))}">${esc(s.name)} · ${s.orders}${s.error ? ' ⚠️' : ''}</a>`).join('')}
+        </nav>
+        <span class="small muted">${acc ? syncInfo(acc) : 'оновлюється само кожні кілька хвилин'}</span>
+        ${acc && can('api') ? '<button class="btn sm" id="mpRename">Перейменувати</button>' : ''}${acc && can('market.edit') ? `<button class="btn sm" id="mpSync" ${acc.active ? '' : 'disabled'}>Оновити зараз</button>` : ''}
       </div>
       ${(acc ? [acc] : shops).filter((s) => s.error).map((s) => `<div class="alert warn small" style="margin-bottom:10px">⚠️ «${esc(s.name)}»: не вдалося оновити${s.error_at ? ` (${esc(fmtDateTime(s.error_at))})` : ''} — ${esc(s.error)}</div>`).join('')}
       ${(acc ? [acc] : shops).filter((s) => s.active).map(hist).join('')}
       ${(acc ? [acc] : shops).filter((s) => s.active && s.reviews).map((s) => (s.reviews.error ? `<div class="alert warn small" style="margin-bottom:6px">Відгуки «${esc(s.name)}»: ${esc(s.reviews.error)}</div>`
     : !s.reviews.full ? `<div class="small muted" style="margin-bottom:6px">⏳ Відгуки «${esc(s.name)}» завантажуються у фоні${s.reviews.n ? '' : ' — перші з\'являться за кілька хвилин'}.</div>` : '')).join('')}
-      <div class="small muted" style="margin-bottom:10px">${acc ? syncInfo(acc) : `Нові й змінені замовлення оновлюються самі кожні кілька хвилин${mp === 'rozetka' ? '' : ' (зберігаються 45 днів)'}.`}</div>
       <div class="mp-shell${pref.get('rail', false) ? ' rail' : ''}" id="mpShell">
       <aside class="mp-nav" id="mpNav" aria-label="Розділи замовлень"></aside>
-      <section class="mp-main">
-      <div class="btn-row" style="margin-bottom:10px;flex-wrap:wrap">
-        <label class="sr-only" for="mpQ">Пошук</label><input id="mpQ" type="search" placeholder="№ замовлення, клієнт, телефон або ТТН" value="${esc(state.q)}" style="max-width:320px">
-        <label class="small muted">з <input type="date" id="mpFrom" value="${esc(state.from)}"></label>
-        <label class="small muted">по <input type="date" id="mpTo" value="${esc(state.to)}"></label>
-        <button class="btn sm" data-per="30">30 днів</button>${mp === 'rozetka' ? '<button class="btn sm" data-per="365">Рік</button>' : ''}<button class="btn sm" data-per="">Увесь час</button>
-      </div>
-      ${rz ? `<div id="mpRvBox"><div class="btn-row" style="margin-bottom:6px;flex-wrap:wrap;align-items:center"><span class="small muted">Відгуки:</span><span id="mpRv" class="f-chips"></span>
-        ${can('api') ? '<button class="btn sm" id="mpRvSet">Текст нагадування</button>' : ''}</div><div id="mpRvStats" class="small muted" style="margin-bottom:10px"></div></div>` : ''}
-      <div id="mpGrpHead"></div>
-      <div id="mpStatuses" class="f-chips" style="margin-bottom:10px"></div>
-      <div id="mpBulk"></div>
-      <div id="mpTotal" class="small" style="margin-bottom:8px"></div>
-      <div id="mpList"><div class="card empty"><span class="spinner"></span> Завантажую…</div></div>
+      <section class="mp-col" aria-label="Замовлення">
+        <div class="mp-col-head">
+          <div class="mp-col-title"><h2 id="mpTitle">${esc(m.title)}</h2><span id="mpTotal" class="small muted"></span></div>
+          <label class="mp-search"><span class="sr-only">Пошук</span><input id="mpQ" type="search" placeholder="№ замовлення, клієнт, телефон або ТТН" value="${esc(state.q)}"></label>
+          <div class="mp-period">
+            <button class="btn sm" data-per="30">30 днів</button>${mp === 'rozetka' ? '<button class="btn sm" data-per="365">Рік</button>' : ''}<button class="btn sm" data-per="">Увесь час</button>
+            <label class="small muted">з <input type="date" id="mpFrom" value="${esc(state.from)}"></label>
+            <label class="small muted">по <input type="date" id="mpTo" value="${esc(state.to)}"></label>
+          </div>
+          <div id="mpGrpHead"></div>
+          <div id="mpStatuses" class="f-chips"></div>
+          ${rz ? `<div id="mpRvBox"><div class="f-chips" style="align-items:center"><span class="small muted">Відгуки:</span><span id="mpRv" class="f-chips"></span>
+            ${can('api') ? '<button class="btn sm" id="mpRvSet">Текст нагадування</button>' : ''}</div><div id="mpRvStats" class="small muted"></div></div>` : ''}
+        </div>
+        <div id="mpBulk"></div>
+        <div id="mpList" class="mp-list"><div class="mp-empty"><span class="spinner"></span> Завантажую…</div></div>
       </section>
-      <aside class="mp-detail" id="mpDetail" hidden aria-label="Замовлення"></aside>
+      <aside class="mp-detail" id="mpDetail" aria-label="Замовлення"><div class="mp-empty">Оберіть замовлення зі списку</div></aside>
       </div>`;
 
     const name = new Map(shops.map((s) => [s.id, s.name]));
@@ -150,16 +155,32 @@ export function createMarketPages({ can }) {
     };
     const keyOf = (o) => `${o.account_id}:${o.id}`;
     const canPick = (o) => rz && state.grp === 'new' && can('market.edit') && String(o.status) === '1';
-    const rowHtml = (o) => (byKey.set(keyOf(o), o), `<tr class="click${state.sel === keyOf(o) ? ' on' : ''}" data-ok="${esc(keyOf(o))}">
-          <td>${canPick(o) ? `<label class="mp-pick"><input type="checkbox" data-pick="${esc(keyOf(o))}" ${picked.has(keyOf(o)) ? 'checked' : ''} aria-label="Вибрати ${esc(o.number)}"></label>` : ''}<b>${esc(o.number)}</b><div class="small muted">${esc(dt(o.created_at))}</div></td>
-          ${acc ? '' : `<td class="small mp-opt">${esc(name.get(o.account_id) || '')}</td>`}
-          <td>${esc(o.customer || '—')}<div class="small muted">${esc(o.phone || '')}</div>${o.recipient ? `<div class="small muted">отримувач: ${esc(o.recipient)}${o.recipient_phone ? ` · ${esc(o.recipient_phone)}` : ''}</div>` : ''}${callsHtml(o)}</td>
-          <td class="small">${o.items.length ? `${esc(o.items[0].name)}${o.items[0].qty > 1 ? ` × ${o.items[0].qty}` : ''}${o.items.length > 1 ? ` <span class="muted">+${o.items.length - 1}</span>` : ''}` : '—'}</td>
-          <td class="r"><b>${uah(o.total)}</b></td>
-          <td class="small mp-opt">${esc(o.delivery || '—')}${o.ttn ? `<div class="muted">ТТН ${esc(o.ttn)}</div>` : ''}</td>
-          <td><span class="badge">${esc(o.status_name || o.status || '—')}</span></td>
-          ${rz ? `<td class="small" data-rvcell="${esc(o.account_id)}:${esc(o.id)}">${rvCell(o)}</td>` : ''}
-        </tr>`);
+    // скільки чекає нове замовлення (дати Розетки — за Києвом)
+    const kyivNow = () => Date.parse(`${new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(new Date()).replace(' ', 'T')}Z`);
+    const waitOf = (o) => {
+      const min = Math.max(0, Math.round((kyivNow() - Date.parse(`${String(o.created_at).slice(0, 19).replace(' ', 'T')}Z`)) / 60e3));
+      if (!Number.isFinite(min)) return '';
+      const t = min < 60 ? `${min} хв` : min < 1440 ? `${Math.floor(min / 60)} год ${min % 60} хв` : `${Math.floor(min / 1440)} дн`;
+      return `<span class="${min >= 30 ? 'mp-late' : 'muted'}">чекає ${t}</span>`;
+    };
+    const callMini = (o) => {
+      if (!o.calls) return '';
+      const b = o.calls.before;
+      const a = o.calls.after;
+      return `<div class="mp-l4">${b.n ? '<span class="mp-tag ok">📞 був дзвінок до замовлення</span>' : '<span class="mp-tag">без дзвінка до замовлення</span>'}${a.n ? ` <span class="muted">☎ менеджер: ${esc(dt(a.last.at))}${a.answered ? '' : ' · без відповіді'}</span>` : ''}</div>`;
+    };
+    const showRv = () => rz && (state.grp === 'success' || state.rv);
+    const rowHtml = (o) => (byKey.set(keyOf(o), o), `<div class="mp-row${state.sel === keyOf(o) ? ' on' : ''}" data-ok="${esc(keyOf(o))}" tabindex="0">
+          ${canPick(o) ? `<label class="mp-pick"><input type="checkbox" data-pick="${esc(keyOf(o))}" ${picked.has(keyOf(o)) ? 'checked' : ''} aria-label="Вибрати ${esc(o.number)}"></label>` : ''}
+          <div class="mp-row-b">
+            <div class="mp-l1"><span><b>${esc(o.number)}</b> <span class="small muted">${esc(dt(o.created_at))}</span></span><b>${uah(o.total)}</b></div>
+            <div class="mp-l2">${o.items.length ? `${esc(o.items[0].name)}${o.items[0].qty > 1 ? ` × ${o.items[0].qty}` : ''}${o.items.length > 1 ? ` <span class="muted">+${o.items.length - 1}</span>` : ''}` : '—'}</div>
+            <div class="mp-l3"><span>${esc(o.customer || '—')}${o.delivery ? ` · ${esc(o.delivery)}` : ''}${many ? ` · ${esc(name.get(o.account_id) || '')}` : ''}</span>
+              ${rz && String(o.status) === '1' && state.grp === 'new' ? waitOf(o) : `<span class="badge">${esc(o.status_name || o.status || '—')}</span>`}</div>
+            ${callMini(o)}
+            ${showRv() ? `<div class="mp-l4" data-rvcell="${esc(keyOf(o))}">${rvCell(o)}</div>` : ''}
+          </div>
+        </div>`);
     let offset = 0;
     const load = async (more = false) => {
       offset = more ? offset + 300 : 0;
@@ -186,23 +207,28 @@ export function createMarketPages({ can }) {
           d.reviews.by.length ? ` · ${d.reviews.by.map((m) => `${esc(m.who || 'без імені')}: ${m.n} (відгуків ${m.reviewed})`).join(', ')}` : ''}` : '';
       }
       const tot = d.total || { n: 0, sum: 0 };
-      $('#mpTotal').innerHTML = tot.n ? `Знайдено <b>${tot.n}</b> замовлень на <b>${uah(tot.sum)}</b>` : '';
-      const moreBtn = d.more ? '<div style="margin-top:8px"><button class="btn sm" id="mpMore">Показати ще</button></div>' : '';
+      $('#mpTotal').innerHTML = tot.n ? `${tot.n} замовл. · ${uah(tot.sum)}` : '';
+      $('#mpTitle').textContent = rz ? (GROUPS.find(([k]) => k === state.grp)?.[1] || 'Усі замовлення') : (d.statuses.find((x) => x.status === state.status)?.status_name || 'Усі замовлення');
+      const moreBtn = d.more ? '<div class="mp-more"><button class="btn sm" id="mpMore">Показати ще</button></div>' : '';
       if (more) {
-        $('#mpList tbody').insertAdjacentHTML('beforeend', d.rows.map(rowHtml).join(''));
+        $('#mpMore')?.parentElement.insertAdjacentHTML('beforebegin', d.rows.map(rowHtml).join(''));
         bindAsk();
         $('#mpMore')?.parentElement.remove();
         $('#mpList').insertAdjacentHTML('beforeend', moreBtn);
       } else {
-        $('#mpList').innerHTML = d.rows.length ? `<table class="list"><thead><tr><th>Замовлення</th>${acc ? '' : '<th class="mp-opt">Магазин</th>'}<th>Клієнт</th><th>Товари</th><th class="r">Сума</th><th class="mp-opt">Доставка</th><th>Статус</th>${rz ? '<th>Відгук</th>' : ''}</tr></thead><tbody>
-          ${d.rows.map(rowHtml).join('')}</tbody></table>${moreBtn}`
-          : `<div class="card empty">${state.q || state.status || state.from || state.to || state.rv ? 'Нічого не знайдено.' : 'Замовлень ще немає — вони з\'являться після першого оновлення (кілька хвилин).'}</div>`;
+        $('#mpList').innerHTML = d.rows.length ? `${d.rows.map(rowHtml).join('')}${moreBtn}`
+          : `<div class="mp-empty">${state.q || state.status || state.from || state.to || state.rv ? 'Нічого не знайдено.' : 'Замовлень ще немає — вони з\'являться після першого оновлення (кілька хвилин).'}</div>`;
       }
       if ($('#mpMore')) $('#mpMore').onclick = () => load(true);
       if (!more) bindAsk();
       bindRows();
       bindPick();
-      if (state.sel && !more) { if (byKey.has(state.sel)) showDetail(byKey.get(state.sel)); else closeDetail(); }
+      if (!more) {
+        // картка: обране раніше, а на широкому екрані — перше замовлення списку
+        const first = d.rows[0] ? keyOf(d.rows[0]) : '';
+        const k = byKey.has(state.sel) ? state.sel : wide() ? first : '';
+        if (k) showDetail(byKey.get(k)); else closeDetail();
+      }
     };
 
     // ---------- бічна панель: групи замовлень Розетки (або статуси Prom і Епіцентру), згортання ----------
@@ -304,39 +330,42 @@ export function createMarketPages({ can }) {
 
     // ---------- картка замовлення праворуч ----------
     function bindRows() {
-      $$('#mpList tr[data-ok]').forEach((tr) => (tr.onclick = (e) => {
-        if (e.target.closest('button, a, input, select, label')) return;
-        const o = byKey.get(tr.dataset.ok);
-        if (o) showDetail(o);
-      }));
+      $$('#mpList [data-ok]').forEach((el) => {
+        el.onclick = (e) => {
+          if (e.target.closest('button, a, input, select, label')) return;
+          const o = byKey.get(el.dataset.ok);
+          if (o) showDetail(o);
+        };
+        el.onkeydown = (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === el) { e.preventDefault(); el.click(); } };
+      });
     }
+    const wide = () => window.innerWidth > 1150;
     function closeDetail() {
       state.sel = '';
-      $('#mpDetail').hidden = true;
+      $('#mpDetail').innerHTML = '<div class="mp-empty">Оберіть замовлення зі списку</div>';
       $('#mpShell').classList.remove('detail');
-      $$('#mpList tr.on').forEach((x) => x.classList.remove('on'));
+      $$('#mpList .mp-row.on').forEach((x) => x.classList.remove('on'));
     }
     async function showDetail(o) {
       state.sel = keyOf(o);
-      $$('#mpList tr[data-ok]').forEach((x) => x.classList.toggle('on', x.dataset.ok === state.sel));
+      $$('#mpList [data-ok]').forEach((x) => x.classList.toggle('on', x.dataset.ok === state.sel));
       const box = $('#mpDetail');
-      box.hidden = false;
       $('#mpShell').classList.add('detail');
       const ph = intlPhone(o.phone);
       const items = o.items.map((it) => `<div class="mp-goods"><span>${esc(it.name)}${it.qty > 1 ? ` <span class="muted">× ${it.qty}</span>` : ''}</span><b>${it.price ? uah(it.price * (it.qty || 1)) : ''}</b></div>`).join('') || '<div class="muted">—</div>';
-      box.innerHTML = `<div class="mp-d-head"><div><b>Замовлення ${esc(o.number)}</b><div class="small muted">${esc(dt(o.created_at))} · ${esc(name.get(o.account_id) || '')}</div></div>
+      box.innerHTML = `<div class="mp-d-head"><div style="flex:1"><b style="font-size:16px">Замовлення ${esc(o.number)}</b><div class="small muted">${esc(dt(o.created_at))} · ${esc(name.get(o.account_id) || '')}${o.changed_at ? ` · змінено ${esc(dt(o.changed_at))}` : ''}</div></div>
+          <span class="badge info">${esc(o.status_name || o.status || '—')}</span>
           <button type="button" class="btn sm" id="mpDClose" aria-label="Закрити картку">✕</button></div>
         <div class="mp-d-body">
-          <div><span class="badge">${esc(o.status_name || o.status || '—')}</span>${o.changed_at ? ` <span class="small muted">змінено ${esc(dt(o.changed_at))}</span>` : ''}</div>
-          ${canPick(o) ? '<div><button type="button" class="btn primary sm" id="mpDTake">Взяти в обробку</button> <span class="small muted">→ «Обробляється менеджером» у Розетці</span></div>' : ''}
+          ${canPick(o) ? '<div class="mp-wide-box"><button type="button" class="btn primary" id="mpDTake">Взяти в обробку</button> <span class="small muted">→ «Обробляється менеджером» у Розетці</span></div>' : ''}
           <div class="mp-box"><div class="mp-cap">Покупець</div><b>${esc(o.customer || '—')}</b>
             ${ph ? `<div class="btn-row" style="margin-top:4px;flex-wrap:wrap;align-items:center"><span>${esc(ph)}</span><a class="btn sm" href="tel:${esc(ph)}">Подзвонити</a><button type="button" class="btn sm" id="mpDCopy">Копіювати</button></div>` : ''}
             ${o.recipient ? `<div class="small muted" style="margin-top:4px">Отримувач: ${esc(o.recipient)}${o.recipient_phone ? ` · ${esc(o.recipient_phone)}` : ''}</div>` : ''}
             ${callsHtml(o)}</div>
           <div class="mp-box"><div class="mp-cap">Доставка</div>${esc(o.delivery || '—')}${o.ttn ? `<div class="small">ТТН <b>${esc(o.ttn)}</b></div>` : ''}</div>
-          <div class="mp-box"><div class="mp-cap">Товари</div>${items}<div class="mp-goods" style="border-top:1px solid var(--line);padding-top:6px;margin-top:4px"><span>Разом</span><b>${uah(o.total)}</b></div></div>
-          ${rz ? `<div class="mp-box"><div class="mp-cap">Відгук</div><div class="small">${rvCell(o)}</div></div>` : ''}
-          ${rz && o.calls ? '<div class="mp-box"><div class="mp-cap">Дзвінки Binotel з цим номером</div><div id="mpDCalls" class="small muted"><span class="spinner"></span></div></div>' : ''}
+          <div class="mp-box mp-wide-box"><div class="mp-cap">Товари</div>${items}<div class="mp-goods" style="border-top:1px solid var(--line);padding-top:6px;margin-top:4px"><span>Разом</span><b>${uah(o.total)}</b></div></div>
+          ${rz ? `<div class="mp-box mp-wide-box"><div class="mp-cap">Відгук</div><div class="small">${rvCell(o)}</div></div>` : ''}
+          ${rz && o.calls ? '<div class="mp-box mp-wide-box"><div class="mp-cap">Дзвінки Binotel з цим номером</div><div id="mpDCalls" class="small muted"><span class="spinner"></span></div></div>' : ''}
         </div>`;
       $('#mpDClose').onclick = closeDetail;
       if ($('#mpDTake')) $('#mpDTake').onclick = () => moveToWork([keyOf(o)]);
