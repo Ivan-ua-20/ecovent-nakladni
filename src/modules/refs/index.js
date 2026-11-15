@@ -2,6 +2,7 @@
 // відділи LP-CRM, значення «Поле 1» (канали) і шаблони накладних.
 import { can, publicUser } from '../../core/auth.js';
 import { MASK, fail, need, parseTpl, loadSettings } from '../../core/common.js';
+const noTel = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith('binotel_')));
 import { DEFAULT_WARNING } from '../../core/schema.js';
 import { checkImages } from '../../core/validate.js';
 import { FOP_REQUISITES, REQUISITES_DENIED, changedFields, describeChanges, logAudit } from '../../core/requisites.js';
@@ -51,9 +52,10 @@ export function mountRefs(app, { db, fetchFn }) {
       invFops,
       defaultWarning: DEFAULT_WARNING,
       user: publicUser(user),
+      // ключі Binotel не віддаємо в браузер (налаштовуються окремо: /api/tel/settings)
       settings: apiOk
-        ? { ...s, lpcrm_key: s.lpcrm_key ? MASK : '', lpcrm_in_key: s.lpcrm_in_key ? MASK : '', odb_key: s.odb_key ? MASK : '', tg_token: s.tg_token ? MASK : '', tg_secret: '' }
-        : Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith('lpcrm_') && !k.startsWith('checkbox_') && !k.startsWith('odb_') && !k.startsWith('tg_')).concat([['lpcrm_key', s.lpcrm_key ? MASK : ''], ['lpcrm_subdomain', s.lpcrm_subdomain || '']])),
+        ? { ...noTel(s), lpcrm_key: s.lpcrm_key ? MASK : '', lpcrm_in_key: s.lpcrm_in_key ? MASK : '', odb_key: s.odb_key ? MASK : '', tg_token: s.tg_token ? MASK : '', tg_secret: '' }
+        : Object.fromEntries(Object.entries(noTel(s)).filter(([k]) => !k.startsWith('lpcrm_') && !k.startsWith('checkbox_') && !k.startsWith('odb_') && !k.startsWith('tg_')).concat([['lpcrm_key', s.lpcrm_key ? MASK : ''], ['lpcrm_subdomain', s.lpcrm_subdomain || '']])),
     });
   });
 

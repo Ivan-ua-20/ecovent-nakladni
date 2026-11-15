@@ -610,9 +610,12 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     const revs = rz && shown.some((r) => r.review_n > 0) ? await db.all(
       `SELECT account_id, order_id, goods_id, goods, mark, name, created_at FROM mp_reviews WHERE mp = 'rozetka' AND order_id IN (SELECT value FROM json_each(?)) ORDER BY created_at`,
       [JSON.stringify(shown.filter((r) => r.review_n > 0).map((r) => r.id))]) : [];
+    // дзвінки Binotel (якщо підключено): чи дзвонив покупець до замовлення, чи дзвонив менеджер після
+    const tel = rz && shown.length ? await services.telephony?.marks(shown.map((r) => ({ key: `${r.account_id}:${r.id}`, phones: [r.phone, r.recipient_phone], at: r.created_at }))) : null;
     return c.json({
       rows: shown.map((r) => ({
         ...r,
+        ...(tel ? { calls: tel.get(`${r.account_id}:${r.id}`) || null } : {}),
         items: (() => { try { return JSON.parse(r.items || '[]'); } catch { return []; } })(),
         ...(rz ? { reviews: revs.filter((v) => v.account_id === r.account_id && v.order_id === r.id).map(({ account_id: _a, order_id: _o, ...v }) => v) } : {}),
       })),

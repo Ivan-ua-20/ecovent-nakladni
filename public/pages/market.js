@@ -18,6 +18,18 @@ const intlPhone = (p) => {
   return `+${d}`;
 };
 const firstName = (full) => { const w = String(full || '').trim().split(/\s+/); return w.length > 1 ? w[1] : w[0] || ''; }; // «Прізвище Ім'я»
+const mmss = (sec) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+// Дзвінок Binotel: коли, вхідний/вихідний, розмова чи без відповіді, хто з менеджерів.
+const callLine = (x) => `${dt(x.at)} · ${x.dir === 'in' ? 'вхідний' : 'вихідний'} · ${x.disp === 'ANSWER' && x.billsec ? `розмова ${mmss(x.billsec)}` : 'без відповіді'}${x.who ? ` · ${x.who}` : ''}`;
+// Позначка «чи був дзвінок до замовлення» і дзвінки після (якщо Binotel підключено).
+const callsHtml = (o) => {
+  if (!o.calls) return '';
+  const { before: b, after: a } = o.calls;
+  const pre = b.n ? `<span class="badge ok" title="${esc(`За 30 днів до замовлення: ${b.n} дзв.\nОстанній: ${callLine(b.last)}`)}">📞 був дзвінок до замовлення${b.n > 1 ? ` ×${b.n}` : ''}</span>`
+    : '<span class="badge" title="За 30 днів до замовлення дзвінків з цього номера чи на нього не було">без дзвінка до замовлення</span>';
+  const post = a.n ? `<div class="small muted" title="${esc(`Після замовлення: ${a.n} дзв., з них з розмовою ${a.answered}`)}">☎ після: ${esc(callLine(a.last))}${a.n > 1 ? ` (усього ${a.n})` : ''}</div>` : '';
+  return `<div style="margin-top:3px">${pre}</div>${post}`;
+};
 const VIA = { viber: 'Viber', telegram: 'Telegram', phone: 'дзвінок', copy: 'текст', chat: 'чат Розетки', manual: 'вручну' };
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch { /* немає доступу до буфера — старий спосіб */ }
@@ -125,7 +137,7 @@ export function createMarketPages({ can }) {
     const rowHtml = (o) => `<tr>
           <td><b>${esc(o.number)}</b><div class="small muted">${esc(dt(o.created_at))}</div></td>
           ${acc ? '' : `<td class="small">${esc(name.get(o.account_id) || '')}</td>`}
-          <td>${esc(o.customer || '—')}<div class="small muted">${esc(o.phone || '')}</div>${o.recipient ? `<div class="small muted">отримувач: ${esc(o.recipient)}${o.recipient_phone ? ` · ${esc(o.recipient_phone)}` : ''}</div>` : ''}</td>
+          <td>${esc(o.customer || '—')}<div class="small muted">${esc(o.phone || '')}</div>${o.recipient ? `<div class="small muted">отримувач: ${esc(o.recipient)}${o.recipient_phone ? ` · ${esc(o.recipient_phone)}` : ''}</div>` : ''}${callsHtml(o)}</td>
           <td class="small">${o.items.length ? `${esc(o.items[0].name)}${o.items[0].qty > 1 ? ` × ${o.items[0].qty}` : ''}${o.items.length > 1 ? ` <span class="muted">+${o.items.length - 1}</span>` : ''}` : '—'}</td>
           <td class="r"><b>${uah(o.total)}</b></td>
           <td class="small">${esc(o.delivery || '—')}${o.ttn ? `<div class="muted">ТТН ${esc(o.ttn)}</div>` : ''}</td>
