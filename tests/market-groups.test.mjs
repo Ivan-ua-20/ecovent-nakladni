@@ -50,7 +50,7 @@ const ids = (d) => d.rows.map((r) => Number(r.id)).sort((a, b) => a - b);
 
 // ---------- лічильники груп ----------
 const all = await get('');
-assert.deepEqual(all.groups, { new: 2, work: 4, ttn: 2, call: 4, delivery: 4, success: 2, failed: 1, cancelled: 6 });
+assert.deepEqual(all.groups, { new: 2, work: 4, ttn: 2, call: 4, dups: 12, delivery: 4, success: 2, failed: 1, cancelled: 6 });
 assert.deepEqual(all.cancels, { client: 1, manager: 3, auto: 2 });
 assert.equal(all.statuses.find((x) => x.status === '6').n, 2, 'один статус з різними status_group — один рядок фільтра');
 assert.deepEqual(all.statuses.filter((x) => x.status === '26').map((x) => `${x.grp}:${x.n}`).sort(), ['ttn:1', 'work:1'], 'той самий статус — окремо в кожній групі');

@@ -174,7 +174,7 @@ assert.equal((await db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE mp = 'roze
 assert.ok(histCalls.every(() => true) && calls.filter((c) => c.includes('created_from=')).every((c) => c.includes('types=1')), 'історія — теж усі замовлення');
 // разовий перезапуск історії (була завантажена без успішних/неуспішних): ще раз з поточного місяця, без дублів
 const before = (await db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE mp = 'rozetka'`)).n;
-await db.run(`DELETE FROM settings WHERE key = 'mp_hist_v3'`);
+await db.run(`DELETE FROM settings WHERE key = 'mp_hist_v4'`);
 const sh = (await req('GET', '/api/mp/shops')).j;
 assert.ok(!sh[0].shops.find((s) => s.id === 1).history.done, 'історію перезапущено');
 // денна норма: вичерпана — пауза без запитів до Розетки

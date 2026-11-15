@@ -51,12 +51,17 @@ export async function rzLogin(fetchFn, username, password) {
 // types=1 — усі замовлення (без нього Розетка віддає лише ті, що в роботі: без «Успішних» і «Неуспішних»).
 // Групи як у кабінеті: 1 усі, 4 нові, 2 в обробці, 5 доставляються, 3 успішні, 6 неуспішні.
 export async function rzOrdersSearch(fetchFn, token, { changedFrom = '', createdFrom = '', createdTo = '', page = 1 } = {}) {
-  const q = new URLSearchParams({ page: String(page), perPage: '100', types: '1', sort: createdFrom ? '-created' : '-changed', expand: 'delivery,status_data,purchases' });
-  if (changedFrom) q.set('changed_from', changedFrom);
-  if (createdFrom) q.set('created_from', createdFrom);
-  if (createdTo) q.set('created_to', createdTo);
-  const res = await send(fetchFn, `/orders/search?${q}`, { token });
-  const j = await res.json().catch(() => null);
+  // payment — оплата з кабінету; якщо Розетка раптом не прийме це розширення — повторюємо без нього (щоб не зупинити синхронізацію)
+  const ask = async (expand) => {
+    const q = new URLSearchParams({ page: String(page), perPage: '100', types: '1', sort: createdFrom ? '-created' : '-changed', expand });
+    if (changedFrom) q.set('changed_from', changedFrom);
+    if (createdFrom) q.set('created_from', createdFrom);
+    if (createdTo) q.set('created_to', createdTo);
+    const res = await send(fetchFn, `/orders/search?${q}`, { token });
+    return res.json().catch(() => null);
+  };
+  let j = await ask('delivery,status_data,purchases,payment');
+  if (!j?.success && !rzError(j).rzAuth) j = await ask('delivery,status_data,purchases');
   if (!j?.success) throw rzError(j);
   return {
     orders: Array.isArray(j.content?.orders) ? j.content.orders : [],

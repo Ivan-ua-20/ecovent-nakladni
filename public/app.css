@@ -973,3 +973,7 @@ main.mp-wide { max-width: none; }
 
 .mp-cp { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: 13px; line-height: 1; vertical-align: baseline; border-radius: 4px; }
 .mp-cp:hover { color: var(--accent); background: var(--accent-soft); }
+
+.mp-tag.warn { background: var(--warn-soft, #fff4dc); color: var(--warn, #9a5b00); }
+.mp-dup { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.mp-dup:last-of-type { border-bottom: 0; }
