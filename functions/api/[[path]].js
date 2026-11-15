@@ -4843,6 +4843,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const names = await getJson2("an_status_names") || {};
     const users = await db.all(`SELECT tg_chat_id, crm_logins FROM users WHERE active = 1 AND tg_chat_id != '' AND crm_logins != ''`);
     const owners = (await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'owner'`)).map((u) => u.tg_chat_id);
+    const notifyOn = (await db.get(`SELECT value FROM settings WHERE key = 'chk_dup_notify'`))?.value === "1";
     const esc2 = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     let n = 0;
     const recent = addDays(kyivDay(), -recentDays);
@@ -4859,7 +4860,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
 `) + list.map((r) => `\u2022 \u2116 <b>${esc2(r.code)}</b> \xB7 ${esc2(names[r.status] || `\u0441\u0442\u0430\u0442\u0443\u0441 ${r.status}`)} \xB7 ${esc2(r.day.split("-").reverse().join("."))}${r.buyer ? ` \xB7 ${esc2(r.buyer)}` : ""}${r.user ? ` \xB7 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 ${esc2(r.user)}` : ""}`).join("\n") + (tel ? "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0434\u0432\u0456\u0447\u0456." : "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u043F\u043E\u043C\u0438\u043B\u043A\u0430 (\u043E\u0434\u043D\u0430 \u043F\u043E\u0441\u0438\u043B\u043A\u0430 \u043D\u0430 \u0434\u0432\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F).");
       const logins = new Set(list.map((r) => r.user).filter(Boolean));
       const chats = [.../* @__PURE__ */ new Set([...users.filter((u) => crmLogins(u.crm_logins).some((l) => logins.has(l))).map((u) => u.tg_chat_id), ...owners])];
-      if (chats.length) await services.notify?.sendText({ chatIds: chats }, text).catch(() => 0);
+      if (chats.length && notifyOn) await services.notify?.sendText({ chatIds: chats }, text).catch(() => 0);
       await db.run(`INSERT INTO an_ttn_dups (ttn, codes, at) VALUES (?, ?, ?) ON CONFLICT(ttn) DO UPDATE SET codes = excluded.codes, at = excluded.at`, [ttn, codes, nowIso()]);
       n++;
     }
@@ -17649,6 +17650,7 @@ function evaluate(o, ctx) {
       else add("ok", `\u041E\u043F\u043B\u0430\u0442\u0430 ${fmt(p.amount)} \u043D\u0430 \xAB${payFop}\xBB \xB7 ${p.day.split("-").reverse().join(".")}`);
     }
   }
+  if (ctx.dupTtn?.length) add("bad", `\u0422\u0430 \u0441\u0430\u043C\u0430 \u0422\u0422\u041D \u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u2116 ${ctx.dupTtn.join(", \u2116 ")} \u2014 \u043E\u0434\u043D\u0430 \u043F\u043E\u0441\u0438\u043B\u043A\u0430 \u043D\u0430 \u043A\u0456\u043B\u044C\u043A\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C?`);
   if (ctx.dup?.length) add("warn", `\u041C\u043E\u0436\u043B\u0438\u0432\u0438\u0439 \u0434\u0443\u0431\u043B\u044C: \u0442\u043E\u0439 \u0441\u0430\u043C\u0438\u0439 \u0442\u0435\u043B\u0435\u0444\u043E\u043D \u0443 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E\u043C\u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u2116 ${ctx.dup.join(", \u2116 ")}.`);
   const order2 = ["bad", "warn", "wait", "info", "ok"];
   const level = items.reduce((lv, it) => order2.indexOf(it.level) < order2.indexOf(lv) ? it.level : lv, "ok");
@@ -17982,6 +17984,14 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       if (!byPhone.has(o.phone)) byPhone.set(o.phone, []);
       byPhone.get(o.phone).push(o);
     }
+    const byTtn = /* @__PURE__ */ new Map();
+    for (const o of orders) {
+      const t = String(o.ttn || "").replace(/\s/g, "").toUpperCase();
+      if (t) {
+        if (!byTtn.has(t)) byTtn.set(t, []);
+        byTtn.get(t).push(o);
+      }
+    }
     const today3 = kyivDay();
     const rows = orders.map((o) => {
       const rule = rs[String(o.payment)];
@@ -17989,7 +17999,8 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       const dup = (byPhone.get(o.phone) || []).filter((x) => x !== o && Math.abs(Date.parse(x.day) - Date.parse(o.day)) <= 3 * 864e5).map((x) => x.id || x.code);
       const receipt = matched.get(o.code) || null;
       const payment = rule?.cls === "bank" ? findPayment(o, txRows, o.total) : null;
-      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today: today3, dup });
+      const dupTtn = (byTtn.get(String(o.ttn || "").replace(/\s/g, "").toUpperCase()) || []).filter((x) => x !== o).map((x) => x.id || x.code);
+      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today: today3, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn });
       return {
         code: o.code,
         id: o.id,
@@ -18077,6 +18088,17 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       saved[id] = row;
     }
     await setJson("chk_pay", saved);
+    return c.json({ ok: true });
+  });
+  app.get("/api/checks/settings", async (c) => {
+    need(c, "users");
+    const v = (await db.get(`SELECT value FROM settings WHERE key = 'chk_dup_notify'`))?.value;
+    return c.json({ dup_notify: v === "1" });
+  });
+  app.put("/api/checks/settings", async (c) => {
+    need(c, "users");
+    const b = await c.req.json();
+    await db.run(`INSERT INTO settings (key, value) VALUES ('chk_dup_notify', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [b.dup_notify ? "1" : "0"]);
     return c.json({ ok: true });
   });
   app.post("/api/checks/refresh", async (c) => {
