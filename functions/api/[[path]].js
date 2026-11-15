@@ -13296,6 +13296,9 @@ async function rzOrderChat(fetchFn, token, orderId) {
 async function rzSendMessage(fetchFn, token, { chatId, receiverId, body }) {
   return getContent(fetchFn, token, "/messages/create", { method: "POST", body: { chat_id: chatId, receiver_id: receiverId, body, sendEmailUser: 1 } });
 }
+async function rzSetOrderStatus(fetchFn, token, orderId, status) {
+  return getContent(fetchFn, token, `/orders/${encodeURIComponent(orderId)}`, { method: "PUT", body: { status: Number(status) } });
+}
 async function rzMessageCounts(fetchFn, token) {
   return await getContent(fetchFn, token, "/messages/counts") || {};
 }
@@ -17514,6 +17517,41 @@ ${items.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio 
     if (!chat?.id || !chat.userId) throw fail(400, "\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u043D\u0435 \u0434\u0430\u043B\u0430 \u0447\u0430\u0442 \u0446\u044C\u043E\u0433\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2014 \u043D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u043F\u043E\u043A\u0443\u043F\u0446\u044E \u0443 Viber \u0430\u0431\u043E Telegram.");
     await rzCall(acc, (t) => rzSendMessage(fetchFn, t, { chatId: chat.id, receiverId: chat.userId, body: text }));
     return c.json(await markAsked(o, c.get("user"), "chat"));
+  });
+  const BULK_TO = { 26: { name: "\u041E\u0431\u0440\u043E\u0431\u043B\u044F\u0454\u0442\u044C\u0441\u044F \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u043E\u043C", from: RZ_NEW } };
+  app.post("/api/mp/rz/status", async (c) => {
+    need(c, "market.edit");
+    const b = await c.req.json().catch(() => ({}));
+    const to = BULK_TO[Number(b.status)];
+    if (!to) throw fail(400, "\u0426\u0435\u0439 \u0441\u0442\u0430\u0442\u0443\u0441 \u043D\u0435 \u043C\u043E\u0436\u043D\u0430 \u0441\u0442\u0430\u0432\u0438\u0442\u0438 \u0433\u0440\u0443\u043F\u043E\u044E.");
+    const list = Array.isArray(b.orders) ? b.orders.slice(0, 10) : [];
+    if (!list.length) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
+    const done = [];
+    const failed = [];
+    for (const x of list) {
+      const key = `${Number(x.account) || 0}:${String(x.id || "")}`;
+      try {
+        const o = await rzOrderOf(x, c);
+        if (!to.from.includes(String(o.status))) {
+          failed.push({ key, error: `\u0443\u0436\u0435 \xAB${o.status_name || o.status}\xBB` });
+          continue;
+        }
+        const acc = await accOf("rozetka", o.account_id);
+        await rzCall(acc, (t) => rzSetOrderStatus(fetchFn, t, o.id, b.status));
+        await db.run(
+          `UPDATE mp_orders SET status = ?, status_name = ?, status_group = 1, changed_at = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ?`,
+          [String(b.status), to.name, kyivDT(/* @__PURE__ */ new Date()), o.account_id, o.id]
+        );
+        done.push(key);
+      } catch (e) {
+        if (e.pending) {
+          failed.push({ key, error: "\u043D\u0435 \u0432\u0441\u0442\u0438\u0433\u043B\u0438 \u2014 \u0441\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0449\u0435 \u0440\u0430\u0437", retry: true });
+          break;
+        }
+        failed.push({ key, error: String(e.message || e).slice(0, 200) });
+      }
+    }
+    return c.json({ done, failed });
   });
   app.post("/api/mp/sync", async (c) => {
     need(c, "market.edit");

@@ -3,7 +3,7 @@
 // Розетка: історія за обраний період, типово 4 роки (завантажується у фоні; поки сторінка відкрита — можна швидше);
 // відгуки на товари — фільтр «хто ще не залишив відгук» і нагадування (Viber, Telegram, дзвінок, чат Розетки).
 import { esc } from '../invoice.js';
-import { $, $$, main, api, toast, modal, fmtDateTime, todayKyiv } from '../core/ui.js';
+import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime, todayKyiv } from '../core/ui.js';
 
 const uah = (n) => `${Number(n || 0).toLocaleString('uk-UA', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} ₴`;
 const dt = (s) => String(s || '').slice(0, 16).replace(/^(\d{4})-(\d{2})-(\d{2})/, '$3.$2.$1');
@@ -44,6 +44,7 @@ async function copyText(text) {
 
 export function createMarketPages({ can }) {
   const state = { status: '', q: '', from: '', to: '', rv: '', grp: '', cancel: '', sel: '' };
+  const picked = new Set(); // вибрані «Нові» для групового переведення в обробку
   // Бічна панель: згорнуті групи і вузький режим — пам'ятаємо в цьому браузері.
   const pref = {
     get(k, d) { try { return JSON.parse(localStorage.getItem(`mp.${k}`)) ?? d; } catch { return d; } },
@@ -112,6 +113,7 @@ export function createMarketPages({ can }) {
         ${can('api') ? '<button class="btn sm" id="mpRvSet">Текст нагадування</button>' : ''}</div><div id="mpRvStats" class="small muted" style="margin-bottom:10px"></div></div>` : ''}
       <div id="mpGrpHead"></div>
       <div id="mpStatuses" class="f-chips" style="margin-bottom:10px"></div>
+      <div id="mpBulk"></div>
       <div id="mpTotal" class="small" style="margin-bottom:8px"></div>
       <div id="mpList"><div class="card empty"><span class="spinner"></span> Завантажую…</div></div>
       </section>
@@ -147,8 +149,9 @@ export function createMarketPages({ can }) {
       return `${twoNote}${asked}<button class="btn sm ${o.asked_at ? '' : 'primary'}" data-rvask="${esc(o.account_id)}:${esc(o.id)}">${o.asked_at ? 'Ще раз' : 'Нагадати'}</button>`;
     };
     const keyOf = (o) => `${o.account_id}:${o.id}`;
+    const canPick = (o) => rz && state.grp === 'new' && can('market.edit') && String(o.status) === '1';
     const rowHtml = (o) => (byKey.set(keyOf(o), o), `<tr class="click${state.sel === keyOf(o) ? ' on' : ''}" data-ok="${esc(keyOf(o))}">
-          <td><b>${esc(o.number)}</b><div class="small muted">${esc(dt(o.created_at))}</div></td>
+          <td>${canPick(o) ? `<label class="mp-pick"><input type="checkbox" data-pick="${esc(keyOf(o))}" ${picked.has(keyOf(o)) ? 'checked' : ''} aria-label="Вибрати ${esc(o.number)}"></label>` : ''}<b>${esc(o.number)}</b><div class="small muted">${esc(dt(o.created_at))}</div></td>
           ${acc ? '' : `<td class="small mp-opt">${esc(name.get(o.account_id) || '')}</td>`}
           <td>${esc(o.customer || '—')}<div class="small muted">${esc(o.phone || '')}</div>${o.recipient ? `<div class="small muted">отримувач: ${esc(o.recipient)}${o.recipient_phone ? ` · ${esc(o.recipient_phone)}` : ''}</div>` : ''}${callsHtml(o)}</td>
           <td class="small">${o.items.length ? `${esc(o.items[0].name)}${o.items[0].qty > 1 ? ` × ${o.items[0].qty}` : ''}${o.items.length > 1 ? ` <span class="muted">+${o.items.length - 1}</span>` : ''}` : '—'}</td>
@@ -198,6 +201,7 @@ export function createMarketPages({ can }) {
       if ($('#mpMore')) $('#mpMore').onclick = () => load(true);
       if (!more) bindAsk();
       bindRows();
+      bindPick();
       if (state.sel && !more) { if (byKey.has(state.sel)) showDetail(byKey.get(state.sel)); else closeDetail(); }
     };
 
@@ -253,6 +257,51 @@ export function createMarketPages({ can }) {
     .map(([k, t, tip]) => `<button class="chip ${state.cancel === k ? 'on' : ''}" data-cancel="${k}" title="${esc(tip)}">${esc(t)}</button>`).join('')}</div>`;
     }
 
+    // ---------- групове переведення «Нових» в «Обробляється менеджером» ----------
+    function bindPick() {
+      const boxes = $$('#mpList [data-pick]');
+      const keys = boxes.map((x) => x.dataset.pick);
+      for (const k of [...picked]) if (!keys.includes(k)) picked.delete(k); // лише ті, що на екрані
+      const bar = $('#mpBulk');
+      if (!boxes.length) { bar.innerHTML = ''; return; }
+      const n = picked.size;
+      bar.innerHTML = `<div class="mp-bulk${n ? ' on' : ''}"><label class="check"><input type="checkbox" id="mpPickAll" ${n && n === keys.length ? 'checked' : ''}> ${n ? `Вибрано ${n}` : 'Вибрати всі'}</label>
+        ${n ? `<button type="button" class="btn sm" id="mpPickNone">Зняти</button><button type="button" class="btn sm primary" id="mpPickGo">Перевести в «Обробляється менеджером»</button>` : '<span class="small muted">Позначте замовлення, щоб перевести їх в обробку одним кліком</span>'}</div>`;
+      $('#mpPickAll').indeterminate = n > 0 && n < keys.length;
+      $('#mpPickAll').onchange = (e) => { picked.clear(); if (e.target.checked) keys.forEach((k) => picked.add(k)); boxes.forEach((x) => { x.checked = picked.has(x.dataset.pick); }); bindPick(); };
+      boxes.forEach((x) => (x.onchange = () => { if (x.checked) picked.add(x.dataset.pick); else picked.delete(x.dataset.pick); bindPick(); }));
+      if ($('#mpPickNone')) $('#mpPickNone').onclick = () => { picked.clear(); boxes.forEach((x) => { x.checked = false; }); bindPick(); };
+      if ($('#mpPickGo')) $('#mpPickGo').onclick = () => moveToWork([...picked]);
+    }
+    async function moveToWork(keys) {
+      if (!(await confirmDanger(`Перевести ${keys.length} замовл. в «Обробляється менеджером»?`, 'Статус зміниться в кабінеті Розетки — покупець побачить, що замовлення обробляється. Повернути «Нове» не можна.', 'Перевести'))) return;
+      const b = $('#mpPickGo');
+      if (b) { b.disabled = true; b.innerHTML = '<span class="spinner"></span> Переводжу…'; }
+      let todo = keys.map((k) => { const [account, ...id] = k.split(':'); return { account: Number(account), id: id.join(':'), key: k }; });
+      const done = [];
+      const failed = [];
+      let guard = 0;
+      while (todo.length && guard++ < 200) {
+        const part = todo.slice(0, 10);
+        try {
+          const r = await api('POST', '/api/mp/rz/status', { status: 26, orders: part.map(({ account, id }) => ({ account, id })) });
+          done.push(...r.done);
+          const retry = new Set(r.failed.filter((x) => x.retry).map((x) => x.key));
+          failed.push(...r.failed.filter((x) => !x.retry));
+          const handled = new Set([...r.done, ...r.failed.filter((x) => !x.retry).map((x) => x.key)]);
+          todo = [...part.filter((x) => !handled.has(x.key) || retry.has(x.key)), ...todo.slice(10)];
+          if (b) b.innerHTML = `<span class="spinner"></span> Переведено ${done.length} з ${keys.length}…`;
+        } catch (er) { failed.push(...part.map((x) => ({ key: x.key, error: er.message }))); todo = todo.slice(10); }
+      }
+      picked.clear();
+      if (done.length) toast(`Переведено в «Обробляється менеджером»: ${done.length}`);
+      if (failed.length) {
+        const num = (k) => byKey.get(k)?.number || k.split(':')[1];
+        modal('Не всі замовлення переведено', `<div class="small">${failed.map((x) => `<div>№${esc(num(x.key))}: ${esc(x.error)}</div>`).join('')}</div>`, { footer: '<button class="btn primary" data-close>Зрозуміло</button>' });
+      }
+      load();
+    }
+
     // ---------- картка замовлення праворуч ----------
     function bindRows() {
       $$('#mpList tr[data-ok]').forEach((tr) => (tr.onclick = (e) => {
@@ -279,6 +328,7 @@ export function createMarketPages({ can }) {
           <button type="button" class="btn sm" id="mpDClose" aria-label="Закрити картку">✕</button></div>
         <div class="mp-d-body">
           <div><span class="badge">${esc(o.status_name || o.status || '—')}</span>${o.changed_at ? ` <span class="small muted">змінено ${esc(dt(o.changed_at))}</span>` : ''}</div>
+          ${canPick(o) ? '<div><button type="button" class="btn primary sm" id="mpDTake">Взяти в обробку</button> <span class="small muted">→ «Обробляється менеджером» у Розетці</span></div>' : ''}
           <div class="mp-box"><div class="mp-cap">Покупець</div><b>${esc(o.customer || '—')}</b>
             ${ph ? `<div class="btn-row" style="margin-top:4px;flex-wrap:wrap;align-items:center"><span>${esc(ph)}</span><a class="btn sm" href="tel:${esc(ph)}">Подзвонити</a><button type="button" class="btn sm" id="mpDCopy">Копіювати</button></div>` : ''}
             ${o.recipient ? `<div class="small muted" style="margin-top:4px">Отримувач: ${esc(o.recipient)}${o.recipient_phone ? ` · ${esc(o.recipient_phone)}` : ''}</div>` : ''}
@@ -289,6 +339,7 @@ export function createMarketPages({ can }) {
           ${rz && o.calls ? '<div class="mp-box"><div class="mp-cap">Дзвінки Binotel з цим номером</div><div id="mpDCalls" class="small muted"><span class="spinner"></span></div></div>' : ''}
         </div>`;
       $('#mpDClose').onclick = closeDetail;
+      if ($('#mpDTake')) $('#mpDTake').onclick = () => moveToWork([keyOf(o)]);
       if ($('#mpDCopy')) $('#mpDCopy').onclick = async () => { if (await copyText(ph)) toast('Телефон скопійовано'); };
       $$('[data-rvask]', box).forEach((b) => (b.onclick = () => askModal(byKey.get(b.dataset.rvask))));
       if ($('#mpDCalls')) {
