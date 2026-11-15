@@ -155,3 +155,25 @@ export async function testCheckbox(fetchFn, fop) {
   const me = await authed(fetchFn, fop, '/cashier/me');
   return { cashier: me?.full_name || '', organization: me?.organization?.title || '' };
 }
+
+// Сторінка чеків ФОП за період (до 100, усі каси організації): для звірки «чек ↔ замовлення».
+// Повертає { rows, more }. refs — числа з чека (номер замовлення може стояти в шапці, підвалі, коді товару чи order_id).
+export async function listReceipts(fetchFn, fop, fromIso, toIso, offset = 0) {
+  const qs = new URLSearchParams({ from_date: fromIso, to_date: toIso, limit: '100', offset: String(offset), self_receipts: 'false' });
+  const r = await authed(fetchFn, fop, `/receipts/search?${qs}`);
+  const results = Array.isArray(r?.results) ? r.results : [];
+  const rows = results.map((rc) => {
+    const text = [rc.header, rc.footer, rc.barcode, rc.order_id, rc.external_id, ...(rc.goods || []).map((g) => g.good?.code || '')].filter(Boolean).join(' ');
+    const refs = [...new Set(String(text).match(/\d{5,20}/g) || [])].slice(0, 20).join(' ');
+    return {
+      id: String(rc.id || ''),
+      type: String(rc.type || ''),
+      at: String(rc.fiscal_date || rc.created_at || ''),
+      total: rc.total_sum != null ? rc.total_sum / 100 : 0,
+      fiscal: String(rc.fiscal_code || ''),
+      pays: (rc.payments || []).map((p) => ({ type: String(p.type || ''), label: String(p.label || ''), value: p.value != null ? p.value / 100 : 0 })),
+      refs,
+    };
+  }).filter((x) => x.id);
+  return { rows, more: results.length >= 100 };
+}

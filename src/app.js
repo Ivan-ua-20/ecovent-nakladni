@@ -21,6 +21,7 @@ import { mountOdb, ODB_BASE } from './modules/payments/index.js';
 import { mountHome } from './modules/home/index.js';
 import { mountCron } from './modules/cron/index.js';
 import { mountMarket } from './modules/market/index.js';
+import { mountChecks } from './modules/checks/index.js';
 
 // shared — стан, що живе довше за одне звернення (на Cloudflare застосунок створюється на кожен запит,
 // а об'єкт shared з pages-entry.js — один на ізолят): мітка останньої чистки, кеш чеків, замок синхронізації.
@@ -100,6 +101,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   services.market = mountMarket(app, ctx);
   services.returns = mountReturns(app, ctx);
   services.analytics = mountAnalytics(app, ctx);
+  services.checks = mountChecks(app, ctx);
   services.notify = mountTg(app, ctx);
   mountHome(app, ctx);
   services.payments = mountOdb(app, { ...ctx, base: odbBase, notify: (...a) => services.notify.notify(...a), onTx: (ids, origin) => services.b2b?.onPayments?.(ids, origin) });

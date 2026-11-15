@@ -874,3 +874,19 @@ tr.ps-on > td { background: #f0faf7; }
 tr.se-flash td { background: rgba(250, 204, 21, .25); transition: background .4s; }
 .se-add > span:first-child { font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .se-dup { margin-top: 6px; }
+
+/* «Перевірка»: список перевірок у рядку замовлення, підсвітка рядків */
+.chk-items { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.chk-items li { display: flex; gap: 6px; align-items: flex-start; }
+.chk-ic { flex: 0 0 16px; text-align: center; font-weight: 700; }
+.chk-bad .chk-ic, .chk-bad { color: var(--bad); }
+.chk-warn .chk-ic { color: var(--warn); }
+.chk-ok, .chk-wait, .chk-info, .chk-skip { color: var(--muted, #6b7280); }
+.chk-ok .chk-ic { color: var(--ok); }
+tr.chk-row-bad > td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
+tr.chk-row-warn > td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+tr.chk-done td { color: var(--muted, #6b7280); }
+.chk-com { margin-top: 4px; }
+.ret-f.chk-chk { flex-direction: row; align-items: center; gap: 8px; align-self: flex-end; min-height: 38px; }
+.ret-f.chk-chk input { width: auto; flex: 0 0 auto; margin: 0; }
+.ret-f.chk-chk span { font-size: 14px; color: inherit; font-weight: 500; }

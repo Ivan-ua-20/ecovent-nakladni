@@ -23,6 +23,7 @@ import { createPriceLogPages } from './pages/b2b-pricelog.js';
 import { createClaimPages } from './pages/b2b-claims.js';
 import { createRetailPages } from './pages/retail.js';
 import { createReturnsPages } from './pages/returns.js';
+import { createChecksPages } from './pages/checks.js';
 
 // ---------- стан ----------
 let boot = { fops: [], templates: [], offices: [], channels: [], invFops: [], settings: {}, user: null };
@@ -87,6 +88,10 @@ const SECTIONS = [
     { id: 'rzpricelog', label: 'Журнал змін цін', perm: 'refs.edit' },
   ] },
   { id: 'returns', label: 'Повернення', perm: 'returns.view', home: 'returns', tabs: [{ id: 'returns', label: 'Повернення' }] },
+  // Звірка оплат, наложки й чеків відправлених замовлень LP-CRM (власник і адміністратори).
+  { id: 'checks', label: 'Перевірка', perm: 'users', home: 'checks', tabs: [
+    { id: 'checks', label: 'Замовлення' }, { id: 'chkreceipts', label: 'Чеки за день' }, { id: 'chkpay', label: 'Види оплат' },
+  ] },
   // Усі налаштування — в одному розділі: щоденна робота — в інших, рідкісні налаштування — тут.
   { id: 'settings', label: 'Налаштування', perm: 'refs.edit', home: 'settings', tabs: [
     { id: 'settings', label: 'Загальні налаштування' },
@@ -299,6 +304,7 @@ const CLAIMS = createClaimPages(ctx);
 ctx.openClaimForm = CLAIMS.openClaimForm;
 const RETAIL = createRetailPages(ctx);
 const RETURNS = createReturnsPages(ctx);
+const CHECKS = createChecksPages(ctx);
 const { viewPartners, viewCatalog, viewOrders: viewB2bOrders, viewClients: viewB2bClients, viewTrash: viewB2bTrash } = createB2bPages(ctx);
 const HOME = createHomePages(ctx);
 const { viewCouriers, viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients, viewTeam: viewPartnerTeam, viewSettings: viewPartnerSettings, viewTrash: viewPartnerTrash } = createPartnerPages(ctx);
@@ -358,6 +364,9 @@ const routes = {
   rzsettings: () => RETAIL.viewSettings(),
   rzpricelog: () => RETAIL.viewPriceLog(),
   returns: () => RETURNS.viewReturns(),
+  checks: () => CHECKS.viewChecks(),
+  chkreceipts: () => CHECKS.viewReceipts(),
+  chkpay: () => CHECKS.viewPay(),
 };
 
 async function route() {
