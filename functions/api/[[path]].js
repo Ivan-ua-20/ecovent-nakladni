@@ -13384,12 +13384,13 @@ function promPayment(o) {
   const type = String(o?.payment_data?.type || "").toLowerCase();
   const status = String(o?.payment_data?.status || "").toLowerCase();
   const prosale = type.includes("prosale") || /пром[\s-]*оплат|prom[\s-]*оплат|prom[\s-]*pay/i.test(name);
-  const cod = !prosale && /(при отриманн|при получени|наложен|накладен|післяплат|послеоплат|оплата при|cash on delivery)/i.test(name);
+  const credit = !prosale && /(частин|частям|розстроч|рассроч|кредит)/i.test(name);
+  const cod = !prosale && !credit && /(при отриманн|при получени|наложен|накладен|післяплат|послеоплат|оплата при|cash on delivery)/i.test(name);
   const num5 = (v) => {
     const x = Number(String(v ?? "").replace(/[^\d.,]/g, "").replace(",", "."));
     return Number.isFinite(x) ? x : 0;
   };
-  return { kind: prosale ? "prosale" : cod ? "cod" : "other", paid: prosale && /^(paid|оплач)/.test(status), name: name || (prosale ? "\u041F\u0440\u043E\u043C-\u043E\u043F\u043B\u0430\u0442\u0430" : ""), status, total: num5(o?.full_price ?? o?.price) };
+  return { kind: prosale ? "prosale" : credit ? "credit" : cod ? "cod" : "other", paid: prosale && /^(paid|оплач)/.test(status), name: name || (prosale ? "\u041F\u0440\u043E\u043C-\u043E\u043F\u043B\u0430\u0442\u0430" : ""), status, total: num5(o?.full_price ?? o?.price) };
 }
 
 // src/integrations/epicentr.js
@@ -17666,10 +17667,10 @@ function evaluate(o, ctx) {
     const isProsale = /пром[\s-]*оплат/i.test(rule?.name || "");
     const pn = o.mp_pay_name || "";
     if (isProsale && o.mp_pay === "prosale_unpaid") add("bad", "\u041F\u0440\u043E\u043C-\u043E\u043F\u043B\u0430\u0442\u0430 \u0432 Prom \u0449\u0435 \u043D\u0435 \u043D\u0430\u0434\u0456\u0439\u0448\u043B\u0430 (\u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E).");
-    else if (isProsale && !o.mp_pay.startsWith("prosale")) add("bad", `\u0423 CRM \xAB${rule.name}\xBB, \u0430 \u0432 Prom \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u043F\u043B\u0430\u0442\u0438 \xAB${pn}\xBB.`);
-    else if (cls === "cod" && o.mp_pay === "prosale_paid") add("bad", `\u0423 Prom \u0443\u0436\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E \u041F\u0440\u043E\u043C-\u043E\u043F\u043B\u0430\u0442\u043E\u044E, \u0430 \u0432 CRM \xAB${rule.name}\xBB.`);
+    else if (isProsale && !o.mp_pay.startsWith("prosale") && o.mp_pay !== "credit") add("bad", `\u0423 CRM \xAB${rule.name}\xBB, \u0430 \u0432 Prom \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u043F\u043B\u0430\u0442\u0438 \xAB${pn}\xBB.`);
+    else if (cls === "cod" && (o.mp_pay === "prosale_paid" || o.mp_pay === "credit")) add("bad", `\u0423 Prom \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E \u0447\u0435\u0440\u0435\u0437 Prom (\xAB${pn}\xBB), \u0430 \u0432 CRM \xAB${rule.name}\xBB.`);
     else if ((cls === "prepay" || cls === "bank") && o.mp_pay === "cod" && o.carrier !== "prm") add("bad", `\u0423 CRM \xAB${rule.name}\xBB, \u0430 \u0432 Prom \u2014 \xAB${pn}\xBB (\u043E\u043F\u043B\u0430\u0442\u0430 \u043F\u0440\u0438 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u0456).`);
-    else add("ok", `Prom: ${pn}${o.mp_pay === "prosale_paid" ? " \xB7 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E" : o.mp_pay === "prosale_unpaid" ? " \xB7 \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E" : ""}`);
+    else add("ok", `Prom: ${pn}${o.mp_pay === "prosale_paid" ? " \xB7 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E" : o.mp_pay === "prosale_unpaid" ? " \xB7 \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E" : o.mp_pay === "credit" ? " \xB7 \u0447\u0435\u0440\u0435\u0437 Prom" : ""}`);
   }
   const r = ctx.receipt;
   if (!r && o.receipt_ref && o.ref_state === "nofop") add("warn", "\u0423 LP-CRM \u0447\u0435\u043A \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u043E, \u0430\u043B\u0435 \u043A\u0430\u0441\u0430 \u0446\u044C\u043E\u0433\u043E \u0424\u041E\u041F \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0430 \u0434\u043E \u0441\u0435\u0440\u0432\u0456\u0441\u0443 \u2014 \u0434\u043E\u0434\u0430\u0439\u0442\u0435 \u0434\u043E\u0441\u0442\u0443\u043F Checkbox \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0424\u041E\u041F\u0438 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0438\u0445\xBB, \u0449\u043E\u0431 \u0437\u0432\u0456\u0440\u0438\u0442\u0438 \u0441\u0443\u043C\u0443 \u0439 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u043F\u043B\u0430\u0442\u0438.");
@@ -18066,6 +18067,10 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     if (state.data_v !== 4) {
       await db.run(`UPDATE chk_orders SET fetched_status = 0`);
       state.data_v = 4;
+    }
+    if (state.prom_v !== 2) {
+      await db.run(`UPDATE chk_orders SET mp_at = '' WHERE mp_pay = 'other'`);
+      state.prom_v = 2;
     }
     const budget = { lp: 0, np: 0, rd: 0, prom: 0, cb: 0 };
     const res = {};
@@ -20014,7 +20019,7 @@ var schema16 = {
   ],
   columns: [
     // Замовлення Prom з тією самою ТТН (знайдено серед замовлень маркетплейсів): спосіб оплати в Prom —
-    // mp_pay: prosale_paid | prosale_unpaid | cod | other; mp_pay_name — як у кабінеті Prom; mp_at — коли перевірено.
+    // mp_pay: prosale_paid | prosale_unpaid | credit (частинами через Prom) | cod | other; mp_pay_name — як у кабінеті Prom; mp_at — коли перевірено.
     ["chk_orders", "mp_pay", "TEXT DEFAULT ''"],
     ["chk_orders", "mp_pay_name", "TEXT DEFAULT ''"],
     ["chk_orders", "mp_at", "TEXT DEFAULT ''"],
