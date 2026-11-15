@@ -102,6 +102,10 @@ assert.equal(r2.status_group, 3);
 r = await req('POST', '/api/mp/rz/cancel', { account: 1, id: '9002', status: 31 });
 assert.equal(r.status, 400, 'уже скасоване');
 assert.equal((await req('POST', '/api/mp/rz/cancel', { account: 2, id: '9003', status: 31 }, M)).status, 403, 'чужий магазин');
+r = await req('POST', '/api/mp/rz/cancel', { account: 2, id: '9003', status: 31, in_account: 1 });
+assert.equal(r.status, 400, 'із картки замовлення іншого магазину — не можна');
+assert.match(r.j.error, /іншого магазину/);
+assert.equal((await row(9003)).status_group, 1);
 assert.equal((await req('GET', '/api/mp/orders?mp=rozetka', null, H)).j.groups.dups, 2);
 
 // ---------- Розетка не приймає expand=payment — синхронізація все одно працює ----------

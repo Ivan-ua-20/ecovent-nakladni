@@ -818,6 +818,8 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     const reason = RZ_CANCEL_REASONS[Number(b.status)];
     if (!reason) throw fail(400, 'Оберіть причину скасування.');
     const o = await rzOrderOf(b, c);
+    // зі сторінки замовлення одного магазину не можна змінювати замовлення іншого (дублі між магазинами — лише перегляд)
+    if (b.in_account != null && Number(b.in_account) !== Number(o.account_id)) throw fail(400, 'Це замовлення іншого магазину — змінювати його можна лише в тому магазині.');
     if (Number(o.status_group) !== 1) throw fail(400, `Замовлення вже «${o.status_name || o.status}» — скасувати не можна.`);
     const acc = await accOf('rozetka', o.account_id);
     await rzCall(acc, (t) => rzSetOrderStatus(fetchFn, t, o.id, b.status));

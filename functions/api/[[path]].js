@@ -17631,6 +17631,7 @@ ${items.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio 
     const reason = RZ_CANCEL_REASONS[Number(b.status)];
     if (!reason) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u043F\u0440\u0438\u0447\u0438\u043D\u0443 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u043D\u043D\u044F.");
     const o = await rzOrderOf(b, c);
+    if (b.in_account != null && Number(b.in_account) !== Number(o.account_id)) throw fail(400, "\u0426\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0456\u043D\u0448\u043E\u0433\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0443 \u2014 \u0437\u043C\u0456\u043D\u044E\u0432\u0430\u0442\u0438 \u0439\u043E\u0433\u043E \u043C\u043E\u0436\u043D\u0430 \u043B\u0438\u0448\u0435 \u0432 \u0442\u043E\u043C\u0443 \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0456.");
     if (Number(o.status_group) !== 1) throw fail(400, `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \xAB${o.status_name || o.status}\xBB \u2014 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438 \u043D\u0435 \u043C\u043E\u0436\u043D\u0430.`);
     const acc = await accOf("rozetka", o.account_id);
     await rzCall(acc, (t) => rzSetOrderStatus(fetchFn, t, o.id, b.status));
