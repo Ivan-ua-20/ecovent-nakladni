@@ -165,7 +165,8 @@ export function evaluate(o, ctx) {
   if (!rule) add('warn', o.payment ? `Вид оплати ${o.payment} невідомий — оберіть його клас у «Види оплат».` : 'У замовленні не вказано вид оплати.');
   const cls = rule?.cls || '';
   if (cls === 'skip') return { level: 'skip', items: [{ level: 'skip', text: `«${rule.name}» — не перевіряємо` }] };
-  const part = cls === 'cod' ? partialOf(o.comment) : null;
+  // Часткова оплата: поле «передоплата» LP-CRM, інакше — сума з коментаря.
+  const part = cls === 'cod' ? (o.prepayment > 0 ? { sum: o.prepayment } : partialOf(o.comment)) : null;
   const expCod = part ? (part.sum ? o.total - part.sum : null) : o.total;
 
   // 1) Наложка в ТТН
@@ -176,7 +177,8 @@ export function evaluate(o, ctx) {
     else if (cls === 'cod') {
       if (!(o.cod > 0)) add('bad', o.carrier === 'prm' ? `Післяплата за CRM («${rule.name}»), а в Prom — «${o.mp_pay_name || 'без оплати при отриманні'}».` : `Післяплата за CRM («${rule.name}»), а в ТТН наложки немає.`);
       else if (part) {
-        if (part.sum && !near(o.cod, expCod)) add('bad', `Часткова оплата: наложка ${fmt(o.cod)}, а має бути ${fmt(expCod)} (${fmt(o.total)} − передоплата ${fmt(part.sum)}).`);
+        if (part.sum && !near(o.cod, expCod) && !near(o.cod, o.total)) add('bad', `Часткова оплата: наложка ${fmt(o.cod)}, а має бути ${fmt(expCod)} (${fmt(o.total)} − передоплата ${fmt(part.sum)}).`);
+        else if (part.sum && near(o.cod, o.total) && !near(expCod, o.total)) add('bad', `Передоплата ${fmt(part.sum)}, а наложка — на всю суму ${fmt(o.total)} (має бути ${fmt(expCod)}).`);
         else if (!part.sum && o.cod >= o.total - 0.5) add('warn', 'У коментарі згадано передоплату, але наложка — на всю суму замовлення.');
         else add('ok', `Наложка ${fmt(o.cod)} (часткова оплата)`);
       } else if (!near(o.cod, o.total)) add('bad', `Наложка ${fmt(o.cod)}, а сума замовлення ${fmt(o.total)}.`);
@@ -205,7 +207,8 @@ export function evaluate(o, ctx) {
   // Чек видають під час відправки (і для післяплати теж): відправлене замовлення без чека — помилка.
   if (!r && o.receipt_ref && o.ref_state === 'nofop') add('warn', 'У LP-CRM чек прив’язано, але каса цього ФОП не підключена до сервісу — додайте доступ Checkbox у «Налаштування → ФОПи накладних», щоб звірити суму й спосіб оплати.');
   else if (!r && o.receipt_ref) add('wait', 'У LP-CRM чек прив’язано — завантажуємо його з Checkbox.');
-  else if (!r) add('bad', 'Відправлено, а чек не знайдено: у LP-CRM не прив’язано і в Checkbox не знайдено.');
+  else if (!r && ctx.canReceipt === false) add('info', `Чек не звіряємо: каса ${ctx.expectedFop ? `«${fopName(ctx.expectedFop)}»` : 'цього ФОП'} не підключена до сервісу (доступ Checkbox у «Налаштування → ФОПи накладних»).`);
+  else if (!r) add('bad', 'Відправлено, а чек у Checkbox не знайдено.');
   else {
     const how = r.bySum ? ' (знайдено за сумою)' : r.byRef ? '' : ' (знайдено за № замовлення)';
     if (!part && !near(r.total, o.total)) add('bad', `Чек на ${fmt(r.total)}, а замовлення на ${fmt(o.total)}${how}.`);

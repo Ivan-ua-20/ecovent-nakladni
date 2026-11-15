@@ -34,8 +34,9 @@ await db.run(`INSERT INTO settings (key, value) VALUES ('lpcrm_key', 'k') ON CON
 await db.run(`DELETE FROM fops`);
 await db.run(`INSERT INTO fops (id, short_name, full_name, ipn, iban, checkbox_login, checkbox_password, active) VALUES (1, 'ФОП Агафіца Д.М.', 'А Д М', '1111111111', 'UA111', 'c1', 'p', 1)`);
 await db.run(`INSERT INTO fops (id, short_name, full_name, ipn, iban, checkbox_login, checkbox_password, active) VALUES (2, 'ФОП Лупу В.Ф.', 'Л В Ф', '2222222222', 'UA222', 'c2', 'p', 1)`);
+await db.run(`INSERT INTO fops (id, short_name, full_name, active) VALUES (3, 'ТОВ Ековент-Дистрибюшн', 'ТОВ', 1)`); // каса не підключена
 await db.run(`DELETE FROM offices`);
-await db.run(`INSERT INTO offices (office_id, name, fop_id) VALUES ('22', 'Ecovent-Expert / ФОП Агафіца Д.М.', 1), ('12', 'Маркетплейси / ФОП ЛУПУ В.Ф.', 2)`);
+await db.run(`INSERT INTO offices (office_id, name, fop_id) VALUES ('22', 'Ecovent-Expert / ФОП Агафіца Д.М.', 1), ('12', 'Маркетплейси / ФОП ЛУПУ В.Ф.', 2), ('28', 'ТОВ «ЕКОВЕНТ-ДИСТРИБ’ЮШН»', 3)`);
 await db.run(`INSERT INTO np_accounts (id, name, api_key, active, created_at) VALUES (1, 'НП', 'npk', 1, '')`);
 await db.run(`INSERT INTO rz_accounts (id, name, username, password) VALUES (1, 'Ековент', 'u', 'p')`);
 await db.run(`INSERT INTO prom_accounts (id, name, token, active) VALUES (1, 'Prom Amsterdam', 'ptok', 1)`);
@@ -60,6 +61,8 @@ const ORDERS = [
   O(10009, 14, 999, '20450000000009', { phone: '380509999999', office: '12' }),
   O(10010, 14, 300, '2045 0000 000002', { office: '12' }), // та сама ТТН, що в 10002
   // Prom: замовлення з тією самою ТТН — оплата через API Prom
+  O(10016, 16, 2989, '20450000000016', { office: '28' }), // каса ТОВ не підключена — чек не вимагаємо
+  O(10017, 4, 1000, '20450000000017', { prepayment: '200.00' }), // передоплата з поля LP-CRM: наложка 800
   O(10011, 10, 610, '20450000000011', { office: '12' }), // Пром-оплата, у Prom оплачено — гаразд
   O(10012, 10, 620, 'PRM-0000012', { office: '12' }), // Пром-оплата, а в Prom «Оплата при отриманні» (Розетка Делівері з Prom)
   O(10013, 4, 630, 'PRM-0000013', { office: '12' }), // післяплата, у Prom оплата при отриманні — наложка є
@@ -72,7 +75,7 @@ const PROM = {
   p13: { id: 13, full_price: '630', payment_option: { name: 'Оплата при отриманні' } },
   p14: { id: 14, full_price: '640', payment_option: { name: 'Пром-оплата' }, payment_data: { type: 'prosale', status: 'unpaid' } },
 };
-const TRACK = { 20450000000015: {}, 20450000000011: {}, 20450000000014: {}, 20450000000001: { AfterpaymentOnGoodsCost: '1000' }, 20450000000002: { AfterpaymentOnGoodsCost: '500' }, 20450000000003: {}, 20450000000004: {},
+const TRACK = { 20450000000016: { AfterpaymentOnGoodsCost: '2989' }, 20450000000017: { AfterpaymentOnGoodsCost: '800' }, 20450000000015: {}, 20450000000011: {}, 20450000000014: {}, 20450000000001: { AfterpaymentOnGoodsCost: '1000' }, 20450000000002: { AfterpaymentOnGoodsCost: '500' }, 20450000000003: {}, 20450000000004: {},
   20450000000005: { RedeliverySum: '700' }, 20450000000007: {}, 20450000000008: {}, 20450000000009: {} };
 const RC = {
   c1: [
@@ -173,7 +176,7 @@ assert.equal(row(10015).level, 'ok', texts(10015)); assert.match(texts(10015), /
 assert.equal(row(10004).level, 'bad'); assert.match(texts(10004), /Оплата прийшла на «ФОП Лупу В\.Ф\.», а чек пробито на «ФОП Агафіца Д\.М\.»/);
 assert.ok(row(10004).receipt.bySum, 'чек знайдено за сумою');
 assert.match(texts(10005), /ok: Наложка 700 грн \(часткова оплата\)/);
-assert.match(texts(10005), /bad: Відправлено, а чек не знайдено/);
+assert.match(texts(10005), /bad: Відправлено, а чек у Checkbox не знайдено/);
 assert.equal(row(10006).level, 'bad'); assert.match(texts(10006), /Післяплата Rozetka.*наложки немає/);
 assert.match(texts(10007), /bad: У чеку спосіб оплати «Готівка», а для «Оплата на картку» має бути «Картка»/);
 assert.match(texts(10007), /warn: Чек пробито на «ФОП Агафіца Д\.М\.», а за відділом/);
@@ -182,6 +185,9 @@ assert.match(texts(10009), /Можливий дубль.*10008/);
 assert.match(texts(10010), /bad: Та сама ТТН у замовленні № 10002/);
 assert.match(texts(10002), /Та сама ТТН у замовленні № 10010/);
 assert.ok(j.counts.bad >= 5);
+assert.equal(row(10016).level, 'ok', texts(10016)); assert.match(texts(10016), /Чек не звіряємо: каса «ТОВ Ековент-Дистрибюшн» не підключена/);
+assert.match(texts(10017), /ok: Наложка 800 грн \(часткова оплата\)/);
+assert.deepEqual(j.no_checkbox, ['ТОВ Ековент-Дистрибюшн']);
 // Prom
 assert.match(texts(10011), /ok: Prom: Пром-оплата · оплачено/);
 assert.match(texts(10011), /ok: Наложки немає/);

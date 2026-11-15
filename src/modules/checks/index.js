@@ -66,6 +66,7 @@ export function normalizeCheckOrder(raw) {
     phone: p9(raw.phone), buyer: String(raw.bayer_name || '').trim().slice(0, 120), user: String(raw.user || '').trim().slice(0, 40),
     comment: String(raw.comment || '').trim().slice(0, 500),
     receipt_ref: receiptRefOf(raw),
+    prepayment: round2(num(raw.prepayment)),
   };
 }
 
@@ -122,10 +123,10 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       if (got.length) {
         await db.batch(got.map((o) => [`UPDATE chk_orders SET id = ?, day = ?, fetched_status = status, payment = ?, total = ?, office = ?, channel = ?, site = ?,
           delivery = ?, phone = ?, buyer = ?, user = ?, comment = ?,
-          ref_state = CASE WHEN receipt_ref = ? THEN ref_state ELSE '' END, receipt_ref = ?,
+          ref_state = CASE WHEN receipt_ref = ? THEN ref_state ELSE '' END, receipt_ref = ?, prepayment = ?,
           ttn_at = CASE WHEN ttn = ? THEN ttn_at ELSE '' END, cod = CASE WHEN ttn = ? THEN cod ELSE 0 END, cod_kind = CASE WHEN ttn = ? THEN cod_kind ELSE '' END,
           ttn_err = CASE WHEN ttn = ? THEN ttn_err ELSE '' END, ttn = ?, carrier = ? WHERE code = ?`,
-        [o.id, o.day, o.payment, o.total, o.office, o.channel, o.site, o.delivery, o.phone, o.buyer, o.user, o.comment, o.receipt_ref, o.receipt_ref, o.ttn, o.ttn, o.ttn, o.ttn, o.ttn, o.carrier, o.code]]));
+        [o.id, o.day, o.payment, o.total, o.office, o.channel, o.site, o.delivery, o.phone, o.buyer, o.user, o.comment, o.receipt_ref, o.receipt_ref, o.prepayment, o.ttn, o.ttn, o.ttn, o.ttn, o.ttn, o.carrier, o.code]]));
       }
       // Замовлення, яких LP-CRM не віддала (видалені тощо), — щоб не просити їх щоразу.
       const seen = new Set(got.map((o) => o.code));
@@ -312,6 +313,8 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const lock = await db.run(`INSERT INTO settings (key, value) VALUES ('chk_lock', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value < ?`,
       [nowIso(), new Date(Date.now() - 5 * 60e3).toISOString()]);
     if (!lock.changes) return { busy: true };
+    // Нові поля замовлення (версія даних) — один раз перечитати повні дані всіх замовлень.
+    if (state.data_v !== 4) { await db.run(`UPDATE chk_orders SET fetched_status = 0`); state.data_v = 4; }
     const budget = { lp: 0, np: 0, rd: 0, prom: 0, cb: 0 };
     const res = {};
     try {
@@ -358,7 +361,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       db.all(`SELECT * FROM chk_orders WHERE listed_at != '' AND listed_at >= ? AND day BETWEEN ? AND ? ORDER BY day DESC, code DESC`, [listed, from, to]),
       // чеки за період + прив'язані в LP-CRM до замовлень періоду (можуть бути з іншого дня)
       db.all(`SELECT * FROM chk_receipts WHERE day BETWEEN ? AND ? OR id IN (SELECT receipt_ref FROM chk_orders WHERE receipt_ref != '' AND day BETWEEN ? AND ?)`, [recFrom, recTo, from, to]),
-      db.all(`SELECT id, short_name, ipn, iban FROM fops`),
+      db.all(`SELECT id, short_name, ipn, iban, active, checkbox_login, checkbox_password, checkbox_license, checkbox_pin FROM fops`),
       db.all(`SELECT office_id, name, fop_id FROM offices`),
       db.all(`SELECT name, fop_id FROM channels`),
       db.all(`SELECT iban, code, name, alias FROM odb_accounts`).catch(() => []),
@@ -366,6 +369,8 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       getJson('chk_statuses', {}),
     ]);
     const fops = Object.fromEntries(fopsAll.map((f) => [String(f.id), f.short_name]));
+    const cbFops = new Set(fopsAll.filter(hasCheckbox).map((f) => String(f.id)));
+    const allCb = fopsAll.filter((f) => f.active).every(hasCheckbox);
     const fopByIpn = new Map(fopsAll.filter((f) => f.ipn).map((f) => [String(f.ipn).trim(), f.id]));
     const fopByIban = new Map(fopsAll.filter((f) => f.iban).map((f) => [String(f.iban).replace(/\s/g, '').toUpperCase(), f.id]));
     const accByIban = new Map(accounts.map((a) => [String(a.iban).toUpperCase(), a]));
@@ -392,12 +397,14 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const today = kyivDay();
     const rows = orders.map((o) => {
       const rule = rs[String(o.payment)];
-      const part = rule?.cls === 'cod' ? partialOf(o.comment) : null;
+      const part = rule?.cls === 'cod' ? (o.prepayment > 0 || partialOf(o.comment)) : null;
       const dup = (byPhone.get(o.phone) || []).filter((x) => x !== o && Math.abs(Date.parse(x.day) - Date.parse(o.day)) <= 3 * 86400e3).map((x) => x.id || x.code);
       const receipt = matched.get(o.code) || null;
       const payment = rule?.cls === 'bank' ? findPayment(o, txRows, o.total) : null;
       const dupTtn = (byTtn.get(String(o.ttn || '').replace(/\s/g, '').toUpperCase()) || []).filter((x) => x !== o).map((x) => x.id || x.code);
-      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn });
+      // Чек можна вимагати, лише якщо касу ФОП (за відділом / полем 1) підключено; ФОП невідомий — якщо підключено всі каси.
+      const canReceipt = o.fopId ? cbFops.has(String(o.fopId)) : allCb && cbFops.size > 0;
+      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn, canReceipt });
       return {
         code: o.code, id: o.id, day: o.day, status: o.status_name || String(o.status), total: o.total,
         payment: rule?.name || (o.payment ? `Оплата ${o.payment}` : '—'), cls: rule?.cls || '', partial: Boolean(part),
