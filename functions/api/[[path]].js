@@ -17637,7 +17637,7 @@ function evaluate(o, ctx) {
   if (!rule) add("warn", o.payment ? `\u0412\u0438\u0434 \u043E\u043F\u043B\u0430\u0442\u0438 ${o.payment} \u043D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u043A\u043B\u0430\u0441 \u0443 \xAB\u0412\u0438\u0434\u0438 \u043E\u043F\u043B\u0430\u0442\xBB.` : "\u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E \u0432\u0438\u0434 \u043E\u043F\u043B\u0430\u0442\u0438.");
   const cls = rule?.cls || "";
   if (cls === "skip") return { level: "skip", items: [{ level: "skip", text: `\xAB${rule.name}\xBB \u2014 \u043D\u0435 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u044F\u0454\u043C\u043E` }] };
-  const part = cls === "cod" ? partialOf(o.comment) : null;
+  const part = cls === "cod" ? o.prepayment > 0 ? { sum: o.prepayment } : partialOf(o.comment) : null;
   const expCod = part ? part.sum ? o.total - part.sum : null : o.total;
   if (!o.ttn) add("warn", "\u041D\u0435\u043C\u0430\u0454 \u0422\u0422\u041D \u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456.");
   else if (o.carrier === "np" || o.carrier === "rd" || o.carrier === "prm" && o.ttn_at) {
@@ -17646,7 +17646,8 @@ function evaluate(o, ctx) {
     else if (cls === "cod") {
       if (!(o.cod > 0)) add("bad", o.carrier === "prm" ? `\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 \u0437\u0430 CRM (\xAB${rule.name}\xBB), \u0430 \u0432 Prom \u2014 \xAB${o.mp_pay_name || "\u0431\u0435\u0437 \u043E\u043F\u043B\u0430\u0442\u0438 \u043F\u0440\u0438 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u0456"}\xBB.` : `\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 \u0437\u0430 CRM (\xAB${rule.name}\xBB), \u0430 \u0432 \u0422\u0422\u041D \u043D\u0430\u043B\u043E\u0436\u043A\u0438 \u043D\u0435\u043C\u0430\u0454.`);
       else if (part) {
-        if (part.sum && !near(o.cod, expCod)) add("bad", `\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430: \u043D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)}, \u0430 \u043C\u0430\u0454 \u0431\u0443\u0442\u0438 ${fmt(expCod)} (${fmt(o.total)} \u2212 \u043F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0430 ${fmt(part.sum)}).`);
+        if (part.sum && !near(o.cod, expCod) && !near(o.cod, o.total)) add("bad", `\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430: \u043D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)}, \u0430 \u043C\u0430\u0454 \u0431\u0443\u0442\u0438 ${fmt(expCod)} (${fmt(o.total)} \u2212 \u043F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0430 ${fmt(part.sum)}).`);
+        else if (part.sum && near(o.cod, o.total) && !near(expCod, o.total)) add("bad", `\u041F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0430 ${fmt(part.sum)}, \u0430 \u043D\u0430\u043B\u043E\u0436\u043A\u0430 \u2014 \u043D\u0430 \u0432\u0441\u044E \u0441\u0443\u043C\u0443 ${fmt(o.total)} (\u043C\u0430\u0454 \u0431\u0443\u0442\u0438 ${fmt(expCod)}).`);
         else if (!part.sum && o.cod >= o.total - 0.5) add("warn", "\u0423 \u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440\u0456 \u0437\u0433\u0430\u0434\u0430\u043D\u043E \u043F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0443, \u0430\u043B\u0435 \u043D\u0430\u043B\u043E\u0436\u043A\u0430 \u2014 \u043D\u0430 \u0432\u0441\u044E \u0441\u0443\u043C\u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
         else add("ok", `\u041D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)} (\u0447\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430)`);
       } else if (!near(o.cod, o.total)) add("bad", `\u041D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)}, \u0430 \u0441\u0443\u043C\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${fmt(o.total)}.`);
@@ -17670,7 +17671,8 @@ function evaluate(o, ctx) {
   const r = ctx.receipt;
   if (!r && o.receipt_ref && o.ref_state === "nofop") add("warn", "\u0423 LP-CRM \u0447\u0435\u043A \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u043E, \u0430\u043B\u0435 \u043A\u0430\u0441\u0430 \u0446\u044C\u043E\u0433\u043E \u0424\u041E\u041F \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0430 \u0434\u043E \u0441\u0435\u0440\u0432\u0456\u0441\u0443 \u2014 \u0434\u043E\u0434\u0430\u0439\u0442\u0435 \u0434\u043E\u0441\u0442\u0443\u043F Checkbox \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0424\u041E\u041F\u0438 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0438\u0445\xBB, \u0449\u043E\u0431 \u0437\u0432\u0456\u0440\u0438\u0442\u0438 \u0441\u0443\u043C\u0443 \u0439 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u043F\u043B\u0430\u0442\u0438.");
   else if (!r && o.receipt_ref) add("wait", "\u0423 LP-CRM \u0447\u0435\u043A \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u043E \u2014 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0443\u0454\u043C\u043E \u0439\u043E\u0433\u043E \u0437 Checkbox.");
-  else if (!r) add("bad", "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E, \u0430 \u0447\u0435\u043A \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E: \u0443 LP-CRM \u043D\u0435 \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u043E \u0456 \u0432 Checkbox \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+  else if (!r && ctx.canReceipt === false) add("info", `\u0427\u0435\u043A \u043D\u0435 \u0437\u0432\u0456\u0440\u044F\u0454\u043C\u043E: \u043A\u0430\u0441\u0430 ${ctx.expectedFop ? `\xAB${fopName(ctx.expectedFop)}\xBB` : "\u0446\u044C\u043E\u0433\u043E \u0424\u041E\u041F"} \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0430 \u0434\u043E \u0441\u0435\u0440\u0432\u0456\u0441\u0443 (\u0434\u043E\u0441\u0442\u0443\u043F Checkbox \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0424\u041E\u041F\u0438 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0438\u0445\xBB).`);
+  else if (!r) add("bad", "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E, \u0430 \u0447\u0435\u043A \u0443 Checkbox \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
   else {
     const how = r.bySum ? " (\u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0437\u0430 \u0441\u0443\u043C\u043E\u044E)" : r.byRef ? "" : " (\u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0437\u0430 \u2116 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F)";
     if (!part && !near(r.total, o.total)) add("bad", `\u0427\u0435\u043A \u043D\u0430 ${fmt(r.total)}, \u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0430 ${fmt(o.total)}${how}.`);
@@ -17753,7 +17755,8 @@ function normalizeCheckOrder(raw2) {
     buyer: String(raw2.bayer_name || "").trim().slice(0, 120),
     user: String(raw2.user || "").trim().slice(0, 40),
     comment: String(raw2.comment || "").trim().slice(0, 500),
-    receipt_ref: receiptRefOf(raw2)
+    receipt_ref: receiptRefOf(raw2),
+    prepayment: round2(num(raw2.prepayment))
   };
 }
 function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
@@ -17820,10 +17823,10 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         await db.batch(got.map((o) => [
           `UPDATE chk_orders SET id = ?, day = ?, fetched_status = status, payment = ?, total = ?, office = ?, channel = ?, site = ?,
           delivery = ?, phone = ?, buyer = ?, user = ?, comment = ?,
-          ref_state = CASE WHEN receipt_ref = ? THEN ref_state ELSE '' END, receipt_ref = ?,
+          ref_state = CASE WHEN receipt_ref = ? THEN ref_state ELSE '' END, receipt_ref = ?, prepayment = ?,
           ttn_at = CASE WHEN ttn = ? THEN ttn_at ELSE '' END, cod = CASE WHEN ttn = ? THEN cod ELSE 0 END, cod_kind = CASE WHEN ttn = ? THEN cod_kind ELSE '' END,
           ttn_err = CASE WHEN ttn = ? THEN ttn_err ELSE '' END, ttn = ?, carrier = ? WHERE code = ?`,
-          [o.id, o.day, o.payment, o.total, o.office, o.channel, o.site, o.delivery, o.phone, o.buyer, o.user, o.comment, o.receipt_ref, o.receipt_ref, o.ttn, o.ttn, o.ttn, o.ttn, o.ttn, o.carrier, o.code]
+          [o.id, o.day, o.payment, o.total, o.office, o.channel, o.site, o.delivery, o.phone, o.buyer, o.user, o.comment, o.receipt_ref, o.receipt_ref, o.prepayment, o.ttn, o.ttn, o.ttn, o.ttn, o.ttn, o.carrier, o.code]
         ]));
       }
       const seen = new Set(got.map((o) => o.code));
@@ -18049,6 +18052,10 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       [nowIso(), new Date(Date.now() - 5 * 6e4).toISOString()]
     );
     if (!lock.changes) return { busy: true };
+    if (state.data_v !== 4) {
+      await db.run(`UPDATE chk_orders SET fetched_status = 0`);
+      state.data_v = 4;
+    }
     const budget = { lp: 0, np: 0, rd: 0, prom: 0, cb: 0 };
     const res = {};
     try {
@@ -18111,7 +18118,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       db.all(`SELECT * FROM chk_orders WHERE listed_at != '' AND listed_at >= ? AND day BETWEEN ? AND ? ORDER BY day DESC, code DESC`, [listed, from, to]),
       // чеки за період + прив'язані в LP-CRM до замовлень періоду (можуть бути з іншого дня)
       db.all(`SELECT * FROM chk_receipts WHERE day BETWEEN ? AND ? OR id IN (SELECT receipt_ref FROM chk_orders WHERE receipt_ref != '' AND day BETWEEN ? AND ?)`, [recFrom, recTo, from, to]),
-      db.all(`SELECT id, short_name, ipn, iban FROM fops`),
+      db.all(`SELECT id, short_name, ipn, iban, active, checkbox_login, checkbox_password, checkbox_license, checkbox_pin FROM fops`),
       db.all(`SELECT office_id, name, fop_id FROM offices`),
       db.all(`SELECT name, fop_id FROM channels`),
       db.all(`SELECT iban, code, name, alias FROM odb_accounts`).catch(() => []),
@@ -18119,6 +18126,8 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       getJson2("chk_statuses", {})
     ]);
     const fops = Object.fromEntries(fopsAll.map((f) => [String(f.id), f.short_name]));
+    const cbFops = new Set(fopsAll.filter(hasCheckbox).map((f) => String(f.id)));
+    const allCb = fopsAll.filter((f) => f.active).every(hasCheckbox);
     const fopByIpn = new Map(fopsAll.filter((f) => f.ipn).map((f) => [String(f.ipn).trim(), f.id]));
     const fopByIban = new Map(fopsAll.filter((f) => f.iban).map((f) => [String(f.iban).replace(/\s/g, "").toUpperCase(), f.id]));
     const accByIban = new Map(accounts.map((a) => [String(a.iban).toUpperCase(), a]));
@@ -18159,12 +18168,13 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const today3 = kyivDay();
     const rows = orders.map((o) => {
       const rule = rs[String(o.payment)];
-      const part = rule?.cls === "cod" ? partialOf(o.comment) : null;
+      const part = rule?.cls === "cod" ? o.prepayment > 0 || partialOf(o.comment) : null;
       const dup = (byPhone.get(o.phone) || []).filter((x) => x !== o && Math.abs(Date.parse(x.day) - Date.parse(o.day)) <= 3 * 864e5).map((x) => x.id || x.code);
       const receipt = matched.get(o.code) || null;
       const payment = rule?.cls === "bank" ? findPayment(o, txRows, o.total) : null;
       const dupTtn = (byTtn.get(String(o.ttn || "").replace(/\s/g, "").toUpperCase()) || []).filter((x) => x !== o).map((x) => x.id || x.code);
-      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today: today3, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn });
+      const canReceipt = o.fopId ? cbFops.has(String(o.fopId)) : allCb && cbFops.size > 0;
+      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today: today3, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn, canReceipt });
       return {
         code: o.code,
         id: o.id,
@@ -19933,7 +19943,7 @@ var schema15 = {
 // src/modules/checks/schema.js
 var schema16 = {
   name: "checks",
-  version: 3,
+  version: 4,
   tables: [
     // Замовлення LP-CRM у статусах «відправлено / очікує викупу / завершено» за останні CHECK_DAYS днів.
     // listed_at — коли востаннє бачили в цих статусах (зникло зі списку — більше не показуємо);
@@ -19997,7 +20007,9 @@ var schema16 = {
     // Чек, прив'язаний до замовлення в LP-CRM (номер чека Checkbox, UUID); ref_state: '' — ще не шукали,
     // ok — чек є серед завантажених, nofop — жодна каса, підключена в сервісі, цього чека не бачить.
     ["chk_orders", "receipt_ref", "TEXT DEFAULT ''"],
-    ["chk_orders", "ref_state", "TEXT DEFAULT ''"]
+    ["chk_orders", "ref_state", "TEXT DEFAULT ''"],
+    // Передоплата з LP-CRM (поле prepayment): часткова оплата — наложка має бути на суму мінус передоплата.
+    ["chk_orders", "prepayment", "REAL NOT NULL DEFAULT 0"]
   ]
 };
 
