@@ -23,6 +23,9 @@ const fetchFn = async (url, opts = {}) => {
     if (id === '104') return new Response(JSON.stringify({ success: false, errors: { message: 'Status change not allowed', code: 1001 } }));
     return new Response(JSON.stringify({ success: true, content: { id: Number(id), status: 26 } }));
   }
+  if (u.host === 'api-seller.rozetka.com.ua' && u.pathname === '/orders/101' && (opts.method || 'GET') === 'GET') {
+    return new Response(JSON.stringify({ success: true, content: { id: 101, expand: u.searchParams.get('expand'), payment_type_name: 'Оплата карткою' } }));
+  }
   throw new Error(`неочікуваний запит ${opts.method || 'GET'} ${url}`);
 };
 const mk = () => createApp({ db, fetchFn });
@@ -32,6 +35,11 @@ const req = async (method, path, body, headers = H) => {
   const r = await mk().request(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
   return { status: r.status, j: await r.json().catch(() => ({})) };
 };
+
+// діагностика: «сире» замовлення з Розетки (лише адміністратор)
+let raw = await req('GET', '/api/mp/rz/raw/1/101?expand=payment,delivery');
+assert.equal(raw.status, 200);
+assert.deepEqual(raw.j, { id: 101, expand: 'payment,delivery', payment_type_name: 'Оплата карткою' });
 
 // інший статус групою — ні
 let r = await req('POST', '/api/mp/rz/status', { status: 45, orders: [{ account: 1, id: '101' }] });
@@ -67,5 +75,6 @@ const M = { 'Content-Type': 'application/json', Cookie: lm.headers.get('set-cook
 const me = (await req('GET', '/api/bootstrap', null, M)).j.user;
 assert.ok(me.perms.includes('market.view') && !me.perms.includes('market.edit'));
 assert.equal((await req('POST', '/api/mp/rz/status', { status: 26, orders: [{ account: 1, id: '104' }] }, M)).status, 403);
+assert.equal((await req('GET', '/api/mp/rz/raw/1/101', null, M)).status, 403);
 
 console.log('OK — маркетплейси: групове переведення «Нових» в «Обробляється менеджером»');
