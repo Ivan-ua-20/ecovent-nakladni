@@ -192,11 +192,11 @@ export function createMarketPages({ can }) {
       // підстатуси: у групі Розетки — лише її статуси; Prom і Епіцентр — статуси в бічній панелі
       const inGrp = rz ? d.statuses.filter((x) => !state.grp || state.grp === 'call' || x.grp === state.grp) : [];
       const grpSum = inGrp.reduce((a, x) => a + x.n, 0);
-      $('#mpStatuses').innerHTML = rz && state.grp !== 'call' && inGrp.length > 1 ? `<button class="chip ${state.status ? '' : 'on'}" data-st="">Усі · ${grpSum}</button>${inGrp.map((x) => `<button class="chip ${state.status === x.status ? 'on' : ''}" data-st="${esc(x.status)}">${esc(x.status_name || x.status || '—')} · ${x.n}</button>`).join('')}` : '';
+      $('#mpStatuses').innerHTML = rz && state.grp && state.grp !== 'call' && inGrp.length > 1 ? `<button class="chip ${state.status ? '' : 'on'}" data-st="">Усі · ${grpSum}</button>${inGrp.map((x) => `<button class="chip ${state.status === x.status ? 'on' : ''}" data-st="${esc(x.status)}">${esc(x.status_name || x.status || '—')} · ${x.n}</button>`).join('')}` : '';
       $$('#mpStatuses [data-st]').forEach((b) => (b.onclick = () => { state.status = b.dataset.st; load(); }));
       $('#mpGrpHead').innerHTML = grpHead(d);
       $$('#mpGrpHead [data-cancel]').forEach((b) => (b.onclick = () => { state.cancel = b.dataset.cancel; state.status = ''; load(); }));
-      if ($('#mpRvBox')) $('#mpRvBox').hidden = Boolean(state.grp && state.grp !== 'success');
+      if ($('#mpRvBox')) $('#mpRvBox').hidden = state.grp !== 'success'; // відгуки — у «Успішних» (і «Відгуки: можна нагадати»)
       if (rz && d.reviews) {
         const s = d.reviews.stats;
         const pct = s.done ? Math.round((s.reviewed / s.done) * 100) : 0;
