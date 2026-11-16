@@ -1082,8 +1082,11 @@ export function createB2bPages(ctx = {}) {
     };
     if ($('#oRiSend')) $('#oRiSend').onclick = async (e) => {
       const btn = e.currentTarget;
+      const label = btn.textContent;
       btn.disabled = true;
-      try { await api('POST', `/api/b2b/orders/${o.id}/reinvoice-request`); toast('Запит надіслано у «Фінансові питання»'); viewOrder(o.id); } catch (er) { toast(er.message, true); btn.disabled = false; }
+      btn.innerHTML = '<span class="spinner"></span> Надсилаю у «Фінансові питання»…';
+      try { await api('POST', `/api/b2b/orders/${o.id}/reinvoice-request`); toast('Запит надіслано у «Фінансові питання»'); viewOrder(o.id); }
+      catch (er) { toast(`Не надіслано: ${er.message}`, true); btn.disabled = false; btn.textContent = label; }
     };
     if ($('#oRiDone')) $('#oRiDone').onclick = async () => {
       if (!(await confirmDanger('Рахунок і накладну перероблено?', 'Позначку «переробити рахунок/накладну» буде знято. Якщо номер рахунку новий — просто внесіть його в «Рахунок і накладна», позначка зніметься сама.', 'Так, перероблено'))) return;
