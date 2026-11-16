@@ -469,6 +469,21 @@ export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
 
   // Запит рахунку на закупівлю (нову або змінену) — у гілку General.
   // Текст запиту рахунку; done — рахунок уже є: те саме замовлення, лише з позначкою (повідомлення лишається в групі).
+  // Що змінили після рахунку (для «Переробіть рахунок»): записи історії з позначкою «рахунок … треба переробити»
+  // після останнього перевиставлення; «змінив Хто: A; B — разом …» → пункти A, B.
+  async function changesSince(o) {
+    const rows = await db.all(`SELECT action FROM b2b_order_log WHERE order_id = ? ORDER BY id`, [o.id]);
+    let from = 0;
+    rows.forEach((r, i) => { if (/рахунок перевиставлено|рахунок\/накладну перероблено|рахунок( і накладну)? перероблено/.test(r.action)) from = i + 1; });
+    const out = [];
+    for (const r of rows.slice(from)) {
+      if (!/треба переробити/.test(r.action)) continue;
+      let t = r.action.replace(/ · рахунок № .*?треба переробити.*$/, '').replace(/ — разом [^·]*$/, '');
+      t = t.replace(/^змінив [^:]*: /, '');
+      for (const part of (t.startsWith('спосіб отримання') ? [t] : t.split('; '))) if (part && !out.includes(part)) out.push(part);
+    }
+    return out;
+  }
   async function reqText(o, { mode = '', done = false } = {}) {
     const items = await db.all(`SELECT name, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
     const lines = items.slice(0, 50).map((i) => `${h(i.name)} — ${i.qty} шт — ${m2(i.price)}`);
@@ -476,7 +491,9 @@ export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
     const head = done ? `🧾 <b>Закупівля ${orderNo(o.id)}</b> · ✅ рахунок № ${h(o.invoice_no)} додано`
       : o.reinvoice ? `🔁 <b>Переробіть рахунок № ${h(o.reinvoice)} · ${orderNo(o.id)}</b>\nЗакупівлю змінив менеджер — оновіть рахунок${o.waybill_no ? ' і накладну' : ''} на цей склад${Number(o.paid_amount) > 0 ? ` (уже оплачено ${m2(o.paid_amount)} грн${Number(o.paid_amount) < o.total - 0.004 ? `, до доплати ${m2(o.total - o.paid_amount)} грн` : ''})` : ''}`
         : `🧾 <b>Потрібен рахунок · ${orderNo(o.id)}</b>${mode === 'changed' ? ' <i>(закупівлю змінено)</i>' : ''}`;
-    return `${head}\nПартнер: «${h(o.partner)}»\n\n`
+    const what = !done && o.reinvoice ? await changesSince(o) : [];
+    const whatTxt = what.length ? `\n\n<b>Що змінилось:</b>\n${what.slice(0, 25).map((x) => `• ${h(x)}`).join('\n')}${what.length > 25 ? `\n…і ще ${what.length - 25}` : ''}` : '';
+    return `${head}${whatTxt}\nПартнер: «${h(o.partner)}»\n\n`
       + `<b>Рахунок на:</b>\n${h(o.entity)}\n${o.delivery === 'pickup' ? '🚗 <b>Самовивіз</b> — партнер забирає всю закупівлю зі складу\n' : ''}\n<b>Товари:</b>\n${lines.join('\n')}\n\n<b>Разом: ${m2(o.total)} грн</b> (з ПДВ)`
       + `${o.comment ? `\n<i>Коментар: ${h(String(o.comment).slice(0, 200))}</i>` : ''}${done ? '' : '\n\n↩️ Надішліть рахунок <b>відповіддю на це повідомлення</b>'}`;
   }

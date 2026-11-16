@@ -10458,13 +10458,34 @@ ${[...checks, ...itemLines.slice(0, 20), ...more].join("\n")}${!kind ? "\n\n<b>\
   const finChat = async () => (await db.get(`SELECT value FROM settings WHERE key = 'b2b_fin_chat'`))?.value || "";
   const orderFull = (id) => db.get(`SELECT o.*, p.name AS partner FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id WHERE o.id = ?`, [id]);
   const firstLine2 = (e) => String(e || "").split("\n")[0];
+  async function changesSince(o) {
+    const rows = await db.all(`SELECT action FROM b2b_order_log WHERE order_id = ? ORDER BY id`, [o.id]);
+    let from = 0;
+    rows.forEach((r, i) => {
+      if (/рахунок перевиставлено|рахунок\/накладну перероблено|рахунок( і накладну)? перероблено/.test(r.action)) from = i + 1;
+    });
+    const out = [];
+    for (const r of rows.slice(from)) {
+      if (!/треба переробити/.test(r.action)) continue;
+      let t = r.action.replace(/ · рахунок № .*?треба переробити.*$/, "").replace(/ — разом [^·]*$/, "");
+      t = t.replace(/^змінив [^:]*: /, "");
+      for (const part of t.startsWith("\u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u044F") ? [t] : t.split("; ")) if (part && !out.includes(part)) out.push(part);
+    }
+    return out;
+  }
   async function reqText(o, { mode = "", done = false } = {}) {
     const items = await db.all(`SELECT name, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
     const lines = items.slice(0, 50).map((i) => `${h5(i.name)} \u2014 ${i.qty} \u0448\u0442 \u2014 ${m22(i.price)}`);
     if (items.length > 50) lines.push(`\u2026\u0456 \u0449\u0435 ${items.length - 50} \u043F\u043E\u0437.`);
     const head = done ? `\u{1F9FE} <b>\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}</b> \xB7 \u2705 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h5(o.invoice_no)} \u0434\u043E\u0434\u0430\u043D\u043E` : o.reinvoice ? `\u{1F501} <b>\u041F\u0435\u0440\u0435\u0440\u043E\u0431\u0456\u0442\u044C \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h5(o.reinvoice)} \xB7 ${orderNo(o.id)}</b>
 \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0440\u0430\u0445\u0443\u043D\u043E\u043A${o.waybill_no ? " \u0456 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0443" : ""} \u043D\u0430 \u0446\u0435\u0439 \u0441\u043A\u043B\u0430\u0434${Number(o.paid_amount) > 0 ? ` (\u0443\u0436\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E ${m22(o.paid_amount)} \u0433\u0440\u043D${Number(o.paid_amount) < o.total - 4e-3 ? `, \u0434\u043E \u0434\u043E\u043F\u043B\u0430\u0442\u0438 ${m22(o.total - o.paid_amount)} \u0433\u0440\u043D` : ""})` : ""}` : `\u{1F9FE} <b>\u041F\u043E\u0442\u0440\u0456\u0431\u0435\u043D \u0440\u0430\u0445\u0443\u043D\u043E\u043A \xB7 ${orderNo(o.id)}</b>${mode === "changed" ? " <i>(\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0437\u043C\u0456\u043D\u0435\u043D\u043E)</i>" : ""}`;
-    return `${head}
+    const what = !done && o.reinvoice ? await changesSince(o) : [];
+    const whatTxt = what.length ? `
+
+<b>\u0429\u043E \u0437\u043C\u0456\u043D\u0438\u043B\u043E\u0441\u044C:</b>
+${what.slice(0, 25).map((x) => `\u2022 ${h5(x)}`).join("\n")}${what.length > 25 ? `
+\u2026\u0456 \u0449\u0435 ${what.length - 25}` : ""}` : "";
+    return `${head}${whatTxt}
 \u041F\u0430\u0440\u0442\u043D\u0435\u0440: \xAB${h5(o.partner)}\xBB
 
 <b>\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430:</b>
@@ -11005,7 +11026,7 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
     const removed = cur.filter((i, n) => !kept.has(n));
     if (mergedIdx.size) changes.push("\u0440\u044F\u0434\u043A\u0438 \u0442\u043E\u0432\u0430\u0440\u0443 \u0437 \u043E\u0434\u043D\u0430\u043A\u043E\u0432\u043E\u044E \u0446\u0456\u043D\u043E\u044E \u043E\u0431\u2019\u0454\u0434\u043D\u0430\u043D\u043E");
     for (const i of removed) changes.push(`\u2212 ${i.name} \xD7 ${i.qty} (\u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E)`);
-    if (ent.id !== o.entity_id) changes.push(`\u044E\u0440\u043E\u0441\u043E\u0431\u0430: ${firstLine(ent.text)}`);
+    if (ent.id !== o.entity_id) changes.push(`\u044E\u0440\u043E\u0441\u043E\u0431\u0430: ${firstLine(o.entity) || "\u2014"} \u2192 ${firstLine(ent.text)}`);
     if (comment !== (o.comment || "")) changes.push("\u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440");
     if (!changes.length) return { ok: true, changed: false };
     const invoiced = Boolean(o.invoice_no) && INVOICED.includes(o.status);

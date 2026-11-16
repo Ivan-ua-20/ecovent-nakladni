@@ -169,7 +169,7 @@ export function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice 
     const removed = cur.filter((i, n) => !kept.has(n));
     if (mergedIdx.size) changes.push('рядки товару з однаковою ціною об’єднано');
     for (const i of removed) changes.push(`− ${i.name} × ${i.qty} (прибрано)`);
-    if (ent.id !== o.entity_id) changes.push(`юрособа: ${firstLine(ent.text)}`);
+    if (ent.id !== o.entity_id) changes.push(`юрособа: ${firstLine(o.entity) || '—'} → ${firstLine(ent.text)}`);
     if (comment !== (o.comment || '')) changes.push('коментар');
     if (!changes.length) return { ok: true, changed: false };
 

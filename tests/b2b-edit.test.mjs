@@ -106,6 +106,9 @@ await req('POST', `/api/b2b/orders/${s1.id}/reinvoice-request`);
 const fin = tg.find((m) => String(m.chat_id) === '-900');
 assert.match(fin.text, /Переробіть рахунок № СФ-1 · B2B-/);
 assert.match(fin.text, /уже оплачено 13[\s ]500,00 грн, до доплати 9[\s ]000,00 грн/);
+// що саме змінилось після рахунку — обидві правки, без повторів
+assert.match(fin.text, /<b>Що змінилось:<\/b>\n• [^\n]*: 1 → 2 шт\n• коментар/);
+assert.ok(!/разом|треба переробити/.test(fin.text.split('Що змінилось')[1].split('Партнер')[0]), 'без службових хвостів');
 assert.ok((await req('GET', `/api/b2b/orders/${s1.id}`)).order.reinvoice_sent, 'видно, що надіслано');
 assert.match(await errOf(() => req('POST', `/api/b2b/orders/${s1.id}/reinvoice-request`, null, A)), /прав|доступ/i, 'партнер — ні');
 assert.match((await req('GET', `/api/b2b/p/orders/${s1.id}`, null, A)).order.reinvoice, /СФ-1/, 'партнер бачить');
