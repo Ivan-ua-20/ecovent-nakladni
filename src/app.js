@@ -26,7 +26,7 @@ import { mountTelephony } from './modules/telephony/index.js';
 
 // shared — стан, що живе довше за одне звернення (на Cloudflare застосунок створюється на кожен запит,
 // а об'єкт shared з pages-entry.js — один на ізолят): мітка останньої чистки, кеш чеків, замок синхронізації.
-export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, odbBase = ODB_BASE, shared = {} }) {
+export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, odbBase = ODB_BASE, shared = {}, sleepFn = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const app = new Hono();
   // Ліміт зовнішніх запитів на одне звернення (Cloudflare: 50). Коли вичерпано — відповідаємо «триває»,
   // і браузер сам повторює запит; пошук продовжується з того місця, де зупинився.
@@ -87,7 +87,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
 
   // Публічні входи модулів для інших модулів.
   const services = {};
-  const ctx = { db, fetchFn, services, onCleanup, onTick, onCron, cronActive, runCleanup, shared };
+  const ctx = { db, fetchFn, services, onCleanup, onTick, onCron, cronActive, runCleanup, shared, sleepFn };
 
   // Порядок важливий: auth першим (його маршрути входу не потребують сесії, а далі стоїть перевірка входу).
   mountAuth(app, ctx);

@@ -24,12 +24,14 @@ const CALLS = [
 ];
 const binCalls = [];
 let badKey = false;
+let tooFrequent = 0; // скільки наступних запитів Binotel відповість «занадто часто»
 const fetchFn = async (url, opts = {}) => {
   const u = new URL(url);
   if (u.host === 'api.binotel.com') {
     const b = JSON.parse(opts.body);
     assert.equal(u.pathname, '/api/4.0/stats/list-of-calls-for-period.json');
     if (badKey || b.key !== 'k123' || b.secret !== 's456') return new Response(JSON.stringify({ status: 'error', code: 120, message: 'Wrong key or secret' }));
+    if (tooFrequent > 0) { tooFrequent--; return new Response(JSON.stringify({ status: 'error', code: 105, message: 'Requests are too frequent. You can do this request after 5 sec.' })); }
     assert.ok(b.stopTime - b.startTime <= 86399, 'період не довший за 24 год');
     binCalls.push([b.startTime, b.stopTime]);
     const list = CALLS.filter((c) => c.startTime >= b.startTime && c.startTime <= b.stopTime);
@@ -37,7 +39,8 @@ const fetchFn = async (url, opts = {}) => {
   }
   throw new Error(`неочікуваний запит ${url}`);
 };
-const mk = () => createApp({ db, fetchFn });
+const sleeps = [];
+const mk = () => createApp({ db, fetchFn, sleepFn: async (ms) => { sleeps.push(ms); } });
 const setup = await mk().request('/api/auth/setup', { method: 'POST', body: JSON.stringify({ login: 'owner', password: 'secret123' }), headers: { 'Content-Type': 'application/json' } });
 const H = { 'Content-Type': 'application/json', Cookie: setup.headers.get('set-cookie').split(';')[0] };
 const req = async (method, path, body, headers = H) => {
@@ -85,13 +88,26 @@ assert.equal((await db.get(`SELECT value FROM settings WHERE key = 'binotel_secr
 binCalls.length = 0;
 cr = (await req('POST', '/api/cron/run/binotel', null, { 'X-Cron-Key': cronKey })).j;
 assert.equal(cr.ok, true);
-assert.equal(cr.result.chunks, 8);
-assert.equal(binCalls.length, 8);
+assert.equal(cr.result.chunks, 5);
+assert.equal(binCalls.length, 5);
+assert.deepEqual(sleeps, [5500, 5500, 5500, 5500], 'між запитами до Binotel — пауза');
 const st1 = JSON.parse((await db.get(`SELECT value FROM settings WHERE key = 'binotel_sync'`)).value);
 assert.ok(Math.abs(binCalls[0][0] - (Math.floor(Date.now() / 1000) - 60 - 90 * 86400)) < 5, 'початок — 90 днів тому');
-assert.equal(st1.to, binCalls[7][1] + 1, 'наступного разу — з місця зупинки');
+assert.equal(st1.to, binCalls[4][1] + 1, 'наступного разу — з місця зупинки');
 cr = (await req('POST', '/api/cron/run/binotel', null, { 'X-Cron-Key': cronKey })).j;
 assert.equal(cr.result.skipped, 'ще рано', 'не частіше разу на 4 хв');
+// Binotel: «занадто часто» — чекаємо й повторюємо; двічі поспіль — зупиняємось без помилки, продовжимо наступного разу
+binCalls.length = 0; sleeps.length = 0; tooFrequent = 1;
+r = await req('POST', '/api/tel/sync');
+assert.equal(r.status, 200);
+assert.equal(r.j.chunks, 5);
+assert.ok(sleeps.includes(5500), 'паузи між запитами');
+assert.ok(sleeps.includes(5 * 1000 + 500), 'чекали, скільки просив Binotel (5 с + запас)');
+tooFrequent = 2;
+r = await req('POST', '/api/tel/sync');
+assert.equal(r.status, 200, '«занадто часто» — не помилка');
+assert.equal(r.j.chunks, 0);
+assert.equal(r.j.sync.error, '');
 // «Оновити зараз» доводить до кінця
 let guard = 0;
 for (;;) {

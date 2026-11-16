@@ -18597,7 +18597,8 @@ async function binotelCallsForPeriod(fetchFn, cred, startTime, stopTime) {
 
 // src/modules/telephony/index.js
 var BACKFILL_DAYS = 90;
-var CHUNKS_PER_RUN = 8;
+var CHUNKS_PER_RUN = 5;
+var GAP_MS2 = 5500;
 var EVERY_MS2 = 4 * 6e4;
 var OVERLAP_S = 15 * 60;
 var KEEP_DAYS4 = 400;
@@ -18617,7 +18618,7 @@ var shiftAt = (at, days2) => new Date(Date.parse(`${String(at).slice(0, 19).repl
 var hint = (k) => k ? `${MASK}${String(k).slice(-4)}` : "";
 function mountTelephony(app, { db, fetchFn, onCron = () => {
 }, onCleanup = () => {
-} }) {
+}, sleepFn = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const getVal = async (key) => (await db.get(`SELECT value FROM settings WHERE key = ?`, [key]))?.value || "";
   const putVal = (key, value) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]);
   const creds = async () => {
@@ -18659,8 +18660,23 @@ function mountTelephony(app, { db, fetchFn, onCron = () => {
     let error = "";
     try {
       while (chunks < CHUNKS_PER_RUN && to < now) {
+        if (chunks) await sleepFn(GAP_MS2);
         const stop = Math.min(to + BINOTEL_MAX_PERIOD - 1, now);
-        saved += await saveCalls(await binotelCallsForPeriod(fetchFn, cur, to, stop));
+        let list;
+        try {
+          list = await binotelCallsForPeriod(fetchFn, cur, to, stop);
+        } catch (e) {
+          if (!/too frequent/i.test(String(e.message))) throw e;
+          const sec = Math.min(15, Number(String(e.message).match(/after (\d+)/i)?.[1]) || 5);
+          await sleepFn(sec * 1e3 + 500);
+          try {
+            list = await binotelCallsForPeriod(fetchFn, cur, to, stop);
+          } catch (e2) {
+            if (/too frequent/i.test(String(e2.message))) break;
+            throw e2;
+          }
+        }
+        saved += await saveCalls(list);
         to = stop + 1;
         chunks++;
       }
@@ -18724,7 +18740,13 @@ function mountTelephony(app, { db, fetchFn, onCron = () => {
     if (!key || !secret) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043A\u043B\u044E\u0447 \u0456 \u0441\u0435\u043A\u0440\u0435\u0442 Binotel (Binotel \u2192 \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 API).");
     if (key.length > 200 || secret.length > 200) throw fail(400, "\u0417\u0430\u0434\u043E\u0432\u0433\u0438\u0439 \u043A\u043B\u044E\u0447 \u0430\u0431\u043E \u0441\u0435\u043A\u0440\u0435\u0442.");
     const now = Math.floor(Date.now() / 1e3);
-    await binotelCallsForPeriod(fetchFn, { key, secret }, now - 600, now);
+    try {
+      await binotelCallsForPeriod(fetchFn, { key, secret }, now - 600, now);
+    } catch (e) {
+      if (!/too frequent/i.test(String(e.message))) throw e;
+      await sleepFn(6e3);
+      await binotelCallsForPeriod(fetchFn, { key, secret }, now - 600, now);
+    }
     await db.batch([
       [`INSERT INTO settings (key, value) VALUES ('binotel_key', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key]],
       [`INSERT INTO settings (key, value) VALUES ('binotel_secret', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [secret]]
@@ -18785,7 +18807,7 @@ function mountTelephony(app, { db, fetchFn, onCron = () => {
 }
 
 // src/app.js
-function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, odbBase = ODB_BASE, shared: shared2 = {} }) {
+function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, odbBase = ODB_BASE, shared: shared2 = {}, sleepFn = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const app = new Hono3();
   let usedSubrequests = 0;
   const fetchFn = async (...args) => {
@@ -18837,7 +18859,7 @@ function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infinity, o
     return shared2.cronOn;
   }
   const services = {};
-  const ctx = { db, fetchFn, services, onCleanup, onTick, onCron, cronActive, runCleanup, shared: shared2 };
+  const ctx = { db, fetchFn, services, onCleanup, onTick, onCron, cronActive, runCleanup, shared: shared2, sleepFn };
   mountAuth(app, ctx);
   mountRefs(app, ctx);
   services.nakladni = mountNakladni(app, ctx);
