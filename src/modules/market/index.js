@@ -7,6 +7,7 @@ import { shopAllowed, accessOf } from '../../core/auth.js';
 import { rzOrdersSearch, rzItemComments, rzSuccessStatuses, rzOrderChat, rzSendMessage, rzMessageCounts, rzUnreadChats, rzSetOrderStatus, rzGetOrder } from '../../integrations/rozetka.js';
 import { promOrders } from '../../integrations/prom.js';
 import { epcOrdersPage } from '../../integrations/epicentr.js';
+import { mountMarketCrm } from './crm.js';
 
 const KEEP_DAYS = 45;
 const HISTORY_YEARS = 4; // Розетка: історія типово за 4 роки (період можна обрати), зберігається весь цей час
@@ -661,6 +662,10 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     if (grp === 'call') { where.push(CALL_SQL); params.push(...callParams()); }
     else if (grp === 'dups') where.push(DUPS_SQL);
     else if (grp) { where.push(`${groupSql(SUCCESS_SQL)} = ?`); params.push(okIds, grp); }
+    // LP-CRM: no — ще не внесені/не прив'язані, yes — прив'язані
+    const crmF = rz ? String(c.req.query('crm') || '') : '';
+    if (crmF === 'no') where.push(`crm_id = '' AND crm_code = ''`);
+    if (crmF === 'yes') where.push(`(crm_id != '' OR crm_code != '')`);
     const cancel = grp === 'cancelled' ? String(c.req.query('cancel') || '') : '';
     if (cancel === 'client') where.push(`status IN (${inList(RZ_CANCEL_CLIENT)})`);
     if (cancel === 'auto') where.push(`status IN (${inList(RZ_CANCEL_AUTO)})`);
@@ -768,6 +773,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     if (!o) throw fail(404, 'Замовлення не знайдено.');
     return o;
   };
+  mountMarketCrm(app, { db, fetchFn, services, onCron, rzOrderOf });
   const markAsked = async (o, user, via) => {
     const at = nowIso();
     const by = String(user?.name || user?.login || '').slice(0, 80);

@@ -3,8 +3,17 @@
 
 export const schema = {
   name: 'market',
-  version: 7,
+  version: 8,
   tables: [
+  // Товар Розетки → товар LP-CRM (для «Створити в LP-CRM»; запам'ятовується після першого разу).
+  `CREATE TABLE IF NOT EXISTS mp_crm_items (
+    mp TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    product_id INTEGER NOT NULL,
+    name TEXT DEFAULT '',
+    updated_at TEXT DEFAULT '',
+    PRIMARY KEY (mp, item_id)
+  )`,
   // mp — rozetka | prom | epc; account_id — магазин у налаштуваннях доставки; items — JSON [{ name, qty, price }].
   `CREATE TABLE IF NOT EXISTS mp_orders (
     mp TEXT NOT NULL,
@@ -60,6 +69,7 @@ export const schema = {
   ],
   // після додавання колонок: дублі (кілька замовлень одного покупця) — пошук за останніми 9 цифрами телефону й за активними
   after: [
+    `CREATE INDEX IF NOT EXISTS mp_orders_crm ON mp_orders (crm_code)`,
     `CREATE INDEX IF NOT EXISTS mp_orders_p9 ON mp_orders (substr(phone, -9))`,
     `CREATE INDEX IF NOT EXISTS mp_orders_active ON mp_orders (mp, status_group)`,
   ],
@@ -108,5 +118,12 @@ export const schema = {
     ['mp_orders', 'address', "TEXT DEFAULT ''"],
     ['mp_orders', 'comment', "TEXT DEFAULT ''"],
     ['mp_orders', 'dup_of', "TEXT DEFAULT ''"],
+    // Прив'язка до LP-CRM: № замовлення (crm_id), його код (crm_code, order_id у LP-CRM), коли й хто, статус у LP-CRM.
+    ['mp_orders', 'crm_id', "TEXT DEFAULT ''"],
+    ['mp_orders', 'crm_code', "TEXT DEFAULT ''"],
+    ['mp_orders', 'crm_at', "TEXT DEFAULT ''"],
+    ['mp_orders', 'crm_by', "TEXT DEFAULT ''"],
+    ['mp_orders', 'crm_status', "TEXT DEFAULT ''"],
+    ['mp_orders', 'crm_checked_at', "TEXT DEFAULT ''"],
   ],
 };
