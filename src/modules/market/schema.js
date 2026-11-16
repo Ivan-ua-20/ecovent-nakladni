@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'market',
-  version: 9,
+  version: 10,
   tables: [
   // Товари магазинів маркетплейсів (з замовлень) і їх прив'язка до товарів LP-CRM (див. items.js).
   // Кілька товарів маркетплейсу (дублі, інший магазин) можуть вести до одного product_id; link_source — manual | learned |
@@ -161,5 +161,8 @@ export const schema = {
     ['mp_orders', 'crm_by', "TEXT DEFAULT ''"],
     ['mp_orders', 'crm_status', "TEXT DEFAULT ''"],
     ['mp_orders', 'crm_checked_at', "TEXT DEFAULT ''"],
+    // «Подзвонив»: менеджер набрав покупця скасованого / неоплаченого замовлення (група «Передзвонити», ранкове нагадування).
+    ['mp_orders', 'called_at', "TEXT DEFAULT ''"],
+    ['mp_orders', 'called_by', "TEXT DEFAULT ''"],
   ],
 };

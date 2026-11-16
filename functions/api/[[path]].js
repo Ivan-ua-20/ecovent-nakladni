@@ -4856,7 +4856,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     const names = await getJson2("an_status_names") || {};
     const users = await db.all(`SELECT tg_chat_id, crm_logins FROM users WHERE active = 1 AND tg_chat_id != '' AND crm_logins != ''`);
     const owners = (await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'owner'`)).map((u) => u.tg_chat_id);
-    const esc2 = (s2) => String(s2 ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const esc3 = (s2) => String(s2 ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     let n = 0;
     const recent = addDays(kyivDay(), -recentDays);
     for (const [ttn, list] of dups) {
@@ -4867,9 +4867,9 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
         continue;
       }
       const tel = ttn.startsWith("tel:") ? ttn.slice(4) : "";
-      const text = (tel ? `\u26A0\uFE0F <b>\u0414\u0443\u0431\u043B\u044C \u0437\u0430 \u0442\u0435\u043B\u0435\u0444\u043E\u043D\u043E\u043C 0${esc2(tel)}</b> \u0443 LP-CRM \u2014 ${list.length} \u043F\u0440\u0438\u0439\u043D\u044F\u0442\u0438\u0445 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0437 \u043E\u0434\u043D\u0438\u043C \u043D\u043E\u043C\u0435\u0440\u043E\u043C:
-` : `\u26A0\uFE0F <b>\u0414\u0443\u0431\u043B\u044C \u0422\u0422\u041D ${esc2(ttn)}</b> \u0443 LP-CRM \u2014 \u0446\u044F \u0422\u0422\u041D \u0454 \u0432 ${list.length} \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F\u0445:
-`) + list.map((r) => `\u2022 \u2116 <b>${esc2(r.code)}</b> \xB7 ${esc2(names[r.status] || `\u0441\u0442\u0430\u0442\u0443\u0441 ${r.status}`)} \xB7 ${esc2(r.day.split("-").reverse().join("."))}${r.buyer ? ` \xB7 ${esc2(r.buyer)}` : ""}${r.user ? ` \xB7 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 ${esc2(r.user)}` : ""}`).join("\n") + (tel ? "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0434\u0432\u0456\u0447\u0456." : "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u043F\u043E\u043C\u0438\u043B\u043A\u0430 (\u043E\u0434\u043D\u0430 \u043F\u043E\u0441\u0438\u043B\u043A\u0430 \u043D\u0430 \u0434\u0432\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F).");
+      const text = (tel ? `\u26A0\uFE0F <b>\u0414\u0443\u0431\u043B\u044C \u0437\u0430 \u0442\u0435\u043B\u0435\u0444\u043E\u043D\u043E\u043C 0${esc3(tel)}</b> \u0443 LP-CRM \u2014 ${list.length} \u043F\u0440\u0438\u0439\u043D\u044F\u0442\u0438\u0445 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0437 \u043E\u0434\u043D\u0438\u043C \u043D\u043E\u043C\u0435\u0440\u043E\u043C:
+` : `\u26A0\uFE0F <b>\u0414\u0443\u0431\u043B\u044C \u0422\u0422\u041D ${esc3(ttn)}</b> \u0443 LP-CRM \u2014 \u0446\u044F \u0422\u0422\u041D \u0454 \u0432 ${list.length} \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F\u0445:
+`) + list.map((r) => `\u2022 \u2116 <b>${esc3(r.code)}</b> \xB7 ${esc3(names[r.status] || `\u0441\u0442\u0430\u0442\u0443\u0441 ${r.status}`)} \xB7 ${esc3(r.day.split("-").reverse().join("."))}${r.buyer ? ` \xB7 ${esc3(r.buyer)}` : ""}${r.user ? ` \xB7 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 ${esc3(r.user)}` : ""}`).join("\n") + (tel ? "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0434\u0432\u0456\u0447\u0456." : "\n\n\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0447\u0438 \u043D\u0435 \u043F\u043E\u043C\u0438\u043B\u043A\u0430 (\u043E\u0434\u043D\u0430 \u043F\u043E\u0441\u0438\u043B\u043A\u0430 \u043D\u0430 \u0434\u0432\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F).");
       const logins = new Set(list.map((r) => r.user).filter(Boolean));
       const chats = [.../* @__PURE__ */ new Set([...users.filter((u) => crmLogins(u.crm_logins).some((l) => logins.has(l))).map((u) => u.tg_chat_id), ...owners])];
       if (chats.length) await services.notify?.sendText({ chatIds: chats }, text).catch(() => 0);
@@ -5675,10 +5675,10 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
           }
           return x;
         };
-        const dm = /* @__PURE__ */ new Map();
+        const dm2 = /* @__PURE__ */ new Map();
         const gm = /* @__PURE__ */ new Map();
         for (const r3 of rows) {
-          const d = add(dm, r3.day, () => ({ day: r3.day, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
+          const d = add(dm2, r3.day, () => ({ day: r3.day, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
           const g = add(gm, `${r3.dept}|${r3.src}|${r3.user}|${r3.status}|${r3.deliv}`, () => ({ dept: r3.dept, src: r3.src, user: r3.user, status: r3.status, deliv: r3.deliv, rev: 0, net: 0, cnt: 0, rcnt: 0 }));
           for (const x of [d, g]) {
             x.rev += r3.rev || 0;
@@ -5700,7 +5700,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
           }
         }
         const fin = (m) => [...m.values()].map(({ orders, rorders, ...x }) => ({ ...x, cnt: orders.size, rcnt: rorders.size }));
-        return { daily: [...dm.values()], groups: [...gm.values()], brands: fin(bm), cats: fin(cm), top: top3 };
+        return { daily: [...dm2.values()], groups: [...gm.values()], brands: fin(bm), cats: fin(cm), top: top3 };
       }
       const [daily, groups, brands2, cats, top2] = await Promise.all([
         db.all(`SELECT o.day AS day, ${orderMeasures(itemLevel)} ${q.from} GROUP BY o.day`, q.params),
@@ -8423,7 +8423,7 @@ var TTN_FIELDS = ["", "additional_2", "additional_3", "additional_4", "delivery_
 var newCode = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Math.random() * 9e4))}`;
 function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, hooks = {}, onCron = () => {
 } }) {
-  const { itemsTxt, itemsDiff, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, linePrice, aggLines, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah4, h: h8 } = orders;
+  const { itemsTxt, itemsDiff, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf: limitsOf2, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, linePrice, aggLines, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah5, h: h8 } = orders;
   const userName8 = (u) => u?.name || u?.login || "";
   const SELECT = `SELECT o.*, s.status AS supply_status, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id) AS files,
     (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = o.id AND f.kind = 'label') AS labels
@@ -8658,11 +8658,11 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     const inOpen = open && own.openId === open.id ? own.total : 0;
     const openAfter = (open?.total || 0) - inOpen + total;
     if (openAfter > lim.open + 4e-3) {
-      throw fail(400, `\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F \u043F\u0435\u0440\u0435\u0432\u0438\u0449\u0438\u0442\u044C \u043B\u0456\u043C\u0456\u0442 ${uah4(lim.open)} (\u0437\u0430\u0440\u0430\u0437 ${uah4((open?.total || 0) - inOpen)}, \u0446\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${uah4(total)}). \u0421\u0444\u043E\u0440\u043C\u0443\u0439\u0442\u0435 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E (\u043E\u0431\u0435\u0440\u0456\u0442\u044C \u044E\u0440\u043E\u0441\u043E\u0431\u0443) \u2014 \u043F\u0456\u0441\u043B\u044F \u0446\u044C\u043E\u0433\u043E \u043C\u043E\u0436\u043D\u0430 \u043F\u0440\u043E\u0434\u043E\u0432\u0436\u0443\u0432\u0430\u0442\u0438.`);
+      throw fail(400, `\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F \u043F\u0435\u0440\u0435\u0432\u0438\u0449\u0438\u0442\u044C \u043B\u0456\u043C\u0456\u0442 ${uah5(lim.open)} (\u0437\u0430\u0440\u0430\u0437 ${uah5((open?.total || 0) - inOpen)}, \u0446\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${uah5(total)}). \u0421\u0444\u043E\u0440\u043C\u0443\u0439\u0442\u0435 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E (\u043E\u0431\u0435\u0440\u0456\u0442\u044C \u044E\u0440\u043E\u0441\u043E\u0431\u0443) \u2014 \u043F\u0456\u0441\u043B\u044F \u0446\u044C\u043E\u0433\u043E \u043C\u043E\u0436\u043D\u0430 \u043F\u0440\u043E\u0434\u043E\u0432\u0436\u0443\u0432\u0430\u0442\u0438.`);
     }
     const unpaid = await unpaidTotal(p.id) - inOpen;
     if (unpaid + total > lim.unpaid + 4e-3) {
-      throw fail(400, `\u041B\u0456\u043C\u0456\u0442 \u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0438\u0445 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C \u2014 ${uah4(lim.unpaid)}: \u0437\u0430\u0440\u0430\u0437 \u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E ${uah4(unpaid)}. \u0421\u043F\u0435\u0440\u0448\u0443 \u043E\u043F\u043B\u0430\u0442\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0430\u0431\u043E \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.`);
+      throw fail(400, `\u041B\u0456\u043C\u0456\u0442 \u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0438\u0445 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C \u2014 ${uah5(lim.unpaid)}: \u0437\u0430\u0440\u0430\u0437 \u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E ${uah5(unpaid)}. \u0421\u043F\u0435\u0440\u0448\u0443 \u043E\u043F\u043B\u0430\u0442\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0430\u0431\u043E \u0437\u0432\u0435\u0440\u043D\u0456\u0442\u044C\u0441\u044F \u0434\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430.`);
     }
     return { supplyId: null, toOpen: true, openId: open?.id || null, items, total };
   }
@@ -8733,8 +8733,8 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
       let price = w.price ?? i.price;
       const rrp = w.rrp ?? i.rrp;
       if (w.price == null && w.rrp != null && r22(w.rrp) !== r22(i.rrp) && i.rrp > 0) price = r22(i.price / i.rrp * w.rrp);
-      if (r22(rrp) !== r22(i.rrp)) list.push(`${i.name}: \u0420\u0420\u0426 ${uah4(i.rrp)} \u2192 ${uah4(rrp)}`);
-      if (r22(price) !== r22(i.price)) list.push(`${i.name}: \u0446\u0456\u043D\u0430 ${uah4(i.price)} \u2192 ${uah4(price)}`);
+      if (r22(rrp) !== r22(i.rrp)) list.push(`${i.name}: \u0420\u0420\u0426 ${uah5(i.rrp)} \u2192 ${uah5(rrp)}`);
+      if (r22(price) !== r22(i.price)) list.push(`${i.name}: \u0446\u0456\u043D\u0430 ${uah5(i.price)} \u2192 ${uah5(price)}`);
       if (r22(price) !== r22(i.price) || r22(rrp) !== r22(i.rrp)) ch.set(i.product_id, { price, rrp });
     }
     if (!ch.size) return [];
@@ -8751,10 +8751,10 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     if (!quiet) {
       const who = userName8(c.get("user")) || "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440";
       const total = (await db.get(`SELECT total FROM b2b_orders WHERE id = ?`, [o.id])).total;
-      await log(o.id, c.get("user"), `\u0446\u0456\u043D\u0438 \u0437\u043C\u0456\u043D\u0438\u0432 ${who}: ${list.join("; ")} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah4(total)}`.slice(0, 1800));
+      await log(o.id, c.get("user"), `\u0446\u0456\u043D\u0438 \u0437\u043C\u0456\u043D\u0438\u0432 ${who}: ${list.join("; ")} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah5(total)}`.slice(0, 1800));
       await tgPartner(o.partner_id, `\u270F\uFE0F <b>\u0426\u0456\u043D\u0438 \u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0438\u0432 ${h8(who)}</b> (${h8(o.client_name)})
 ${list.slice(0, 20).map(h8).join("\n")}
-<b>\u0420\u0430\u0437\u043E\u043C: ${uah4(total)}</b>
+<b>\u0420\u0430\u0437\u043E\u043C: ${uah5(total)}</b>
 ${link(c, `pclients/${o.id}`)}`);
     }
     return list;
@@ -8808,7 +8808,7 @@ ${link(c, `pclients/${o.id}`)}`);
     if (["paid", "done"].includes(st) || !o.supply_id && o.paid_at) return;
     if (s2?.pay_terms === "postpay" && !overdueDays(s2)) return;
     const p = await db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [o.partner_id]);
-    await tgAdmins(`\u26A0\uFE0F <b>\u0412\u0456\u0434\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u043E\u043F\u043B\u0430\u0442\u0438</b>: ${orderNo(o.id)} (${h8(o.client_name)}, ${uah4(o.total)}) \xAB${h8(p?.name || "")}\xBB \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 CRM, \u0430 ${!o.supply_id ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0435" : st === "open" ? `\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.supply_id)} \u0449\u0435 \u0431\u0435\u0437 \u0440\u0430\u0445\u0443\u043D\u043A\u0443` : `\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.supply_id)} \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0430 (${ORDER_STATUS[st] || st})`}.
+    await tgAdmins(`\u26A0\uFE0F <b>\u0412\u0456\u0434\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u043E\u043F\u043B\u0430\u0442\u0438</b>: ${orderNo(o.id)} (${h8(o.client_name)}, ${uah5(o.total)}) \xAB${h8(p?.name || "")}\xBB \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 CRM, \u0430 ${!o.supply_id ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0435" : st === "open" ? `\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.supply_id)} \u0449\u0435 \u0431\u0435\u0437 \u0440\u0430\u0445\u0443\u043D\u043A\u0443` : `\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.supply_id)} \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0430 (${ORDER_STATUS[st] || st})`}.
 ${link(c, `b2bclients/${o.id}`)}`);
   }
   function senderOf(c, siteSetting) {
@@ -8871,7 +8871,7 @@ ${link(base, `b2bclients/${o.id}`)}` : ""}`);
     }
   };
   const tgNew = async (c, p, id, f, it, verb = "\u041D\u043E\u0432\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430") => {
-    const lines = it.items.slice(0, 60).map((i) => `${h8(i.name)} \u2014 ${i.qty} \u0448\u0442 \u2014 ${uah4(i.price)}`).join("\n");
+    const lines = it.items.slice(0, 60).map((i) => `${h8(i.name)} \u2014 ${i.qty} \u0448\u0442 \u2014 ${uah5(i.price)}`).join("\n");
     const text = `${f.urgent ? "\u{1F525} <b>\u0422\u0415\u0420\u041C\u0406\u041D\u041E\u0412\u041E</b>\n" : ""}\u{1F4E6} <b>${verb} ${orderNo(id)}</b> \u0432\u0456\u0434 \xAB${h8(p.name)}\xBB
 
 <b>\u041A\u043B\u0456\u0454\u043D\u0442:</b> ${h8(f.client_name)}, ${h8(f.client_phone)}${f.ttn ? `
@@ -8881,7 +8881,7 @@ ${it.supplyId ? `\u0406\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u
 <b>\u0422\u043E\u0432\u0430\u0440\u0438:</b>
 ${lines}
 
-<b>\u0420\u0430\u0437\u043E\u043C: ${uah4(it.total)}</b>`;
+<b>\u0420\u0430\u0437\u043E\u043C: ${uah5(it.total)}</b>`;
     await tgAdmins(`${text}
 
 ${link(c, `b2bclients/${id}`)}`);
@@ -9007,11 +9007,11 @@ ${link(base, `porders/${s2.id}`)}` : ""}`);
     );
     await db.batch([...itemRows(r.lastId, it.items), [
       `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
-      [r.lastId, now, userName8(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah4(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : it.draftId ? ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u2014 \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}${f.urgent ? " \xB7 \u{1F525} \u0442\u0435\u0440\u043C\u0456\u043D\u043E\u0432\u043E" : ""}: ${itemsTxt(it.items)}`.slice(0, 2e3)]
+      [r.lastId, now, userName8(u), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 \u043D\u0430 ${uah5(it.total)}${it.supplyId ? ` \u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.supplyId)}` : it.draftId ? ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u2014 \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)}` : ` \u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(it.openId)})`}${f.urgent ? " \xB7 \u{1F525} \u0442\u0435\u0440\u043C\u0456\u043D\u043E\u0432\u043E" : ""}: ${itemsTxt(it.items)}`.slice(0, 2e3)]
     ]]);
     if (it.draftId) {
       await draftAdjust(it.draftId, it.items);
-      await log(it.draftId, u, `\u0434\u043E\u0434\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(r.lastId)} (${f.client_name}): ${itemsTxt(it.items)} \u2014 ${uah4(it.total)}`);
+      await log(it.draftId, u, `\u0434\u043E\u0434\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(r.lastId)} (${f.client_name}): ${itemsTxt(it.items)} \u2014 ${uah5(it.total)}`);
     }
     if (it.openId) await rebuildOpen(it.openId);
     await tgNew(c, p, r.lastId, f, it);
@@ -9052,7 +9052,7 @@ ${link(base, `porders/${s2.id}`)}` : ""}`);
     await moveDraftItems(curDraft, curDraft || it.draftId ? oldItems : [], it.draftId, it.items);
     if (it.openId) await rebuildOpen(it.openId);
     if (cur?.status === "open" && cur.id !== it.openId) await rebuildOpen(cur.id);
-    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430: ${diff} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah4(it.total)}${it.draftId ? ` (\u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u0446\u0456 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)})` : ""}${f.urgent !== (o.urgent ? 1 : 0) ? f.urgent ? " \xB7 \u{1F525} \u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u0422\u0435\u0440\u043C\u0456\u043D\u043E\u0432\u043E\xBB" : " \xB7 \u0437\u043D\u044F\u0442\u043E \xAB\u0422\u0435\u0440\u043C\u0456\u043D\u043E\u0432\u043E\xBB" : ""}`);
+    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430: ${diff} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah5(it.total)}${it.draftId ? ` (\u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u0446\u0456 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(it.draftId)})` : ""}${f.urgent !== (o.urgent ? 1 : 0) ? f.urgent ? " \xB7 \u{1F525} \u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u0422\u0435\u0440\u043C\u0456\u043D\u043E\u0432\u043E\xBB" : " \xB7 \u0437\u043D\u044F\u0442\u043E \xAB\u0422\u0435\u0440\u043C\u0456\u043D\u043E\u0432\u043E\xBB" : ""}`);
     await tgNew(c, p, o.id, f, it, "\u0417\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430");
     return c.json({ ok: true, total: it.total });
   });
@@ -9131,16 +9131,16 @@ ${link(c, `b2bclients/${o.id}`)}`);
       if (!x) ch.push(`+ ${i.name} \xD7 ${i.qty}`);
       else {
         if (x.qty !== i.qty) ch.push(`${i.name}: ${x.qty} \u2192 ${i.qty} \u0448\u0442`);
-        if (Math.round((x.rrp || 0) * 100) !== Math.round((i.rrp || 0) * 100)) ch.push(`${i.name}: \u0420\u0420\u0426 ${uah4(x.rrp)} \u2192 ${uah4(i.rrp)}`);
-        if (Math.round(x.price * 100) !== Math.round(i.price * 100)) ch.push(`${i.name}: \u0446\u0456\u043D\u0430 ${uah4(x.price)} \u2192 ${uah4(i.price)}`);
+        if (Math.round((x.rrp || 0) * 100) !== Math.round((i.rrp || 0) * 100)) ch.push(`${i.name}: \u0420\u0420\u0426 ${uah5(x.rrp)} \u2192 ${uah5(i.rrp)}`);
+        if (Math.round(x.price * 100) !== Math.round(i.price * 100)) ch.push(`${i.name}: \u0446\u0456\u043D\u0430 ${uah5(x.price)} \u2192 ${uah5(i.price)}`);
       }
     }
     for (const x of a.items) if (!b.items.some((i) => i.product_id === x.product_id)) ch.push(`\u2212 ${x.name} \xD7 ${x.qty}`);
     return ch;
   }
   const brief = (x) => `${x.client_name}, ${phoneTxt(x.client_phone)}${x.ttn ? `, \u0422\u0422\u041D ${x.ttn}` : ""}
-${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah4(i.price)}`).join("\n")}
-   ${x.supply_id ? `\u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(x.supply_id)}` : "\u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456"} \xB7 \u0440\u0430\u0437\u043E\u043C ${uah4(x.total)}`;
+${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah5(i.price)}`).join("\n")}
+   ${x.supply_id ? `\u0456\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(x.supply_id)}` : "\u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456"} \xB7 \u0440\u0430\u0437\u043E\u043C ${uah5(x.total)}`;
   const phoneTxt = (ph) => String(ph).length === 12 ? `+${ph}` : ph;
   app.put("/api/b2b/clients/:id/edit", async (c) => {
     need(c, "b2b.admin");
@@ -9214,7 +9214,7 @@ ${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah4(i.price)}`).join(
       `UPDATE b2b_orders SET pending = ? WHERE id = ?`,
       [changes.length || crmOld ? JSON.stringify({ before, changes, by, at: now, crm_old: crmOld }) : "", o.id]
     );
-    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440: ${changes.join("; ") || "\u0431\u0435\u0437 \u0437\u043C\u0456\u043D"} \u2014 ${uah4(o.total)}${wasCrm ? ` \xB7 \u0441\u0442\u0430\u0440\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 CRM \u2116 ${oldCrm} \u0430\u043D\u0443\u043B\u044C\u043E\u0432\u0430\u043D\u043E` : ""}${changes.length ? " \xB7 \u0447\u0435\u043A\u0430\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430" : ""}`.slice(0, 1800));
+    await log(o.id, c.get("user"), `\u0437\u043C\u0456\u043D\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440: ${changes.join("; ") || "\u0431\u0435\u0437 \u0437\u043C\u0456\u043D"} \u2014 ${uah5(o.total)}${wasCrm ? ` \xB7 \u0441\u0442\u0430\u0440\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 CRM \u2116 ${oldCrm} \u0430\u043D\u0443\u043B\u044C\u043E\u0432\u0430\u043D\u043E` : ""}${changes.length ? " \xB7 \u0447\u0435\u043A\u0430\u0454 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430" : ""}`.slice(0, 1800));
     if (changes.length || wasCrm) {
       const url = link(c, `pclients/${o.id}`);
       if (wasCrm) {
@@ -9597,7 +9597,7 @@ ${link(c, `pclients/${o.id}`)}`);
     if (paid) await db.run(`UPDATE b2b_orders SET paid_amount = total, paid_at = ?, paid_by = ?, paid_note = ?, updated_at = ? WHERE id = ?`, [now, userName8(u), note, now, o.id]);
     else await db.run(`UPDATE b2b_orders SET paid_amount = 0, paid_at = '', paid_by = '', paid_note = '', updated_at = ? WHERE id = ?`, [now, o.id]);
     await log(o.id, u, paid ? `\u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443: ${note}` : "\u0437\u043D\u044F\u0442\u043E \u043F\u043E\u0437\u043D\u0430\u0447\u043A\u0443 \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB");
-    if (paid) await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E</b>: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h8(o.client_name)}) \u2014 ${uah4(o.total)}
+    if (paid) await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E</b>: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h8(o.client_name)}) \u2014 ${uah5(o.total)}
 \u{1F4AC} ${h8(note)}`);
     return c.json({ ok: true });
   });
@@ -10882,7 +10882,7 @@ var foreignInvoice = (purpose, invoiceNo) => {
   return nos.length > 0 && !nos.includes(digitsOf(invoiceNo));
 };
 function mountB2bPay(app, { db, services, orders, hooks }) {
-  const { log, tgAdmins, tgPartner, link, uah: uah4, h: h8 } = orders;
+  const { log, tgAdmins, tgPartner, link, uah: uah5, h: h8 } = orders;
   const candidatesFor = (codes) => db.all(
     `SELECT o.id, o.partner_id, o.total, o.paid_amount, o.invoice_no, o.status, e.code FROM b2b_orders o JOIN b2b_entities e ON e.id = o.entity_id
      WHERE o.kind = 'supply' AND o.status IN ('pay_wait', 'partial') AND e.code IN (SELECT value FROM json_each(?)) ORDER BY o.id`,
@@ -10905,19 +10905,19 @@ function mountB2bPay(app, { db, services, orders, hooks }) {
     const url = (hash2) => base ? `
 ${link(base, hash2)}` : "";
     if (status === "paid") {
-      await log(o.id, user, `\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E: ${uah4(sum)}${user ? "" : " \u2014 Opendatabot"}`);
-      await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}${o.invoice_no ? `, \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h8(o.invoice_no)}` : ""} \u2014 ${uah4(o.total)}${url(`porders/${o.id}`)}`);
-      await tgAdmins(`\u2705 <b>\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E</b>${who}: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 ${uah4(sum)}${url(`b2borders/${o.id}`)}`);
+      await log(o.id, user, `\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E: ${uah5(sum)}${user ? "" : " \u2014 Opendatabot"}`);
+      await tgPartner(o.partner_id, `\u2705 <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)}${o.invoice_no ? `, \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h8(o.invoice_no)}` : ""} \u2014 ${uah5(o.total)}${url(`porders/${o.id}`)}`);
+      await tgAdmins(`\u2705 <b>\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E</b>${who}: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 ${uah5(sum)}${url(`b2borders/${o.id}`)}`);
       if (o.status !== "paid") {
         await hooks.finPaid?.(o.id).catch(() => 0);
         await hooks.crmPaid?.(o.id, typeof base === "string" ? base : base ? new URL(base.req.url).origin : "").catch(() => 0);
       }
     } else if (status === "partial") {
       const left = round2(o.total - sum);
-      await log(o.id, user, `\u0447\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E: ${uah4(sum)} \u0437 ${uah4(o.total)}, \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah4(left)}`);
-      await tgPartner(o.partner_id, `\u{1F4B3} <b>\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E ${uah4(sum)} \u0437 ${uah4(o.total)}.
-<b>\u0429\u0435 \u0434\u043E \u043E\u043F\u043B\u0430\u0442\u0438: ${uah4(left)}</b>${url(`porders/${o.id}`)}`);
-      await tgAdmins(`\u{1F4B3} <b>\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E</b>${who}: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 ${uah4(sum)} \u0437 ${uah4(o.total)}, \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah4(left)}${url(`b2borders/${o.id}`)}`);
+      await log(o.id, user, `\u0447\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E: ${uah5(sum)} \u0437 ${uah5(o.total)}, \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah5(left)}`);
+      await tgPartner(o.partner_id, `\u{1F4B3} <b>\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430</b>: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E ${uah5(sum)} \u0437 ${uah5(o.total)}.
+<b>\u0429\u0435 \u0434\u043E \u043E\u043F\u043B\u0430\u0442\u0438: ${uah5(left)}</b>${url(`porders/${o.id}`)}`);
+      await tgAdmins(`\u{1F4B3} <b>\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E</b>${who}: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(o.id)} \u2014 ${uah5(sum)} \u0437 ${uah5(o.total)}, \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah5(left)}${url(`b2borders/${o.id}`)}`);
     } else {
       await log(o.id, user, `\u043E\u043F\u043B\u0430\u0442\u0443 \u0437\u043D\u044F\u0442\u043E: \xAB${status === "pay_wait" ? "\u041E\u0447\u0456\u043A\u0443\u0454 \u043E\u043F\u043B\u0430\u0442\u0443" : "\u041E\u0447\u0456\u043A\u0443\u0454 \u0440\u0430\u0445\u0443\u043D\u043E\u043A"}\xBB`);
     }
@@ -10952,8 +10952,8 @@ ${link(base, hash2)}` : "";
         hit.paid_amount = round2(hit.paid_amount + t.amount);
         await recalc(hit.id, base);
       } else {
-        const why = shared2.has(t.payer_code) ? `\u043A\u043E\u0434 \u043F\u043B\u0430\u0442\u043D\u0438\u043A\u0430 ${h8(t.payer_code)} \u0454 \u0432 \u044E\u0440\u043E\u0441\u043E\u0431\u0430\u0445 \u043A\u0456\u043B\u044C\u043A\u043E\u0445 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432` : pool.length > 1 ? `\u043F\u0456\u0434\u0445\u043E\u0434\u0438\u0442\u044C \u043A\u0456\u043B\u044C\u043A\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C: ${pool.map((o) => `${orderNo(o.id)} (\u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah4(due(o))})`).join(", ")}` : `\u0441\u0443\u043C\u0430 \u0431\u0456\u043B\u044C\u0448\u0430 \u0437\u0430 \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah4(due(pool[0]))} \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(pool[0].id)}`;
-        await tgAdmins(`\u{1F4B3} <b>\u041F\u043B\u0430\u0442\u0456\u0436 \u0437\u0430 B2B \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435</b>: ${uah4(t.amount)} \u0432\u0456\u0434 ${h8(t.payer_name || t.payer_code)}
+        const why = shared2.has(t.payer_code) ? `\u043A\u043E\u0434 \u043F\u043B\u0430\u0442\u043D\u0438\u043A\u0430 ${h8(t.payer_code)} \u0454 \u0432 \u044E\u0440\u043E\u0441\u043E\u0431\u0430\u0445 \u043A\u0456\u043B\u044C\u043A\u043E\u0445 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432` : pool.length > 1 ? `\u043F\u0456\u0434\u0445\u043E\u0434\u0438\u0442\u044C \u043A\u0456\u043B\u044C\u043A\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u0435\u043B\u044C: ${pool.map((o) => `${orderNo(o.id)} (\u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah5(due(o))})`).join(", ")}` : `\u0441\u0443\u043C\u0430 \u0431\u0456\u043B\u044C\u0448\u0430 \u0437\u0430 \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${uah5(due(pool[0]))} \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(pool[0].id)}`;
+        await tgAdmins(`\u{1F4B3} <b>\u041F\u043B\u0430\u0442\u0456\u0436 \u0437\u0430 B2B \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435</b>: ${uah5(t.amount)} \u0432\u0456\u0434 ${h8(t.payer_name || t.payer_code)}
 ${why}.
 \u0412\u043A\u0430\u0436\u0456\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0432\u0440\u0443\u0447\u043D\u0443 \u043D\u0430 \u0457\u0457 \u0441\u0442\u043E\u0440\u0456\u043D\u0446\u0456 \u0430\u0431\u043E \u0432 \xAB\u041F\u043B\u0430\u0442\u0435\u0436\u0430\u0445\xBB.${base ? `
 ${link(base, `b2borders/${pool[0].id}`)}` : ""}`);
@@ -11067,7 +11067,7 @@ var INVOICED = ["pay_wait", "partial", "paid", "done"];
 var userName4 = (u) => u?.name || u?.login || "";
 var firstLine = (s2) => String(s2 || "").split("\n")[0];
 function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partnerPrice2 }) {
-  const { orderOf, supplyLeft, itemRows, totalOf, log, tgPartner, tgGroup, link, uah: uah4, h: h8, rebuildOpen, getOpen, entityText } = orders;
+  const { orderOf, supplyLeft, itemRows, totalOf, log, tgPartner, tgGroup, link, uah: uah5, h: h8, rebuildOpen, getOpen, entityText } = orders;
   const partnerCatalog = async (partnerId, delivery = "np") => {
     const p = await db.get(`SELECT * FROM b2b_partners WHERE id = ?`, [partnerId]);
     const rows = await withGrace(db, p, await db.all(
@@ -11201,16 +11201,16 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
     const total = totalOf(items);
     const changes = [];
     const several = /* @__PURE__ */ new Set([...multi, ...cur.filter((i, n) => cur.findIndex((x) => x.product_id === i.product_id) !== n).map((i) => i.product_id)]);
-    const nm = (i, price) => several.has(i.product_id) ? `${i.name} (\u0440\u044F\u0434\u043E\u043A \u043F\u043E ${uah4(price)})` : i.name;
+    const nm = (i, price) => several.has(i.product_id) ? `${i.name} (\u0440\u044F\u0434\u043E\u043A \u043F\u043E ${uah5(price)})` : i.name;
     for (const i of items) {
       const old = i._idx !== null ? cur[i._idx] : null;
       if (!old) {
-        changes.push(`+ ${i.name} \xD7 ${i.qty} \u043F\u043E ${uah4(i.price)}${curOf(i.product_id) ? " (\u043E\u043A\u0440\u0435\u043C\u0438\u0439 \u0440\u044F\u0434\u043E\u043A \u2014 \u0442\u043E\u0432\u0430\u0440 \u0443\u0436\u0435 \u0454 \u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0437\u0430 \u0456\u043D\u0448\u043E\u044E \u0446\u0456\u043D\u043E\u044E)" : ""}`);
+        changes.push(`+ ${i.name} \xD7 ${i.qty} \u043F\u043E ${uah5(i.price)}${curOf(i.product_id) ? " (\u043E\u043A\u0440\u0435\u043C\u0438\u0439 \u0440\u044F\u0434\u043E\u043A \u2014 \u0442\u043E\u0432\u0430\u0440 \u0443\u0436\u0435 \u0454 \u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \u0437\u0430 \u0456\u043D\u0448\u043E\u044E \u0446\u0456\u043D\u043E\u044E)" : ""}`);
         continue;
       }
       if (old.qty !== i.qty) changes.push(`${nm(i, old.price)}: ${old.qty} \u2192 ${i.qty} \u0448\u0442`);
-      if (round2(old.rrp) !== round2(i.rrp)) changes.push(`${nm(i, old.price)}: \u0420\u0420\u0426 ${uah4(old.rrp)} \u2192 ${uah4(i.rrp)}`);
-      if (round2(old.price) !== round2(i.price)) changes.push(`${nm(i, old.price)}: \u0446\u0456\u043D\u0430 ${uah4(old.price)} \u2192 ${uah4(i.price)}`);
+      if (round2(old.rrp) !== round2(i.rrp)) changes.push(`${nm(i, old.price)}: \u0420\u0420\u0426 ${uah5(old.rrp)} \u2192 ${uah5(i.rrp)}`);
+      if (round2(old.price) !== round2(i.price)) changes.push(`${nm(i, old.price)}: \u0446\u0456\u043D\u0430 ${uah5(old.price)} \u2192 ${uah5(i.price)}`);
     }
     const kept = /* @__PURE__ */ new Set([...items.map((i) => i._idx).filter((x) => x !== null), ...mergedIdx]);
     const removed = cur.filter((i, n) => !kept.has(n));
@@ -11238,16 +11238,16 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
     }
     await db.batch(st);
     const who = userName4(u) || "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440";
-    await log(o.id, u, `\u0437\u043C\u0456\u043D\u0438\u0432 ${who}: ${changes.join("; ")} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah4(total)}${invoiced ? ` \xB7 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${redo} \u0442\u0440\u0435\u0431\u0430 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u0438\u0442\u0438` : ""}${status !== o.status ? ` \xB7 \u0441\u0442\u0430\u0442\u0443\u0441: ${status === "partial" ? "\xAB\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB" : "\xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB"}` : ""}`.slice(0, 1800));
+    await log(o.id, u, `\u0437\u043C\u0456\u043D\u0438\u0432 ${who}: ${changes.join("; ")} \u2014 \u0440\u0430\u0437\u043E\u043C ${uah5(total)}${invoiced ? ` \xB7 \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${redo} \u0442\u0440\u0435\u0431\u0430 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u0438\u0442\u0438` : ""}${status !== o.status ? ` \xB7 \u0441\u0442\u0430\u0442\u0443\u0441: ${status === "partial" ? "\xAB\u0427\u0430\u0441\u0442\u043A\u043E\u0432\u043E \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB" : "\xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB"}` : ""}`.slice(0, 1800));
     if (["draft", "open"].includes(o.status)) await priceToClients(o, u, cur, items);
     if (o.status === "open") await rebuildOpen(o.id);
     const lines = changes.slice(0, 20).map(h8).join("\n");
     const what = o.status === "draft" ? "\u0427\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456" : o.status === "open" ? "\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E" : "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E";
     const text = `\u270F\uFE0F <b>${what} ${orderNo(o.id)} \u0437\u043C\u0456\u043D\u0438\u0432 ${h8(who)}</b>
 ${lines}
-<b>\u0420\u0430\u0437\u043E\u043C: ${uah4(total)}</b>${invoiced ? `
+<b>\u0420\u0430\u0437\u043E\u043C: ${uah5(total)}</b>${invoiced ? `
 
-\u{1F501} \u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h8(o.invoice_no)}${o.waybill_no ? ` \u0456 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0443 \u2116 ${h8(o.waybill_no)}` : ""} \u0431\u0443\u0434\u0435 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u043B\u0435\u043D\u043E \u2014 \u043D\u043E\u0432\u0456 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0438 \u043D\u0430\u0434\u0456\u0439\u0434\u0443\u0442\u044C \u0441\u044E\u0434\u0438.${paid > 0 ? ` \u041E\u043F\u043B\u0430\u0442\u0430 ${uah4(paid)} \u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0430\u043D\u0430${status === "partial" ? `, \u0434\u043E \u0434\u043E\u043F\u043B\u0430\u0442\u0438 ${uah4(total - paid)}` : ""}.` : ""}` : ""}`;
+\u{1F501} \u0420\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${h8(o.invoice_no)}${o.waybill_no ? ` \u0456 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0443 \u2116 ${h8(o.waybill_no)}` : ""} \u0431\u0443\u0434\u0435 \u043F\u0435\u0440\u0435\u0440\u043E\u0431\u043B\u0435\u043D\u043E \u2014 \u043D\u043E\u0432\u0456 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0438 \u043D\u0430\u0434\u0456\u0439\u0434\u0443\u0442\u044C \u0441\u044E\u0434\u0438.${paid > 0 ? ` \u041E\u043F\u043B\u0430\u0442\u0430 ${uah5(paid)} \u0437\u0430\u0440\u0430\u0445\u043E\u0432\u0430\u043D\u0430${status === "partial" ? `, \u0434\u043E \u0434\u043E\u043F\u043B\u0430\u0442\u0438 ${uah5(total - paid)}` : ""}.` : ""}` : ""}`;
     await tgPartner(o.partner_id, `${text}
 ${link(c, `porders/${o.id}`)}`);
     await tgGroup(o.partner_id, text);
@@ -11271,7 +11271,7 @@ ${link(c, `porders/${o.id}`)}`);
       [`UPDATE b2b_orders SET total = (SELECT ROUND(COALESCE(SUM(ROUND(qty * price, 2)), 0), 2) FROM b2b_order_items WHERE order_id = b2b_orders.id), updated_at = ?
         WHERE id IN (SELECT value FROM json_each(?))`, [nowIso(), JSON.stringify(hit.map((r) => r.order_id))]]
     ]);
-    const note = changed.map((i) => `${i.name}: \u0446\u0456\u043D\u0430 ${uah4(i.price)}, \u0420\u0420\u0426 ${uah4(i.rrp)}`).join("; ");
+    const note = changed.map((i) => `${i.name}: \u0446\u0456\u043D\u0430 ${uah5(i.price)}, \u0420\u0420\u0426 ${uah5(i.rrp)}`).join("; ");
     for (const r of hit) await log(r.order_id, u, `\u0446\u0456\u043D\u0438 \u0437\u043C\u0456\u043D\u0435\u043D\u043E \u0432 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 ${orderNo(o.id)} (${userName4(u) || "\u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440"}): ${note}`.slice(0, 1800));
   }
   async function toTrash(o, u, { byPartner = false } = {}) {
@@ -11311,7 +11311,7 @@ ${link(c, `porders/${o.id}`)}`);
     if (o.status !== "draft") {
       await tgPartner(o.partner_id, `\u{1F5D1} ${o.kind === "client" ? `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(o.id)} (${h8(o.client_name)})` : `\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(o.id)}`} \u0432\u0438\u0434\u0430\u043B\u0438\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u2014 \u0439\u043E\u0433\u043E \u0432\u0438\u0434\u043D\u043E \u0432 \xAB\u041A\u043E\u0448\u0438\u043A\u0443\xBB.`);
     }
-    await logAudit(db, { user: c.get("user"), kind: "b2b", refId: o.partner_id, action: `\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u0432 \u043A\u043E\u0448\u0438\u043A ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E"} ${orderNo(o.id)} \u043D\u0430 ${uah4(o.total)}${o.crm_id ? ` (\u0443 LP-CRM \u2116 ${o.crm_id} \u2014 \u043D\u0435 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E)` : ""}` }).catch(() => 0);
+    await logAudit(db, { user: c.get("user"), kind: "b2b", refId: o.partner_id, action: `\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u0432 \u043A\u043E\u0448\u0438\u043A ${o.kind === "client" ? "\u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430" : "\u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E"} ${orderNo(o.id)} \u043D\u0430 ${uah5(o.total)}${o.crm_id ? ` (\u0443 LP-CRM \u2116 ${o.crm_id} \u2014 \u043D\u0435 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E)` : ""}` }).catch(() => 0);
     return c.json({ ok: true, inCrm: o.crm_id || "" });
   });
   const trashRow = (r, forPartner = false) => ({
@@ -11805,7 +11805,7 @@ var DEFECT_STATE = {
 var claimNo = (id) => `\u041E-${id}`;
 var OPEN = ["new", "review", "approved"];
 function mountB2bClaims(app, { db, services = {}, myPartner, orders }) {
-  const { orderOf, itemRows, storeFile, sendFile, groupOf, log, tgAdmins, tgPartner, tgGroup, link, uah: uah4, h: h8, entityText } = orders;
+  const { orderOf, itemRows, storeFile, sendFile, groupOf, log, tgAdmins, tgPartner, tgGroup, link, uah: uah5, h: h8, entityText } = orders;
   const userName8 = (u) => u?.name || u?.login || "";
   const J3 = (v, d) => {
     try {
@@ -11850,7 +11850,7 @@ ${itemsLine(c.want_items)}` : ""}${r.deliver_to ? `
 <b>\u0411\u0440\u0430\u043A:</b> ${h8(c.return_name)}${r.return_ttn ? ` \xB7 \u0422\u0422\u041D \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F ${h8(r.return_ttn)}` : ""}` : ""}${r.defect ? `
 <b>\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430:</b> ${h8(c.defect_name)}${r.defect_note ? ` \u2014 ${h8(r.defect_note)}` : ""}` : ""}${r.decision_note ? `
 <b>\u0420\u0456\u0448\u0435\u043D\u043D\u044F \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430:</b> ${h8(r.decision_note)}` : ""}${r.refund_amount ? `
-<b>\u0414\u043E \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F:</b> ${uah4(r.refund_amount)}` : ""}${r.exch_supply_id ? `
+<b>\u0414\u043E \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F:</b> ${uah5(r.refund_amount)}` : ""}${r.exch_supply_id ? `
 <b>\u041E\u0431\u043C\u0456\u043D\u043D\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F:</b> ${orderNo(r.exch_supply_id)} (0 \u0433\u0440\u043D)` : ""}${r.files ? `
 \u{1F4F7} \u0424\u043E\u0442\u043E/\u0432\u0456\u0434\u0435\u043E: ${r.files}` : ""}`;
   }
@@ -12133,7 +12133,7 @@ ${link(c, `b2bclaims/${r.id}`)}`);
           c,
           r22,
           `\u2705 <b>\u0417\u0430\u044F\u0432\u043A\u0443 \u043F\u043E\u0433\u043E\u0434\u0436\u0435\u043D\u043E</b>${mode === "warehouse" ? "\n\u{1F4E6} \u0412\u0456\u0434\u043F\u0440\u0430\u0432\u0442\u0435 \u0431\u0440\u0430\u043A \u043D\u0430\u043C \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u0456 \u0432\u043D\u0435\u0441\u0456\u0442\u044C \u0422\u0422\u041D \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u0432 \u0437\u0430\u044F\u0432\u0446\u0456." : ""}`,
-          { history: `\u043F\u043E\u0433\u043E\u0434\u0436\u0435\u043D\u043E: ${RETURN_MODE[mode]}${note ? ` \u2014 ${note}` : ""}${refund ? `; \u0434\u043E \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F ${uah4(refund)}` : ""}` }
+          { history: `\u043F\u043E\u0433\u043E\u0434\u0436\u0435\u043D\u043E: ${RETURN_MODE[mode]}${note ? ` \u2014 ${note}` : ""}${refund ? `; \u0434\u043E \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F ${uah5(refund)}` : ""}` }
         );
         break;
       }
@@ -12171,7 +12171,7 @@ ${delivery === "pickup" ? "\u{1F697} \u0421\u0430\u043C\u043E\u0432\u0438\u0432\
         const amt = Math.max(0, round2(Number(String(b.refund_amount ?? cl.refund_amount ?? "").replace(",", ".")) || 0));
         if (!amt) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u0441\u0443\u043C\u0443 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F.");
         if (note.length < 3) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C, \u044F\u043A \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u043B\u0438 \u043A\u043E\u0448\u0442\u0438 (\u0437\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043D\u043D\u044F, \u043F\u0435\u0440\u0435\u043A\u0430\u0437 \u0442\u043E\u0449\u043E).");
-        await notify(c, await set({ status: "resolved", refund_amount: amt, decision_note: note }), `\u{1F4B8} <b>\u041A\u043E\u0448\u0442\u0438 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043E</b>: ${uah4(amt)}`, { history: `\u043A\u043E\u0448\u0442\u0438 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043E: ${uah4(amt)} \u2014 ${note}` });
+        await notify(c, await set({ status: "resolved", refund_amount: amt, decision_note: note }), `\u{1F4B8} <b>\u041A\u043E\u0448\u0442\u0438 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043E</b>: ${uah5(amt)}`, { history: `\u043A\u043E\u0448\u0442\u0438 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043E: ${uah5(amt)} \u2014 ${note}` });
         break;
       }
       case "close": {
@@ -17342,6 +17342,206 @@ function mountMarketItems({ db, services = {}, onCron = () => {
   return { resolve, linkMany, autoLink };
 }
 
+// src/modules/market/remind.js
+var RECALL_SKIP = ["31", "49", "44", "28"];
+var RECALL_UNPAID = ["50"];
+var RECALL_DAYS = 3;
+var MAX_ITEMS = 30;
+var MAX_WINDOW_H = 72;
+var REMIND_DEFAULT = { on: true, hour: 9, days: [1, 2, 3, 4, 5, 6], admins: true, client: true, unpaid: true, empty: false };
+var inList = (a) => a.map((x) => `'${x}'`).join(", ");
+var recallSql = (failed) => `(mp = 'rozetka' AND status_group = 3 AND status NOT IN (${inList([...failed, ...RECALL_SKIP])})
+  AND phone != '' AND called_at = '' AND changed_at >= ?
+  AND NOT EXISTS (SELECT 1 FROM mp_orders o2 WHERE o2.mp = 'rozetka' AND o2.phone != '' AND substr(o2.phone, -9) = substr(mp_orders.phone, -9)
+    AND o2.created_at > mp_orders.created_at AND NOT (o2.account_id = mp_orders.account_id AND o2.id = mp_orders.id)))`;
+var kyivParts2 = (ms) => Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Europe/Kyiv",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  weekday: "short",
+  hourCycle: "h23"
+}).formatToParts(new Date(ms)).map((p) => [p.type, p.value]));
+var WD = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+var esc2 = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+var uah4 = (n) => `${Math.round(Number(n) || 0).toLocaleString("uk-UA").replace(/ /g, " ")} \u20B4`;
+var phoneFmt2 = (p) => {
+  const d = String(p || "").replace(/\D/g, "");
+  return d.length === 12 ? `+${d.slice(0, 3)} ${d.slice(3, 5)} ${d.slice(5, 8)} ${d.slice(8, 10)} ${d.slice(10)}` : d ? `+${d}` : "";
+};
+var dm = (s2) => {
+  const v = String(s2 || "");
+  return `${v.slice(8, 10)}.${v.slice(5, 7)} ${v.slice(11, 16)}`;
+};
+function mountMarketRemind(app, { db, services = {}, onCron = () => {
+}, shopsOf, kyivDT: kyivDT2, failed, rzOrderOf, shared: shared2 = {}, clock }) {
+  const now = () => clock ? clock() : Date.now();
+  const getJson2 = async (key, def) => {
+    try {
+      return JSON.parse((await db.get(`SELECT value FROM settings WHERE key = ?`, [key]))?.value || "null") ?? def;
+    } catch {
+      return def;
+    }
+  };
+  const putJson = (key, v) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, JSON.stringify(v)]);
+  const settings = async () => ({ ...REMIND_DEFAULT, ...await getJson2("mp_remind", {}) });
+  const userName8 = (u) => String(u?.name || u?.login || "").slice(0, 80);
+  const SQL = recallSql(failed);
+  async function lists(since, accounts = null) {
+    const rows = await db.all(
+      `SELECT account_id, id, number, created_at, changed_at, status, status_name, customer, phone, total, items, pay_type
+      FROM mp_orders WHERE ${SQL} ${accounts ? "AND account_id IN (SELECT value FROM json_each(?))" : ""} ORDER BY changed_at LIMIT 400`,
+      accounts ? [since, JSON.stringify(accounts)] : [since]
+    );
+    const unpaid = (r) => RECALL_UNPAID.includes(String(r.status));
+    const tel = rows.length ? await services.telephony?.marks(rows.map((r) => ({ key: `${r.account_id}:${r.id}`, phones: [r.phone], at: unpaid(r) ? r.created_at : r.changed_at }))).catch(() => null) : null;
+    const out = { client: [], unpaid: [], called: 0 };
+    for (const r of rows) {
+      const m = tel?.get(`${r.account_id}:${r.id}`);
+      if (m?.after?.n) {
+        out.called++;
+        continue;
+      }
+      let item = "";
+      try {
+        const it = JSON.parse(r.items || "[]");
+        item = it[0]?.name || "";
+      } catch {
+      }
+      (unpaid(r) ? out.unpaid : out.client).push({ ...r, item, items: void 0 });
+    }
+    return out;
+  }
+  async function reorderedCount(since, accounts) {
+    const r = await db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE mp = 'rozetka' AND status_group = 3 AND phone != '' AND changed_at >= ?
+      ${accounts ? "AND account_id IN (SELECT value FROM json_each(?))" : ""}
+      AND EXISTS (SELECT 1 FROM mp_orders o2 WHERE o2.mp = 'rozetka' AND substr(o2.phone, -9) = substr(mp_orders.phone, -9) AND o2.created_at > mp_orders.created_at
+        AND NOT (o2.account_id = mp_orders.account_id AND o2.id = mp_orders.id))`, accounts ? [since, JSON.stringify(accounts)] : [since]);
+    return r?.n || 0;
+  }
+  function message({ name, l, shopNames, reordered, origin, st, title }) {
+    const line = (r, i2) => {
+      const shop = shopNames.get(r.account_id) || "";
+      return `${i2}. <b>${esc2(r.number)}</b> \xB7 ${esc2(String(r.item).slice(0, 60))} \xB7 ${uah4(r.total)}
+   ${esc2(r.customer || "\u2014")} \xB7 ${esc2(phoneFmt2(r.phone))}${shop ? ` \xB7 ${esc2(shop)}` : ""}
+   ${RECALL_UNPAID.includes(String(r.status)) ? `${esc2(r.pay_type || "\u043E\u043F\u043B\u0430\u0442\u0430")} \u043D\u0435 \u043F\u0440\u043E\u0439\u0448\u043B\u0430 \xB7 ` : ""}\u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E ${esc2(dm(r.changed_at))} \xB7 \xAB${esc2(r.status_name || r.status)}\xBB`;
+    };
+    const parts = [`\u{1F4DE} <b>${esc2(title)}</b>`, `${name ? `${esc2(name)}, \u043E` : "\u041E"}\u0441\u044C \u043A\u043E\u043C\u0443 \u0432\u0430\u0440\u0442\u043E \u043F\u043E\u0434\u0437\u0432\u043E\u043D\u0438\u0442\u0438 \u0441\u044C\u043E\u0433\u043E\u0434\u043D\u0456.`];
+    let i = 0;
+    if (st.client && l.client.length) {
+      parts.push("", `<b>\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u0456 \u2014 ${l.client.length}</b>`, "<i>\u0417\u0430\u043F\u0440\u043E\u043F\u043E\u043D\u0443\u0432\u0430\u0442\u0438 \u0456\u043D\u0448\u0438\u0439 \u0432\u0430\u0440\u0456\u0430\u043D\u0442, \u0437\u043D\u0438\u0436\u043A\u0443 \u0430\u0431\u043E \u0434\u043E\u043F\u043E\u043C\u043E\u0433\u0443 \u0437 \u043E\u043F\u043B\u0430\u0442\u043E\u044E.</i>");
+      for (const r of l.client.slice(0, MAX_ITEMS)) parts.push(line(r, ++i));
+      if (l.client.length > MAX_ITEMS) parts.push(`\u2026\u0456 \u0449\u0435 ${l.client.length - MAX_ITEMS}`);
+    }
+    if (st.unpaid && l.unpaid.length) {
+      parts.push("", `<b>\u041D\u0435 \u043E\u043F\u043B\u0430\u0442\u0438\u043B\u0438, \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u2014 ${l.unpaid.length}</b>`, "<i>\u041F\u043E\u043A\u0443\u043F\u0435\u0446\u044C \u0445\u043E\u0442\u0456\u0432 \u043A\u0443\u043F\u0438\u0442\u0438, \u0430\u043B\u0435 \u043E\u043F\u043B\u0430\u0442\u0430 \u043D\u0435 \u043F\u0440\u043E\u0439\u0448\u043B\u0430.</i>");
+      for (const r of l.unpaid.slice(0, MAX_ITEMS)) parts.push(line(r, ++i));
+      if (l.unpaid.length > MAX_ITEMS) parts.push(`\u2026\u0456 \u0449\u0435 ${l.unpaid.length - MAX_ITEMS}`);
+    }
+    const skipped = [reordered ? `${reordered} \u043F\u043E\u043A\u0443\u043F\u0446. \u0443\u0436\u0435 \u0437\u0440\u043E\u0431\u0438\u043B\u0438 \u043D\u043E\u0432\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F` : "", l.called ? `${l.called} \u2014 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u0443\u0436\u0435 \u0434\u0437\u0432\u043E\u043D\u0438\u0432` : ""].filter(Boolean);
+    if (skipped.length) parts.push("", `<i>\u041D\u0435 \u043F\u043E\u043A\u0430\u0437\u0443\u044E: ${skipped.join(", ")}.</i>`);
+    if (origin) parts.push("", `<a href="${origin}/#/mprz?grp=recall">\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0438 \u0441\u043F\u0438\u0441\u043E\u043A \u0443 \u0441\u0435\u0440\u0432\u0456\u0441\u0456</a>`);
+    parts.push("<i>\u0412\u0456\u0434\u043C\u0456\u0442\u044C\u0442\u0435 \xAB\u041F\u043E\u0434\u0437\u0432\u043E\u043D\u0438\u0432\xBB \u0443 \u043A\u0430\u0440\u0442\u0446\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2014 \u043D\u0430\u0441\u0442\u0443\u043F\u043D\u043E\u0433\u043E \u0440\u0430\u0437\u0443 \u0432\u043E\u043D\u043E \u043D\u0435 \u043F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u044C\u0441\u044F.</i>");
+    return parts.join("\n").slice(0, 4e3);
+  }
+  async function send4({ only = null, force = false } = {}) {
+    const st = await settings();
+    if (!services.notify?.sendText) return { skipped: "Telegram \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E" };
+    const t = now();
+    const last = await getJson2("mp_remind_last", {});
+    const fromMs = Math.max(t - MAX_WINDOW_H * 36e5, last.at && !only ? Date.parse(last.at) : t - 24 * 36e5);
+    const since = kyivDT2(fromMs);
+    const shops = (await shopsOf()).rozetka || [];
+    const shopNames = new Map(shops.map((s2) => [s2.id, s2.name]));
+    const origin = await getJson2("mp_site_origin", "") || "";
+    const kp = kyivParts2(t);
+    const title = `\u041F\u0435\u0440\u0435\u0434\u0437\u0432\u043E\u043D\u0438\u0442\u0438 \xB7 ${kp.day}.${kp.month}`;
+    const out = { sent: 0, users: 0, orders: 0 };
+    const users = only ? [only] : (await db.all(`SELECT * FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('manager', 'viewer')`)).filter((u) => accessOf(u)?.tg.includes("market"));
+    for (const u of users) {
+      const accs = shops.filter((s2) => shopAllowed(u, "rozetka", s2.id)).map((s2) => s2.id);
+      if (!accs.length) continue;
+      const l = await lists(since, accs);
+      const n = (st.client ? l.client.length : 0) + (st.unpaid ? l.unpaid.length : 0);
+      if (!n && !st.empty && !only) continue;
+      const text = n ? message({ name: String(u.name || "").split(/\s+/)[0], l, shopNames, reordered: await reorderedCount(since, accs), origin, st, title }) : `\u{1F4DE} <b>${esc2(title)}</b>
+\u0421\u044C\u043E\u0433\u043E\u0434\u043D\u0456 \u043F\u0435\u0440\u0435\u0434\u0437\u0432\u043E\u043D\u044E\u0432\u0430\u0442\u0438 \u043D\u0456\u043A\u043E\u043C\u0443.`;
+      out.sent += await services.notify.sendText({ chatIds: [u.tg_chat_id] }, text).catch(() => 0) || 0;
+      out.users++;
+      out.orders += n;
+    }
+    if (!only && st.admins) {
+      const l = await lists(since);
+      const n = (st.client ? l.client.length : 0) + (st.unpaid ? l.unpaid.length : 0);
+      if (n || st.empty) {
+        const text = n ? message({ name: "", l, shopNames, reordered: await reorderedCount(since, null), origin, st, title: `${title} \xB7 \u0443\u0441\u0456 \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0438` }) : `\u{1F4DE} <b>${esc2(title)}</b>
+\u0421\u044C\u043E\u0433\u043E\u0434\u043D\u0456 \u043F\u0435\u0440\u0435\u0434\u0437\u0432\u043E\u043D\u044E\u0432\u0430\u0442\u0438 \u043D\u0456\u043A\u043E\u043C\u0443.`;
+        out.sent += await services.notify.sendText({ admins: true }, text).catch(() => 0) || 0;
+      }
+    }
+    if (!only) await putJson("mp_remind_last", { day: `${kp.year}-${kp.month}-${kp.day}`, at: new Date(t).toISOString(), ...out, force });
+    return out;
+  }
+  async function tick() {
+    const st = await settings();
+    if (!st.on) return { skipped: "\u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E" };
+    const kp = kyivParts2(now());
+    if (!st.days.includes(WD[kp.weekday])) return { skipped: "\u0441\u044C\u043E\u0433\u043E\u0434\u043D\u0456 \u043D\u0435 \u043D\u0430\u0434\u0441\u0438\u043B\u0430\u0454\u043C\u043E" };
+    if (Number(kp.hour) < Number(st.hour)) return { skipped: `\u0449\u0435 \u0440\u0430\u043D\u043E (\u043E ${st.hour}:00)` };
+    const day = `${kp.year}-${kp.month}-${kp.day}`;
+    const last = await getJson2("mp_remind_last", {});
+    if (last.day === day) return { skipped: "\u0441\u044C\u043E\u0433\u043E\u0434\u043D\u0456 \u0432\u0436\u0435 \u043D\u0430\u0434\u0456\u0441\u043B\u0430\u043D\u043E" };
+    const claim = await db.run(`INSERT INTO settings (key, value) VALUES ('mp_remind_claim', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value != excluded.value`, [day]);
+    if (!claim.changes) return { skipped: "\u043D\u0430\u0434\u0441\u0438\u043B\u0430\u0454\u0442\u044C\u0441\u044F" };
+    return send4();
+  }
+  onCron("market-remind", "\u0420\u0430\u043D\u043A\u043E\u0432\u0435 \u043D\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043D\u043D\u044F \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430\u043C \u0443 Telegram: \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u0456 \u0439 \u043D\u0435\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0420\u043E\u0437\u0435\u0442\u043A\u0438, \u043A\u043E\u043C\u0443 \u043F\u0435\u0440\u0435\u0434\u0437\u0432\u043E\u043D\u0438\u0442\u0438", tick);
+  const rememberOrigin = (c) => {
+    const o = new URL(c.req.url).origin;
+    if (shared2.mpOrigin !== o) {
+      shared2.mpOrigin = o;
+      putJson("mp_site_origin", o).catch(() => 0);
+    }
+  };
+  app.get("/api/mp/remind/settings", async (c) => {
+    need(c, "market.view");
+    rememberOrigin(c);
+    return c.json({ ...await settings(), last: await getJson2("mp_remind_last", null) });
+  });
+  app.put("/api/mp/remind/settings", async (c) => {
+    need(c, "api");
+    rememberOrigin(c);
+    const b = await c.req.json().catch(() => ({}));
+    const hour = Number(b.hour);
+    if (!Number.isInteger(hour) || hour < 5 || hour > 20) throw fail(400, "\u0413\u043E\u0434\u0438\u043D\u0430 \u043D\u0430\u0434\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u2014 \u0432\u0456\u0434 5 \u0434\u043E 20.");
+    const days2 = [...new Set((Array.isArray(b.days) ? b.days : []).map(Number).filter((d) => d >= 1 && d <= 7))].sort();
+    const v = { on: Boolean(b.on), hour, days: days2, admins: Boolean(b.admins), client: Boolean(b.client), unpaid: Boolean(b.unpaid), empty: Boolean(b.empty) };
+    await putJson("mp_remind", v);
+    return c.json(v);
+  });
+  app.post("/api/mp/remind/test", async (c) => {
+    need(c, "market.view");
+    rememberOrigin(c);
+    const u = await db.get(`SELECT * FROM users WHERE id = ?`, [c.get("user").id]);
+    if (!u?.tg_chat_id) throw fail(400, "\u0421\u043F\u0435\u0440\u0448\u0443 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0456\u0442\u044C \u0441\u0432\u0456\u0439 Telegram (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u041A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0456 \u2192 Telegram), \u0442\u043E\u0434\u0456 \u043D\u0430\u0434\u0456\u0448\u043B\u0435\u043C\u043E \u0442\u0435\u0441\u0442\u043E\u0432\u0435.");
+    const r = await send4({ only: u });
+    if (!r.sent) throw fail(400, "\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u043D\u0430\u0434\u0456\u0441\u043B\u0430\u0442\u0438 \u0432 Telegram \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0449\u043E \u0431\u043E\u0442 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0439.");
+    return c.json(r);
+  });
+  app.post("/api/mp/called", async (c) => {
+    need(c, "market.edit");
+    const b = await c.req.json().catch(() => ({}));
+    const o = await rzOrderOf(b, c);
+    const at = b.undo ? "" : nowIso();
+    const by = b.undo ? "" : userName8(c.get("user"));
+    await db.run(`UPDATE mp_orders SET called_at = ?, called_by = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ?`, [at, by, o.account_id, o.id]);
+    return c.json({ called_at: at, called_by: by });
+  });
+  return { send: send4, tick, lists, settings };
+}
+
 // src/modules/market/index.js
 var KEEP_DAYS3 = 45;
 var HISTORY_YEARS = 4;
@@ -17376,11 +17576,11 @@ var RZ_CANCEL = ["17", "18", "28", "29", "31", "33", "35", "37", "39", "40", "41
 var RZ_CANCEL_CLIENT = ["45"];
 var RZ_CANCEL_AUTO = ["49", "50"];
 var RZ_GROUPS = ["new", "work", "ttn", "call", "dups", "delivery", "success", "failed", "cancelled"];
-var inList = (a) => a.map((x) => `'${x}'`).join(", ");
-var groupSql = (successSql) => `(CASE WHEN ${successSql} THEN 'success' WHEN status IN (${inList(RZ_FAILED)}) THEN 'failed'
-  WHEN status_group = 3 OR (status_group = 0 AND status IN (${inList(RZ_CANCEL)})) THEN 'cancelled'
-  WHEN status IN (${inList(RZ_NEW)}) THEN 'new' WHEN status IN (${inList(RZ_DELIVERY)}) THEN 'delivery'
-  WHEN status IN (${inList(RZ_TTN)}) OR ttn != '' THEN 'ttn' ELSE 'work' END)`;
+var inList2 = (a) => a.map((x) => `'${x}'`).join(", ");
+var groupSql = (successSql) => `(CASE WHEN ${successSql} THEN 'success' WHEN status IN (${inList2(RZ_FAILED)}) THEN 'failed'
+  WHEN status_group = 3 OR (status_group = 0 AND status IN (${inList2(RZ_CANCEL)})) THEN 'cancelled'
+  WHEN status IN (${inList2(RZ_NEW)}) THEN 'new' WHEN status IN (${inList2(RZ_DELIVERY)}) THEN 'delivery'
+  WHEN status IN (${inList2(RZ_TTN)}) OR ttn != '' THEN 'ttn' ELSE 'work' END)`;
 var rzGroupOf = (status, group, okSet = /* @__PURE__ */ new Set(), hasTtn = false) => {
   const st = String(status);
   if (Number(group) === 2 || !Number(group) && okSet.has(st)) return "success";
@@ -17394,6 +17594,7 @@ var rzGroupOf = (status, group, okSet = /* @__PURE__ */ new Set(), hasTtn = fals
 var rzCancelBy = (status) => RZ_CANCEL_CLIENT.includes(String(status)) ? "client" : RZ_CANCEL_AUTO.includes(String(status)) ? "auto" : "manager";
 var DUPS_SQL = `(status_group = 1 AND phone != '' AND substr(phone, -9) IN (SELECT substr(phone, -9) FROM mp_orders WHERE mp = 'rozetka' AND status_group = 1 AND phone != '' GROUP BY substr(phone, -9) HAVING COUNT(*) > 1))`;
 var DUP_DAYS = 14;
+var RECALL_SQL = recallSql(RZ_FAILED);
 var RZ_CANCEL_REASONS = {
   31: "\u0421\u043A\u0430\u0441\u0443\u0432\u0430\u043D\u043D\u044F. \u0421\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0434\u0443\u0431\u043B\u044E\u044E\u0447\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F",
   50: "\u041A\u043B\u0456\u0454\u043D\u0442 \u043D\u0435 \u043E\u043F\u043B\u0430\u0442\u0438\u0432",
@@ -17403,7 +17604,7 @@ var RZ_CANCEL_REASONS = {
   28: "\u041D\u0435\u043F\u0440\u0430\u0432\u0438\u043B\u044C\u043D\u0456 \u043A\u043E\u043D\u0442\u0430\u043A\u0442\u043D\u0456 \u0434\u0430\u043D\u0456",
   44: "\u0421\u043A\u0430\u0441\u0443\u0432\u0430\u043D\u043D\u044F. \u0424\u0435\u0439\u043A\u043E\u0432\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F"
 };
-var CALL_SQL = `(status = '47' OR (status = '55' AND changed_at <= ?) OR (status = '5' AND changed_at <= ?) OR (status IN (${inList(RZ_NEW)}) AND created_at <= ?))`;
+var CALL_SQL = `(status = '47' OR (status = '55' AND changed_at <= ?) OR (status = '5' AND changed_at <= ?) OR (status IN (${inList2(RZ_NEW)}) AND created_at <= ?))`;
 var callParams = (nowMs = Date.now()) => [kyivDTms(nowMs - 864e5), kyivDTms(nowMs - 4 * 864e5), kyivDTms(nowMs - 30 * 6e4)];
 var EPC_STATUS = {
   new: "\u041D\u043E\u0432\u0438\u0439",
@@ -17490,7 +17691,8 @@ var ROW = {
       qty: Number(p.quantity) || 1,
       price: money2(p.price),
       ...p.item?.article ? { article: String(p.item.article).trim().slice(0, 120) } : {},
-      ...p.item?.price_offer_id ? { offer: String(p.item.price_offer_id) } : {}
+      ...p.item?.price_offer_id ? { offer: String(p.item.price_offer_id) } : {},
+      ...p.item?.photo_preview ? { photo: String(p.item.photo_preview).slice(0, 300) } : {}
     })),
     goods: rzGoods(o),
     ...rzOther(o),
@@ -18021,7 +18223,7 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     if (!shops.length) return { skipped: "\u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0438 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E" };
     const users = (await db.all(`SELECT * FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('manager', 'viewer')`)).filter((u) => accessOf(u)?.tg.includes("market"));
     const seen = await getSetting("rzmsg_seen", {});
-    const esc2 = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const esc3 = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const hm = (v) => String(v || "").slice(11, 16);
     const fresh = kyivDT(now - MSG_FRESH_DAYS * 864e5);
     const out = { shops: 0, chats: 0, sent: 0, errors: 0 };
@@ -18058,17 +18260,17 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
           continue;
         }
         out.chats += items2.length;
-        const head = `\u{1F4AC} <b>\u0420\u043E\u0437\u0435\u0442\u043A\u0430${acc.name ? ` \xB7 ${esc2(acc.name)}` : ""}</b>`;
+        const head = `\u{1F4AC} <b>\u0420\u043E\u0437\u0435\u0442\u043A\u0430${acc.name ? ` \xB7 ${esc3(acc.name)}` : ""}</b>`;
         const link = (it) => it.type === "orders" && it.ch.order_id ? `${RZ_CABINET}/orders?msgType=orders&search=${encodeURIComponent(it.ch.order_id)}` : it.ch.item_id || it.ch.item?.id ? `${RZ_CABINET}/items?msgType=items&search=${encodeURIComponent(it.ch.item_id || it.ch.item.id)}` : `${RZ_CABINET}/items?msgType=items`;
-        const what = (it) => it.type === "orders" ? `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2116${esc2(it.ch.order_id || "")}` : it.ch.item?.name ? `\u041F\u0438\u0442\u0430\u043D\u043D\u044F \u043F\u0440\u043E \u0442\u043E\u0432\u0430\u0440: ${esc2(String(it.ch.item.name).slice(0, 90))}` : "\u041F\u0438\u0442\u0430\u043D\u043D\u044F \u0432\u0456\u0434 \u043F\u043E\u043A\u0443\u043F\u0446\u044F";
+        const what = (it) => it.type === "orders" ? `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2116${esc3(it.ch.order_id || "")}` : it.ch.item?.name ? `\u041F\u0438\u0442\u0430\u043D\u043D\u044F \u043F\u0440\u043E \u0442\u043E\u0432\u0430\u0440: ${esc3(String(it.ch.item.name).slice(0, 90))}` : "\u041F\u0438\u0442\u0430\u043D\u043D\u044F \u0432\u0456\u0434 \u043F\u043E\u043A\u0443\u043F\u0446\u044F";
         const texts = items2.length > 3 ? [`${head} \xB7 \u043D\u043E\u0432\u0456 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F: ${items2.length}
-${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio || "")} \xB7 ${hm(it.neu[it.neu.length - 1].created)}`).join("\n")}${items2.length > 25 ? `
+${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc3(it.ch.user_fio || "")} \xB7 ${hm(it.neu[it.neu.length - 1].created)}`).join("\n")}${items2.length > 25 ? `
 \u2026\u0456 \u0449\u0435 ${items2.length - 25}` : ""}
 
 <a href="${RZ_CABINET}/orders">\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0438 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438</a>`] : items2.map((it) => `${head} \xB7 \u043D\u043E\u0432\u0435 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F
-<b>${what(it)}</b> \xB7 \u0447\u0430\u0442 ${esc2(it.ch.id)}
-\u0412\u0456\u0434: ${esc2(it.ch.user_fio || "\u2014")}
-` + it.neu.slice(-3).map((m) => `\xAB${esc2(String(m.body || (m.files?.length ? "[\u0444\u0430\u0439\u043B]" : "")).slice(0, 300))}\xBB <i>${hm(m.created)}</i>`).join("\n") + `
+<b>${what(it)}</b> \xB7 \u0447\u0430\u0442 ${esc3(it.ch.id)}
+\u0412\u0456\u0434: ${esc3(it.ch.user_fio || "\u2014")}
+` + it.neu.slice(-3).map((m) => `\xAB${esc3(String(m.body || (m.files?.length ? "[\u0444\u0430\u0439\u043B]" : "")).slice(0, 300))}\xBB <i>${hm(m.created)}</i>`).join("\n") + `
 <a href="${link(it)}">\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0438 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438</a>`);
         if (out.sent + texts.length * to.length > MSG_SEND_MAX) break;
         for (const t of texts) out.sent += await services.notify.sendText({ chatIds: to }, t).catch(() => 0) || 0;
@@ -18181,13 +18383,18 @@ ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio
       where.push(`${groupSql(SUCCESS_SQL)} = ?`);
       params.push(okIds, grp);
     }
+    const recallSince = kyivDT(Date.now() - RECALL_DAYS * 864e5);
+    if (rz && c.req.query("grp") === "recall") {
+      where.push(RECALL_SQL);
+      params.push(recallSince);
+    }
     const crmF = rz ? String(c.req.query("crm") || "") : "";
     if (crmF === "no") where.push(`crm_id = '' AND crm_code = ''`);
     if (crmF === "yes") where.push(`(crm_id != '' OR crm_code != '')`);
     const cancel = grp === "cancelled" ? String(c.req.query("cancel") || "") : "";
-    if (cancel === "client") where.push(`status IN (${inList(RZ_CANCEL_CLIENT)})`);
-    if (cancel === "auto") where.push(`status IN (${inList(RZ_CANCEL_AUTO)})`);
-    if (cancel === "manager") where.push(`status NOT IN (${inList([...RZ_CANCEL_CLIENT, ...RZ_CANCEL_AUTO])})`);
+    if (cancel === "client") where.push(`status IN (${inList2(RZ_CANCEL_CLIENT)})`);
+    if (cancel === "auto") where.push(`status IN (${inList2(RZ_CANCEL_AUTO)})`);
+    if (cancel === "manager") where.push(`status NOT IN (${inList2([...RZ_CANCEL_CLIENT, ...RZ_CANCEL_AUTO])})`);
     const q = String(c.req.query("q") || "").trim();
     if (q) {
       const digits = q.replace(/\D/g, "");
@@ -18197,6 +18404,7 @@ ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio
     const offset = Math.max(0, Number(c.req.query("offset")) || 0);
     let callN = 0;
     let dupsN = 0;
+    let recallN = 0;
     const [rows, statusRows, total, rvStats, rvBy] = await Promise.all([
       db.all(`SELECT *, ${rz ? SUCCESS_SQL : "0"} AS ok FROM mp_orders WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT 301 OFFSET ?`, [...rz ? [okIds] : [], ...params, offset]),
       db.all(`SELECT status, status_group, ttn != '' AS has_ttn, MAX(status_name) AS status_name, COUNT(*) AS n FROM mp_orders WHERE ${base.join(" AND ")} GROUP BY status, status_group, ttn != '' ORDER BY n DESC`, baseParams),
@@ -18207,10 +18415,12 @@ ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio
         FROM (SELECT ${SUCCESS_SQL} AS ok, review_n, asked_at, changed_at FROM mp_orders WHERE ${base.join(" AND ")})`, [border, okIds, ...baseParams]) : null,
       rz ? db.all(`SELECT asked_by AS who, COUNT(*) AS n, SUM(review_n > 0) AS reviewed FROM mp_orders WHERE ${base.join(" AND ")} AND asked_at != '' GROUP BY asked_by ORDER BY n DESC`, baseParams) : [],
       rz ? db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE ${base.join(" AND ")} AND ${CALL_SQL}`, [...baseParams, ...callParams()]) : null,
-      rz ? db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE ${base.join(" AND ")} AND ${DUPS_SQL}`, baseParams) : null
+      rz ? db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE ${base.join(" AND ")} AND ${DUPS_SQL}`, baseParams) : null,
+      rz ? db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE ${base.join(" AND ")} AND ${RECALL_SQL}`, [...baseParams, recallSince]) : null
     ]).then((x) => {
       callN = x[5]?.n || 0;
       dupsN = x[6]?.n || 0;
+      recallN = x[7]?.n || 0;
       return x;
     });
     const okSet = new Set(JSON.parse(okIds));
@@ -18275,7 +18485,7 @@ ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio
       more: rows.length > 300,
       total: { n: total?.n || 0, sum: Math.round((total?.sum || 0) * 100) / 100 },
       statuses,
-      ...rz ? { groups, cancels } : {},
+      ...rz ? { groups, cancels, recall: recallN } : {},
       ...rz ? { reviews: { days: rvs.days, stats: Object.fromEntries(Object.entries(rvStats || {}).map(([k, v]) => [k, v || 0])), by: rvBy } } : {}
     });
   });
@@ -18301,6 +18511,7 @@ ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc2(it.ch.user_fio
   };
   const items = mountMarketItems({ db, services, onCron });
   mountMarketCrm(app, { db, fetchFn, services, onCron, rzOrderOf, items });
+  mountMarketRemind(app, { db, services, onCron, shopsOf, kyivDT, failed: RZ_FAILED, rzOrderOf, shared: shared2, clock: shared2.clock });
   const markAsked = async (o, user, via) => {
     const at = nowIso();
     const by = String(user?.name || user?.login || "").slice(0, 80);
@@ -21038,7 +21249,7 @@ var schema13 = {
 // src/modules/market/schema.js
 var schema14 = {
   name: "market",
-  version: 9,
+  version: 10,
   tables: [
     // Товари магазинів маркетплейсів (з замовлень) і їх прив'язка до товарів LP-CRM (див. items.js).
     // Кілька товарів маркетплейсу (дублі, інший магазин) можуть вести до одного product_id; link_source — manual | learned |
@@ -21194,7 +21405,10 @@ var schema14 = {
     ["mp_orders", "crm_at", "TEXT DEFAULT ''"],
     ["mp_orders", "crm_by", "TEXT DEFAULT ''"],
     ["mp_orders", "crm_status", "TEXT DEFAULT ''"],
-    ["mp_orders", "crm_checked_at", "TEXT DEFAULT ''"]
+    ["mp_orders", "crm_checked_at", "TEXT DEFAULT ''"],
+    // «Подзвонив»: менеджер набрав покупця скасованого / неоплаченого замовлення (група «Передзвонити», ранкове нагадування).
+    ["mp_orders", "called_at", "TEXT DEFAULT ''"],
+    ["mp_orders", "called_by", "TEXT DEFAULT ''"]
   ]
 };
 

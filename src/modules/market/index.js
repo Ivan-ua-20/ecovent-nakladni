@@ -9,6 +9,7 @@ import { promOrders } from '../../integrations/prom.js';
 import { epcOrdersPage } from '../../integrations/epicentr.js';
 import { mountMarketCrm } from './crm.js';
 import { mountMarketItems } from './items.js';
+import { mountMarketRemind, recallSql, RECALL_DAYS } from './remind.js';
 
 const KEEP_DAYS = 45;
 const HISTORY_YEARS = 4; // Розетка: історія типово за 4 роки (період можна обрати), зберігається весь цей час
@@ -70,6 +71,7 @@ export const rzCancelBy = (status) => (RZ_CANCEL_CLIENT.includes(String(status))
 // «Кілька замовлень»: активні замовлення покупців, у яких зараз більше одного активного замовлення (той самий телефон).
 const DUPS_SQL = `(status_group = 1 AND phone != '' AND substr(phone, -9) IN (SELECT substr(phone, -9) FROM mp_orders WHERE mp = 'rozetka' AND status_group = 1 AND phone != '' GROUP BY substr(phone, -9) HAVING COUNT(*) > 1))`;
 const DUP_DAYS = 14; // інші замовлення того самого покупця в межах 14 днів — показуємо як можливі дублі
+const RECALL_SQL = recallSql(RZ_FAILED); // «Передзвонити» (remind.js)
 // Причини скасування, які менеджер може обрати (коди статусів Розетки).
 export const RZ_CANCEL_REASONS = { 31: 'Скасування. Створено дублююче замовлення', 50: 'Клієнт не оплатив', 40: 'Клієнт передумав',
   18: 'Не вдалося зв\'язатися', 42: 'Немає в наявності', 28: 'Неправильні контактні дані', 44: 'Скасування. Фейкове замовлення' };
@@ -145,7 +147,7 @@ const ROW = {
     phone: String(o.user_phone || o.delivery?.recipient_phone || ''), total: money(o.cost ?? o.amount),
     delivery: String(o.delivery?.delivery_service_name || o.delivery_service?.name || ''), ttn: String(o.ttn || o.delivery?.ttn || ''),
     items: (o.purchases || []).map((p) => ({ id: String(p.item_id || p.item?.id || ''), name: String(p.item_name || p.item?.name || ''), qty: Number(p.quantity) || 1, price: money(p.price),
-      ...(p.item?.article ? { article: String(p.item.article).trim().slice(0, 120) } : {}), ...(p.item?.price_offer_id ? { offer: String(p.item.price_offer_id) } : {}) })),
+      ...(p.item?.article ? { article: String(p.item.article).trim().slice(0, 120) } : {}), ...(p.item?.price_offer_id ? { offer: String(p.item.price_offer_id) } : {}), ...(p.item?.photo_preview ? { photo: String(p.item.photo_preview).slice(0, 300) } : {}) })),
     goods: rzGoods(o),
     ...rzOther(o),
     ...rzPay(o),
@@ -710,6 +712,9 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     if (grp === 'call') { where.push(CALL_SQL); params.push(...callParams()); }
     else if (grp === 'dups') where.push(DUPS_SQL);
     else if (grp) { where.push(`${groupSql(SUCCESS_SQL)} = ?`); params.push(okIds, grp); }
+    // «Передзвонити»: скасовані за останні дні, кому ще не дзвонили і хто не замовив знову (remind.js)
+    const recallSince = kyivDT(Date.now() - RECALL_DAYS * 86400e3);
+    if (rz && c.req.query('grp') === 'recall') { where.push(RECALL_SQL); params.push(recallSince); }
     // LP-CRM: no — ще не внесені/не прив'язані, yes — прив'язані
     const crmF = rz ? String(c.req.query('crm') || '') : '';
     if (crmF === 'no') where.push(`crm_id = '' AND crm_code = ''`);
@@ -728,6 +733,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     const offset = Math.max(0, Number(c.req.query('offset')) || 0);
     let callN = 0;
     let dupsN = 0;
+    let recallN = 0;
     const [rows, statusRows, total, rvStats, rvBy] = await Promise.all([
       db.all(`SELECT *, ${rz ? SUCCESS_SQL : '0'} AS ok FROM mp_orders WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT 301 OFFSET ?`, [...(rz ? [okIds] : []), ...params, offset]),
       db.all(`SELECT status, status_group, ttn != '' AS has_ttn, MAX(status_name) AS status_name, COUNT(*) AS n FROM mp_orders WHERE ${base.join(' AND ')} GROUP BY status, status_group, ttn != '' ORDER BY n DESC`, baseParams),
@@ -739,7 +745,8 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
       rz ? db.all(`SELECT asked_by AS who, COUNT(*) AS n, SUM(review_n > 0) AS reviewed FROM mp_orders WHERE ${base.join(' AND ')} AND asked_at != '' GROUP BY asked_by ORDER BY n DESC`, baseParams) : [],
       rz ? db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE ${base.join(' AND ')} AND ${CALL_SQL}`, [...baseParams, ...callParams()]) : null,
       rz ? db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE ${base.join(' AND ')} AND ${DUPS_SQL}`, baseParams) : null,
-    ]).then((x) => { callN = x[5]?.n || 0; dupsN = x[6]?.n || 0; return x; });
+      rz ? db.get(`SELECT COUNT(*) AS n FROM mp_orders WHERE ${base.join(' AND ')} AND ${RECALL_SQL}`, [...baseParams, recallSince]) : null,
+    ]).then((x) => { callN = x[5]?.n || 0; dupsN = x[6]?.n || 0; recallN = x[7]?.n || 0; return x; });
     // статуси (для фільтра) — по коду; групи й «хто скасував» — з кодів і status_group
     const okSet = new Set(JSON.parse(okIds));
     const groups = Object.fromEntries(RZ_GROUPS.map((g) => [g, 0]));
@@ -795,7 +802,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
       more: rows.length > 300,
       total: { n: total?.n || 0, sum: Math.round((total?.sum || 0) * 100) / 100 },
       statuses,
-      ...(rz ? { groups, cancels } : {}),
+      ...(rz ? { groups, cancels, recall: recallN } : {}),
       ...(rz ? { reviews: { days: rvs.days, stats: Object.fromEntries(Object.entries(rvStats || {}).map(([k, v]) => [k, v || 0])), by: rvBy } } : {}),
     });
   });
@@ -823,6 +830,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
   };
   const items = mountMarketItems({ db, services, onCron });
   mountMarketCrm(app, { db, fetchFn, services, onCron, rzOrderOf, items });
+  mountMarketRemind(app, { db, services, onCron, shopsOf, kyivDT, failed: RZ_FAILED, rzOrderOf, shared, clock: shared.clock });
   const markAsked = async (o, user, via) => {
     const at = nowIso();
     const by = String(user?.name || user?.login || '').slice(0, 80);
