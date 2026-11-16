@@ -66,8 +66,8 @@ assert.equal(r.j.suggest[0].key, '1:9002');
 assert.deepEqual(r.j.suggest[0].crm.map((x) => [x.id, x.by]), [['90002', 'телефон']]);
 assert.equal(r.j.notFound, 1);
 assert.equal((await row(1, '9002')).crm_id, '', 'за телефоном не прив\'язує сам');
-// товар запам'ятався з однозначного збігу (1 товар ↔ 1 товар)
-assert.deepEqual({ ...(await db.get(`SELECT item_id, product_id FROM mp_crm_items`)) }, { item_id: '564329178', product_id: 701 });
+// товар запам'ятався з однозначного збігу (1 товар ↔ 1 товар) — у довіднику товарів магазину
+assert.deepEqual((await db.all(`SELECT account_id, item_id, product_id, link_source, link_by FROM mp_items`)).map((x) => ({ ...x })), [{ account_id: 1, item_id: '564329178', product_id: 701, link_source: 'learned', link_by: 'за замовленням LP-CRM' }]);
 
 // ---------- ручна прив'язка за номером, повторна — заборонена, відв'язка ----------
 r = await req('PUT', '/api/mp/crm/link', { account: 1, id: '9002', crm: '90002' });
@@ -126,7 +126,8 @@ const o4 = await row(1, '9004');
 assert.equal(o4.crm_id, '95555');
 assert.equal(o4.crm_status, 'Нові');
 assert.match(o4.crm_by, /створив\(ла\) owner/);
-assert.equal((await db.get(`SELECT product_id FROM mp_crm_items WHERE item_id = '111'`)).product_id, 703, 'новий товар запам\'ятався');
+assert.deepEqual({ ...(await db.get(`SELECT product_id, link_source, link_by FROM mp_items WHERE account_id = 1 AND item_id = '111'`)) }, { product_id: 703, link_source: 'manual', link_by: 'owner' }, 'обраний у формі товар запам\'ятався');
+assert.equal((await db.get(`SELECT COUNT(*) AS n FROM mp_items_log`)).n, 2, 'журнал прив\'язок: вивчений і ручний');
 r = await req('POST', '/api/mp/crm/create', { account: 1, id: '9004', items });
 assert.equal(r.status, 400, 'вдруге — ні');
 assert.match(r.j.error, /Уже в LP-CRM: № 95555/);
@@ -134,11 +135,56 @@ assert.match(r.j.error, /Уже в LP-CRM: № 95555/);
 // ---------- пошук товарів LP-CRM ----------
 r = await req('GET', '/api/mp/crm/products?q=evoair comfodry');
 assert.deepEqual(r.j.products.map((p) => p.id), [701]);
-// схожий за назвою товар підставляється сам
-await db.run(`DELETE FROM mp_crm_items`);
+// ---------- довідник товарів: правила прив'язки (лише однозначний збіг, без вгадування за назвою) ----------
+// 2) той самий товар в іншому магазині — копіюється (і записується в довідник того магазину)
 r = await req('GET', '/api/mp/crm/prefill/2/9005');
-assert.equal(r.j.items[0].product_id, 701);
-assert.equal(r.j.items[0].from, 'guess');
+assert.deepEqual([r.j.items[0].product_id, r.j.items[0].from, r.j.items[0].product_name], [701, 'copied', 'Осушувач повітря Evoair ComfoDry 12']);
+assert.deepEqual({ ...(await db.get(`SELECT product_id, link_source, link_by FROM mp_items WHERE account_id = 2 AND item_id = '564329178'`)) }, { product_id: 701, link_source: 'copied', link_by: 'авто' });
+// стара таблиця mp_crm_items ще читається (для баз до появи довідника)
+await db.run(`INSERT INTO mp_crm_items (mp, item_id, product_id, name, updated_at) VALUES ('rozetka', '777', 703, 'Старий', '')`);
+await ins(2, '9006', '26', { phone: '380509990002', items: [{ id: '777', name: 'Старий товар', qty: 1, price: 100 }] });
+r = await req('GET', '/api/mp/crm/prefill/2/9006');
+assert.deepEqual([r.j.items[0].product_id, r.j.items[0].from], [703, 'saved']);
+// 3) код на початку артикулу = «[код]» у назві товару LP-CRM; 4) артикул без бренду = model; неоднозначний код і невідомий артикул — порожньо
+await db.batch([
+  [`INSERT INTO crm_products (product_id, name, namel, code, sku, skun, model, active) VALUES
+    (669, 'Осушувач повітря Evoair ComfoDry 12 (COMFODRY12) [30414]', 'осушувач повітря evoair comfodry 12 (comfodry12) [30414]', '30414', 'COMFODRY12', 'comfodry12', 'COMFODRY12', 1),
+    (646, 'Осушувач повітря Evoair Dryora 10 (DRYORA10) [30360]', 'осушувач повітря evoair dryora 10 (dryora10) [30360]', '30360', 'DRYORA10', 'dryora10', 'DRYORA10', 1),
+    (1021, 'Очищувач повітря DREO 337S (DR-HAP007S) [83891]', 'очищувач повітря dreo 337s (dr-hap007s) [83891]', '83891', 'DR-HAP007S', 'drhap007s', '', 1),
+    (1024, 'Очищувач повітря DREO 337S [83891]', 'очищувач повітря dreo 337s [83891]', '83891', '', '', '', 1)`, []],
+]);
+await ins(2, '9007', '26', { phone: '380509990003', items: [
+  { id: 'A1', name: 'Осушувач ComfoDry', qty: 1, price: 7600, article: '30414 EvoairComfoDry12' },
+  { id: 'A2', name: 'Осушувач Dryora', qty: 1, price: 6500, article: '99999 EvoairDryora10' },
+  { id: 'A3', name: 'Очищувач DREO', qty: 1, price: 7499, article: '83891 Dreo337S' },
+  { id: 'A4', name: 'Щось нове', qty: 1, price: 1, article: '12345 SomethingNew' },
+  { id: 'A5', name: 'Без артикулу', qty: 1, price: 1 }] });
+r = await req('GET', '/api/mp/crm/prefill/2/9007');
+assert.deepEqual(r.j.items.map((x) => [x.item_id, x.product_id, x.from]), [['A1', 669, 'code'], ['A2', 646, 'sku'], ['A3', null, ''], ['A4', null, ''], ['A5', null, '']]);
+assert.equal(r.j.items[1].product_name, 'Осушувач повітря Evoair Dryora 10 (DRYORA10) [30360]');
+assert.deepEqual((await db.all(`SELECT item_id, product_id, link_source FROM mp_items WHERE account_id = 2 AND item_id LIKE 'A%' ORDER BY item_id`)).map((x) => ({ ...x })),
+  [{ item_id: 'A1', product_id: 669, link_source: 'code' }, { item_id: 'A2', product_id: 646, link_source: 'sku' }], 'автоматичні збіги записано, порожні — ні');
+// ручний вибір у формі має пріоритет і не перезаписується автопідбором
+await req('PUT', '/api/mp/crm/settings/2', { office: '8' });
+r = await req('POST', '/api/mp/crm/create', { account: 2, id: '9007', items: [
+  { item_id: 'A1', product_id: 701, price: 7600, qty: 1 }, { item_id: 'A2', product_id: 646, price: 6500, qty: 1 }, { item_id: 'A3', product_id: 1021, price: 7499, qty: 1 },
+  { item_id: 'A4', product_id: 703, price: 1, qty: 1 }, { item_id: 'A5', product_id: 703, price: 1, qty: 1 }] });
+assert.equal(r.status, 200, JSON.stringify(r.j));
+assert.deepEqual((await db.all(`SELECT item_id, product_id, link_source FROM mp_items WHERE account_id = 2 AND item_id LIKE 'A%' ORDER BY item_id`)).map((x) => [x.item_id, x.product_id, x.link_source]),
+  [['A1', 701, 'manual'], ['A2', 646, 'sku'], ['A3', 1021, 'manual'], ['A4', 703, 'manual'], ['A5', 703, 'manual']], 'змінений вручну — manual, незмінений — як був');
+assert.equal((await db.get(`SELECT COUNT(*) AS n FROM mp_items WHERE product_id = 703`)).n, 4, 'кілька товарів маркетплейсу (і з різних магазинів) → один товар LP-CRM');
+// фоновий підбір для товарів без прив'язки (з синхронізації): за кодом, дубль у магазині — копія
+await db.batch([
+  [`INSERT INTO mp_items (mp, account_id, item_id, name, article, last_seen) VALUES ('rozetka', 1, 'B1', 'Dryora дубль', '30360 EvoairDryora10', '2026-11-01'), ('rozetka', 1, 'B2', 'Без коду', 'XYZ', '2026-11-02'), ('rozetka', 1, 'B3', 'Дубль ComfoDry', '30414 EvoairComfoDry12', '2026-11-03')`, []],
+]);
+r = (await req('POST', '/api/cron/run/market-items', null, { 'X-Cron-Key': (await req('POST', '/api/jobs/key')).j.key })).j;
+assert.ok(r.ok, JSON.stringify(r));
+assert.deepEqual([r.result.checked, r.result.linked], [3, 2]);
+assert.deepEqual((await db.all(`SELECT item_id, product_id, link_source FROM mp_items WHERE account_id = 1 AND item_id LIKE 'B%' ORDER BY item_id`)).map((x) => [x.item_id, x.product_id, x.link_source]),
+  [['B1', 646, 'code'], ['B2', null, ''], ['B3', 701, 'copied']], 'B3: той самий артикул уже прив\'язано вручну в магазині 2 — копія, а не код');
+// пошук у формі бачить і словник каталогу
+r = await req('GET', '/api/mp/crm/products?q=dryora');
+assert.deepEqual(r.j.products.map((p) => p.id), [646]);
 
 // ---------- статус у LP-CRM фоном ----------
 CRM.set('C-TTN-1', { ...CRM.get('C-TTN-1'), status: '2' });

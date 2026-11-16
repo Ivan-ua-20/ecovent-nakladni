@@ -3,8 +3,44 @@
 
 export const schema = {
   name: 'market',
-  version: 8,
+  version: 9,
   tables: [
+  // Товари магазинів маркетплейсів (з замовлень) і їх прив'язка до товарів LP-CRM (див. items.js).
+  // Кілька товарів маркетплейсу (дублі, інший магазин) можуть вести до одного product_id; link_source — manual | learned |
+  // copied | code | sku | unlink; in_shop — товар ще є в магазині (для майбутнього списку товарів кабінету).
+  `CREATE TABLE IF NOT EXISTS mp_items (
+    mp TEXT NOT NULL,
+    account_id INTEGER NOT NULL,
+    item_id TEXT NOT NULL,
+    name TEXT DEFAULT '',
+    article TEXT DEFAULT '',
+    offer_id TEXT DEFAULT '',
+    photo TEXT DEFAULT '',
+    url TEXT DEFAULT '',
+    category TEXT DEFAULT '',
+    first_seen TEXT DEFAULT '',
+    last_seen TEXT DEFAULT '',
+    in_shop INTEGER NOT NULL DEFAULT 1,
+    product_id INTEGER,
+    link_source TEXT DEFAULT '',
+    link_by TEXT DEFAULT '',
+    link_at TEXT DEFAULT '',
+    PRIMARY KEY (mp, account_id, item_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS mp_items_article ON mp_items (mp, article)`,
+  `CREATE INDEX IF NOT EXISTS mp_items_product ON mp_items (product_id)`,
+  // Журнал прив'язок: хто, коли, що змінив (old → new product_id).
+  `CREATE TABLE IF NOT EXISTS mp_items_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mp TEXT NOT NULL,
+    account_id INTEGER NOT NULL,
+    item_id TEXT NOT NULL,
+    old_product_id INTEGER,
+    new_product_id INTEGER,
+    source TEXT DEFAULT '',
+    by TEXT DEFAULT '',
+    at TEXT DEFAULT ''
+  )`,
   // Товар Розетки → товар LP-CRM (для «Створити в LP-CRM»; запам'ятовується після першого разу).
   `CREATE TABLE IF NOT EXISTS mp_crm_items (
     mp TEXT NOT NULL,

@@ -20,9 +20,10 @@ import { schema as market } from './modules/market/schema.js';
 import { schema as returns } from './modules/returns/schema.js';
 import { schema as checks } from './modules/checks/schema.js';
 import { schema as telephony } from './modules/telephony/schema.js';
+import { schema as catalog } from './modules/catalog/schema.js';
 
 // Порядок важливий: колонки notify додаються в users (auth), payments — в inv_fops (rahunky).
-export const MODULE_SCHEMAS = [core, auth, notify, refs, nakladni, rahunky, payments, analytics, admin, errlog, b2b, marking, retail, market, returns, checks, telephony];
+export const MODULE_SCHEMAS = [core, auth, notify, refs, nakladni, rahunky, payments, analytics, admin, errlog, b2b, marking, retail, market, returns, checks, telephony, catalog];
 
 const versionKey = (m) => `schema:${m.name}`;
 
