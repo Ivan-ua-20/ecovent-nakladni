@@ -13,6 +13,7 @@ import { mountRahunky } from './modules/rahunky/index.js';
 import { mountAnalytics } from './modules/analytics/index.js';
 import { mountTg } from './modules/notify/index.js';
 import { mountErrLog } from './modules/errlog/index.js';
+import { mountCatalog } from './modules/catalog/index.js';
 import { mountB2b } from './modules/b2b/index.js';
 import { mountMarking } from './modules/marking/index.js';
 import { mountRetail } from './modules/retail/index.js';
@@ -95,6 +96,7 @@ export function createApp({ db, fetchFn: rawFetch = fetch, maxSubrequests = Infi
   services.nakladni = mountNakladni(app, ctx);
   mountAdmin(app, ctx);
   services.errlog = mountErrLog(app, ctx);
+  services.catalog = mountCatalog(app, ctx); // словник товарів LP-CRM — до маркетплейсів, які його читають
   services.b2b = mountB2b(app, ctx);
   services.rahunky = mountRahunky(app, ctx);
   services.marking = mountMarking(app, ctx);

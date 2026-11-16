@@ -70,6 +70,7 @@ src/
     notify/        Telegram-сповіщення (віддає notify)
     analytics/     аналітика продажів
     checks/        «Перевірка»: вид оплати ↔ наложка в ТТН, чеки Checkbox, оплата на рахунок ↔ ФОП чека (правила — rules.js)
+    catalog/       словник товарів LP-CRM (crm_products, фоновий прохід getProduct за ID) — для прив'язки товарів маркетплейсів (market/items.js)
 public/
   app.js           оболонка: вхід, меню, роутер
   core/ui.js       спільне для сторінок: API, діалоги, повідомлення, друк

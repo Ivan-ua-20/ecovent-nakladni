@@ -8,6 +8,7 @@ import { rzOrdersSearch, rzItemComments, rzSuccessStatuses, rzOrderChat, rzSendM
 import { promOrders } from '../../integrations/prom.js';
 import { epcOrdersPage } from '../../integrations/epicentr.js';
 import { mountMarketCrm } from './crm.js';
+import { mountMarketItems } from './items.js';
 
 const KEEP_DAYS = 45;
 const HISTORY_YEARS = 4; // Розетка: історія типово за 4 роки (період можна обрати), зберігається весь цей час
@@ -143,7 +144,9 @@ const ROW = {
     customer: o.user_title?.full_name || rzRecipient(o) || '',
     phone: String(o.user_phone || o.delivery?.recipient_phone || ''), total: money(o.cost ?? o.amount),
     delivery: String(o.delivery?.delivery_service_name || o.delivery_service?.name || ''), ttn: String(o.ttn || o.delivery?.ttn || ''),
-    items: (o.purchases || []).map((p) => ({ id: String(p.item_id || p.item?.id || ''), name: String(p.item_name || p.item?.name || ''), qty: Number(p.quantity) || 1, price: money(p.price) })),
+    items: (o.purchases || []).map((p) => ({ id: String(p.item_id || p.item?.id || ''), name: String(p.item_name || p.item?.name || ''), qty: Number(p.quantity) || 1, price: money(p.price),
+      ...(p.item?.article ? { article: String(p.item.article).trim().slice(0, 120) } : {}), ...(p.item?.price_offer_id ? { offer: String(p.item.price_offer_id) } : {}) })),
+    goods: rzGoods(o),
     ...rzOther(o),
     ...rzPay(o),
     address: rzAddress(o), comment: String(o.comment || '').slice(0, 1000), dup_of: o.duplicate_order_id ? String(o.duplicate_order_id) : '',
@@ -154,6 +157,7 @@ const ROW = {
     customer: fio(o.client_last_name, o.client_first_name, o.client_second_name), phone: String(o.phone || ''), total: money(o.full_price ?? o.price),
     delivery: String(o.delivery_option?.name || ''), ttn: String(o.delivery_provider_data?.declaration_number || ''),
     items: (o.products || []).map((p) => ({ name: String(p.name || p.name_multilang?.uk || ''), qty: Number(p.quantity) || 1, price: money(p.price) })),
+    goods: (o.products || []).map((p) => ({ id: String(p.id || p.external_id || p.sku || ''), name: String(p.name || p.name_multilang?.uk || ''), article: String(p.sku || p.external_id || ''), offer: String(p.id || ''), photo: String(p.image || p.main_image || ''), url: String(p.url || ''), category: '' })),
   }),
   epc: (o) => ({
     id: String(o.id), number: String(o.number || o.id), created_at: kyivDT(o.createdAt), changed_at: kyivDT(o.updatedAt || o.createdAt),
@@ -161,8 +165,16 @@ const ROW = {
     customer: fio(o.address?.lastName, o.address?.firstName, o.address?.patronymic), phone: String(o.address?.phone || ''), total: money(o.subtotal),
     delivery: EPC_DELIVERY[o.address?.shipment?.provider] || String(o.address?.shipment?.provider || ''), ttn: String(o.address?.shipment?.number || ''),
     items: (o.items || []).map((p) => ({ name: String(p.title || ''), qty: Number(p.quantity) || 1, price: money(p.price) })),
+    goods: (o.items || []).map((p) => ({ id: String(p.id || p.offerId || p.sku || ''), name: String(p.title || ''), article: String(p.sku || p.vendorCode || p.article || ''), offer: String(p.offerId || ''), photo: '', url: '', category: '' })),
   }),
 };
+// Товар Розетки з замовлення (expand=purchases дає повний об'єкт item): для довідника товарів магазину (mp_items).
+const rzGoods = (o) => (o.purchases || []).map((p) => {
+  const it = p.item || {};
+  return { id: String(p.item_id || it.id || ''), name: String(it.name_ua || it.name || p.item_name || '').slice(0, 300), article: String(it.article || '').trim().slice(0, 120),
+    offer: String(it.price_offer_id || it.uploader_offer_id || ''), photo: String(it.photo_preview || it.photo || '').slice(0, 300), url: String(it.url || '').slice(0, 300),
+    category: String(typeof it.catalog_category === 'string' ? it.catalog_category : it.catalog_category?.name || it.catalog_category?.title || '').slice(0, 120) };
+});
 
 export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}, onCleanup = () => {}, shared = {} }) {
   const borderOf = (days) => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
@@ -208,6 +220,42 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
          OR (excluded.address != '' AND mp_orders.address IS NOT excluded.address) OR mp_orders.comment IS NOT excluded.comment OR mp_orders.dup_of IS NOT excluded.dup_of`,
       [mp, accountId, r.id, r.number, r.created_at, r.changed_at, r.status, r.status_name, r.customer, r.phone, r.total, r.delivery, r.ttn, JSON.stringify(r.items), now, searchOf(r), r.status_group || 0, r.recipient || '', r.recipient_phone || '',
         r.pay_type || '', r.pay_status || '', r.paid || 0, r.pay_known || 0, r.address || '', r.comment || '', r.dup_of || ''],
+    ]));
+    await saveGoods(mp, accountId, rows);
+  }
+  // Довідник товарів магазину (mp_items): назва, артикул, offer_id, фото; перший і останній продаж.
+  // Незмінені рядки не перезаписуються; прив'язку до LP-CRM (product_id) синхронізація не чіпає.
+  async function saveGoods(mp, accountId, rows) {
+    const goods = new Map();
+    for (const r of rows) {
+      const day = String(r.created_at || '').slice(0, 10);
+      for (const g of r.goods || []) {
+        if (!g.id) continue;
+        const cur = goods.get(g.id);
+        if (!cur) { goods.set(g.id, { ...g, first: day, last: day }); continue; }
+        if (day && (!cur.first || day < cur.first)) cur.first = day;
+        if (day > cur.last) cur.last = day;
+        for (const k of ['name', 'article', 'offer', 'photo', 'url', 'category']) if (!cur[k] && g[k]) cur[k] = g[k];
+      }
+    }
+    if (!goods.size) return;
+    await db.batch([...goods.values()].map((g) => [
+      `INSERT INTO mp_items (mp, account_id, item_id, name, article, offer_id, photo, url, category, first_seen, last_seen)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(mp, account_id, item_id) DO UPDATE SET
+         name = CASE WHEN excluded.name != '' THEN excluded.name ELSE mp_items.name END,
+         article = CASE WHEN excluded.article != '' THEN excluded.article ELSE mp_items.article END,
+         offer_id = CASE WHEN excluded.offer_id != '' THEN excluded.offer_id ELSE mp_items.offer_id END,
+         photo = CASE WHEN excluded.photo != '' THEN excluded.photo ELSE mp_items.photo END,
+         url = CASE WHEN excluded.url != '' THEN excluded.url ELSE mp_items.url END,
+         category = CASE WHEN excluded.category != '' THEN excluded.category ELSE mp_items.category END,
+         first_seen = CASE WHEN excluded.first_seen != '' AND (mp_items.first_seen = '' OR excluded.first_seen < mp_items.first_seen) THEN excluded.first_seen ELSE mp_items.first_seen END,
+         last_seen = MAX(mp_items.last_seen, excluded.last_seen)
+       WHERE (excluded.name != '' AND mp_items.name IS NOT excluded.name) OR (excluded.article != '' AND mp_items.article IS NOT excluded.article)
+         OR (excluded.offer_id != '' AND mp_items.offer_id IS NOT excluded.offer_id) OR (excluded.photo != '' AND mp_items.photo IS NOT excluded.photo)
+         OR (excluded.url != '' AND mp_items.url IS NOT excluded.url) OR (excluded.category != '' AND mp_items.category IS NOT excluded.category)
+         OR excluded.last_seen > mp_items.last_seen OR (excluded.first_seen != '' AND (mp_items.first_seen = '' OR excluded.first_seen < mp_items.first_seen))`,
+      [mp, accountId, g.id, g.name || '', g.article || '', g.offer || '', g.photo || '', g.url || '', g.category || '', g.first || '', g.last || ''],
     ]));
   }
 
@@ -773,7 +821,8 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     if (!o) throw fail(404, 'Замовлення не знайдено.');
     return o;
   };
-  mountMarketCrm(app, { db, fetchFn, services, onCron, rzOrderOf });
+  const items = mountMarketItems({ db, services, onCron });
+  mountMarketCrm(app, { db, fetchFn, services, onCron, rzOrderOf, items });
   const markAsked = async (o, user, via) => {
     const at = nowIso();
     const by = String(user?.name || user?.login || '').slice(0, 80);

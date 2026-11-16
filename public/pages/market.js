@@ -31,6 +31,8 @@ const callsHtml = (o) => {
   return `<div style="margin-top:3px">${pre}</div>${post}`;
 };
 const VIA = { viber: 'Viber', telegram: 'Telegram', phone: 'дзвінок', copy: 'текст', chat: 'чат Розетки', manual: 'вручну' };
+// Звідки взято товар LP-CRM у формі «Створити в LP-CRM» (довідник товарів: лише однозначний збіг, без вгадування за назвою).
+const FROM_TXT = { saved: 'як минулого разу', copied: 'як у такого ж товару', code: 'за кодом товару', sku: 'за артикулом' };
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch { /* немає доступу до буфера — старий спосіб */ }
   const ta = document.createElement('textarea');
@@ -368,7 +370,7 @@ export function createMarketPages({ can }) {
           <div class="small"><b>${esc(it.name)}</b> <span class="muted">код ${esc(it.item_id)}</span></div>
           <div class="mp-crm-pick"><input type="search" data-q placeholder="Товар LP-CRM: почніть вводити назву" value="${esc(it.product_name)}" autocomplete="off">
             <input type="hidden" data-pid value="${esc(it.product_id || '')}"><div class="mp-crm-res" data-res></div>
-            <div class="small ${it.product_id ? '' : 'muted'}" data-sel>${it.product_id ? `№${esc(it.product_id)}${it.from === 'guess' ? ' · підібрано за назвою, перевірте' : it.from === 'saved' ? ' · як минулого разу' : ''}` : 'товар не обрано'}</div></div>
+            <div class="small ${it.product_id ? '' : 'muted'}" data-sel>${it.product_id ? `№${esc(it.product_id)}${FROM_TXT[it.from] ? ` · ${FROM_TXT[it.from]}` : ''}` : 'товар не обрано — оберіть зі списку'}</div></div>
           <label class="f"><span>К-сть</span><input data-qty type="number" min="1" step="1" value="${it.qty}"></label>
           <label class="f"><span>Ціна, ₴</span><input data-price type="number" min="0" step="0.01" value="${it.price}"></label>
         </div>`).join('');

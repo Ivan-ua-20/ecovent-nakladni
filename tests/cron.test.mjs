@@ -23,7 +23,7 @@ assert.equal((await req('GET', '/api/cron/tasks', {})).status, 401);
 await db.run(`INSERT INTO settings (key, value) VALUES ('an_cron_key', 'old-key-0123456789')`);
 let r = await req('GET', '/api/cron/tasks', { 'X-Cron-Key': 'old-key-0123456789' });
 assert.equal(r.status, 200);
-assert.deepEqual(r.j.tasks.sort(), ['analytics', 'b2b-crm-status', 'binotel', 'checks', 'market', 'market-crm', 'market-history', 'market-msgs', 'market-pay', 'market-reviews', 'orders', 'returns', 'rzs', 'rzsret', 'ttn']);
+assert.deepEqual(r.j.tasks.sort(), ['analytics', 'b2b-crm-status', 'binotel', 'catalog', 'checks', 'market', 'market-crm', 'market-history', 'market-items', 'market-msgs', 'market-pay', 'market-reviews', 'orders', 'returns', 'rzs', 'rzsret', 'ttn']);
 
 // новий ключ з налаштувань; старий після цього не діє
 const { key } = (await req('POST', '/api/jobs/key')).j;
@@ -33,7 +33,7 @@ const K = { 'X-Cron-Key': key };
 
 // кожна задача — окремо; без LP-CRM і без даних — пропускають без запитів назовні
 calls = 0;
-for (const t of ['orders', 'ttn', 'rzs', 'analytics', 'market', 'market-history', 'market-reviews', 'market-msgs', 'market-pay', 'market-crm', 'b2b-crm-status', 'rzsret', 'returns', 'checks', 'binotel']) {
+for (const t of ['orders', 'ttn', 'rzs', 'analytics', 'market', 'market-history', 'market-reviews', 'market-msgs', 'market-pay', 'market-crm', 'market-items', 'catalog', 'b2b-crm-status', 'rzsret', 'returns', 'checks', 'binotel']) {
   r = await req('POST', `/api/cron/run/${t}`, K);
   assert.equal(r.status, 200, t);
   assert.ok(r.j.ok, `${t}: ${JSON.stringify(r.j)}`);

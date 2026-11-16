@@ -3,7 +3,7 @@
 // • «Створити в LP-CRM» — для замовлень у статусі Розетки «Обробляється менеджером» (26): нове замовлення в LP-CRM
 //   (статус «Нові») з покупцем, телефоном, товарами й цінами Розетки, доставкою та оплатою в коментарі;
 // • статус замовлення в LP-CRM для прив'язаних (фоном, раз на 10 хв).
-// Товар Розетки → товар LP-CRM запам'ятовується (mp_crm_items) і підставляється наступного разу.
+// Товар Розетки → товар LP-CRM: довідник mp_items і правила прив'язки — в items.js (лише однозначний збіг, інакше порожньо).
 import { fail, need, nowIso, loadSettings } from '../../core/common.js';
 import { addNewOrder, getOrdersBatch, getStatuses } from '../../integrations/lpcrm.js';
 import { ttnOf } from '../analytics/index.js';
@@ -15,7 +15,7 @@ const J = (a) => JSON.stringify(a);
 const CHECK_MS = 10 * 60e3;
 export const CRM_FROM_STATUS = '26'; // «Обробляється менеджером»
 
-export function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {}, rzOrderOf }) {
+export function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {}, rzOrderOf, items }) {
   const userName = (u) => String(u?.name || u?.login || '').slice(0, 80);
   const creds = async () => {
     const s = await loadSettings(db);
@@ -45,59 +45,45 @@ export function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () =>
   });
 
   // ---------- товари: Розетка → LP-CRM ----------
+  // Зв'язок із замовленням LP-CRM вивчає товар: однозначно лише для замовлення з одним товаром (не чіпає наявні прив'язки).
   const learn = async (mp, o, crmOrder) => {
-    // однозначно лише для замовлення з одним товаром
-    const items = JSON.parse(o.items || '[]');
+    const list = JSON.parse(o.items || '[]');
     const prods = Array.isArray(crmOrder?.products) ? crmOrder.products : Object.values(crmOrder?.products || {});
-    if (items.length !== 1 || prods.length !== 1 || !items[0].id) return;
+    if (list.length !== 1 || prods.length !== 1 || !list[0].id) return;
     const pid = Number(prods[0].product_id ?? prods[0].id);
     if (!pid) return;
-    await db.run(`INSERT INTO mp_crm_items (mp, item_id, product_id, name, updated_at) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(mp, item_id) DO NOTHING`, [mp, String(items[0].id), pid, String(prods[0].name || items[0].name || '').slice(0, 300), nowIso()]);
+    await items.linkMany(mp, o.account_id, [{ ...list[0], item_id: String(list[0].id), product_id: pid, source: 'learned' }], 'за замовленням LP-CRM', { onlyEmpty: true });
   };
+  // Пошук товару LP-CRM для форми: словник каталогу, а також товари з аналітики й рітейлу (поки каталог не повний).
   const searchProducts = async (q, limit = 20) => {
     const words = String(q || '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 2).slice(0, 6);
     if (!words.length) return [];
     const like = words.map(() => `LOWER(name) LIKE ?`).join(' AND ');
     const args = words.map((w) => `%${w}%`);
-    const [a, b] = await Promise.all([
+    const [k, a, b] = await Promise.all([
+      services.catalog?.search(q, 60) ?? [],
       db.all(`SELECT product_id AS id, name FROM an_products WHERE ${like} LIMIT 60`, args).catch(() => []),
       db.all(`SELECT product_id AS id, name FROM rzs_products WHERE product_id IS NOT NULL AND ${like} LIMIT 60`, args).catch(() => []),
     ]);
     const seen = new Set();
-    return [...a, ...b].filter((p) => p.id && !seen.has(p.id) && seen.add(p.id)).slice(0, limit);
-  };
-  // Найкращий збіг за назвою: найбільше спільних слів (бренд, модель, цифри).
-  const guess = async (name) => {
-    const words = String(name || '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3 && !/^(для|та|до|від|with|and)$/.test(w));
-    const strong = words.filter((w) => /\d/.test(w) || /^[a-z]/.test(w)).slice(0, 4); // модель/бренд латиницею, цифри
-    if (!strong.length) return null;
-    const list = await searchProducts(strong.slice(0, 2).join(' '), 40);
-    let best = null;
-    for (const p of list) {
-      const n = String(p.name).toLowerCase();
-      const score = words.filter((w) => n.includes(w)).length;
-      if (!best || score > best.score) best = { ...p, score };
-    }
-    return best && best.score >= Math.min(3, words.length) ? { id: best.id, name: best.name } : null;
+    return [...k, ...a, ...b].filter((p) => p.id && !seen.has(p.id) && seen.add(p.id)).map((p) => ({ id: p.id, name: p.name })).slice(0, limit);
   };
   app.get('/api/mp/crm/products', async (c) => {
     need(c, 'market.edit');
     return c.json({ products: await searchProducts(c.req.query('q')) });
   });
-  // Що підставити у форму «Створити в LP-CRM»: товари з ціною й кількістю Розетки і товаром LP-CRM (запам'ятаний або схожий за назвою).
+  // Що підставити у форму «Створити в LP-CRM»: товари з ціною й кількістю Розетки і товаром LP-CRM з довідника
+  // (прив'язаний раніше, скопійований з такого ж товару, за кодом чи артикулом); інакше поле порожнє.
   app.get('/api/mp/crm/prefill/:account/:id', async (c) => {
     need(c, 'market.edit');
     const o = await rzOrderOf({ account: c.req.param('account'), id: c.req.param('id') }, c);
-    const items = JSON.parse(o.items || '[]');
-    const known = items.length ? await db.all(`SELECT item_id, product_id, name FROM mp_crm_items WHERE mp = 'rozetka' AND item_id IN (SELECT value FROM json_each(?))`, [J(items.map((i) => String(i.id || '')))]) : [];
-    const out = [];
-    for (const it of items) {
-      const k = known.find((x) => x.item_id === String(it.id || ''));
-      const g = k ? null : await guess(it.name);
-      out.push({ item_id: String(it.id || ''), name: it.name, qty: Number(it.qty) || 1, price: Number(it.price) || 0,
-        product_id: k?.product_id || g?.id || null, product_name: k?.name || g?.name || '', from: k ? 'saved' : g ? 'guess' : '' });
-    }
+    const list = JSON.parse(o.items || '[]');
+    const found = await items.resolve('rozetka', o.account_id, list);
+    const out = list.map((it) => {
+      const f = found.find((x) => x.item_id === String(it.id || ''));
+      return { item_id: String(it.id || ''), name: it.name, qty: Number(it.qty) || 1, price: Number(it.price) || 0,
+        product_id: f?.product_id || null, product_name: f?.product_name || '', from: f?.from || '' };
+    });
     const cfg = (await shopCfgAll())[String(o.account_id)] || {};
     return c.json({ items: out, shop: cfg, configured: Boolean(await creds()) });
   });
@@ -113,7 +99,6 @@ export function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () =>
     if (!cr) throw fail(400, 'Не налаштовано LP-CRM у «Налаштуваннях».');
     const cfg = (await shopCfgAll())[String(o.account_id)] || {};
     if (!cfg.office) throw fail(400, 'Вкажіть ID відділу LP-CRM для цього магазину («Налаштування LP-CRM» на сторінці магазину).');
-    const items = JSON.parse(o.items || '[]');
     const lines = (Array.isArray(b.items) ? b.items : []).slice(0, 50).map((x) => ({
       item_id: String(x.item_id || ''), product_id: Number(x.product_id) || 0, price: Math.round((Number(x.price) || 0) * 100) / 100, count: Math.max(1, Math.round(Number(x.qty) || 1)),
       name: String(x.product_name || '').slice(0, 300),
@@ -153,13 +138,11 @@ export function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () =>
     const by = userName(c.get('user'));
     const st = [[`UPDATE mp_orders SET crm_id = ?, crm_at = ?, crm_by = ?, crm_status = 'Нові', crm_checked_at = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ?`,
       [crmId, nowIso(), `створив(ла) ${by}`, nowIso(), o.account_id, o.id]]];
-    // запам'ятати товари (лише ті, що є в замовленні Розетки)
-    for (const l of lines) {
-      if (!l.item_id || !items.some((i) => String(i.id) === l.item_id)) continue;
-      st.push([`INSERT INTO mp_crm_items (mp, item_id, product_id, name, updated_at) VALUES ('rozetka', ?, ?, ?, ?)
-        ON CONFLICT(mp, item_id) DO UPDATE SET product_id = excluded.product_id, name = excluded.name, updated_at = excluded.updated_at`, [l.item_id, l.product_id, l.name, nowIso()]]);
-    }
     await db.batch(st);
+    // запам'ятати обрані товари в довіднику (лише ті, що є в замовленні Розетки) — наступного разу підставляться самі
+    const ordered = JSON.parse(o.items || '[]');
+    await items.linkMany('rozetka', o.account_id, lines.filter((l) => l.item_id && ordered.some((i) => String(i.id) === l.item_id))
+      .map((l) => { const it = ordered.find((i) => String(i.id) === l.item_id); return { item_id: l.item_id, name: it?.name || '', article: it?.article || '', offer: it?.offer || '', product_id: l.product_id, source: 'manual' }; }), by);
     return c.json({ ok: true, crm_id: crmId, code });
   });
 
