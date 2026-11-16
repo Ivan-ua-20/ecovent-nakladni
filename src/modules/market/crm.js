@@ -14,6 +14,23 @@ const phone9 = (v) => String(v ?? '').replace(/\D/g, '').slice(-9);
 const J = (a) => JSON.stringify(a);
 const CHECK_MS = 10 * 60e3;
 export const CRM_FROM_STATUS = '26'; // «Обробляється менеджером»
+export const MP_OFFICE = '5'; // відділ LP-CRM «Маркетплейси» — для всіх замовлень з вкладки «Маркетплейси»
+// Вид оплати LP-CRM: 14 — RozetkaPay (оплата на Розетці будь-яким способом), 15 — післяплата RozetkaPay (оплата при отриманні),
+// 16 — післяплата NovaPay (Нова пошта, оплата при отриманні), 18 — післяплата Meest (Meest, оплата при отриманні).
+const COD_RE = /отриман|післяплат|наложен|готівк|cash/i;
+const fmtAt = (s) => { const v = String(s || ''); return v.length >= 16 ? `${v.slice(8, 10)}.${v.slice(5, 7)}.${v.slice(0, 4)} ${v.slice(11, 19)}` : v; };
+const money = (n) => `${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString('uk-UA').replace(/ /g, ' ')} грн`;
+const PAY_NAMES = { 14: 'RozetkaPay', 15: 'Післяплата RozetkaPay', 16: 'Післяплата NovaPay', 18: 'Післяплата Meest' };
+export function crmPayment(o) {
+  const type = String(o.pay_type || '').trim();
+  const cod = !o.paid && COD_RE.test(type);
+  const deliv = String(o.delivery || '');
+  if (cod) {
+    const [payment, via] = /нова\s*пошт|nova\s*po/i.test(deliv) ? ['16', 'NovaPay (Нова пошта)'] : /meest|міст/i.test(deliv) ? ['18', 'Meest'] : ['15', 'RozetkaPay'];
+    return { payment, cod: true, text: `Післяплата (наложка) ${money(o.total)} — оплата при отриманні, ${via}. Спосіб на Розетці: ${type || '—'}${o.pay_status ? `, ${o.pay_status}` : ''}` };
+  }
+  return { payment: '14', cod: false, text: `${o.paid ? 'Оплачено одразу на Розетці' : 'Оплата на Розетці, ще не оплачено'} (RozetkaPay): ${type || 'спосіб не вказано'}, ${money(o.total)}${o.pay_status && !o.paid ? ` — ${o.pay_status}` : ''}` };
+}
 
 export function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {}, rzOrderOf, items }) {
   const userName = (u) => String(u?.name || u?.login || '').slice(0, 80);
@@ -85,7 +102,8 @@ export function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () =>
         product_id: f?.product_id || null, product_name: f?.product_name || '', from: f?.from || '' };
     });
     const cfg = (await shopCfgAll())[String(o.account_id)] || {};
-    return c.json({ items: out, shop: cfg, configured: Boolean(await creds()) });
+    const pay = crmPayment(o);
+    return c.json({ items: out, shop: cfg, configured: Boolean(await creds()), pay: { id: pay.payment, name: PAY_NAMES[pay.payment] } });
   });
 
   // ---------- створити в LP-CRM ----------
@@ -98,7 +116,6 @@ export function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () =>
     const cr = await creds();
     if (!cr) throw fail(400, 'Не налаштовано LP-CRM у «Налаштуваннях».');
     const cfg = (await shopCfgAll())[String(o.account_id)] || {};
-    if (!cfg.office) throw fail(400, 'Вкажіть ID відділу LP-CRM для цього магазину («Налаштування LP-CRM» на сторінці магазину).');
     const lines = (Array.isArray(b.items) ? b.items : []).slice(0, 50).map((x) => ({
       item_id: String(x.item_id || ''), product_id: Number(x.product_id) || 0, price: Math.round((Number(x.price) || 0) * 100) / 100, count: Math.max(1, Math.round(Number(x.qty) || 1)),
       name: String(x.product_name || '').slice(0, 300),
@@ -110,14 +127,15 @@ export function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () =>
     const claim = await db.run(`UPDATE mp_orders SET crm_code = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ? AND crm_code = '' AND crm_id = ''`, [code, o.account_id, o.id]);
     if (!claim.changes) throw fail(409, 'Замовлення вже передається в LP-CRM.');
     const shop = String(b.shop_name || '').slice(0, 80);
-    const comment = [`Rozetka ${o.number}${shop ? ` · ${shop}` : ''}`, o.pay_type ? `Оплата: ${o.pay_type}${o.paid ? ' (оплачено)' : o.pay_status ? ` (${o.pay_status})` : ''}` : '',
+    const pay = crmPayment(o);
+    const comment = [`Rozetka ${o.number}${shop ? ` · ${shop}` : ''}`, `Замовлення від ${fmtAt(o.created_at)}`, `Оплата: ${pay.text}`,
       o.delivery ? `Доставка: ${o.delivery}` : '', o.recipient && o.recipient !== o.customer ? `Отримувач: ${o.recipient}${o.recipient_phone ? ` ${o.recipient_phone}` : ''}` : '',
       o.comment ? `Коментар покупця: ${o.comment}` : ''].filter(Boolean).join('\n');
     const host = cfg.site || new URL(c.req.url).host;
     let res;
     try {
       res = await addNewOrder(fetchFn, { subdomain: cr.subdomain, key: cr.inKey }, {
-        code, office: cfg.office, bayer_name: o.customer || o.recipient || '', phone: String(o.phone || o.recipient_phone || '').replace(/\D/g, ''), comment,
+        code, office: MP_OFFICE, payment: pay.payment, bayer_name: o.customer || o.recipient || '', phone: String(o.phone || o.recipient_phone || '').replace(/\D/g, ''), comment,
         delivery: cfg.delivery || '', delivery_adress: [o.address, o.ttn ? `ТТН ${o.ttn}` : ''].filter(Boolean).join(', '), site: host, additional_1: cfg.field1 || '',
         products: lines.map((l) => ({ product_id: l.product_id, price: l.price, count: l.count })),
       });

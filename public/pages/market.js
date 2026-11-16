@@ -435,7 +435,6 @@ export function createMarketPages({ can }) {
       let pre;
       try { pre = await api('GET', `/api/mp/crm/prefill/${o.account_id}/${encodeURIComponent(o.id)}`); } catch (er) { toast(er.message, true); return; }
       if (!pre.configured) { toast('Не налаштовано LP-CRM у «Налаштуваннях»', true); return; }
-      if (!pre.shop.office) { toast(`Спершу вкажіть ID відділу LP-CRM для магазину «${name.get(o.account_id) || ''}» (кнопка «Налаштування LP-CRM» на сторінці магазину)`, true); return; }
       const rows = pre.items.map((it, i) => `<div class="mp-crm-line" data-i="${i}">
           <div class="small"><b>${esc(it.name)}</b> <span class="muted">код ${esc(it.item_id)}</span></div>
           <div class="mp-crm-pick"><input type="search" data-q placeholder="Товар LP-CRM: почніть вводити назву" value="${esc(it.product_name)}" autocomplete="off">
@@ -445,7 +444,7 @@ export function createMarketPages({ can }) {
           <label class="f"><span>Ціна, ₴</span><input data-price type="number" min="0" step="0.01" value="${it.price}"></label>
         </div>`).join('');
       const md = modal(`Створити в LP-CRM: Розетка №${o.number}`, `<div class="form-stack">
-          <div class="small">Нове замовлення в LP-CRM (статус «Нові»), відділ <b>${esc(pre.shop.office)}</b>. Покупець <b>${esc(o.customer || '')}</b>, ${esc(intlPhone(o.phone) || '')}. Доставка, оплата й коментар покупця підуть у коментар.</div>
+          <div class="small">Нове замовлення в LP-CRM (статус «Нові»), відділ <b>5 · Маркетплейси</b>, вид оплати <b>${esc(pre.pay?.name || '')}</b>. Покупець <b>${esc(o.customer || '')}</b>, ${esc(intlPhone(o.phone) || '')}. У коментар підуть номер, дата й час замовлення, повна інформація про оплату, доставка й коментар покупця.</div>
           ${rows}</div>`, { wide: true, footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="mpCrmGo">Створити в LP-CRM</button>' });
       const el = md.el;
       $$('.mp-crm-line', el).forEach((line) => {
@@ -804,7 +803,7 @@ export function createMarketPages({ can }) {
       try { cfg = (await api('GET', '/api/mp/crm/settings')).shops?.[acc.id] || {}; } catch { /* */ }
       const md = modal(`LP-CRM для «${acc.name}»`, `<form id="mpCs" class="form-stack">
           <div class="small muted">З цими даними кнопка «Створити в LP-CRM» створює замовлення в LP-CRM (статус «Нові»).</div>
-          <label class="f"><span>ID відділу LP-CRM (обов'язково)</span><input name="office" inputmode="numeric" value="${esc(cfg.office || '')}" required></label>
+          <div class="small muted">Відділ LP-CRM для всіх замовлень з «Маркетплейсів» — <b>5 · Маркетплейси</b>; вид оплати визначається сам (RozetkaPay або післяплата RozetkaPay / NovaPay / Meest).</div><input type="hidden" name="office" value="${esc(cfg.office || '')}">
           <label class="f"><span>Сайт (поле «Сайт» у LP-CRM)</span><input name="site" value="${esc(cfg.site || '')}" placeholder="напр. rozetka.com.ua"></label>
           <label class="f"><span>ID служби доставки в LP-CRM</span><input name="delivery" inputmode="numeric" value="${esc(cfg.delivery || '')}"></label>
           <label class="f"><span>«Додаткове поле 1» — канал продажу (за ним аналітика визначає джерело)</span><input name="field1" value="${esc(cfg.field1 || '')}" placeholder="напр. Rozetka(Ecovent)"></label>

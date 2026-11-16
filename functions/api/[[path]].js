@@ -11114,7 +11114,7 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
     if (o.status === "cancelled") throw fail(400, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E.");
     const cur = await db.all(`SELECT product_id, name, article, qty, price, rrp FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]);
     const extraOk = !["draft", "open"].includes(o.status);
-    const money3 = (v, what2) => {
+    const money4 = (v, what2) => {
       const raw2 = v === void 0 || v === null ? "" : String(v).replace(/\s/g, "").replace(",", ".");
       const x = raw2 === "" ? null : round2(Number(raw2));
       if (x !== null && !(x >= 0 && x < 1e8)) throw fail(400, `${what2} \u2014 \u0447\u0438\u0441\u043B\u043E \u0432\u0456\u0434 0.`);
@@ -11127,8 +11127,8 @@ function mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice: partne
       const qty = Number(it.qty);
       if (!id) continue;
       if (!Number.isInteger(qty) || qty < 0 || qty > 1e5) throw fail(400, "\u041A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C \u2014 \u0446\u0456\u043B\u0435 \u0447\u0438\u0441\u043B\u043E \u0432\u0456\u0434 0.");
-      const price = money3(it.price, "\u0426\u0456\u043D\u0430");
-      const rrp = money3(it.rrp, "\u0420\u0420\u0426");
+      const price = money4(it.price, "\u0426\u0456\u043D\u0430");
+      const rrp = money4(it.rrp, "\u0420\u0420\u0426");
       let idx = null;
       if (it.line !== void 0 && it.line !== null && it.line !== "" && !it.extra) {
         idx = Number(it.line);
@@ -16907,6 +16907,24 @@ var phone92 = (v) => String(v ?? "").replace(/\D/g, "").slice(-9);
 var J = (a) => JSON.stringify(a);
 var CHECK_MS = 10 * 6e4;
 var CRM_FROM_STATUS = "26";
+var MP_OFFICE = "5";
+var COD_RE = /отриман|післяплат|наложен|готівк|cash/i;
+var fmtAt = (s2) => {
+  const v = String(s2 || "");
+  return v.length >= 16 ? `${v.slice(8, 10)}.${v.slice(5, 7)}.${v.slice(0, 4)} ${v.slice(11, 19)}` : v;
+};
+var money2 = (n) => `${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString("uk-UA").replace(/ /g, " ")} \u0433\u0440\u043D`;
+var PAY_NAMES = { 14: "RozetkaPay", 15: "\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 RozetkaPay", 16: "\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 NovaPay", 18: "\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 Meest" };
+function crmPayment(o) {
+  const type = String(o.pay_type || "").trim();
+  const cod = !o.paid && COD_RE.test(type);
+  const deliv = String(o.delivery || "");
+  if (cod) {
+    const [payment, via] = /нова\s*пошт|nova\s*po/i.test(deliv) ? ["16", "NovaPay (\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430)"] : /meest|міст/i.test(deliv) ? ["18", "Meest"] : ["15", "RozetkaPay"];
+    return { payment, cod: true, text: `\u041F\u0456\u0441\u043B\u044F\u043F\u043B\u0430\u0442\u0430 (\u043D\u0430\u043B\u043E\u0436\u043A\u0430) ${money2(o.total)} \u2014 \u043E\u043F\u043B\u0430\u0442\u0430 \u043F\u0440\u0438 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u0456, ${via}. \u0421\u043F\u043E\u0441\u0456\u0431 \u043D\u0430 \u0420\u043E\u0437\u0435\u0442\u0446\u0456: ${type || "\u2014"}${o.pay_status ? `, ${o.pay_status}` : ""}` };
+  }
+  return { payment: "14", cod: false, text: `${o.paid ? "\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E \u043E\u0434\u0440\u0430\u0437\u0443 \u043D\u0430 \u0420\u043E\u0437\u0435\u0442\u0446\u0456" : "\u041E\u043F\u043B\u0430\u0442\u0430 \u043D\u0430 \u0420\u043E\u0437\u0435\u0442\u0446\u0456, \u0449\u0435 \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E"} (RozetkaPay): ${type || "\u0441\u043F\u043E\u0441\u0456\u0431 \u043D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E"}, ${money2(o.total)}${o.pay_status && !o.paid ? ` \u2014 ${o.pay_status}` : ""}` };
+}
 function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
 }, rzOrderOf, items }) {
   const userName8 = (u) => String(u?.name || u?.login || "").slice(0, 80);
@@ -16981,7 +16999,8 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
       };
     });
     const cfg = (await shopCfgAll())[String(o.account_id)] || {};
-    return c.json({ items: out, shop: cfg, configured: Boolean(await creds()) });
+    const pay = crmPayment(o);
+    return c.json({ items: out, shop: cfg, configured: Boolean(await creds()), pay: { id: pay.payment, name: PAY_NAMES[pay.payment] } });
   });
   app.post("/api/mp/crm/create", async (c) => {
     need(c, "market.edit");
@@ -16992,7 +17011,6 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
     const cr = await creds();
     if (!cr) throw fail(400, "\u041D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E LP-CRM \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445\xBB.");
     const cfg = (await shopCfgAll())[String(o.account_id)] || {};
-    if (!cfg.office) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C ID \u0432\u0456\u0434\u0434\u0456\u043B\u0443 LP-CRM \u0434\u043B\u044F \u0446\u044C\u043E\u0433\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0443 (\xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F LP-CRM\xBB \u043D\u0430 \u0441\u0442\u043E\u0440\u0456\u043D\u0446\u0456 \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0443).");
     const lines = (Array.isArray(b.items) ? b.items : []).slice(0, 50).map((x) => ({
       item_id: String(x.item_id || ""),
       product_id: Number(x.product_id) || 0,
@@ -17007,9 +17025,11 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
     const claim = await db.run(`UPDATE mp_orders SET crm_code = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ? AND crm_code = '' AND crm_id = ''`, [code, o.account_id, o.id]);
     if (!claim.changes) throw fail(409, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u0454\u0442\u044C\u0441\u044F \u0432 LP-CRM.");
     const shop = String(b.shop_name || "").slice(0, 80);
+    const pay = crmPayment(o);
     const comment = [
       `Rozetka ${o.number}${shop ? ` \xB7 ${shop}` : ""}`,
-      o.pay_type ? `\u041E\u043F\u043B\u0430\u0442\u0430: ${o.pay_type}${o.paid ? " (\u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E)" : o.pay_status ? ` (${o.pay_status})` : ""}` : "",
+      `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0456\u0434 ${fmtAt(o.created_at)}`,
+      `\u041E\u043F\u043B\u0430\u0442\u0430: ${pay.text}`,
       o.delivery ? `\u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430: ${o.delivery}` : "",
       o.recipient && o.recipient !== o.customer ? `\u041E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0447: ${o.recipient}${o.recipient_phone ? ` ${o.recipient_phone}` : ""}` : "",
       o.comment ? `\u041A\u043E\u043C\u0435\u043D\u0442\u0430\u0440 \u043F\u043E\u043A\u0443\u043F\u0446\u044F: ${o.comment}` : ""
@@ -17019,7 +17039,8 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
     try {
       res = await addNewOrder(fetchFn, { subdomain: cr.subdomain, key: cr.inKey }, {
         code,
-        office: cfg.office,
+        office: MP_OFFICE,
+        payment: pay.payment,
         bayer_name: o.customer || o.recipient || "",
         phone: String(o.phone || o.recipient_phone || "").replace(/\D/g, ""),
         comment,
@@ -17636,7 +17657,7 @@ var kyivDT = (v) => {
   return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(d);
 };
 var kyivDTms = (ms) => kyivDT(new Date(ms));
-var money2 = (v) => {
+var money3 = (v) => {
   if (typeof v === "number") return v;
   const n = Number(String(v ?? "").replace(/[^\d,.-]/g, "").replace(",", "."));
   return Number.isFinite(n) ? n : 0;
@@ -17682,14 +17703,14 @@ var ROW = {
     status_group: Number(o.status_group) || 0,
     customer: o.user_title?.full_name || rzRecipient(o) || "",
     phone: String(o.user_phone || o.delivery?.recipient_phone || ""),
-    total: money2(o.cost ?? o.amount),
+    total: money3(o.cost ?? o.amount),
     delivery: String(o.delivery?.delivery_service_name || o.delivery_service?.name || ""),
     ttn: String(o.ttn || o.delivery?.ttn || ""),
     items: (o.purchases || []).map((p) => ({
       id: String(p.item_id || p.item?.id || ""),
       name: String(p.item_name || p.item?.name || ""),
       qty: Number(p.quantity) || 1,
-      price: money2(p.price),
+      price: money3(p.price),
       ...p.item?.article ? { article: String(p.item.article).trim().slice(0, 120) } : {},
       ...p.item?.price_offer_id ? { offer: String(p.item.price_offer_id) } : {},
       ...p.item?.photo_preview ? { photo: String(p.item.photo_preview).slice(0, 300) } : {}
@@ -17710,10 +17731,10 @@ var ROW = {
     status_name: String(o.status_name || o.status || ""),
     customer: fio(o.client_last_name, o.client_first_name, o.client_second_name),
     phone: String(o.phone || ""),
-    total: money2(o.full_price ?? o.price),
+    total: money3(o.full_price ?? o.price),
     delivery: String(o.delivery_option?.name || ""),
     ttn: String(o.delivery_provider_data?.declaration_number || ""),
-    items: (o.products || []).map((p) => ({ name: String(p.name || p.name_multilang?.uk || ""), qty: Number(p.quantity) || 1, price: money2(p.price) })),
+    items: (o.products || []).map((p) => ({ name: String(p.name || p.name_multilang?.uk || ""), qty: Number(p.quantity) || 1, price: money3(p.price) })),
     goods: (o.products || []).map((p) => ({ id: String(p.id || p.external_id || p.sku || ""), name: String(p.name || p.name_multilang?.uk || ""), article: String(p.sku || p.external_id || ""), offer: String(p.id || ""), photo: String(p.image || p.main_image || ""), url: String(p.url || ""), category: "" }))
   }),
   epc: (o) => ({
@@ -17725,10 +17746,10 @@ var ROW = {
     status_name: EPC_STATUS[o.statusCode] || String(o.statusCode || ""),
     customer: fio(o.address?.lastName, o.address?.firstName, o.address?.patronymic),
     phone: String(o.address?.phone || ""),
-    total: money2(o.subtotal),
+    total: money3(o.subtotal),
     delivery: EPC_DELIVERY[o.address?.shipment?.provider] || String(o.address?.shipment?.provider || ""),
     ttn: String(o.address?.shipment?.number || ""),
-    items: (o.items || []).map((p) => ({ name: String(p.title || ""), qty: Number(p.quantity) || 1, price: money2(p.price) })),
+    items: (o.items || []).map((p) => ({ name: String(p.title || ""), qty: Number(p.quantity) || 1, price: money3(p.price) })),
     goods: (o.items || []).map((p) => ({ id: String(p.id || p.offerId || p.sku || ""), name: String(p.title || ""), article: String(p.sku || p.vendorCode || p.article || ""), offer: String(p.offerId || ""), photo: "", url: "", category: "" }))
   })
 };
