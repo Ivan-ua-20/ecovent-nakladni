@@ -129,7 +129,7 @@ let o = (await req('GET', '/api/mp/orders?mp=rozetka')).j;
 assert.equal(o.rows.length, 2);
 assert.equal(o.rows.find((x) => x.ttn).ttn, 'RMP-1000000001');
 assert.equal(o.rows[0].customer, 'Сидоренко Ольга');
-assert.deepEqual(o.rows[0].items, [{ id: '555', name: 'Зволожувач', qty: 1, price: 2500, article: '77061 D200S', offer: '1693318580' }]);
+assert.deepEqual(o.rows[0].items, [{ id: '555', name: 'Зволожувач', qty: 1, price: 2500, article: '77061 D200S', offer: '1693318580', photo: 'https://content.rozetka.com.ua/d200s.jpg' }]);
 // довідник товарів магазину — з замовлень: один рядок на товар, назва українською, артикул, offer_id, фото, перший і останній продаж
 assert.deepEqual((await db.all(`SELECT account_id, item_id, name, article, offer_id, photo, url, first_seen, last_seen, product_id FROM mp_items WHERE mp = 'rozetka'`)).map((x) => ({ ...x })),
   [{ account_id: 1, item_id: '555', name: 'Зволожувач Levoit Dual 200S', article: '77061 D200S', offer_id: '1693318580', photo: 'https://content.rozetka.com.ua/d200s.jpg', url: 'https://rozetka.com.ua/555/p555/', first_seen: '2026-10-29', last_seen: '2026-10-29', product_id: null }]);
