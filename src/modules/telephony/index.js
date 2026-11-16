@@ -5,7 +5,8 @@ import { MASK, fail, need } from '../../core/common.js';
 import { binotelCallsForPeriod, phone9, BINOTEL_MAX_PERIOD } from '../../integrations/binotel.js';
 
 const BACKFILL_DAYS = 90;
-const CHUNKS_PER_RUN = 8; // діб журналу за один запуск (кожна доба — один запит до Binotel)
+const CHUNKS_PER_RUN = 5; // діб журналу за один запуск (кожна доба — один запит до Binotel)
+const GAP_MS = 5500; // Binotel: журнал можна запитувати не частіше ніж раз на ~5 с
 const EVERY_MS = 4 * 60e3;
 const OVERLAP_S = 15 * 60; // перечитуємо останні 15 хв: дзвінок міг ще тривати
 const KEEP_DAYS = 400;
@@ -19,7 +20,7 @@ const kyivAt = (ts) => new Intl.DateTimeFormat('sv-SE', {
 const shiftAt = (at, days) => new Date(Date.parse(`${String(at).slice(0, 19).replace(' ', 'T')}Z`) + days * 864e5).toISOString().slice(0, 19).replace('T', ' ');
 const hint = (k) => (k ? `${MASK}${String(k).slice(-4)}` : '');
 
-export function mountTelephony(app, { db, fetchFn, onCron = () => {}, onCleanup = () => {} }) {
+export function mountTelephony(app, { db, fetchFn, onCron = () => {}, onCleanup = () => {}, sleepFn = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const getVal = async (key) => (await db.get(`SELECT value FROM settings WHERE key = ?`, [key]))?.value || '';
   const putVal = (key, value) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]);
   const creds = async () => {
@@ -59,8 +60,19 @@ export function mountTelephony(app, { db, fetchFn, onCron = () => {}, onCleanup 
     let error = '';
     try {
       while (chunks < CHUNKS_PER_RUN && to < now) {
+        if (chunks) await sleepFn(GAP_MS);
         const stop = Math.min(to + BINOTEL_MAX_PERIOD - 1, now);
-        saved += await saveCalls(await binotelCallsForPeriod(fetchFn, cur, to, stop));
+        let list;
+        try { list = await binotelCallsForPeriod(fetchFn, cur, to, stop); }
+        catch (e) {
+          // «занадто часто» — не помилка: чекаємо, скільки просить Binotel, і пробуємо ще раз; не вийшло — продовжимо наступного разу
+          if (!/too frequent/i.test(String(e.message))) throw e;
+          const sec = Math.min(15, Number(String(e.message).match(/after (\d+)/i)?.[1]) || 5);
+          await sleepFn(sec * 1000 + 500);
+          try { list = await binotelCallsForPeriod(fetchFn, cur, to, stop); }
+          catch (e2) { if (/too frequent/i.test(String(e2.message))) break; throw e2; }
+        }
+        saved += await saveCalls(list);
         to = stop + 1;
         chunks++;
       }
@@ -107,7 +119,12 @@ export function mountTelephony(app, { db, fetchFn, onCron = () => {}, onCleanup 
     if (key.length > 200 || secret.length > 200) throw fail(400, 'Задовгий ключ або секрет.');
     // перевіряємо доступ: журнал за останні 10 хв
     const now = Math.floor(Date.now() / 1000);
-    await binotelCallsForPeriod(fetchFn, { key, secret }, now - 600, now);
+    try { await binotelCallsForPeriod(fetchFn, { key, secret }, now - 600, now); }
+    catch (e) {
+      if (!/too frequent/i.test(String(e.message))) throw e;
+      await sleepFn(6000); // фонове завантаження щойно ходило в Binotel — зачекати й перевірити ще раз
+      await binotelCallsForPeriod(fetchFn, { key, secret }, now - 600, now);
+    }
     await db.batch([
       [`INSERT INTO settings (key, value) VALUES ('binotel_key', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key]],
       [`INSERT INTO settings (key, value) VALUES ('binotel_secret', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [secret]],
