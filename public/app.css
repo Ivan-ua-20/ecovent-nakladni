@@ -1006,7 +1006,13 @@ main.mp-wide { max-width: none; }
 .mp3-rail .sep { height: 1px; background: var(--line); margin: 6px 4px; }
 .mp3-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .mp3-head { display: flex; flex-direction: column; gap: 8px; }
-.mp3-head .f-chips { margin: 0; }
+.mp3-head .f-chips { margin: 0; flex: none; }
+.mp3-head > * { flex: none; }
+.mp3-top { display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
+.mp3-top .mp3-title { flex: 0 1 auto; min-width: 0; }
+.mp3-top .mp3-tools { flex: 1 1 520px; justify-content: flex-end; }
+.mp3-top .mp3-search { flex: 1 1 240px; max-width: 420px; }
+.mp3-legend { padding: 6px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; line-height: 1.3; }
 .mp3-head .f-chips:empty, #mpGrpHead:empty { display: none; }
 .mp3-title { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .mp3-title h2 { margin: 0; font-size: 22px; font-weight: 800; }
@@ -1074,3 +1080,14 @@ main.mp-wide { max-width: none; }
   .mp3-r > :nth-child(n+3):not(.mp3-no):not(.mp3-sum):not(.mp3-thumb) { margin-left: 50px; }
   .mp3-detail .mp-d-body { grid-template-columns: minmax(0, 1fr); }
 }
+/* картка замовлення 3В: дії в шапці, товари з фото, компактний LP-CRM */
+.mp3-dh { flex-direction: column; align-items: stretch !important; gap: 10px; }
+.mp3-dh-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mp3-good { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+.mp3-good .mp3-c { flex: 1; }
+.mp3-goodsum { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mp3-crm .btn-row { gap: 6px; }
+.mp3-crm .btn-row > span[style] { margin-left: 0 !important; width: 100%; }
+.mp3-crm #mpCrmNum { width: auto !important; flex: 1; min-width: 0; }
+.mp3-keys { display: flex; gap: 14px; flex-wrap: wrap; }
+.kbd { display: inline-block; border: 1px solid #d9e0dd; border-bottom-width: 2px; border-radius: 5px; padding: 0 6px; font-size: 11px; background: var(--surface); color: #4b5a55; }

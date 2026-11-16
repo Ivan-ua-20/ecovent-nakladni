@@ -156,13 +156,13 @@ export function createMarketPages({ can }) {
       <nav class="mp3-rail" id="mpNav" aria-label="Групи замовлень"></nav>
       <section class="mp3-col" aria-label="Замовлення">
         <div class="mp3-head">
-          <div class="mp3-title"><h2 id="mpTitle">${esc(m.title)}</h2><span id="mpTotal" class="muted"></span></div>
+          <div class="mp3-top"><div class="mp3-title"><h2 id="mpTitle">${esc(m.title)}</h2><span id="mpTotal" class="muted"></span></div>
           <div class="mp3-tools">
             <label class="mp3-search"><span class="sr-only">Пошук</span>${ico('search', 16)}<input id="mpQ" type="search" placeholder="№ замовлення, клієнт, телефон або ТТН" value="${esc(state.q)}"></label>
             <div class="mp3-seg" role="group" aria-label="Період"><button type="button" data-per="30">30 днів</button>${mp === 'rozetka' ? '<button type="button" data-per="365">Рік</button>' : ''}<button type="button" data-per="">Увесь час</button></div>
             <label class="small muted mp3-date">з <input type="date" id="mpFrom" value="${esc(state.from)}"></label>
             <label class="small muted mp3-date">по <input type="date" id="mpTo" value="${esc(state.to)}"></label>
-          </div>
+          </div></div>
           <div id="mpGrpHead"></div>
           <div id="mpStatuses" class="f-chips"></div>
           ${rz ? `<div class="f-chips" id="mpCrmF" style="align-items:center"><span class="small muted">LP-CRM:</span>
@@ -591,28 +591,27 @@ export function createMarketPages({ can }) {
       const ph = intlPhone(o.phone);
       const nocall = o.calls && !o.calls.before.n && !o.calls.after.n;
       const calledBtn = rz && can('market.edit') ? `<button type="button" class="btn sm" id="mpDCalled">${o.called_at ? 'Зняти відмітку «Подзвонив»' : 'Відмітити: подзвонив'}</button>` : '';
-      const items = o.items.map((it) => `<div class="mp-goods"><span>${esc(it.name)}${cp(it.name, 'Назва товару')}${it.id ? ` <span class="small muted">код ${esc(it.id)}</span>${cp(it.id, 'Код товару')}` : ''}${it.qty > 1 ? ` <span class="muted">× ${it.qty}</span>` : ''}</span><b>${it.price ? uah(it.price * (it.qty || 1)) : ''}</b></div>`).join('') || '<div class="muted">—</div>';
-      box.innerHTML = `<div class="mp-d-head"><div style="flex:1;min-width:0"><b style="font-size:18px">№ ${esc(o.number)}</b>${cp(o.number, 'Номер замовлення')} <span class="badge info">${esc(o.status_name || o.status || '—')}</span>
-          <div class="small muted">${esc(dt(o.created_at))} · ${esc(name.get(o.account_id) || '')}${o.changed_at ? ` · змінено ${esc(dt(o.changed_at))}` : ''}</div></div>
-          <button type="button" class="btn sm" id="mpDPrev" aria-label="Попереднє замовлення (стрілка вгору)">↑</button><button type="button" class="btn sm" id="mpDNext" aria-label="Наступне замовлення (стрілка вниз)">↓</button>
-          <button type="button" class="btn sm" id="mpDClose" aria-label="Закрити картку (Esc)">✕</button></div>
+      const items = o.items.map((it) => `<div class="mp3-good">${it.photo ? `<img class="mp3-thumb" src="${esc(it.photo)}" alt="" loading="lazy">` : '<span class="mp3-thumb"></span>'}<div class="mp3-c"><span>${esc(it.name)}${cp(it.name, 'Назва товару')}</span><span class="small muted">${it.id ? `код ${esc(it.id)}${cp(it.id, 'Код товару')}` : ''}${it.article ? ` · артикул ${esc(it.article)}` : ''}</span></div><b class="mp3-goodsum">${it.qty > 1 ? `${it.qty} × ` : ''}${uah(it.price || 0)}</b></div>`).join('') || '<div class="muted">—</div>';
+      const wait = rz && String(o.status) === '1' && Number(o.status_group) !== 3 ? ` ${waitOf(o)}` : '';
+      box.innerHTML = `<div class="mp-d-head mp3-dh">
+          <div class="mp3-dh-row"><div style="flex:1;min-width:0"><b style="font-size:18px">№ ${esc(o.number)}</b>${cp(o.number, 'Номер замовлення')} <span class="badge info">${esc(o.status_name || o.status || '—')}</span>${wait}
+            <div class="small muted">${esc(dt(o.created_at))} · ${esc(name.get(o.account_id) || '')}${o.changed_at ? ` · змінено ${esc(dt(o.changed_at))}` : ''}</div></div>
+            <button type="button" class="btn sm" id="mpDPrev" aria-label="Попереднє замовлення (стрілка вгору)">↑</button><button type="button" class="btn sm" id="mpDNext" aria-label="Наступне замовлення (стрілка вниз)">↓</button>
+            <button type="button" class="btn sm" id="mpDClose" aria-label="Закрити картку (Esc)">✕</button></div>
+          <div class="mp3-dh-row">${rz && can('market.edit') && String(o.status) === '1' && Number(o.status_group) !== 3 ? '<button type="button" class="btn sm primary" id="mpDTake" title="Статус у Розетці зміниться на «Обробляється менеджером»">Взяти в обробку</button>' : ''}${ph ? `<a class="btn sm" href="tel:${esc(ph)}">${BINOTEL} Подзвонити</a>` : ''}<button type="button" class="btn sm" id="mpDCopyAll">Скопіювати все</button>
+            ${canCancel(o) ? '<button type="button" class="btn sm danger" id="mpDCancel" style="margin-left:auto">Скасувати…</button>' : ''}</div></div>
         <div class="mp-d-body">
-          <div class="mp-wide-box btn-row" style="align-items:center;flex-wrap:wrap">${ph ? `<a class="btn sm" href="tel:${esc(ph)}">${BINOTEL} Подзвонити</a>` : ''}<button type="button" class="btn sm" id="mpDCopyAll">Скопіювати все</button></div>
           ${rz && o.calls ? `<div class="mp-box mp-wide-box${nocall && !o.called_at ? ' mp3-nocall' : ''}"><div class="mp-cap">${BINOTEL} Дзвінки Binotel</div>
             ${nocall ? `<div><b>Дзвінків із цим номером не було</b></div><div class="small muted">За 30 днів до замовлення й після, номер ${esc(ph)}</div>` : ''}
             <div id="mpDCalls" class="small muted"><span class="spinner"></span></div>
             ${o.called_at ? `<div class="small" style="margin-top:6px">✓ Подзвонив${o.called_by ? ` ${esc(o.called_by)}` : ''} · ${esc(fmtDateTime(o.called_at))}</div>` : ''}
             ${calledBtn ? `<div style="margin-top:8px">${calledBtn}</div>` : ''}</div>` : calledBtn ? `<div class="mp-wide-box">${calledBtn}</div>` : ''}
-          ${canPick(o) || canCancel(o) ? `<div class="mp-wide-box btn-row" style="align-items:center">${canPick(o) ? '<button type="button" class="btn primary" id="mpDTake">Взяти в обробку</button> <span class="small muted">→ «Обробляється менеджером» у Розетці</span>' : ''}
-            ${canCancel(o) ? '<button type="button" class="btn danger" id="mpDCancel" style="margin-left:auto">Скасувати замовлення…</button>' : ''}</div>` : ''}
           <div class="mp-box"><div class="mp-cap">Покупець</div><b>${esc(o.customer || '—')}</b>${cp(o.customer, 'ПІБ')}
-            ${ph ? `<div class="btn-row" style="margin-top:4px;flex-wrap:wrap;align-items:center"><span>${esc(ph)}</span>${cp(ph, 'Телефон')}<a class="btn sm" href="tel:${esc(ph)}">Подзвонити</a></div>` : ''}
-            ${o.recipient ? `<div class="small" style="margin-top:4px"><span class="muted">Отримувач:</span> ${esc(o.recipient)}${cp(o.recipient, 'ПІБ отримувача')}${o.recipient_phone ? ` · ${esc(o.recipient_phone)}${cp(intlPhone(o.recipient_phone), 'Телефон отримувача')}` : ''}</div>` : ''}
-            ${callsHtml(o)}</div>
-          <div class="mp-box"><div class="mp-cap">Доставка</div>${esc(o.delivery || '—')}${o.address ? `<div>${esc(o.address)}${cp(o.address, 'Адресу')}</div>` : ''}${o.ttn ? `<div>ТТН <b>${esc(o.ttn)}</b>${cp(o.ttn, 'ТТН')}</div>` : ''}</div>
-          ${rz ? `<div class="mp-box"><div class="mp-cap">Оплата</div>${o.pay_type || o.pay_status ? `${esc(o.pay_type || '—')}<div>${o.paid ? '<b style="color:var(--ok)">✓ Оплачено</b>' : esc(o.pay_status || 'не оплачено')}</div>` : '<span class="muted">ще не отримано з Розетки</span>'}</div>` : ''}
-          ${o.comment ? `<div class="mp-box"><div class="mp-cap">Коментар покупця</div>${esc(o.comment)}${cp(o.comment, 'Коментар')}</div>` : ''}
-          ${rz ? `<div class="mp-box mp-wide-box" id="mpDCrm"><div class="mp-cap">LP-CRM</div>${crmBox(o)}</div>` : ''}
+            ${ph ? `<div style="margin-top:2px">${esc(ph)}${cp(ph, 'Телефон')}</div>` : ''}
+            ${o.recipient ? `<div class="small" style="margin-top:4px"><span class="muted">Отримувач:</span> ${esc(o.recipient)}${cp(o.recipient, 'ПІБ отримувача')}${o.recipient_phone ? ` · ${esc(o.recipient_phone)}${cp(intlPhone(o.recipient_phone), 'Телефон отримувача')}` : ''}</div>` : ''}</div>
+          <div class="mp-box"><div class="mp-cap">Доставка</div><b>${esc(o.delivery || '—')}</b>${o.address ? `<div class="small">${esc(o.address)}${cp(o.address, 'Адресу')}</div>` : ''}${o.ttn ? `<div class="small">ТТН <b>${esc(o.ttn)}</b>${cp(o.ttn, 'ТТН')}</div>` : '<div class="small muted">ТТН ще не створено</div>'}</div>
+          ${rz ? `<div class="mp-box"><div class="mp-cap">Оплата</div><b>${esc(o.pay_type || '—')}</b><div class="small ${o.paid ? '' : 'muted'}">${o.paid ? '<b style="color:var(--ok)">✓ Оплачено</b>' : esc(o.pay_status || (o.pay_type ? 'не оплачено' : 'ще не отримано з Розетки'))}</div><div style="margin-top:4px"><b>${uah(o.total)}</b>${cp(String(o.total), 'Сума')}</div></div>` : ''}
+          ${rz ? `<div class="mp-box mp3-crm" id="mpDCrm"><div class="mp-cap">LP-CRM</div>${crmBox(o)}</div>` : ''}
           ${o.dups?.length || o.dup_of ? `<div class="mp-box mp-wide-box"><div class="mp-cap">Інші замовлення цього покупця</div>
             ${o.dup_of ? `<div class="small" style="margin-bottom:6px">Розетка позначила це замовлення дублем №${esc(o.dup_of)}${cp(o.dup_of, 'Номер')}</div>` : ''}
             ${(o.dups || []).map((x) => { const other = x.account_id !== o.account_id; return `<div class="mp-dup${other ? ' other' : ''}">
@@ -622,8 +621,10 @@ export function createMarketPages({ can }) {
               <span class="btn-row" style="margin-left:auto"><button type="button" class="btn sm" data-dgo="${esc(`${x.account_id}:${x.id}`)}" data-dnum="${esc(x.number)}">${other ? 'Перейти в магазин' : 'Відкрити'}</button>${cancelIn(x, o) ? `<button type="button" class="btn sm danger" data-dcancel="${esc(`${x.account_id}:${x.id}`)}" data-dnum="${esc(x.number)}">Скасувати…</button>` : ''}</span></div>`; }).join('')}
             ${(o.dups || []).some((x) => x.account_id !== o.account_id) ? '<div class="small muted" style="margin-top:6px">Замовлення іншого магазину звідси змінювати не можна — відкрийте його в тому магазині.</div>' : ''}
             ${(o.dups || []).filter((x) => cancelIn(x, o) && !x.paid).length > 1 ? `<div style="margin-top:8px"><button type="button" class="btn sm danger" id="mpDCancelUnpaid">Скасувати неоплачені в цьому магазині (${(o.dups || []).filter((x) => cancelIn(x, o) && !x.paid).length})…</button></div>` : ''}</div>` : ''}
-          <div class="mp-box mp-wide-box"><div class="mp-cap">Товари</div>${items}<div class="mp-goods" style="border-top:1px solid var(--line);padding-top:6px;margin-top:4px"><span>Разом</span><b>${uah(o.total)}${cp(String(o.total), 'Сума')}</b></div></div>
-          ${rz ? `<div class="mp-box mp-wide-box"><div class="mp-cap">Відгук</div><div class="small">${rvCell(o)}</div></div>` : ''}
+          <div class="mp-box mp-wide-box"><div class="mp-cap">Товари</div>${items}<div class="mp-goods" style="border-top:1px solid var(--line);padding-top:6px;margin-top:6px"><span>Разом</span><b>${uah(o.total)}${cp(String(o.total), 'Сума')}</b></div></div>
+          ${o.comment ? `<div class="mp-box"><div class="mp-cap">Коментар покупця</div>${esc(o.comment)}${cp(o.comment, 'Коментар')}</div>` : ''}
+          ${rz && (o.ok || o.review_n > 0) ? `<div class="mp-box mp-wide-box"><div class="mp-cap">Відгук</div><div class="small">${rvCell(o)}</div></div>` : ''}
+          <div class="mp-wide-box small muted mp3-keys"><span><span class="kbd">Esc</span> закрити</span><span><span class="kbd">↑</span> <span class="kbd">↓</span> сусіднє замовлення</span></div>
         </div>`;
       $('#mpDClose').onclick = closeDetail;
       $('#mpDPrev').onclick = () => { const x = neighbour(-1); if (x) showDetail(x); };
