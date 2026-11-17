@@ -192,3 +192,14 @@ export async function getReceipt(fetchFn, fop, id) {
     throw e;
   }
 }
+
+// Хто цей касир і чия каса: назва організації (ФОП / ТОВ) і її код (ІПН / ЄДРПОУ) — для звірки «чий чек».
+export async function cashierMe(fetchFn, fop) {
+  const me = await authed(fetchFn, fop, '/cashier/me');
+  const org = me?.organization || {};
+  return {
+    name: String(me?.full_name || ''),
+    org_title: String(org.title || org.name || ''),
+    org_code: String(org.edrpou || org.tax_number || org.inn || '').trim(),
+  };
+}

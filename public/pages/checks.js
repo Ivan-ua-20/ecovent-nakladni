@@ -2,7 +2,7 @@
 // оплати, ФОП), оплата на рахунок ↔ ФОП чека, можливі дублі. Окрема вкладка «Чеки за день» — замість зошита: кожен чек ФОП
 // з замовленням, до якого його зіставлено. «Налаштування» — що очікувати для кожного виду оплати LP-CRM.
 import { esc, money } from '../invoice.js';
-import { $, $$, main, api, toast, fmtDateTime, todayKyiv } from '../core/ui.js';
+import { $, $$, main, api, toast, fmtDateTime, todayKyiv, modal, confirmDanger } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
 import { fpLayout, wireFp, fpGroup, fpBtn, fpKpi } from './b2b-shared.js';
 
@@ -56,8 +56,8 @@ export function createChecksPages() {
         <button class="btn" id="chkRefresh">🔄 Оновити зараз</button><button class="btn" id="chkXls">⬇ Excel</button></div></div>
       <div class="small muted" style="margin-bottom:10px">Відправлені замовлення LP-CRM за ${dmy(d.from)}–${dmy(d.to)}: вид оплати ↔ наложка в ТТН, чек Checkbox, оплата на рахунок.
         ${st.finished ? `Дані оновлено ${esc(fmtDateTime(st.finished))}` : 'Дані ще збираються'}${st.more ? ' · збір триває…' : ''} · оновлюється само раз на 10 хв.</div>
-      ${(d.cb_failed || []).length ? `<div class="alert warn small" style="margin-bottom:10px">Checkbox не пускає (чеки цих ФОП не звіряємо, повторимо через кілька годин): ${d.cb_failed.map(esc).join('; ')}. Перевірте логін і пароль каси в «Налаштування → ФОПи накладних».</div>` : ''}
-      ${(d.no_checkbox || []).length ? `<div class="alert warn small" style="margin-bottom:10px">Без доступу до Checkbox (чеки цих ФОП не звіряємо): ${d.no_checkbox.map(esc).join(', ')}. Логін і пароль каси вносяться в «Налаштування → ФОПи накладних».</div>` : ''}
+      ${(d.cb_failed || []).length ? `<div class="alert warn small" style="margin-bottom:10px">Checkbox не пускає (чеки цих ФОП не звіряємо, повторимо через кілька годин): ${d.cb_failed.map(esc).join('; ')}. Перевірте логін і пароль каси в <a href="#/chkpay">«Перевірка → Налаштування»</a>.</div>` : ''}
+      ${(d.no_checkbox || []).length ? `<div class="alert warn small" style="margin-bottom:10px">Каси без пароля (чеки їхніх відділів не звіряємо): ${d.no_checkbox.map(esc).join(', ')}. Пароль касира вноситься в <a href="#/chkpay">«Перевірка → Налаштування»</a>.</div>` : ''}
       ${(st.errors || []).length ? `<div class="alert warn small" style="margin-bottom:10px">Не все вдалося зібрати: ${st.errors.map(esc).join('; ')}</div>` : ''}
       ${fpLayout(fpGroup('Результат', LEVELS.map(([k, v, hint]) => fpBtn(`<span class="ret-st"><span>${esc(v)}</span>${hint ? `<span class="small muted">${esc(hint)}</span>` : ''}</span><b class="small ${k === 'bad' && lvN[k] ? 'ret-bad' : ''}">${lvN[k] || ''}</b>`, f.lv === k, `data-clv="${k}"`)).join(''))
         + fpGroup('Період', `<div class="an7-dates ${f.from || f.to ? 'on' : ''}"><input id="chkFrom" type="date" value="${esc(f.from)}" aria-label="З дати"><input id="chkTo" type="date" value="${esc(f.to)}" aria-label="По дату"></div>`),
@@ -121,11 +121,52 @@ export function createChecksPages() {
   }
 
   // Види оплат LP-CRM: клас перевірки і слово, яке має бути в способі оплати чека.
+  // Каси Checkbox — як у модулі Checkbox LP-CRM: з них програма читає чеки; «правильна каса» — за відділом замовлення.
+  const cashState = (k) => k.error ? `<span class="badge bad">Не пускає</span> <span class="small">${esc(k.error)}</span>`
+    : k.org_title ? `<span class="badge ok">Працює</span> <span class="small">${esc(k.org_title)}${k.org_code ? ` · ${esc(k.org_code)}` : ''}</span>`
+    : k.ready ? '<span class="badge info">Не перевірено</span>' : '<span class="small muted">Внесіть пароль касира</span>';
+  function cashiersHtml(list) {
+    return `<div class="head-row"><h3>Каси Checkbox</h3><div class="btn-row"><button class="btn" id="cashAdd">+ Додати касу</button></div></div>
+      <div class="small muted" style="margin-bottom:10px">Звідси програма читає чеки. Чек кожного замовлення має бути пробитий касою його відділу — як у модулі Checkbox LP-CRM.
+        На кожен ФОП / ТОВ досить однієї каси з паролем: через неї видно чеки всіх кас цієї організації.</div>
+      ${list.length ? `<div class="table-wrap"><table class="list"><thead><tr><th>Каса</th><th>Логін</th><th>Відділи LP-CRM</th><th>Доступ</th><th>Стан</th><th></th></tr></thead><tbody>
+      ${list.map((k) => `<tr class="${k.lp_active ? '' : 'chk-done'}"><td><b>${esc(k.name)}</b>${k.lp_active ? '' : '<div class="small muted">вимкнена в LP-CRM</div>'}${k.active ? '' : '<div class="small muted">не читаємо</div>'}</td>
+        <td class="small">${esc(k.login || '—')}</td><td class="small">${k.offices.length ? esc(k.offices.join(', ')) : '<span class="muted">—</span>'}</td>
+        <td class="small">${k.has_password ? 'пароль ✓' : k.has_license && k.has_pin ? 'ключ і PIN ✓' : '<span class="ret-bad">немає</span>'}</td>
+        <td>${cashState(k)}</td>
+        <td class="nowrap"><button class="btn sm" data-cedit="${k.id}">Змінити</button>${k.ready ? ` <button class="btn sm" data-ctest="${k.id}">Перевірити вхід</button>` : ''}</td></tr>`).join('')}
+      </tbody></table></div>` : '<div class="card empty">Кас ще немає. Додайте каси, як у модулі Checkbox LP-CRM.</div>'}`;
+  }
+  function cashierForm(k, done) {
+    const m = modal(k ? `Каса: ${k.name}` : 'Нова каса Checkbox', `
+      <div class="form-grid" style="display:grid;gap:10px">
+        <label>Назва (ФОП / ТОВ)<input id="ckName" value="${esc(k?.name || '')}" autocomplete="off"></label>
+        <label>Логін касира<input id="ckLogin" value="${esc(k?.login || '')}" autocomplete="off"></label>
+        <label>Пароль касира<input id="ckPass" type="password" autocomplete="new-password" placeholder="${k?.has_password ? 'збережено — залиште порожнім, щоб не змінювати' : ''}"></label>
+        <div class="small muted">Або замість логіна й пароля — ключ ліцензії каси й PIN касира:</div>
+        <label>Ключ ліцензії каси<input id="ckLic" type="password" autocomplete="off" placeholder="${k?.has_license ? 'збережено — залиште порожнім, щоб не змінювати' : ''}"></label>
+        <label>PIN касира<input id="ckPin" type="password" autocomplete="off" inputmode="numeric" placeholder="${k?.has_pin ? 'збережено' : ''}"></label>
+        <label>Відділи LP-CRM (номери через кому)<input id="ckOff" value="${esc((k?.offices || []).join(', '))}" placeholder="напр. 13, 22" autocomplete="off"></label>
+        <label class="chk-chk ret-f"><input type="checkbox" id="ckLp" ${!k || k.lp_active ? 'checked' : ''}> <span>Увімкнена в LP-CRM</span></label>
+        <label class="chk-chk ret-f"><input type="checkbox" id="ckAct" ${!k || k.active ? 'checked' : ''}> <span>Читати чеки з цієї каси</span></label>
+      </div>`, { footer: `${k ? '<button class="btn danger" id="ckDel">Видалити</button>' : ''}<span style="flex:1"></span><button class="btn" data-close>Скасувати</button><button class="btn primary" id="ckSave">Зберегти</button>`, focus: '#ckName' });
+    $('#ckSave', m.el).onclick = async () => {
+      const body = { name: $('#ckName', m.el).value, login: $('#ckLogin', m.el).value, password: $('#ckPass', m.el).value, license: $('#ckLic', m.el).value, pin: $('#ckPin', m.el).value,
+        offices: $('#ckOff', m.el).value, lp_active: $('#ckLp', m.el).checked, active: $('#ckAct', m.el).checked };
+      try { await api(k ? 'PUT' : 'POST', k ? `/api/checks/cashiers/${k.id}` : '/api/checks/cashiers', body); m.close(); toast('Збережено'); done(); } catch (e) { toast(e.message, true); }
+    };
+    if (k) $('#ckDel', m.el).onclick = async () => {
+      if (!(await confirmDanger('Видалити касу?', `Каса «${esc(k.name)}» зникне зі списку; чеки з неї більше не читатимуться.`, 'Видалити'))) return;
+      try { await api('DELETE', `/api/checks/cashiers/${k.id}`); m.close(); toast('Видалено'); done(); } catch (e) { toast(e.message, true); }
+    };
+  }
+
   async function viewPay() {
-    const d = await api('GET', '/api/checks/pay');
+    const [d, cash] = await Promise.all([api('GET', '/api/checks/pay'), api('GET', '/api/checks/cashiers')]);
     main.innerHTML = `
       <div class="head-row"><h2>Налаштування перевірки</h2></div>
-      <div class="head-row"><h3>Види оплат</h3><div class="btn-row"><button class="btn primary" id="payKeep">Зберегти види оплат</button></div></div>
+      ${cashiersHtml(cash)}
+      <div class="head-row" style="margin-top:20px"><h3>Види оплат</h3><div class="btn-row"><button class="btn primary" id="payKeep">Зберегти види оплат</button></div></div>
       <div class="small muted" style="margin-bottom:10px">Що очікувати для кожного виду оплати LP-CRM: <b>післяплата</b> — у ТТН має бути наложка на суму замовлення;
         <b>через сервіс</b> (RozetkaPay, Пром-оплата) і <b>на рахунок ФОП</b> — наложки бути не повинно; для «на рахунок» ще шукаємо надходження в Opendatabot.
         «У чеку має бути» — слово зі способу оплати в чеку Checkbox (як у модулі Checkbox LP-CRM); порожньо — не перевіряти.</div>
@@ -134,6 +175,13 @@ export function createChecksPages() {
         <td><select data-pcls aria-label="Що перевіряти для «${esc(r.name)}»">${Object.entries(d.classes).map(([k, v]) => `<option value="${k}" ${r.cls === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></td>
         <td><input data-pcb value="${esc(r.cb || '')}" placeholder="напр. NovaPay" aria-label="Спосіб оплати в чеку для «${esc(r.name)}»"></td></tr>`).join('')}
       </tbody></table></div>`;
+    $('#cashAdd').onclick = () => cashierForm(null, viewPay);
+    $$('[data-cedit]').forEach((b) => (b.onclick = () => cashierForm(cash.find((k) => String(k.id) === b.dataset.cedit), viewPay)));
+    $$('[data-ctest]').forEach((b) => (b.onclick = async () => {
+      b.disabled = true; b.innerHTML = '<span class="spinner"></span> Перевіряю…';
+      try { const k = await api('POST', `/api/checks/cashiers/${b.dataset.ctest}/test`, {}); toast(k.error ? `Checkbox: ${k.error}` : `Працює: ${k.org_title}`, Boolean(k.error)); } catch (e) { toast(e.message, true); }
+      viewPay();
+    }));
     $('#payKeep').onclick = async () => {
       const rows = $$('[data-pid]').map((tr) => ({ id: tr.dataset.pid, name: d.rows.find((x) => x.id === tr.dataset.pid)?.name, cls: $('[data-pcls]', tr).value, cb: $('[data-pcb]', tr).value }));
       try { await api('PUT', '/api/checks/pay', { rows }); toast('Збережено'); viewPay(); } catch (e) { toast(e.message, true); }

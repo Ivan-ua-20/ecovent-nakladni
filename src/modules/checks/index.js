@@ -11,12 +11,12 @@
 // Надходження на рахунки беремо з модуля платежів (Opendatabot) — він уже збирає їх сам.
 // Сповіщень у Telegram модуль не надсилає (сповіщення про дублі ТТН / телефонів, як і раніше, надсилає аналітика).
 // Висновки (що не так із замовленням) не зберігаємо: рахуємо під час показу сторінки з rules.js — завжди за свіжими даними.
-import { need, nowIso, kyivDay, num, round2, loadSettings } from '../../core/common.js';
+import { need, fail, nowIso, kyivDay, num, round2, loadSettings } from '../../core/common.js';
 import { getOrderCodesByStatus, getOrdersBatch, getStatuses, lpcrmBusy } from '../../integrations/lpcrm.js';
 import { npTrackMany } from '../../integrations/novaposhta.js';
 import { rzDeliveryList } from '../../integrations/rozetka.js';
 import { promOrder, promPayment } from '../../integrations/prom.js';
-import { hasCheckbox, listReceipts, getReceipt } from '../../integrations/checkbox.js';
+import { hasCheckbox, listReceipts, getReceipt, cashierMe } from '../../integrations/checkbox.js';
 import { ttnOf } from '../analytics/index.js';
 import { payRules, carrierOf, matchReceipts, findPayment, evaluate, partialOf, CLASSES, CARRIERS, PAY_DEFAULTS } from './rules.js';
 
@@ -73,6 +73,7 @@ export function normalizeCheckOrder(raw) {
 export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
   const getJson = async (key, dflt = {}) => { try { return JSON.parse((await db.get(`SELECT value FROM settings WHERE key = ?`, [key]))?.value || 'null') ?? dflt; } catch { return dflt; } };
   // Те саме з уже прочитаних налаштувань (loadSettings) — без зайвого звернення до бази.
+  const fromJson = (v, dflt = {}) => { try { return JSON.parse(v || 'null') ?? dflt; } catch { return dflt; } };
   const fromS = (s, key, dflt = {}) => { try { return JSON.parse(s[key] || 'null') ?? dflt; } catch { return dflt; } };
   const setJson = (key, v) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, JSON.stringify(v)]);
   const rules = async () => payRules(await getJson('chk_pay', {}));
@@ -222,12 +223,23 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
   }
 
   // ---------------------------------------------------------------- 3) Checkbox
-  // ФОП, до каси яких Checkbox не пускає (за останні 6 год): { fopId: { at, msg } }.
+  // Каси Checkbox для перевірки («Перевірка → Налаштування», як у модулі Checkbox LP-CRM). Для клієнта Checkbox каса —
+  // об'єкт із полями доступу; токен кешується за id `k<id>` (окремо від ФОП накладних).
+  const asCb = (k) => ({ id: `k${k.id}`, dbId: k.id, short_name: k.org_title || k.name, checkbox_login: k.login, checkbox_password: k.password, checkbox_license: k.license, checkbox_pin: k.pin });
+  const canSign = (k) => k.active && hasCheckbox(asCb(k));
+  // Ключ організації каси: код з Checkbox (ІПН / ЄДРПОУ), поки його немає — назва без пробілів і розділових знаків.
+  const orgKey = (k) => String(k.org_code || '').trim() || String(k.org_title || k.name || '').toLowerCase().replace(/[^a-zа-яіїєґ0-9]/gi, '');
+  // Каси, до яких Checkbox не пускає (за останні 6 год): { id каси: { at, msg } }.
   const cbFails = (s) => Object.fromEntries(Object.entries(fromS(s, 'chk_cb_fail')).filter(([, v]) => Date.now() - Date.parse(v.at) < 6 * 3600e3));
+  // Чеки читаємо по одному касиру на організацію: через нього видно чеки всіх кас цього ФОП / ТОВ.
+  const readers = (list, fails) => {
+    const reps = new Map();
+    for (const k of list) if (canSign(k) && !fails[k.id] && !reps.has(orgKey(k))) reps.set(orgKey(k), k);
+    return [...reps.values()].map(asCb);
+  };
   async function syncReceipts(budget, s) {
-    const fails0 = cbFails(s);
-    const fops = (await db.all(`SELECT * FROM fops WHERE active = 1 ORDER BY id`)).filter((f) => hasCheckbox(f) && !fails0[f.id]);
-    if (!fops.length) return { skipped: 'немає ФОП з доступом до Checkbox' };
+    const fops = readers(await db.all(`SELECT * FROM chk_cashiers ORDER BY lp_active DESC, id`), cbFails(s));
+    if (!fops.length) return { skipped: 'немає кас Checkbox з доступом' };
     const today = kyivDay();
     const from = addDays(today, -CHECK_DAYS);
     const days = (await db.all(`SELECT fop_id, day, done, at FROM chk_days WHERE day >= ?`, [from]));
@@ -236,10 +248,11 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const fails = cbFails(s);
     budget.cbFail = fails; // той самий об'єкт — щоб пошук чеків за номером у цьому ж кроці теж оминув цю касу
     const stmts = []; // усе — одним пакетом наприкінці (ліміт звернень до бази на запит)
+    const keepFails = () => stmts.push([`INSERT INTO settings (key, value) VALUES ('chk_cb_fail', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(fails)]]);
     const flush = async () => { for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100)); stmts.length = 0; };
     for (const f of fops) {
       for (let d = today; d >= from; d = addDays(d, -1)) {
-        const h = have.get(`${f.id}|${d}`);
+        const h = have.get(`${f.dbId}|${d}`);
         if (h?.done) continue;
         // сьогодні й учора — не частіше разу на EVERY_MS
         if (h && d >= addDays(today, -1) && Date.now() - Date.parse(h.at || 0) < EVERY_MS - 30e3) continue;
@@ -250,7 +263,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         let rows = [];
         try {
           for (;;) {
-            if (budget.cb >= CB_MAX) { stmts.push([`INSERT INTO settings (key, value) VALUES ('chk_cb_fail', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(fails)]]); await flush(); return { more: true, errors }; }
+            if (budget.cb >= CB_MAX) { keepFails(); await flush(); return { more: true, errors }; }
             budget.cb++;
             const page = await listReceipts(fetchFn, f, fromIso, toIso, offset);
             rows.push(...page.rows);
@@ -261,24 +274,27 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
           if (e.pending) { await flush(); throw e; }
           errors[f.short_name] = e.message;
           // Checkbox не пускає (невірний логін / пароль, забагато спроб) — не стукаємо 6 год, щоб не заблокувати касу.
-          if (e.status === 401 || e.status === 403) fails[f.id] = { at: nowIso(), msg: e.message.replace(/^Checkbox \d+: /, '') };
-          break; // цей ФОП — наступного разу
+          if (e.status === 401 || e.status === 403) {
+            fails[f.dbId] = { at: nowIso(), msg: e.message.replace(/^Checkbox \d+: /, '') };
+            stmts.push([`UPDATE chk_cashiers SET error = ? WHERE id = ?`, [fails[f.dbId].msg.slice(0, 200), f.dbId]]);
+          }
+          break; // ця каса — наступного разу
         }
         rows = rows.filter((r) => kyivDayOf(r.at) === d);
         stmts.push(...rows.map((r) => [`INSERT INTO chk_receipts (id, fop_id, day, at, type, total, fiscal, pays, refs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET type = excluded.type, total = excluded.total, pays = excluded.pays, refs = excluded.refs`,
-        [r.id, f.id, d, r.at, r.type, r.total, r.fiscal, JSON.stringify(r.pays), r.refs]]));
+        [r.id, f.dbId, d, r.at, r.type, r.total, r.fiscal, JSON.stringify(r.pays), r.refs]]));
         stmts.push([`INSERT INTO chk_days (fop_id, day, done, at) VALUES (?, ?, ?, ?) ON CONFLICT(fop_id, day) DO UPDATE SET done = excluded.done, at = excluded.at`,
-          [f.id, d, d < addDays(today, -1) ? 1 : 0, nowIso()]]);
+          [f.dbId, d, d < addDays(today, -1) ? 1 : 0, nowIso()]]);
       }
     }
-    stmts.push([`INSERT INTO settings (key, value) VALUES ('chk_cb_fail', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(fails)]]);
+    keepFails();
     await flush();
     return { errors };
   }
 
   // Чеки, прив'язані до замовлень у LP-CRM, яких немає серед завантажених (інший день, інша каса): беремо за номером
-  // з кожного ФОП з доступом до Checkbox. Жоден не бачить — каса цього ФОП не підключена в сервісі (ref_state = nofop).
+  // з кожної каси з доступом. Жодна не бачить — каса цього ФОП не підключена в сервісі (ref_state = nofop).
   async function syncReceiptRefs(budget, s) {
     const mark = [`UPDATE chk_orders SET ref_state = 'ok' WHERE ref_state = '' AND receipt_ref != '' AND receipt_ref IN (SELECT id FROM chk_receipts)`, []];
     if (budget.cb >= CB_MAX) { await db.batch([mark]); return { more: true }; }
@@ -286,19 +302,19 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       AND NOT EXISTS (SELECT 1 FROM chk_receipts r WHERE r.id = o.receipt_ref) ORDER BY o.day DESC LIMIT 20`);
     if (!rows.length) { await db.batch([mark]); return {}; }
     const failed = { ...cbFails(s), ...(budget.cbFail || {}) };
-    const fops = (await db.all(`SELECT * FROM fops WHERE active = 1 ORDER BY id`)).filter((f) => hasCheckbox(f) && !failed[f.id]);
-    const tried = fromS(s, 'chk_ref_tried'); // чек → ФОП, де вже шукали
+    const fops = readers(await db.all(`SELECT * FROM chk_cashiers ORDER BY lp_active DESC, id`), failed);
+    const tried = fromS(s, 'chk_ref_tried'); // чек → каси, де вже шукали
     const ups = [mark];
     let more = false;
     for (const r of rows) {
       let got = null; let fopId = null;
       for (const f of fops) {
-        if ((tried[r.receipt_ref] || []).includes(f.id)) continue;
+        if ((tried[r.receipt_ref] || []).includes(f.dbId)) continue;
         if (budget.cb >= CB_MAX) { more = true; break; }
         budget.cb++;
         try { got = await getReceipt(fetchFn, f, r.receipt_ref); } catch (e) { if (e.pending) { more = true; break; } }
-        (tried[r.receipt_ref] ||= []).push(f.id);
-        if (got) { fopId = f.id; break; }
+        (tried[r.receipt_ref] ||= []).push(f.dbId);
+        if (got) { fopId = f.dbId; break; }
       }
       if (more) break;
       if (got) {
@@ -324,6 +340,13 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     if (!lock.changes) return { busy: true };
     // Нові поля замовлення (версія даних) — один раз перечитати повні дані всіх замовлень.
     if (state.data_v !== 4) { await db.run(`UPDATE chk_orders SET fetched_status = 0`); state.data_v = 4; }
+    // З версії 5 чеки прив'язані до кас «Перевірки» (не ФОП накладних) — кеш чеків один раз очищуємо й читаємо заново.
+    if (state.cash_v !== 1) {
+      await db.batch([[`DELETE FROM chk_receipts`, []], [`DELETE FROM chk_days`, []], [`UPDATE chk_orders SET ref_state = ''`, []],
+        [`DELETE FROM settings WHERE key IN ('chk_cb_fail', 'chk_ref_tried')`, []]]);
+      state.cash_v = 1;
+      for (const k of ['chk_cb_fail', 'chk_ref_tried']) delete s[k];
+    }
     if (state.prom_v !== 2) { await db.run(`UPDATE chk_orders SET mp_at = '' WHERE mp_pay = 'other'`); state.prom_v = 2; }
     const budget = { lp: 0, np: 0, rd: 0, prom: 0, cb: 0 };
     const res = {};
@@ -367,7 +390,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     // Останній завершений прохід списків (state.listed): замовлення, яких у ньому немає, вийшли з цих статусів.
     const listed = (await getJson('chk_state', {})).listed || '';
     const cbFailRaw = (await db.get(`SELECT value FROM settings WHERE key = 'chk_cb_fail'`))?.value || '{}';
-    const [rs, orders, receipts, fopsAll, offices, channels, accounts, txs, stNames] = await Promise.all([
+    const [rs, orders, receipts, fopsAll, offices, channels, accounts, txs, stNames, cashList] = await Promise.all([
       rules(),
       db.all(`SELECT * FROM chk_orders WHERE listed_at != '' AND listed_at >= ? AND day BETWEEN ? AND ? ORDER BY day DESC, code DESC`, [listed, from, to]),
       // чеки за період + прив'язані в LP-CRM до замовлень періоду (можуть бути з іншого дня)
@@ -378,29 +401,40 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       db.all(`SELECT iban, code, name, alias FROM odb_accounts`).catch(() => []),
       db.all(`SELECT id, date, amount, purpose, iban, payer_name, our_code FROM odb_tx WHERE date >= ? AND date < ?`, [addDays(from, -7), addDays(to, 3)]).catch(() => []),
       getJson('chk_statuses', {}),
+      db.all(`SELECT id, name, login, password, license, pin, offices, lp_active, active, org_title, org_code FROM chk_cashiers ORDER BY lp_active DESC, id`),
     ]);
-    const fops = Object.fromEntries(fopsAll.map((f) => [String(f.id), f.short_name]));
+    // Каси: назва (організація з Checkbox або як у LP-CRM), організація, відділи LP-CRM.
+    const fops = Object.fromEntries(cashList.map((k) => [String(k.id), k.org_title || k.name]));
+    const orgOf = new Map(cashList.map((k) => [String(k.id), orgKey(k)]));
+    const sameOrg = (a, b) => a != null && b != null && orgOf.get(String(a)) === orgOf.get(String(b));
     const failed = cbFails(Object.fromEntries([['chk_cb_fail', cbFailRaw]]));
-    const okCb = (f) => hasCheckbox(f) && !failed[f.id];
-    const cbFops = new Set(fopsAll.filter(okCb).map((f) => String(f.id)));
-    const allCb = fopsAll.filter((f) => f.active).every(okCb);
+    const readable = new Set(readers(cashList, failed).map((f) => orgOf.get(String(f.dbId))));
+    const cashByOffice = new Map();
+    for (const k of cashList) {
+      let offs = []; try { offs = JSON.parse(k.offices || '[]'); } catch { /* порожньо */ }
+      for (const off of offs) if (!cashByOffice.has(String(off))) cashByOffice.set(String(off), k.id);
+    }
+    const cashByCode = new Map(cashList.filter((k) => k.org_code).map((k) => [String(k.org_code).trim(), k.id]));
     const fopByIpn = new Map(fopsAll.filter((f) => f.ipn).map((f) => [String(f.ipn).trim(), f.id]));
     const fopByIban = new Map(fopsAll.filter((f) => f.iban).map((f) => [String(f.iban).replace(/\s/g, '').toUpperCase(), f.id]));
+    const fopName = Object.fromEntries(fopsAll.map((f) => [String(f.id), f.short_name]));
     const accByIban = new Map(accounts.map((a) => [String(a.iban).toUpperCase(), a]));
-    const officeFop = new Map(offices.map((o) => [String(o.office_id), o.fop_id]));
     const officeName = new Map(offices.map((o) => [String(o.office_id), o.name]));
-    const chanFop = new Map(channels.map((c) => [c.name.trim().toLowerCase(), c.fop_id]));
     const names = stNames.names || {};
+    // Яка каса має пробити чек — як у модулі Checkbox LP-CRM: за відділом замовлення.
     for (const o of orders) {
       o.status_name = names[o.status] || '';
-      o.fopId = (o.channel && chanFop.get(o.channel.toLowerCase())) || officeFop.get(String(o.office)) || null;
+      o.fopId = cashByOffice.get(String(o.office)) ?? null;
     }
     const recs = receipts.map((r) => ({ ...r, pays: (() => { try { return JSON.parse(r.pays); } catch { return []; } })() }));
-    const matched = matchReceipts(orders, recs);
+    const matched = matchReceipts(orders, recs, sameOrg);
     const txRows = txs.map((t) => {
       const iban = String(t.iban || '').toUpperCase();
       const acc = accByIban.get(iban);
-      return { ...t, day: String(t.date).slice(0, 10), fop_id: fopByIban.get(iban) || fopByIpn.get(String(t.our_code || acc?.code || '').trim()) || null, account: acc?.alias || acc?.name || iban.slice(-8) };
+      const code = String(t.our_code || acc?.code || '').trim();
+      const fid = fopByIban.get(iban) || fopByIpn.get(code);
+      // fop_id — каса тієї ж організації (для порівняння з чеком); account — куди прийшли гроші, для людини.
+      return { ...t, day: String(t.date).slice(0, 10), fop_id: cashByCode.get(code) ?? null, account: (fid && fopName[String(fid)]) || acc?.alias || acc?.name || iban.slice(-8) };
     });
     // Можливі дублі: той самий телефон у кількох відправлених замовленнях, створених у межах 3 днів.
     const byPhone = new Map();
@@ -415,9 +449,9 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       const receipt = matched.get(o.code) || null;
       const payment = rule?.cls === 'bank' ? findPayment(o, txRows, o.total) : null;
       const dupTtn = (byTtn.get(String(o.ttn || '').replace(/\s/g, '').toUpperCase()) || []).filter((x) => x !== o).map((x) => x.id || x.code);
-      // Чек можна вимагати, лише якщо касу ФОП (за відділом / полем 1) підключено; ФОП невідомий — якщо підключено всі каси.
-      const canReceipt = o.fopId ? cbFops.has(String(o.fopId)) : allCb && cbFops.size > 0;
-      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn, canReceipt });
+      // Чек можна вимагати, лише якщо касу відділу внесено й до неї є доступ.
+      const canReceipt = o.fopId != null && readable.has(orgOf.get(String(o.fopId)));
+      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn, canReceipt, sameOrg, noCashier: o.fopId == null });
       return {
         code: o.code, id: o.id, day: o.day, status: o.status_name || String(o.status), total: o.total,
         payment: rule?.name || (o.payment ? `Оплата ${o.payment}` : '—'), cls: rule?.cls || '', partial: Boolean(part),
@@ -429,7 +463,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         level: ev.level, items: ev.items,
       };
     });
-    return { rows, recs, matched, orders, fops, failed: Object.entries(failed).map(([id, v]) => `${fops[id] || id} — ${v.msg}`) };
+    return { rows, recs, matched, orders, fops, failed: Object.entries(failed).map(([id, v]) => `${fops[id] || id} — ${v.msg}`), cashList };
   }
 
   const period = (c) => {
@@ -445,11 +479,10 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
   app.get('/api/checks', async (c) => {
     need(c, 'users');
     const { from, to } = period(c);
-    const { rows, failed } = await build(from, to);
+    const { rows, failed, cashList } = await build(from, to);
     const counts = rows.reduce((a, r) => { a[r.level] = (a[r.level] || 0) + 1; return a; }, {});
-    // ФОП, чеки яких не можемо звірити: каса не підключена (немає доступу Checkbox у «ФОПи накладних»).
-    const noCb = (await db.all(`SELECT short_name, checkbox_login, checkbox_password, checkbox_license, checkbox_pin FROM fops WHERE active = 1`))
-      .filter((f) => !hasCheckbox(f)).map((f) => f.short_name);
+    // Увімкнені в LP-CRM каси без пароля / ключа — чеки їхніх відділів не звіряємо.
+    const noCb = cashList.filter((k) => k.lp_active && k.active && !canSign(k)).map((k) => k.name);
     const state = await getJson('chk_state', {});
     return c.json({ from, to, rows, counts, no_checkbox: noCb, cb_failed: failed, state: { at: state.at || '', finished: state.finished || '', more: Boolean(state.more), errors: state.errors || [] } });
   });
@@ -464,7 +497,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const groups = new Map();
     for (const r of list) {
       const k = String(r.fop_id);
-      if (!groups.has(k)) groups.set(k, { fop: fops[k] || `ФОП ${k}`, rows: [], sum: 0, ret: 0, free: 0 });
+      if (!groups.has(k)) groups.set(k, { fop: fops[k] || `Каса ${k}`, rows: [], sum: 0, ret: 0, free: 0 });
       const g = groups.get(k);
       const o = byReceipt.get(r.id);
       const isRet = /RETURN/i.test(r.type);
@@ -496,6 +529,76 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     }
     await setJson('chk_pay', saved);
     return c.json({ ok: true });
+  });
+
+  // ---------------------------------------------------------------- каси Checkbox (налаштування)
+  // Секрети (пароль, ключ ліцензії, PIN) назовні не віддаємо — лише ознаку, що їх внесено.
+  const pubCashier = (k) => {
+    let offices = []; try { offices = JSON.parse(k.offices || '[]'); } catch { /* порожньо */ }
+    return { id: k.id, name: k.name, login: k.login, offices, lp_active: Boolean(k.lp_active), active: Boolean(k.active), org_title: k.org_title, org_code: k.org_code,
+      checked_at: k.checked_at, error: k.error, has_password: Boolean(k.password), has_license: Boolean(k.license), has_pin: Boolean(k.pin), ready: canSign(k) };
+  };
+  const cashierBody = (b, cur = {}) => {
+    const keep = (v, old) => (v === undefined || v === null || v === '' ? old || '' : String(v).trim()); // порожнє поле секрету — без змін
+    const offices = (Array.isArray(b.offices) ? b.offices : String(b.offices ?? '').split(/[\s,;]+/)).map((x) => String(x).trim()).filter((x) => /^\d{1,4}$/.test(x));
+    const row = {
+      name: String(b.name ?? cur.name ?? '').trim().slice(0, 120),
+      login: String(b.login ?? cur.login ?? '').trim().slice(0, 120),
+      password: b.clear_password ? '' : keep(b.password, cur.password).slice(0, 200),
+      license: b.clear_license ? '' : keep(b.license, cur.license).slice(0, 200),
+      pin: b.clear_pin ? '' : keep(b.pin, cur.pin).slice(0, 40),
+      offices: JSON.stringify([...new Set(b.offices === undefined && cur.offices ? JSON.parse(cur.offices) : offices)]),
+      lp_active: b.lp_active === undefined ? (cur.lp_active ?? 1) : (b.lp_active ? 1 : 0),
+      active: b.active === undefined ? (cur.active ?? 1) : (b.active ? 1 : 0),
+    };
+    if (!row.name) throw fail(400, 'Вкажіть назву каси (ФОП / ТОВ).');
+    return row;
+  };
+  app.get('/api/checks/cashiers', async (c) => {
+    need(c, 'users');
+    return c.json((await db.all(`SELECT * FROM chk_cashiers ORDER BY lp_active DESC, name`)).map(pubCashier));
+  });
+  app.post('/api/checks/cashiers', async (c) => {
+    need(c, 'users');
+    const r = cashierBody(await c.req.json());
+    const res = await db.run(`INSERT INTO chk_cashiers (name, login, password, license, pin, offices, lp_active, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [r.name, r.login, r.password, r.license, r.pin, r.offices, r.lp_active, r.active, nowIso()]);
+    return c.json(pubCashier(await db.get(`SELECT * FROM chk_cashiers WHERE id = ?`, [res.lastId])));
+  });
+  app.put('/api/checks/cashiers/:id', async (c) => {
+    need(c, 'users');
+    const cur = await db.get(`SELECT * FROM chk_cashiers WHERE id = ?`, [c.req.param('id')]);
+    if (!cur) throw fail(404, 'Касу не знайдено.');
+    const r = cashierBody(await c.req.json(), cur);
+    const secretChanged = r.login !== cur.login || r.password !== cur.password || r.license !== cur.license || r.pin !== cur.pin;
+    await db.run(`UPDATE chk_cashiers SET name = ?, login = ?, password = ?, license = ?, pin = ?, offices = ?, lp_active = ?, active = ?${secretChanged ? ", error = '', checked_at = ''" : ''} WHERE id = ?`,
+      [r.name, r.login, r.password, r.license, r.pin, r.offices, r.lp_active, r.active, cur.id]);
+    if (secretChanged) { // новий доступ — знову пробуємо цю касу одразу
+      const f = fromJson((await db.get(`SELECT value FROM settings WHERE key = 'chk_cb_fail'`))?.value);
+      delete f[cur.id];
+      await db.run(`INSERT INTO settings (key, value) VALUES ('chk_cb_fail', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(f)]);
+    }
+    return c.json(pubCashier(await db.get(`SELECT * FROM chk_cashiers WHERE id = ?`, [cur.id])));
+  });
+  app.delete('/api/checks/cashiers/:id', async (c) => {
+    need(c, 'users');
+    await db.run(`DELETE FROM chk_cashiers WHERE id = ?`, [c.req.param('id')]);
+    return c.json({ ok: true });
+  });
+  // Перевірити вхід: Checkbox пускає? чия каса (організація, ІПН / ЄДРПОУ)?
+  app.post('/api/checks/cashiers/:id/test', async (c) => {
+    need(c, 'users');
+    const k = await db.get(`SELECT * FROM chk_cashiers WHERE id = ?`, [c.req.param('id')]);
+    if (!k) throw fail(404, 'Касу не знайдено.');
+    if (!hasCheckbox(asCb({ ...k, active: 1 }))) throw fail(400, 'Внесіть пароль касира (або ключ ліцензії й PIN), тоді можна перевірити вхід.');
+    try {
+      const me = await cashierMe(fetchFn, asCb(k));
+      await db.run(`UPDATE chk_cashiers SET org_title = ?, org_code = ?, checked_at = ?, error = '' WHERE id = ?`, [me.org_title.slice(0, 160), me.org_code.slice(0, 20), nowIso(), k.id]);
+    } catch (e) {
+      if (e.pending) throw e;
+      await db.run(`UPDATE chk_cashiers SET checked_at = ?, error = ? WHERE id = ?`, [nowIso(), e.message.replace(/^Checkbox \d+: /, '').slice(0, 200), k.id]);
+    }
+    return c.json(pubCashier(await db.get(`SELECT * FROM chk_cashiers WHERE id = ?`, [k.id])));
   });
 
   // «Оновити зараз»: один крок збору; сторінка повторює, доки more = true.
