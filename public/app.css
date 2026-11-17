@@ -1143,3 +1143,17 @@ main.mp-wide { max-width: none; }
   .mpc-shop { grid-template-columns: 1fr; }
   .mpc-foot-note { flex-basis: 100%; }
 }
+
+/* «Перевірка»: смужка етапів і картка перевірки замовлення */
+tr.chk-row { cursor: pointer; }
+tr.chk-row:hover td { background: var(--hover, rgba(0,0,0,.025)); }
+.chk-strip { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 4px; }
+.chk-st { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; padding: 1px 7px 1px 4px; border-radius: 999px; border: 1px solid var(--line, #e5e7eb); white-space: nowrap; }
+.chk-st-bad { color: var(--bad); border-color: currentColor; }
+.chk-st-warn { color: var(--warn); border-color: currentColor; }
+.chk-st-ok { color: var(--ok); }
+.chk-st-wait, .chk-st-info, .chk-st-skip { color: var(--muted, #6b7280); }
+tr.chk-detail > td { background: var(--bg2, #fafafa); padding: 10px 14px 14px; }
+.chk-card { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px 18px; }
+.chk-stage-h { font-weight: 600; font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.chk-com-full { white-space: pre-wrap; margin-top: 4px; }
