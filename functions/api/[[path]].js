@@ -12580,6 +12580,11 @@ function findImage2(node, depth = 0) {
   }
   return "";
 }
+var kyivDayStartIso2 = (now = Date.now()) => {
+  const d = kyivDay(new Date(now));
+  const wall = Date.parse(`${new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(new Date(now)).replace(" ", "T")}Z`);
+  return new Date(Date.parse(`${d}T00:00:00Z`) - (wall - now)).toISOString();
+};
 var num3 = (v) => {
   const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", "."));
   return Number.isFinite(n) ? n : 0;
@@ -13015,7 +13020,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     ]);
     return c.json({ rows: rows.map((r) => ({ ...r, brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456" })), state });
   });
-  async function catalogState(today3 = kyivDay()) {
+  async function catalogState(today3 = kyivDayStartIso2()) {
     const [last, left] = await Promise.all([
       db.get(`SELECT value FROM settings WHERE key = 'b2b_catalog_sync'`),
       db.get(`SELECT COUNT(*) AS n FROM b2b_catalog WHERE hidden = 0 AND checked_at < ? AND (manual = 1 OR brand_id IN (SELECT brand_id FROM b2b_margins))`, [today3])
@@ -13046,7 +13051,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const b = await c.req.json().catch(() => ({}));
     const run = String(b.run || "");
     const fresh = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(run) && Math.abs(Date.now() - Date.parse(run)) < 3 * 3600 * 1e3;
-    const today3 = fresh ? run : kyivDay();
+    const today3 = fresh ? run : kyivDayStartIso2();
     const stamp = nowIso();
     let discovered = 0;
     if (services.analytics?.addProducts) {
