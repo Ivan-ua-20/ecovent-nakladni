@@ -829,7 +829,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     return o;
   };
   const items = mountMarketItems({ db, services, onCron });
-  mountMarketCrm(app, { db, fetchFn, services, onCron, rzOrderOf, items });
+  mountMarketCrm(app, { db, fetchFn, services, onCron, rzOrderOf, items, shopsOf });
   mountMarketRemind(app, { db, services, onCron, shopsOf, kyivDT, failed: RZ_FAILED, rzOrderOf, shared, clock: shared.clock });
   const markAsked = async (o, user, via) => {
     const at = nowIso();

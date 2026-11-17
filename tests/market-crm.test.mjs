@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../src/core/db-node.js';
 import { migrate } from '../src/migrate.js';
 import { createApp } from '../src/app.js';
+import { partsToLines } from '../src/modules/market/crm.js';
 
 const db = openDb(':memory:');
 await migrate(db);
@@ -92,8 +93,11 @@ assert.equal((await req('GET', '/api/mp/orders?mp=rozetka&crm=yes')).j.rows[0].c
 // відділ — завжди 5 «Маркетплейси»; вид оплати — у формі
 r = await req('GET', '/api/mp/crm/prefill/1/9004');
 assert.equal(r.status, 200);
-assert.deepEqual(r.j.pay, { id: '14', name: 'RozetkaPay' });
-assert.deepEqual(r.j.items.map((x) => [x.item_id, x.product_id, x.from, x.qty, x.price]), [['564329178', 701, 'saved', 2, 7600], ['111', null, '', 1, 500]]);
+assert.deepEqual(r.j.pay, { id: '14', name: 'RozetkaPay', cod: false });
+assert.deepEqual(r.j.office, { id: '5', name: 'Маркетплейси' });
+assert.deepEqual(r.j.flow, { check: true, newItem: true }, 'обидва вікна типово увімкнені');
+assert.match(r.j.send.comment, /^Rozetka 9004/);
+assert.deepEqual(r.j.items.map((x) => [x.item_id, x.parts[0]?.product_id ?? null, x.from, x.qty, x.price, x.confirmed]), [['564329178', 701, 'saved', 2, 7600, false], ['111', null, '', 1, 500, false]]);
 const items = [{ item_id: '564329178', product_id: 701, price: 7600, qty: 2, product_name: 'Осушувач' }, { item_id: '111', product_id: 703, price: 500, qty: 1, product_name: 'Очищувач Levoit Core 300' }];
 assert.equal((await req('PUT', '/api/mp/crm/settings/1', { office: 'abc' })).status, 400);
 r = await req('PUT', '/api/mp/crm/settings/1', { office: '7', site: 'rozetka.com.ua', delivery: '1', field1: 'Rozetka(Ecovent)' });
@@ -136,15 +140,15 @@ assert.match(r.j.error, /Уже в LP-CRM: № 95555/);
 r = await req('GET', '/api/mp/crm/products?q=evoair comfodry');
 assert.deepEqual(r.j.products.map((p) => p.id), [701]);
 // ---------- довідник товарів: правила прив'язки (лише однозначний збіг, без вгадування за назвою) ----------
-// 2) той самий товар в іншому магазині — копіюється (і записується в довідник того магазину)
+// 2) той самий товар в іншому магазині НЕ переноситься: прив'язки — окремо для кожного магазину
 r = await req('GET', '/api/mp/crm/prefill/2/9005');
-assert.deepEqual([r.j.items[0].product_id, r.j.items[0].from, r.j.items[0].product_name], [701, 'copied', 'Осушувач повітря Evoair ComfoDry 12']);
-assert.deepEqual({ ...(await db.get(`SELECT product_id, link_source, link_by FROM mp_items WHERE account_id = 2 AND item_id = '564329178'`)) }, { product_id: 701, link_source: 'copied', link_by: 'авто' });
+assert.deepEqual([r.j.items[0].parts.length, r.j.items[0].from], [0, '']);
+assert.ok(!(await db.get(`SELECT product_id FROM mp_items WHERE account_id = 2 AND item_id = '564329178'`))?.product_id);
 // стара таблиця mp_crm_items ще читається (для баз до появи довідника)
 await db.run(`INSERT INTO mp_crm_items (mp, item_id, product_id, name, updated_at) VALUES ('rozetka', '777', 703, 'Старий', '')`);
 await ins(2, '9006', '26', { phone: '380509990002', items: [{ id: '777', name: 'Старий товар', qty: 1, price: 100 }] });
 r = await req('GET', '/api/mp/crm/prefill/2/9006');
-assert.deepEqual([r.j.items[0].product_id, r.j.items[0].from], [703, 'saved']);
+assert.deepEqual([r.j.items[0].parts[0].product_id, r.j.items[0].from], [703, 'saved']);
 // 3) код на початку артикулу = «[код]» у назві товару LP-CRM; 4) артикул без бренду = model; неоднозначний код і невідомий артикул — порожньо
 await db.batch([
   [`INSERT INTO crm_products (product_id, name, namel, code, sku, skun, model, active) VALUES
@@ -160,18 +164,18 @@ await ins(2, '9007', '26', { phone: '380509990003', items: [
   { id: 'A4', name: 'Щось нове', qty: 1, price: 1, article: '12345 SomethingNew' },
   { id: 'A5', name: 'Без артикулу', qty: 1, price: 1 }] });
 r = await req('GET', '/api/mp/crm/prefill/2/9007');
-assert.deepEqual(r.j.items.map((x) => [x.item_id, x.product_id, x.from]), [['A1', 669, 'code'], ['A2', 646, 'sku'], ['A3', null, ''], ['A4', null, ''], ['A5', null, '']]);
-assert.equal(r.j.items[1].product_name, 'Осушувач повітря Evoair Dryora 10 (DRYORA10) [30360]');
+assert.deepEqual(r.j.items.map((x) => [x.item_id, x.parts[0]?.product_id ?? null, x.from]), [['A1', 669, 'code'], ['A2', 646, 'sku'], ['A3', null, ''], ['A4', null, ''], ['A5', null, '']]);
+assert.equal(r.j.items[1].parts[0].name, 'Осушувач повітря Evoair Dryora 10 (DRYORA10) [30360]');
 assert.deepEqual((await db.all(`SELECT item_id, product_id, link_source FROM mp_items WHERE account_id = 2 AND item_id LIKE 'A%' ORDER BY item_id`)).map((x) => ({ ...x })),
   [{ item_id: 'A1', product_id: 669, link_source: 'code' }, { item_id: 'A2', product_id: 646, link_source: 'sku' }], 'автоматичні збіги записано, порожні — ні');
-// ручний вибір у формі має пріоритет і не перезаписується автопідбором
+// рядки з форми не змінюють наявних прив'язок (змінюють лише у вікні підтвердження); порожні — запам'ятовуються
 await req('PUT', '/api/mp/crm/settings/2', { office: '8' });
 r = await req('POST', '/api/mp/crm/create', { account: 2, id: '9007', items: [
   { item_id: 'A1', product_id: 701, price: 7600, qty: 1 }, { item_id: 'A2', product_id: 646, price: 6500, qty: 1 }, { item_id: 'A3', product_id: 1021, price: 7499, qty: 1 },
   { item_id: 'A4', product_id: 703, price: 1, qty: 1 }, { item_id: 'A5', product_id: 703, price: 1, qty: 1 }] });
 assert.equal(r.status, 200, JSON.stringify(r.j));
 assert.deepEqual((await db.all(`SELECT item_id, product_id, link_source FROM mp_items WHERE account_id = 2 AND item_id LIKE 'A%' ORDER BY item_id`)).map((x) => [x.item_id, x.product_id, x.link_source]),
-  [['A1', 701, 'manual'], ['A2', 646, 'sku'], ['A3', 1021, 'manual'], ['A4', 703, 'manual'], ['A5', 703, 'manual']], 'змінений вручну — manual, незмінений — як був');
+  [['A1', 669, 'code'], ['A2', 646, 'sku'], ['A3', 1021, 'manual'], ['A4', 703, 'manual'], ['A5', 703, 'manual']]);
 assert.equal((await db.get(`SELECT COUNT(*) AS n FROM mp_items WHERE product_id = 703`)).n, 4, 'кілька товарів маркетплейсу (і з різних магазинів) → один товар LP-CRM');
 // фоновий підбір для товарів без прив'язки (з синхронізації): за кодом, дубль у магазині — копія
 await db.batch([
@@ -181,10 +185,55 @@ r = (await req('POST', '/api/cron/run/market-items', null, { 'X-Cron-Key': (awai
 assert.ok(r.ok, JSON.stringify(r));
 assert.deepEqual([r.result.checked, r.result.linked], [3, 2]);
 assert.deepEqual((await db.all(`SELECT item_id, product_id, link_source FROM mp_items WHERE account_id = 1 AND item_id LIKE 'B%' ORDER BY item_id`)).map((x) => [x.item_id, x.product_id, x.link_source]),
-  [['B1', 646, 'code'], ['B2', null, ''], ['B3', 701, 'copied']], 'B3: той самий артикул уже прив\'язано вручну в магазині 2 — копія, а не код');
+  [['B1', 646, 'code'], ['B2', null, ''], ['B3', 669, 'code']], 'B3: прив\'язка того ж артикулу в магазині 2 не переноситься — за кодом');
 // пошук у формі бачить і словник каталогу
 r = await req('GET', '/api/mp/crm/products?q=dryora');
 assert.deepEqual(r.j.products.map((p) => p.id), [646]);
+
+// ---------- перше підтвердження товару: склад окремо для кожного магазину, комплект ----------
+await ins(1, '9010', '26', { phone: '380509990010', items: [{ id: 'K1', name: 'Набір DREO + фільтр', qty: 2, price: 10000, article: 'DREO-SET' }, { id: 'B1', name: 'Dryora дубль', qty: 1, price: 6500, article: '30360 EvoairDryora10' }] });
+await ins(2, '9011', '26', { phone: '380509990011', items: [{ id: 'K1', name: 'Набір DREO + фільтр', qty: 1, price: 10000, article: 'DREO-SET' }] });
+r = await req('GET', '/api/mp/crm/prefill/1/9010');
+assert.deepEqual(r.j.items.map((x) => [x.item_id, x.confirmed, x.parts.map((p) => p.product_id)]), [['K1', false, []], ['B1', false, [646]]], 'нові товари — непідтверджені');
+assert.equal((await req('POST', '/api/mp/crm/confirm', { account: 1, items: [{ item_id: 'K1', parts: [] }] })).status, 400, 'без товару LP-CRM — ні');
+r = await req('POST', '/api/mp/crm/confirm', { account: 1, items: [
+  { item_id: 'K1', name: 'Набір DREO + фільтр', article: 'DREO-SET', parts: [{ product_id: 1021, qty: 1 }, { product_id: 703, qty: 1, price: 2600 }] },
+  { item_id: 'B1', parts: [{ product_id: 646, qty: 1 }] }] });
+assert.equal(r.status, 200, JSON.stringify(r.j));
+assert.equal(r.j.confirmed, 2);
+r = await req('GET', '/api/mp/crm/prefill/1/9010');
+assert.deepEqual(r.j.items.map((x) => [x.item_id, x.confirmed, x.from, x.parts.map((p) => [p.product_id, p.qty, p.price])]),
+  [['K1', true, 'confirmed', [[1021, 1, null], [703, 1, 2600]]], ['B1', true, 'confirmed', [[646, 1, null]]]], 'далі — без вікна, склад запам\'ятався');
+assert.equal(r.j.items[0].parts[0].name, 'Очищувач повітря DREO 337S (DR-HAP007S) [83891]');
+r = await req('GET', '/api/mp/crm/prefill/2/9011');
+assert.deepEqual([r.j.items[0].confirmed, r.j.items[0].parts.length], [false, 0], 'в іншому магазині той самий товар підтверджують окремо');
+// сума рядків = ціна Розетки: основний отримує решту
+assert.deepEqual(partsToLines([{ product_id: 1021, qty: 1, price: null }, { product_id: 703, qty: 1, price: 2600 }], 2, 10000),
+  [{ product_id: 1021, count: 2, price: 7400 }, { product_id: 703, count: 2, price: 2600 }]);
+assert.deepEqual(partsToLines([{ product_id: 5, qty: 2, price: null }], 1, 1000), [{ product_id: 5, count: 2, price: 500 }], 'упаковка з 2 шт');
+// створення зі складу довідника (без вікон)
+calls.length = 0;
+r = await req('POST', '/api/mp/crm/create', { account: 1, id: '9010', auto: true });
+assert.equal(r.status, 200, JSON.stringify(r.j));
+assert.match(decodeURIComponent(calls.find((x) => x.method === 'addNewOrder').p.products.replace(/\+/g, ' ')), /"1021".*"7400".*"2".*"703".*"2600".*"2".*"646".*"6500".*"1"/s);
+// виправлені у вікні перевірки покупець, телефон, адреса й коментар
+await ins(1, '9012', '26', { phone: '380509990012', items: [{ id: 'B1', name: 'Dryora дубль', qty: 1, price: 6500 }] });
+calls.length = 0;
+r = await req('POST', '/api/mp/crm/create', { account: 1, id: '9012', auto: true, bayer_name: 'Інше Ім\'я', phone: '+38 (050) 111-22-33', address: 'Львів, № 5', comment: 'Мій коментар' });
+assert.equal(r.status, 200, JSON.stringify(r.j));
+const add2 = calls.find((x) => x.method === 'addNewOrder').p;
+assert.deepEqual([add2.bayer_name, add2.phone, add2.delivery_adress, add2.comment], ['Інше Ім\'я', '380501112233', 'Львів, № 5', 'Мій коментар']);
+r = await req('POST', '/api/mp/crm/create', { account: 2, id: '9011', auto: true });
+assert.equal(r.status, 400, 'без складу — не створює');
+// налаштування вікон
+assert.deepEqual((await req('PUT', '/api/mp/crm/flow', { check: false })).j, { check: false, newItem: true });
+assert.deepEqual((await req('GET', '/api/mp/crm/flow')).j, { check: false, newItem: true });
+// довідник товарів для «Налаштування → Товари»
+r = await req('GET', '/api/mp/items?only=todo');
+assert.equal(r.status, 200);
+assert.ok(r.j.items.every((x) => !x.confirmed));
+r = await req('GET', '/api/mp/items?account=1&q=dreo');
+assert.deepEqual(r.j.items.map((x) => [x.item_id, x.confirmed, x.parts.length]), [['K1', true, 2]]);
 
 // ---------- статус у LP-CRM фоном ----------
 CRM.set('C-TTN-1', { ...CRM.get('C-TTN-1'), status: '2' });

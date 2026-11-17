@@ -134,7 +134,7 @@ export function mountCatalog(app, { db, fetchFn, onCron = () => {} }) {
 
   // ---------- читання для інших модулів ----------
   const J = (a) => JSON.stringify(a);
-  const pick = (r) => ({ id: r.product_id, name: r.name, code: r.code, sku: r.sku, active: Boolean(r.active) });
+  const pick = (r) => ({ id: r.product_id, name: r.name, code: r.code, sku: r.sku, price: Number(r.price) || 0, active: Boolean(r.active) });
   const byIds = async (ids) => {
     const list = [...new Set(ids.map((x) => Number(x)).filter(Boolean))];
     return list.length ? (await db.all(`SELECT * FROM crm_products WHERE product_id IN (SELECT value FROM json_each(?))`, [J(list)])).map(pick) : [];

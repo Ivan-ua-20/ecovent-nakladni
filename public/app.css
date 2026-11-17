@@ -1091,3 +1091,55 @@ main.mp-wide { max-width: none; }
 .mp3-crm #mpCrmNum { width: auto !important; flex: 1; min-width: 0; }
 .mp3-keys { display: flex; gap: 14px; flex-wrap: wrap; }
 .kbd { display: inline-block; border: 1px solid #d9e0dd; border-bottom-width: 2px; border-radius: 5px; padding: 0 6px; font-size: 11px; background: var(--surface); color: #4b5a55; }
+
+/* Маркетплейси → LP-CRM: вікна підтвердження товарів і перевірки даних, «Маркетплейси → Налаштування» (mpcrm.js) */
+.mpc-list { display: flex; flex-direction: column; gap: 12px; }
+.mpc-pair { display: grid; grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1.35fr); gap: 12px; align-items: start; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.mpc-pair.need { border-color: #F5B98A; box-shadow: 0 0 0 1px #F5B98A; }
+.mpc-cap { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; margin: 0 0 6px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.mpc-cap .badge { letter-spacing: 0; text-transform: none; }
+.mpc-mp { display: flex; gap: 10px; }
+.mpc-mp img, .mpc-ph { width: 56px; height: 56px; border-radius: 10px; object-fit: contain; background: #EEF1F0; flex: none; }
+.mpc-ph.sm, .mpc-items img { width: 36px; height: 36px; border-radius: 8px; object-fit: contain; background: #EEF1F0; display: inline-block; }
+.mpc-name { font-weight: 600; }
+.mpc-arrow { display: flex; align-items: center; justify-content: center; height: 56px; color: var(--muted); font-size: 20px; }
+.mpc-prod { display: grid; grid-template-columns: minmax(0, 1fr) 96px 110px 32px; gap: 8px; align-items: end; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 6px; }
+.mpc-prod .f input { width: 100%; }
+.mpc-prod input[readonly] { background: var(--bg, #F3F5F4); color: var(--muted); }
+.mpc-pname { font-weight: 600; font-size: 13px; }
+.mpc-add { margin: 2px 0 6px; }
+.mpc-add input { border-style: dashed; }
+.mpc-bad { color: #B42318; font-weight: 600; }
+.mpc-foot-note { margin-right: auto; }
+.mpc-check { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.mpc-box { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface); display: flex; flex-direction: column; gap: 6px; }
+.mpc-box textarea { width: 100%; font: 12.5px/1.5 ui-monospace, Consolas, monospace; box-sizing: border-box; }
+.mpc-wide { grid-column: 1 / -1; }
+.mpc-kv { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 6px 10px; margin: 0; font-size: 13px; }
+.mpc-kv dt { color: var(--muted); }
+.mpc-kv dd { margin: 0; }
+.mpc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mpc-table th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: 5px 6px; border-bottom: 1px solid var(--line); }
+.mpc-table td { padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: top; font-variant-numeric: tabular-nums; }
+.mpc-table .r { text-align: right; }
+.mpc-total td { font-weight: 700; border-bottom: 0; }
+.mpc-tabs { margin-bottom: 12px; }
+.mpc-card { max-width: 1100px; }
+.mpc-set { display: flex; gap: 14px; align-items: flex-start; padding: 12px 0; border-top: 1px solid var(--line); }
+.mpc-set:first-child { border-top: 0; }
+.mpc-set .switch { flex: none; margin-top: 2px; }
+.mpc-items-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.mpc-items-head select { width: auto; flex: none; }
+.mpc-items-head input[type=search] { flex: 1 1 260px; width: auto; min-width: 200px; }
+.mpc-tbl-wrap { overflow-x: auto; }
+.mpc-shop { display: grid; grid-template-columns: 180px repeat(3, minmax(0, 1fr)) auto; gap: 10px; align-items: end; padding: 10px 0; border-top: 1px solid var(--line); }
+.mpc-shop:first-of-type { border-top: 0; }
+@media (max-width: 760px) {
+  .mpc-pair { grid-template-columns: 1fr; }
+  .mpc-arrow { height: auto; transform: rotate(90deg); }
+  .mpc-prod { grid-template-columns: 1fr 1fr 32px; }
+  .mpc-prod > div:first-child { grid-column: 1 / -1; }
+  .mpc-check { grid-template-columns: 1fr; }
+  .mpc-shop { grid-template-columns: 1fr; }
+  .mpc-foot-note { flex-basis: 100%; }
+}

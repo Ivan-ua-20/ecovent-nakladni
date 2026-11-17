@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'market',
-  version: 10,
+  version: 11,
   tables: [
   // Товари магазинів маркетплейсів (з замовлень) і їх прив'язка до товарів LP-CRM (див. items.js).
   // Кілька товарів маркетплейсу (дублі, інший магазин) можуть вести до одного product_id; link_source — manual | learned |
@@ -40,6 +40,18 @@ export const schema = {
     source TEXT DEFAULT '',
     by TEXT DEFAULT '',
     at TEXT DEFAULT ''
+  )`,
+  // Комплект: додаткові товари LP-CRM для одного товару маркетплейсу (pos ≥ 1; основний — mp_items.product_id і qty).
+  // qty — скільки штук на 1 шт товару маркетплейсу; price — фіксована ціна за штуку (основний отримує решту ціни).
+  `CREATE TABLE IF NOT EXISTS mp_item_parts (
+    mp TEXT NOT NULL,
+    account_id INTEGER NOT NULL,
+    item_id TEXT NOT NULL,
+    pos INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    qty REAL NOT NULL DEFAULT 1,
+    price REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (mp, account_id, item_id, pos)
   )`,
   // Товар Розетки → товар LP-CRM (для «Створити в LP-CRM»; запам'ятовується після першого разу).
   `CREATE TABLE IF NOT EXISTS mp_crm_items (
@@ -110,6 +122,11 @@ export const schema = {
     `CREATE INDEX IF NOT EXISTS mp_orders_active ON mp_orders (mp, status_group)`,
   ],
   columns: [
+    // Прив'язка товару, підтверджена людиною (вікно «Підтвердіть товари для LP-CRM») — окремо для кожного магазину;
+    // qty — скільки штук основного товару LP-CRM на 1 шт товару маркетплейсу.
+    ['mp_items', 'qty', 'REAL'],
+    ['mp_items', 'confirmed_at', "TEXT DEFAULT ''"],
+    ['mp_items', 'confirmed_by', "TEXT DEFAULT ''"],
     // Історія магазину (Розетка — за 4 роки): по місяцях назад від сьогодні за датою створення.
     // hist_from — найдавніша дата; hist_to — кінець наступного місяця-вікна; hist_page — сторінка у вікні; hist_done — усе.
     ['mp_sync', 'hist_from', "TEXT DEFAULT ''"],

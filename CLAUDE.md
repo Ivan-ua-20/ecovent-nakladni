@@ -165,6 +165,7 @@ for t in tests/*.test.mjs; do node --no-warnings "$t" || break; done   # усі 
 | Маркетплейси ↔ LP-CRM | `src/modules/market/crm.js` |
 | «Передзвонити», «Подзвонив», ранкове нагадування в Telegram | `src/modules/market/remind.js` |
 | Товари маркетплейсів ↔ товари LP-CRM (довідник, правила прив'язки) | `src/modules/market/items.js`, словник LP-CRM — `src/modules/catalog/index.js` |
+| Вікна «Підтвердіть товари» / «Перевірте, що піде в LP-CRM», «Маркетплейси → Налаштування» | `public/pages/mpcrm.js`, сервер — `src/modules/market/crm.js` |
 | B2B: закупівлі, рахунки, Telegram | `src/modules/b2b/orders.js`, `edits.js`, `tgdocs.js` |
 | Змінні середовища Cloudflare | `README.md` → «Cloudflare Pages» |
 | Опис для користувачів | `README.md` |
