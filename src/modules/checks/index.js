@@ -442,6 +442,9 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       // fop_id — каса тієї ж організації (для порівняння з чеком); account — куди прийшли гроші, для людини.
       return { ...t, day: String(t.date).slice(0, 10), fop_id: cashByCode.get(code) ?? null, account: (fid && fopName[String(fid)]) || acc?.alias || acc?.name || iban.slice(-8) };
     });
+    // Надходження за сумою (до гривні) — щоб не перебирати всі для кожного замовлення.
+    const txByAmount = new Map();
+    for (const t of txRows) for (const k of [Math.round(t.amount), Math.round(t.amount) - 1, Math.round(t.amount) + 1]) { if (!txByAmount.has(k)) txByAmount.set(k, []); txByAmount.get(k).push(t); }
     // Можливі дублі: той самий телефон у кількох відправлених замовленнях, створених у межах 3 днів.
     const byPhone = new Map();
     for (const o of orders) if (o.phone.length === 9) { if (!byPhone.has(o.phone)) byPhone.set(o.phone, []); byPhone.get(o.phone).push(o); }
@@ -453,7 +456,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       const part = rule?.cls === 'cod' ? (o.prepayment > 0 || partialOf(o.comment)) : null;
       const dup = (byPhone.get(o.phone) || []).filter((x) => x !== o && Math.abs(Date.parse(x.day) - Date.parse(o.day)) <= 3 * 86400e3).map((x) => x.id || x.code);
       const receipt = matched.get(o.code) || null;
-      const payment = rule?.cls === 'bank' ? findPayment(o, txRows, o.total) : null;
+      const payment = rule?.cls === 'bank' ? findPayment(o, txByAmount.get(Math.round(o.total)) || [], o.total) : null;
       const dupTtn = (byTtn.get(String(o.ttn || '').replace(/\s/g, '').toUpperCase()) || []).filter((x) => x !== o).map((x) => x.id || x.code);
       // Чек можна вимагати, лише якщо касу відділу внесено й до неї є доступ.
       const canReceipt = o.fopId != null && o.canRead;
@@ -475,7 +478,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
   const period = (c) => {
     const today = kyivDay();
     const ok = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d || '');
-    let from = ok(c.req.query('from')) ? c.req.query('from') : addDays(today, -CHECK_DAYS);
+    let from = ok(c.req.query('from')) ? c.req.query('from') : addDays(today, -6); // типово — останні 7 днів
     let to = ok(c.req.query('to')) ? c.req.query('to') : today;
     if (from < addDays(today, -CHECK_DAYS - 7)) from = addDays(today, -CHECK_DAYS - 7);
     if (to < from) to = from;

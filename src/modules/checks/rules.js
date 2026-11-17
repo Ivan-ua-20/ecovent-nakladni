@@ -132,13 +132,24 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
   const left = orders.filter((o) => !byOrder.has(o.code) && o.total > 0);
   const ordBySum = new Map();
   for (const o of left) { const k = key(o.total); if (!ordBySum.has(k)) ordBySum.set(k, []); ordBySum.get(k).push(o); }
+  // День чека й межі вікна рахуємо один раз (чеків і замовлень тисячі — інакше сторінка не встигає).
+  const dayOf = new Map(free.map((r) => [r.id, r.day || kyivDayOf(r.at)]));
+  const winEnd = new Map(left.map((o) => [o.code, addDays(o.day, 20)]));
+  const inWin = (o, r) => { const d = dayOf.get(r.id); return d >= o.day && d <= winEnd.get(o.code); };
   for (const [k, list] of ordBySum) {
-    const rcs = rcBySum.get(k) || [];
+    const rcs = rcBySum.get(k);
+    if (!rcs) continue;
     for (const o of list) {
-      const inWin = (r) => { const d = kyivDayOf(r.at); return d >= o.day && d <= addDays(o.day, 20); };
-      const cands = rcs.filter((r) => !used.has(r.id) && inWin(r) && (o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId)) || list.length === 1));
-      const rivals = list.filter((x) => x !== o && cands.some((r) => { const d = kyivDayOf(r.at); return d >= x.day && d <= addDays(x.day, 20); }));
-      if (cands.length === 1 && !rivals.length) take(o, { ...cands[0], bySum: true });
+      const cands = [];
+      for (const r of rcs) {
+        if (used.has(r.id) || !inWin(o, r)) continue;
+        if (!(o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId)) || list.length === 1)) continue;
+        cands.push(r);
+        if (cands.length > 1) break; // неоднозначно — далі не шукаємо
+      }
+      if (cands.length !== 1) continue;
+      const rival = list.some((x) => x !== o && !byOrder.has(x.code) && inWin(x, cands[0]));
+      if (!rival) take(o, { ...cands[0], bySum: true });
     }
   }
   return byOrder;
