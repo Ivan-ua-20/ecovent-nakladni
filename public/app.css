@@ -1274,3 +1274,26 @@ tr.chk-detail > td { background: var(--bg2, #fafafa); padding: 10px 14px 14px; }
 .pl-row .check { flex: 1; }
 .pl-pct { display: inline-flex; align-items: center; gap: 4px; }
 .pl-pct input { width: 80px; text-align: right; }
+
+/* B2B «ТТН створює Ековент»: отримувач НП (np-picker.js) і вікно «Створити ТТН» (b2b-npttn.js) */
+.np-pick { display: flex; flex-direction: column; gap: 10px; }
+.np-pick .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.np-types, .np-mode { display: flex; gap: 6px; flex-wrap: wrap; }
+.np-types .chip input, .np-mode .chip input { position: absolute; opacity: 0; pointer-events: none; }
+.np-types .chip, .np-mode .chip { cursor: pointer; position: relative; }
+.np-ac { position: relative; }
+.np-res { position: absolute; left: 0; right: 0; top: 100%; z-index: 30; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 20px rgba(0,0,0,.1); max-height: 280px; overflow: auto; }
+.np-res:empty { display: none; }
+.np-res button { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 7px 10px; font: inherit; font-size: 13px; cursor: pointer; color: var(--ink); }
+.np-res button:hover { background: var(--accent-soft, #eef7f5); }
+.np-hint { padding: 7px 10px; }
+.np-flag { align-items: flex-start; }
+.np-flag > span { display: flex; flex-direction: column; }
+.tt-form .card { padding: 12px 14px; }
+.tt-form h3 { margin: 0; font-size: 15px; }
+.tt-form .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.tt-wh { display: flex; align-items: center; gap: 4px; }
+.tt-wh input { min-width: 0; }
+@media (max-width: 760px) {
+  .np-pick .grid3, .tt-form .grid4 { grid-template-columns: 1fr 1fr; }
+}

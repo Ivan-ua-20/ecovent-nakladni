@@ -278,7 +278,9 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
       db.all(`SELECT kind, doc_type FROM b2b_files WHERE order_id = ?`, [o.id]),
     ]);
     const out = [];
-    if (!have.some((f) => f.kind === 'label')) out.push('маркування');
+    // «ТТН створює Ековент»: маркування не потрібне, потрібна ТТН, яку створює наш менеджер.
+    if (o.np_recipient) { if (!o.ttn) out.push('ТТН (створює Ековент — кнопка «Створити ТТН»)'); }
+    else if (!have.some((f) => f.kind === 'label')) out.push('маркування');
     for (const t of types) if (!have.some((f) => f.kind === 'doc' && f.doc_type === t.id)) out.push(t.name);
     return out;
   }
@@ -595,10 +597,17 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     return c.json({ ok: true, types: await docTypes(p.id) });
   });
 
+  // «ТТН створює Ековент»: ПІБ і телефон клієнта — з даних отримувача НП.
+  const withNp = (p, b, cur = null) => {
+    const np = hooks.npRecipient?.(p, b, cur) || null;
+    if (np) Object.assign(b, { client_name: [np.last, np.first, np.middle].filter(Boolean).join(' '), client_phone: np.phone, ttn: cur?.np_doc_ref ? cur.ttn : '' });
+    return np;
+  };
   app.post('/api/b2b/p/clients', async (c) => {
     const p = await myPartner(c);
     const b = await c.req.json();
     onlyHeadNoSupply(c, b);
+    const np = withNp(p, b);
     const f = clientFields(b);
     if (f.ttn) { const dup = await labelDup({ ttn: f.ttn }); if (dup) throw fail(400, await ttnDupMsg(f.ttn, dup, p.id)); }
     const it = await buildItems(p, b);
@@ -617,6 +626,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
       await draftAdjust(it.draftId, it.items);
       await log(it.draftId, u, `додано замовлення клієнта ${orderNo(r.lastId)} (${f.client_name}): ${itemsTxt(it.items)} — ${uah(it.total)}`);
     }
+    if (np) await db.run(`UPDATE b2b_orders SET np_recipient = ? WHERE id = ?`, [JSON.stringify(np), r.lastId]);
     if (it.openId) await rebuildOpen(it.openId);
     await tgNew(c, p, r.lastId, f, it);
     return c.json({ id: r.lastId, number: orderNo(r.lastId), total: it.total });
@@ -630,8 +640,9 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     if (o.pending) throw fail(400, 'Менеджер змінив це замовлення — спершу підтвердіть або відхиліть зміни.');
     const b = await c.req.json();
     onlyHeadNoSupply(c, b);
+    const np = withNp(p, b, o);
     const f = clientFields(b);
-    if (f.ttn) { const dup = await labelDup({ ttn: f.ttn }, o.id); if (dup) throw fail(400, await ttnDupMsg(f.ttn, dup, p.id)); }
+    if (f.ttn && f.ttn !== o.ttn) { const dup = await labelDup({ ttn: f.ttn }, o.id); if (dup) throw fail(400, await ttnDupMsg(f.ttn, dup, p.id)); }
     const cur = await supplyOf(o.supply_id);
     const curDraft = cur?.status === 'draft' ? cur.id : null;
     const it = await buildItems(p, b, o.id, { openId: cur?.status === 'open' ? cur.id : null, total: o.total, draftId: curDraft });
@@ -642,6 +653,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
       ...itemRows(o.id, it.items),
       [`UPDATE b2b_orders SET supply_id = ?, client_name = ?, client_phone = ?, ttn = ?, total = ?, comment = ?, urgent = ?, updated_at = ? WHERE id = ?`,
         [it.supplyId || it.draftId || it.openId, f.client_name, f.client_phone, f.ttn, it.total, f.comment, f.urgent, nowIso(), o.id]],
+      [`UPDATE b2b_orders SET np_recipient = ? WHERE id = ?`, [np ? JSON.stringify(np) : '', o.id]],
     ]);
     const diff = itemsDiff(oldItems, it.items);
     if (curDraft && curDraft === it.draftId) { if (diff !== 'склад без змін') await log(curDraft, c.get('user'), `змінено замовлення клієнта ${orderNo(o.id)} (${f.client_name}): ${diff}`); }

@@ -23,6 +23,7 @@ import { mountB2bClaims } from './claims.js';
 import { mountB2bFeeds } from './feeds.js';
 import { mountB2bApi } from './api.js';
 import { mountB2bNews } from './news.js';
+import { mountB2bNpTtn } from './npttn.js';
 
 export const partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 
@@ -230,6 +231,11 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     await applyLimits(c, p, b);
     await applyPause(c, p, b);
     await db.run(`UPDATE b2b_partners SET name = ?, phone = ?, email = ?, note = ?, active = ? WHERE id = ?`, [f.name, f.phone, f.email, f.note, active, p.id]);
+    // «ТТН створює Ековент»: партнер оформлює замовлення без ТТН і маркування, ТТН створюємо ми з нашого кабінету НП.
+    if (b.ttn_by_us !== undefined && (b.ttn_by_us ? 1 : 0) !== (Number(p.ttn_by_us) || 0)) {
+      await db.run(`UPDATE b2b_partners SET ttn_by_us = ? WHERE id = ?`, [b.ttn_by_us ? 1 : 0, p.id]);
+      await audit(c, p.id, b.ttn_by_us ? 'увімкнено «ТТН створює Ековент»' : 'вимкнено «ТТН створює Ековент»');
+    }
     // Вимкнений партнер не може входити (усі його користувачі вимикаються разом із ним; вмикаються окремо).
     if (!active && p.active) {
       await db.batch([
@@ -732,6 +738,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   const hooks = {};
   const orders = mountB2bOrders(app, { db, services, myPartner, partnerPrice, onCleanup, hooks });
   mountB2bClients(app, { db, fetchFn, services, myPartner, orders, hooks, onCron });
+  mountB2bNpTtn(app, { db, fetchFn, services, myPartner, orders, hooks });
   mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice });
   mountB2bClaims(app, { db, services, myPartner, orders });
   mountB2bApi(app, { db, myPartner, tgPartner: orders.tgPartner, CLIENT_STATUS, orderNo, payState, PAY_NAME });

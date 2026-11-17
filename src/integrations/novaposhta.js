@@ -144,3 +144,66 @@ export async function npIncomingPage(fetchFn, apiKey, fromDay, toDay, page) {
     created: npDateIso(d.DateTime || d.CreateTime || d.DateCreated), arrived: npDateIso(d.ArrivalDateTime), received: npDateIso(d.ReceivingDateTime),
   })).filter((d) => /^\d{10,20}$/.test(d.ttn));
 }
+
+// ---------------------------------------------------------------- створення ТТН (B2B: ТТН створює Ековент)
+// Довідники: населені пункти (Address.searchSettlements → DeliveryCity — це CityRef для відділень, вулиць і ТТН),
+// відділення й поштомати (Address.getWarehouses, CategoryOfWarehouse: Branch | Postomat | Store), вулиці (Address.getStreet).
+const s200 = (v, n = 200) => String(v ?? '').trim().slice(0, n);
+export async function npSearchCities(fetchFn, apiKey, q, limit = 20) {
+  const data = await npCall(fetchFn, apiKey, 'Address', 'searchSettlements', { CityName: s200(q, 60), Limit: String(limit), Page: '1' });
+  return (data[0]?.Addresses || []).filter((a) => a.DeliveryCity).map((a) => ({
+    ref: s200(a.DeliveryCity, 40), settlement: s200(a.Ref, 40), name: s200(a.Present || a.MainDescription),
+    city: s200(a.MainDescription, 100), area: s200(a.Area, 60), warehouses: Number(a.Warehouses) || 0,
+  }));
+}
+// kind: 'warehouse' — відділення (не поштомати), 'postomat' — лише поштомати, '' — усі.
+export async function npWarehouses(fetchFn, apiKey, cityRef, q = '', kind = '', limit = 50) {
+  const data = await npCall(fetchFn, apiKey, 'Address', 'getWarehouses', { CityRef: s200(cityRef, 40), FindByString: s200(q, 60), Page: '1', Limit: String(limit), Language: 'UA' });
+  return data.map((w) => ({
+    ref: s200(w.Ref, 40), number: s200(w.Number, 10), name: s200(w.Description, 300), category: s200(w.CategoryOfWarehouse, 20),
+    city: s200(w.CityDescription, 100), maxWeight: Number(w.PlaceMaxWeightAllowed || w.TotalMaxWeightAllowed) || 0,
+  })).filter((w) => w.ref && (!kind || (kind === 'postomat' ? w.category === 'Postomat' : w.category !== 'Postomat')));
+}
+export async function npStreets(fetchFn, apiKey, cityRef, q, limit = 30) {
+  const data = await npCall(fetchFn, apiKey, 'Address', 'getStreet', { CityRef: s200(cityRef, 40), FindByString: s200(q, 60), Page: '1', Limit: String(limit) });
+  return data.map((s) => ({ ref: s200(s.Ref, 40), name: `${s200(s.StreetsType, 20)} ${s200(s.Description, 150)}`.trim() })).filter((s) => s.ref);
+}
+// Відправник кабінету (контрагент) і його контактні особи — для «від кого» в ТТН.
+export async function npSenderFull(fetchFn, apiKey) {
+  const cp = (await npCall(fetchFn, apiKey, 'Counterparty', 'getCounterparties', { CounterpartyProperty: 'Sender', Page: '1' }))[0] || {};
+  if (!cp.Ref) return { ref: '', name: '', code: '', contacts: [] };
+  const list = await npCall(fetchFn, apiKey, 'Counterparty', 'getCounterpartyContactPersons', { Ref: cp.Ref, Page: '1' });
+  return {
+    ref: s200(cp.Ref, 40), name: s200(cp.Description || cp.CounterpartyFullName), code: s200(cp.EDRPOU, 20),
+    contacts: list.map((p) => ({ ref: s200(p.Ref, 40), name: s200(p.Description || [p.LastName, p.FirstName, p.MiddleName].filter(Boolean).join(' '), 120), phone: String(p.Phones || '').replace(/\D/g, '') }))
+      .filter((p) => p.ref).slice(0, 30),
+  };
+}
+// Отримувач — приватна особа (Counterparty.save, CounterpartyProperty = Recipient): повертає контрагента й контактну особу.
+export async function npCreateRecipient(fetchFn, apiKey, { last, first, middle = '', phone }) {
+  const d = (await npCall(fetchFn, apiKey, 'Counterparty', 'save', {
+    FirstName: s200(first, 60), MiddleName: s200(middle, 60), LastName: s200(last, 60), Phone: String(phone || '').replace(/\D/g, ''), Email: '',
+    CounterpartyType: 'PrivatePerson', CounterpartyProperty: 'Recipient',
+  }))[0] || {};
+  const contact = d.ContactPerson?.data?.[0]?.Ref || '';
+  if (!d.Ref || !contact) throw Object.assign(new Error('Нова пошта не створила отримувача — перевірте ПІБ і телефон.'), { status: 400 });
+  return { ref: s200(d.Ref, 40), contact: s200(contact, 40) };
+}
+// Адреса отримувача для адресної доставки (Address.save): вулиця з довідника, будинок, квартира.
+export async function npCreateAddress(fetchFn, apiKey, { counterparty, street, house, flat = '', note = '' }) {
+  const d = (await npCall(fetchFn, apiKey, 'Address', 'save', {
+    CounterpartyRef: s200(counterparty, 40), StreetRef: s200(street, 40), BuildingNumber: s200(house, 20), Flat: s200(flat, 20), Note: s200(note, 100),
+  }))[0] || {};
+  if (!d.Ref) throw Object.assign(new Error('Нова пошта не прийняла адресу — перевірте вулицю й будинок.'), { status: 400 });
+  return s200(d.Ref, 40);
+}
+// Експрес-накладна (InternetDocument.save). props — поля API як є; повертає номер ТТН, Ref, вартість доставки й орієнтовну дату.
+export async function npSaveDocument(fetchFn, apiKey, props) {
+  const d = (await npCall(fetchFn, apiKey, 'InternetDocument', 'save', props))[0] || {};
+  if (!d.IntDocNumber) throw Object.assign(new Error('Нова пошта не створила ТТН.'), { status: 400 });
+  return { ttn: s200(d.IntDocNumber, 40), ref: s200(d.Ref, 40), cost: Number(d.CostOnSite) || 0, estimated: s200(d.EstimatedDeliveryDate, 20) };
+}
+export async function npDeleteDocument(fetchFn, apiKey, ref) {
+  await npCall(fetchFn, apiKey, 'InternetDocument', 'delete', { DocumentRefs: s200(ref, 40) });
+  return true;
+}

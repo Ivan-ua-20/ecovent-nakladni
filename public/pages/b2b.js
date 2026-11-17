@@ -4,6 +4,8 @@ import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
 import { catalogPriceModal, partnerPriceModal } from './b2b-price.js';
+import { npTtnModal } from './b2b-npttn.js';
+import { npAddressText } from './np-picker.js';
 import { viewAdminSupplyForm } from './b2b-supply.js';
 import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, wireTeamForm, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard, urgentBadge, urgentRow, askCancel, cancelNote, deliveryReqText, deliveryReqMoney } from './b2b-shared.js';
 
@@ -58,9 +60,9 @@ export function createB2bPages(ctx = {}) {
         ${pFilter.id ? `<a class="btn sm" href="#/b2bpartners/${esc(pFilter.id)}">Відкрити картку</a>` : ''}</div>
       <div id="pBulk" class="btn-row card" hidden style="position:sticky;top:8px;z-index:5;margin-bottom:10px;padding:8px 12px;flex-wrap:wrap;align-items:center"></div>` : ''}
       ${rows.length ? `<table class="list"><thead><tr><th style="width:34px"><input type="checkbox" id="pSelAll" aria-label="Обрати всіх"></th><th>Партнер</th><th class="hide-m">Контакти</th><th class="r">Борг</th><th class="r hide-m">Користувачі</th><th class="r hide-m">Бренди</th><th>Стан</th><th class="r">Excel прайс</th></tr></thead><tbody>
-        ${rows.map((p) => `<tr class="click" data-p="${p.id}">
+        ${rows.map((p) => `<tr class="click ${p.ttn_by_us ? 'row-bad' : ''}" data-p="${p.id}">
           <td data-nosel style="width:34px"><input type="checkbox" data-psel="${p.id}" aria-label="Обрати"></td>
-          <td><b>${esc(p.name)}</b>${limTxt(p) ? `<div class="small muted">ліміти: ${limTxt(p)}</div>` : ''}<div class="small muted">${sinceOrder(p) == null ? 'ще не замовляв' : sinceOrder(p) === 0 ? 'замовляв сьогодні' : `останнє замовлення ${sinceOrder(p)} дн. тому`}</div></td>
+          <td><b>${esc(p.name)}</b>${p.ttn_by_us ? ' <span class="badge bad" title="Партнер оформлює замовлення без ТТН — ТТН створюємо ми з нашого кабінету НП">ТТН створює Ековент</span>' : ''}${limTxt(p) ? `<div class="small muted">ліміти: ${limTxt(p)}</div>` : ''}<div class="small muted">${sinceOrder(p) == null ? 'ще не замовляв' : sinceOrder(p) === 0 ? 'замовляв сьогодні' : `останнє замовлення ${sinceOrder(p)} дн. тому`}</div></td>
           <td class="small hide-m">${esc([p.phone, p.email].filter(Boolean).join(' · ') || '—')}</td>
           <td class="r nowrap">${p.debt ? `<b>${money(p.debt)} грн</b><div class="small muted">${[p.debt_cnt ? `за рахунками: ${p.debt_cnt}` : '', p.debt_shipped ? `без рахунку: ${money(p.debt_shipped)}` : '', p.postpay_days ? `відстрочка ${p.postpay_days} дн.` : ''].filter(Boolean).join(' · ')}</div>` : `<span class="muted">—</span>${p.postpay_days ? `<div class="small muted">відстрочка ${p.postpay_days} дн.</div>` : ''}`}
             ${p.debt_overdue ? `<div><span class="badge bad">прострочено ${money(p.debt_overdue)}</span></div>` : ''}</td>
@@ -264,6 +266,7 @@ export function createB2bPages(ctx = {}) {
           <label class="f"><span>E-mail</span><input name="email" value="${esc(p?.email || '')}"></label></div>
         <label class="f"><span>Примітка (бачать лише адміністратори)</span><textarea name="note" rows="2">${esc(p?.note || '')}</textarea></label>
         ${isNew ? '' : `<label class="check"><input type="checkbox" name="active" ${p.active ? 'checked' : ''}> Активний (вимкнений партнер не може входити)</label>`}
+        <label class="check np-flag"><input type="checkbox" name="ttn_by_us" ${p?.ttn_by_us ? 'checked' : ''}> <span><b>ТТН створює Ековент</b><span class="small muted">Партнер оформлює замовлення клієнтів без ТТН і маркування — заповнює отримувача (відділення, поштомат чи адреса НП), а ТТН створюємо ми з нашого кабінету Нової пошти перед передачею в LP-CRM. Партнер підсвічується червоним.</span></span></label>
         <div class="grid2">
           <label class="f"><span>Ліміт відкритої закупівлі, грн</span><input name="open_limit" inputmode="decimal" value="${esc(p?.open_limit ?? '')}" placeholder="20000 (типово)"></label>
           <label class="f"><span>Ліміт неоплачених закупівель, грн</span><input name="unpaid_limit" inputmode="decimal" value="${esc(p?.unpaid_limit ?? '')}" placeholder="100000 (типово)"></label>
@@ -283,10 +286,11 @@ export function createB2bPages(ctx = {}) {
       const f = $('#pF', m.el);
       const d = Object.fromEntries(new FormData(f));
       if (f.active) d.active = f.active.checked;
+      d.ttn_by_us = f.ttn_by_us.checked;
       try {
         if (isNew) {
           const r = await api('POST', '/api/b2b/partners', d);
-          if (d.open_limit || d.unpaid_limit || Number(d.postpay_days) || d.postpay_limit || d.price_grace_hours !== '') await api('PUT', `/api/b2b/partners/${r.id}`, { name: d.name, open_limit: d.open_limit, unpaid_limit: d.unpaid_limit, postpay_days: d.postpay_days, postpay_limit: d.postpay_limit, price_grace_hours: d.price_grace_hours });
+          if (d.open_limit || d.unpaid_limit || Number(d.postpay_days) || d.postpay_limit || d.price_grace_hours !== '' || d.ttn_by_us) await api('PUT', `/api/b2b/partners/${r.id}`, { name: d.name, open_limit: d.open_limit, unpaid_limit: d.unpaid_limit, postpay_days: d.postpay_days, postpay_limit: d.postpay_limit, price_grace_hours: d.price_grace_hours, ttn_by_us: d.ttn_by_us });
           m.close(); location.hash = `#/b2bpartners/${r.id}`;
         }
         else { await api('PUT', `/api/b2b/partners/${p.id}`, d); m.close(); toast('Збережено'); viewPartner(p.id); }
@@ -1221,7 +1225,7 @@ export function createB2bPages(ctx = {}) {
       ${filterBar(clFilter, { pay: true })}
       ${bulkBar()}
       ${rows.length ? `<table class="list"><thead><tr>${selHead()}<th>№</th><th>Партнер / клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th>Статус LP-CRM</th></tr></thead><tbody>
-        ${rows.map((o) => `<tr class="click ${o.pending ? 'row-info' : o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''} ${urgentRow(o)}" data-o="${o.id}">
+        ${rows.map((o) => `<tr class="click ${o.pending ? 'row-info' : (o.no_supply || (o.np && !o.ttn)) && o.status !== 'cancelled' ? 'row-bad' : ''} ${urgentRow(o)}" data-o="${o.id}">
           ${selCell(o.id)}
           <td><b>${esc(o.number)}</b>${o.urgent && o.status !== 'cancelled' ? `<div>${urgentBadge(o)}</div>` : ''}<div>${supplyMark(o)}</div>${o.pending ? '<div><span class="badge info">🔵 чекає підтвердження партнера</span></div>' : ''}<div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
           <td>${esc(o.partner)}<div class="small">${esc(o.client_name)} · ${esc(phoneFmt(o.client_phone))}</div><div class="small muted">${o.ttn ? `ТТН ${esc(o.ttn)} · ` : ''}${o.labels ? `📎 маркування: ${o.labels}` : (o.status === 'new' ? '<span class="badge bad">без маркування</span>' : '')}${o.files > (o.labels || 0) ? ` · 📄 документів: ${o.files - (o.labels || 0)}` : ''}</div></td>
@@ -1334,7 +1338,13 @@ export function createB2bPages(ctx = {}) {
           <div class="card form-stack ${o.no_supply && !closed ? 'card-bad' : ''}">
             <h3>Клієнт і доставка</h3>
             <div><b>${esc(o.client_name)}</b> · ${esc(phoneFmt(o.client_phone))}</div>
-            <div>ТТН партнера: ${o.ttn ? `<b>${esc(o.ttn)}</b>` : '<span class="muted">не вказано</span>'}</div>
+            ${o.np ? `<div class="alert ${o.ttn ? 'info' : 'bad'} small np-admin"><b>ТТН створює Ековент.</b> ${esc(npAddressText(o.np))}
+                <div>${o.np.cod ? `Клієнт платить при отриманні: <b>${esc(String(o.np.cod))} грн</b>` : 'Без оплати при отриманні'}</div></div>
+              <div>ТТН: ${o.ttn ? `<b>${esc(o.ttn)}</b>${o.np_meta ? ` <span class="small muted">· ${esc(o.np_meta.sender || '')}${o.np_meta.control ? ` · контроль оплати ${esc(String(o.np_meta.control))} грн` : ''}${o.np_meta.cost ? ` · доставка ${esc(String(o.np_meta.cost))} грн` : ''}${o.np_meta.by ? ` · створив(ла) ${esc(o.np_meta.by)}` : ''}</span>` : ''}` : '<span class="badge bad">ще не створено</span>'}</div>
+              ${!closed && !ro() ? `<div class="btn-row">${!o.ttn && o.status === 'new' ? '<button class="btn primary" id="clTtn">📦 Створити ТТН</button>' : ''}
+                ${o.ttn && o.np_meta ? `<a class="btn" href="/api/np/marking/${esc(o.ttn)}${o.np_meta.account ? `?account=${o.np_meta.account}` : ''}" target="_blank" rel="noopener">🖨 Маркування 100×100</a>` : ''}
+                ${o.ttn && o.np_meta && o.status === 'new' ? '<button class="btn danger" id="clTtnDel">Видалити ТТН</button>' : ''}</div>` : ''}`
+    : `<div>ТТН партнера: ${o.ttn ? `<b>${esc(o.ttn)}</b>` : '<span class="muted">не вказано</span>'}</div>`}
             ${o.ttn ? trackBtn() : ''}
             <div>${o.no_supply ? supplyMark(o) : `Із закупівлі <a href="#/b2borders/${o.supply_id}">${esc(o.supply_number)}</a>`}</div>
           </div>
@@ -1342,7 +1352,7 @@ export function createB2bPages(ctx = {}) {
         <div class="form-stack">
           <div class="card form-stack">
             <h3>LP-CRM</h3>
-            ${missing.length ? `<div class="alert bad small">Бракує: <b>${missing.map(esc).join(', ')}</b> — «Додати в CRM» не спрацює, доки партнер їх не додасть.</div>` : ''}
+            ${missing.length ? `<div class="alert bad small">Бракує: <b>${missing.map(esc).join(', ')}</b> — «Додати в CRM» не спрацює${o.np && !o.ttn ? ', доки не створено ТТН' : ', доки партнер їх не додасть'}.</div>` : ''}
             ${o.crm_id ? `<div>Замовлення № <b>${esc(o.crm_id)}</b>${o.crm_status ? ` · ${crmBadge(o.crm_status)}` : ''}</div>` : ''}
             ${!closed && o.status === 'new' ? `<button class="btn primary" id="clCrm" ${cfg.on && !o.pending ? '' : 'disabled'}>Додати в CRM</button>${o.pending ? '<div class="small muted">Спершу партнер має підтвердити зміни.</div>' : ''}
               ${cfg.on ? '' : '<div class="small muted">Передача в LP-CRM ще вимкнена (вкладка «Замовлення клієнтів» → «Налаштування CRM»). Поки що створіть замовлення в CRM вручну і впишіть номер нижче.</div>'}` : ''}
@@ -1378,6 +1388,12 @@ export function createB2bPages(ctx = {}) {
     $('#clUrgent') && ($('#clUrgent').onclick = async () => {
       try { await api('POST', `/api/b2b/clients/${o.id}/urgent`, { urgent: !o.urgent }); toast(o.urgent ? 'Позначку «Терміново» знято' : 'Позначено «Терміново»'); viewClient(o.id); }
       catch (er) { toast(er.message, true); }
+    });
+    // «ТТН створює Ековент»: створити / видалити ТТН Нової пошти з нашого кабінету.
+    $('#clTtn') && ($('#clTtn').onclick = () => npTtnModal(o, items, () => viewClient(id)));
+    $('#clTtnDel') && ($('#clTtnDel').onclick = async () => {
+      if (!(await confirmDanger(`Видалити ТТН ${o.ttn}?`, 'ТТН буде видалено і в кабінеті Нової пошти. Потім можна створити нову.', 'Видалити ТТН'))) return;
+      try { await api('DELETE', `/api/b2b/clients/${o.id}/ttn`); toast('ТТН видалено'); viewClient(id); } catch (er) { toast(er.message, true); }
     });
     $('#clCrm') && ($('#clCrm').onclick = async (e) => {
       e.currentTarget.disabled = true;
