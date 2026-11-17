@@ -443,7 +443,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     }
     for (const o of orders) o.goodsKeys = String(o.goods || '').split(' ').filter(Boolean).map((id) => [id, codeOf.get(id)].filter(Boolean));
     const recs = receipts.map((r) => ({ ...r, pays: (() => { try { return JSON.parse(r.pays); } catch { return []; } })() }));
-    const matched = matchReceipts(orders, recs, sameOrg);
+    const matched = matchReceipts(orders, recs, sameOrg, (o) => rs[String(o.payment)]?.cb || '');
     const txRows = txs.map((t) => {
       const iban = String(t.iban || '').toUpperCase();
       const acc = accByIban.get(iban);

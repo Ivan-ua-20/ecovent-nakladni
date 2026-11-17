@@ -20040,7 +20040,8 @@ var PAY_DEFAULTS = {
   10: { name: "\u041F\u0440\u043E\u043C-\u043E\u043F\u043B\u0430\u0442\u0430", cls: "prepay", cb: "RozetkaPay" },
   11: { name: "\u041E\u043D\u043B\u0430\u0439\u043D-\u043E\u043F\u043B\u0430\u0442\u0430", cls: "prepay", cb: "mono" },
   12: { name: "OLX \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0430", cls: "prepay" },
-  1: { name: "\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E", cls: "prepay", cb: "\u0435\u043A\u0432\u0430\u0439\u0440\u0438\u043D\u0433" },
+  1: { name: "\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E", cls: "prepay" },
+  // загальний «оплачено» (RozetkaPay, mono, NovaPay…) — спосіб оплати в чеку не звіряємо
   8: { name: "\u041F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u043A\u043E\u0448\u0442\u0456\u0432", cls: "skip" },
   5: { name: "\u041E\u0431\u043C\u0456\u043D", cls: "skip" },
   3: { name: "POS-\u0442\u0435\u0440\u043C\u0456\u043D\u0430\u043B", cls: "skip" },
@@ -20109,7 +20110,7 @@ var near = (a, b) => Math.abs(Number(a || 0) - Number(b || 0)) < 1.005;
 var fmt = (n) => `${Math.round(Number(n) * 100) / 100} \u0433\u0440\u043D`;
 var kyivDayOf2 = (iso) => /(Z|[+-]\d\d:\d\d)$/.test(String(iso)) ? new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv" }).format(new Date(iso)) : String(iso || "").slice(0, 10);
 var addDays6 = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
-function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === String(b)) {
+function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === String(b), cbOf = () => "") {
   const sells = receipts.filter((r) => !/RETURN/i.test(r.type));
   const byOrder = /* @__PURE__ */ new Map();
   const used = /* @__PURE__ */ new Set();
@@ -20155,7 +20156,9 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
     const orgOk = (r) => o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
     const pool = [...new Set(o.goodsKeys[0].flatMap((k) => byTok.get(k) || []))].sort((x, y) => String(x.at).localeCompare(String(y.at)));
     const ok = (r) => !used.has(r.id) && rDay(r) >= o.day && rDay(r) <= end && sumOk(r) && goodsHit(o, r);
-    const hit = pool.find((r) => ok(r) && orgOk(r)) || pool.find(ok);
+    const cb = String(cbOf(o) || "").toLowerCase();
+    const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || "").toLowerCase().includes(cb));
+    const hit = pool.find((r) => ok(r) && orgOk(r) && cbOk(r)) || pool.find((r) => ok(r) && orgOk(r)) || pool.find((r) => ok(r) && cbOk(r)) || pool.find(ok);
     if (hit) take(o, { ...hit, byGoods: true });
   }
   const free = sells.filter((r) => !used.has(r.id));
@@ -20816,7 +20819,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         return [];
       }
     })() }));
-    const matched = matchReceipts(orders, recs, sameOrg);
+    const matched = matchReceipts(orders, recs, sameOrg, (o) => rs[String(o.payment)]?.cb || "");
     const txRows = txs.map((t) => {
       const iban = String(t.iban || "").toUpperCase();
       const acc = accByIban.get(iban);
