@@ -65,6 +65,7 @@ const ORDERS = [
   O(10018, 14, 990, '20450000000018', { office: '30' }), // каса Ватрич не пускає — чек не вимагаємо
   O(10019, 1, 800, '20450000000019', { office: '12', additional_1: 'Riteil(Rozetka)' }), // рітейл Розетки: наложку ставить Розетка
   O(10020, 0, 500, '20450000000020', { office: '12', comment: 'Замовлення 58947987\r\nна суму 500 грн\r\nоплата через моно банк' }), // вид оплати не вказано; звичайний автокоментар
+  O(10022, 14, 710, '20450000000022', { office: '11' }), // відділ 11 — лише у вимкненій касі
   O(10011, 10, 610, '20450000000011', { office: '12' }), // Пром-оплата, у Prom оплачено — гаразд
   O(10012, 10, 620, 'PRM-0000012', { office: '12' }), // Пром-оплата, а в Prom «Оплата при отриманні» (Розетка Делівері з Prom)
   O(10013, 4, 630, 'PRM-0000013', { office: '12' }), // післяплата, у Prom оплата при отриманні — наложка є
@@ -79,7 +80,7 @@ const PROM = {
   p21: { id: 21, full_price: '650', payment_option: { name: 'Оплатить частями' } },
   p14: { id: 14, full_price: '640', payment_option: { name: 'Пром-оплата' }, payment_data: { type: 'prosale', status: 'unpaid' } },
 };
-const TRACK = { 20450000000021: {}, 20450000000018: {}, 20450000000019: { AfterpaymentOnGoodsCost: '1000' }, 20450000000020: {}, 20450000000016: { AfterpaymentOnGoodsCost: '2989' }, 20450000000017: { AfterpaymentOnGoodsCost: '800' }, 20450000000015: {}, 20450000000011: {}, 20450000000014: {}, 20450000000001: { AfterpaymentOnGoodsCost: '1000' }, 20450000000002: { AfterpaymentOnGoodsCost: '500' }, 20450000000003: {}, 20450000000004: {},
+const TRACK = { 20450000000022: {}, 20450000000021: {}, 20450000000018: {}, 20450000000019: { AfterpaymentOnGoodsCost: '1000' }, 20450000000020: {}, 20450000000016: { AfterpaymentOnGoodsCost: '2989' }, 20450000000017: { AfterpaymentOnGoodsCost: '800' }, 20450000000015: {}, 20450000000011: {}, 20450000000014: {}, 20450000000001: { AfterpaymentOnGoodsCost: '1000' }, 20450000000002: { AfterpaymentOnGoodsCost: '500' }, 20450000000003: {}, 20450000000004: {},
   20450000000005: { RedeliverySum: '700' }, 20450000000007: {}, 20450000000008: {}, 20450000000009: {} };
 const RC = {
   c1: [
@@ -164,6 +165,7 @@ const K = async (b) => (await call('POST', '/api/checks/cashiers', b, H)).j;
 const k1 = await K({ name: 'ФОП АГАФІЦА Д.М.', login: 'c1', password: 'p', offices: ['22'] });
 const k2 = await K({ name: 'ФОП ЛУПУ В.Ф.', login: 'c2', password: 'p', offices: '12' });
 const k2b = await K({ name: 'ФОП ЛУПУ В.Ф. (друга каса)', login: 'c2b', offices: ['12'], lp_active: false }); // без пароля, вимкнена в LP-CRM
+await K({ name: 'ФОП Стара каса', login: 'old', password: 'p', offices: ['11'], lp_active: false }); // вимкнена в LP-CRM — для відділу 11 не враховується
 await K({ name: 'ТОВ Ековент-Дистрибюшн', login: 'tov', offices: ['28'] }); // без пароля
 await K({ name: 'ФОП Ватрич Л.Д.', login: 'bad', password: 'x', offices: ['30'] }); // невірний пароль
 assert.equal(k1.has_password, true); assert.equal(k1.password, undefined, 'пароль назовні не віддаємо');
@@ -175,7 +177,7 @@ await call('POST', `/api/checks/cashiers/${k2.id}/test`, {}, H);
 // Порожній пароль під час редагування — пароль не змінюється
 await call('PUT', `/api/checks/cashiers/${k1.id}`, { name: 'ФОП АГАФІЦА Д.М.', login: 'c1', password: '' }, H);
 assert.equal((await db.get(`SELECT password FROM chk_cashiers WHERE id = ?`, [k1.id])).password, 'p');
-assert.equal((await call('GET', '/api/checks/cashiers', null, H)).j.length, 5);
+assert.equal((await call('GET', '/api/checks/cashiers', null, H)).j.length, 6);
 
 // Збір: кнопка «Оновити зараз» — кроками, доки more = false.
 let steps = 0;
@@ -224,6 +226,7 @@ assert.deepEqual(j.cb_failed, ['ФОП Ватрич Л.Д. — Невірний 
 assert.equal(calls.bad, 1, 'з невірним паролем до Checkbox не стукаємо повторно');
 assert.match(texts(10019), /info: Рітейл Розетки/); assert.doesNotMatch(texts(10019), /контроль оплати/);
 assert.match(texts(10020), /warn: У замовленні не вказано вид оплати/);
+assert.match(texts(10022), /Чек не звіряємо: для відділу 11 не вказано касу/, 'вимкнена в LP-CRM каса не вважається касою відділу');
 assert.doesNotMatch(texts(10020), /Коментар/, 'звичайний «оплата через …» — без попередження');
 assert.match(texts(10005), /warn: Коментар про особливу оплату — звірте вручну: «Передоплата 300 грн на картку»/);
 // Prom
