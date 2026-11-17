@@ -168,5 +168,6 @@ for t in tests/*.test.mjs; do node --no-warnings "$t" || break; done   # усі 
 | Вікна «Підтвердіть товари» / «Перевірте, що піде в LP-CRM», «Маркетплейси → Налаштування» | `public/pages/mpcrm.js`, сервер — `src/modules/market/crm.js` |
 | B2B: закупівлі, рахунки, Telegram | `src/modules/b2b/orders.js`, `edits.js`, `tgdocs.js` |
 | B2B «Новини» (статті, файли D1/R2, Telegram-групи партнерів) | `src/modules/b2b/news.js`, сторінки — `public/pages/b2b-news.js` |
+| B2B «ТТН створює Ековент» (отримувач НП, створення ТТН через API НП) | `src/modules/b2b/npttn.js`, API НП — `src/integrations/novaposhta.js`, сторінки — `public/pages/np-picker.js`, `b2b-npttn.js` |
 | Змінні середовища Cloudflare | `README.md` → «Cloudflare Pages» |
 | Опис для користувачів | `README.md` |

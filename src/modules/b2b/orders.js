@@ -493,6 +493,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const drafts = (await hooks.draftsOf?.(p.id)) || [];
     return c.json({
       can_send: await canSend(c, p), // може відправляти закупівлі (керівник або менеджер з дозволом)
+      ttn_by_us: Boolean(p.ttn_by_us), // ТТН створює Ековент — замість ТТН і маркування партнер заповнює отримувача НП
       open: { id: open?.id || null, number: open ? orderNo(open.id) : '', total: open?.total || 0, limit: lim.open, orders: cnt },
       // чернетки закупівель, куди за замовчуванням ідуть замовлення клієнтів без закупівлі (найновіша — першою)
       drafts: drafts.map((d) => ({ id: d.id, number: orderNo(d.id), total: d.total, entity: String(d.entity || '').split('\n')[0].split(',')[0] })),
@@ -658,6 +659,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       if (o.pending) { try { const x = JSON.parse(o.pending); pend = { changes: x.changes || [], by: x.by || '', at: x.at || '', crm_old: x.crm_old || '' }; } catch { pend = { changes: [] }; } }
       out.pending = pend;
     }
+    if (o.kind === 'client') { out.np = (() => { try { return o.np_recipient ? JSON.parse(o.np_recipient) : null; } catch { return null; } })(); out.np_meta = (() => { try { return o.np_meta && !String(o.np_meta).startsWith('creating:') ? JSON.parse(o.np_meta) : null; } catch { return null; } })(); delete out.np_recipient; delete out.np_doc_ref; }
     if (o.kind === 'client') Object.assign(out, { no_supply: !o.supply_id || o.supply_status === 'open', open_supply: o.supply_status === 'open', draft_supply: o.supply_status === 'draft', pay: payState(o), pay_name: PAY_NAME[payState(o)], supply_number: o.supply_id ? orderNo(o.supply_id) : '' });
     return out;
   };

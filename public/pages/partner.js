@@ -2,6 +2,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
+import { npPickerHtml, wireNpPicker, npAddressText, NP_TYPES } from './np-picker.js';
 import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, wireTeamForm, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi, psBar, wirePsBar, psMatch, psHl, psEmpty, urgentBadge, urgentRow, cancelNote, askDeliveryChange, deliveryReqText, deliveryReqMoney, askCancel } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
@@ -681,7 +682,9 @@ export function createPartnerPages(ctx = {}) {
           <div class="card form-stack">
             <h3>Клієнт і доставка</h3>
             <div><b>${esc(o.client_name)}</b><div>${esc(phoneFmt(o.client_phone))}</div></div>
-            <div>ТТН: ${o.ttn ? `<b>${esc(o.ttn)}</b>` : '<span class="muted">не вказано</span>'}</div>
+            ${o.np ? `<div>Доставка: <b>${esc(npAddressText(o.np))}</b></div>
+              <div class="small">${o.np.cod ? `Клієнт платить при отриманні: <b>${uah(o.np.cod)}</b>` : 'Без оплати при отриманні'}</div>` : ''}
+            <div>ТТН: ${o.ttn ? `<b>${esc(o.ttn)}</b>${o.np ? ' <span class="badge info">створив Ековент</span>' : ''}` : o.np ? '<span class="badge warn">створить Ековент</span>' : '<span class="muted">не вказано</span>'}</div>
             ${o.ttn ? trackBtn() : ''}
             <div>${o.no_supply ? supplyMark(o) : `${o.draft_supply ? 'У чернетці закупівлі' : 'Із закупівлі'} <a href="#/porders/${o.supply_id}">${esc(o.supply_number)}</a>`}</div>
           </div>
@@ -767,6 +770,9 @@ export function createPartnerPages(ctx = {}) {
       }
     }
     const lim = await api('GET', '/api/b2b/p/limits');
+    // «ТТН створює Ековент»: партнер заповнює отримувача НП замість ТТН і маркування (або обирає «У мене своя ТТН»).
+    const npMode = Boolean(lim.ttn_by_us);
+    let useNp = npMode && (!cur || Boolean(cur.order.np) || !(cur.order.ttn || (cur.files || []).some((f) => f.kind === 'label')));
     // Без закупівлі — лише керівник команди; менеджер обирає закупівлю (оплачену або ту, що чекає на оплату).
     const head = ctx.can ? ctx.can('b2b.team') : true;
     let source = cur ? String(cur.order.open_supply || cur.order.draft_supply ? '' : (cur.order.supply_id || '')) : (presetSupply || (supplies[0] ? String(supplies[0].id) : ''));
@@ -815,18 +821,26 @@ export function createPartnerPages(ctx = {}) {
         <div class="form-stack">
           <form class="card form-stack" id="cfForm" style="position:sticky;top:12px">
             <h3>Клієнт</h3>
-            <label class="f"><span>ПІБ клієнта *</span><input name="client_name" value="${esc(o.client_name || '')}" required autocomplete="off"></label>
-            <label class="f"><span>Телефон *</span><input name="client_phone" value="${esc(o.client_phone || '')}" inputmode="tel" placeholder="0XXXXXXXXX" required></label>
-            <label class="f"><span>ТТН (ваша)</span><input name="ttn" value="${esc(o.ttn || '')}" inputmode="numeric" placeholder="20450000000000"></label>
+            ${npMode ? `<div class="np-mode" role="radiogroup" aria-label="Хто створює ТТН">
+                <label class="chip ${useNp ? 'on' : ''}"><input type="radio" name="cfMode" value="np" ${useNp ? 'checked' : ''}> ТТН створює Ековент</label>
+                <label class="chip ${useNp ? '' : 'on'}"><input type="radio" name="cfMode" value="own" ${useNp ? '' : 'checked'}> У мене своя ТТН</label></div>
+              <div id="cfNpBox" ${useNp ? '' : 'hidden'}>
+                ${o.ttn && o.np ? `<div class="alert info small">ТТН <b>${esc(o.ttn)}</b> уже створено — змінити отримувача може менеджер.</div>` : '<div class="small muted">Заповніть отримувача — ТТН Нової пошти створить наш менеджер перед відправкою. Маркування додавати не потрібно.</div>'}
+                ${npPickerHtml(o.np || {})}</div>` : ''}
+            <div id="cfOwn" class="form-stack" ${npMode && useNp ? 'hidden' : ''}>
+            <label class="f"><span>ПІБ клієнта *</span><input name="client_name" value="${esc(o.client_name || '')}" ${npMode && useNp ? '' : 'required'} autocomplete="off"></label>
+            <label class="f"><span>Телефон *</span><input name="client_phone" value="${esc(o.client_phone || '')}" inputmode="tel" placeholder="0XXXXXXXXX" ${npMode && useNp ? '' : 'required'}></label>
+            <label class="f"><span>ТТН (ваша)</span><input name="ttn" value="${esc(o.np ? '' : o.ttn || '')}" inputmode="numeric" placeholder="20450000000000"></label>
+            </div>
             <label class="f"><span>Коментар</span><textarea name="comment" rows="2">${esc(o.comment || '')}</textarea></label>
             <label class="urgent-check"><input type="checkbox" name="urgent" ${o.urgent ? 'checked' : ''}>
               <span><b>🔥 Терміново</b><span class="small muted">Замовлення виділимо в списку й зберемо першим. Позначку можна зняти пізніше.</span></span></label>
-            <div class="f"><span>Маркування (етикетка ТТН) *</span>
+            <div class="f" id="cfLabelBox" ${npMode && useNp ? 'hidden' : ''}><span>Маркування (етикетка ТТН) *</span>
               <div class="drop-zone" id="cfDrop">
                 <div id="cfFileList" class="form-stack" style="gap:6px"></div>
                 <div class="drop-hint">Перетягніть файл сюди або <label class="btn sm">+ Додати маркування<input type="file" id="cfFiles" accept=".pdf,image/*" multiple hidden></label></div>
               </div></div>
-            <div class="small muted">PDF або фото до 5 МБ; можна кілька, зайве — ✕. Те саме маркування двічі (в одне чи різні замовлення) додати не можна.</div>
+            <div class="small muted" id="cfLabelHint" ${npMode && useNp ? 'hidden' : ''}>PDF або фото до 5 МБ; можна кілька, зайве — ✕. Те саме маркування двічі (в одне чи різні замовлення) додати не можна.</div>
             ${docTypes.map((t) => `<div class="f"><span>${esc(t.name)}${t.required ? ' *' : ''}</span>
               <div class="drop-zone" id="cfDocZone${t.id}"><div id="cfDocList${t.id}" class="form-stack" style="gap:6px"></div>
                 <div class="drop-hint">Перетягніть файл сюди або <label class="btn sm">+ Додати<input type="file" data-doc="${t.id}" accept=".pdf,image/*" multiple hidden></label></div></div></div>`).join('')}
@@ -880,6 +894,17 @@ export function createPartnerPages(ctx = {}) {
       $('#cfList .ps-reset') && ($('#cfList .ps-reset').onclick = () => { ps.q = ''; ps.sel = false; $('#cfPs .ps-q').value = ''; $('#cfPs .ps-x').hidden = true; $('#cfPs .ps-sel').classList.remove('on'); drawList(); $('#cfPs .ps-q').focus(); });
     };
     const psCount = wirePsBar($('#cfPs'), ps, () => drawList());
+    const npPick = npMode ? wireNpPicker($('#cfNpBox'), o.np || {}, { base: '/api/b2b/p/np' }) : null;
+    $$('input[name="cfMode"]').forEach((r) => (r.onchange = () => {
+      useNp = r.value === 'np';
+      $$('.np-mode .chip').forEach((c) => c.classList.toggle('on', c.contains($('input[name="cfMode"]:checked'))));
+      $('#cfNpBox').hidden = !useNp;
+      $('#cfOwn').hidden = useNp;
+      $('#cfLabelBox').hidden = useNp;
+      $('#cfLabelHint').hidden = useNp;
+      $('#cfForm').client_name.required = !useNp;
+      $('#cfForm').client_phone.required = !useNp;
+    }));
     if ($('#cfInto')) $('#cfInto').onchange = (e) => {
       into = e.target.value;
       $('#cfOpenNote').hidden = into !== 'new';
@@ -975,9 +1000,16 @@ export function createPartnerPages(ctx = {}) {
       const items = [...qty].filter(([pid, q]) => q > 0 && allowed.has(pid)).map(([product_id, q]) => ({ product_id, qty: q }));
       if (!items.length) { toast('Вкажіть кількість хоча б одного товару', true); return; }
       const body = { ...Object.fromEntries(new FormData(e.target)), urgent: e.target.urgent.checked, supply_id: source ? Number(source) : null, items, ...(source ? {} : { into }) };
-      const files = pending.map((x) => x.file);
-      // Обов'язкові: маркування завжди, документи з позначкою «обов'язковий».
-      const lack = [...(saved.length + pending.length ? [] : ['маркування']), ...docTypes.filter((t) => t.required && !docSaved.get(t.id).length && !docPend.get(t.id).length).map((t) => t.name)];
+      delete body.cfMode;
+      if (npMode && useNp) {
+        const bad = npPick.check();
+        if (bad) { toast(bad, true); return; }
+        body.np = npPick.get();
+        Object.assign(body, { client_name: [body.np.last, body.np.first, body.np.middle].filter(Boolean).join(' '), client_phone: body.np.phone, ttn: '' });
+      }
+      const files = npMode && useNp ? [] : pending.map((x) => x.file);
+      // Обов'язкові: маркування (крім «ТТН створює Ековент»), документи з позначкою «обов'язковий».
+      const lack = [...(saved.length + pending.length || (npMode && useNp) ? [] : ['маркування']), ...docTypes.filter((t) => t.required && !docSaved.get(t.id).length && !docPend.get(t.id).length).map((t) => t.name)];
       if (lack.length) { toast(`Додайте: ${lack.join(', ')}`, true); return; }
       if (!(await confirmOrder(body, items))) return;
       $('#cfSave').disabled = true;
@@ -1008,8 +1040,11 @@ export function createPartnerPages(ctx = {}) {
           <div class="card form-stack" style="gap:4px">
             <div>Отримувач: <b>${esc(body.client_name)}</b></div>
             <div>Телефон: <b>${esc(phoneFmt(body.client_phone))}</b></div>
-            <div>ТТН: ${body.ttn ? `<b>${esc(body.ttn)}</b>` : '<span class="badge warn">не вказано</span>'}</div>
-            <div>Маркування: ${labels.length ? labels.map(esc).join(', ') : '<span class="badge warn">не додано</span>'}</div>
+            ${body.np ? `<div>Доставка: <b>${esc(npAddressText(body.np))}</b></div>
+              <div>${body.np.cod ? `Клієнт платить при отриманні: <b>${uah(body.np.cod)}</b>` : 'Клієнт уже оплатив (без оплати при отриманні)'}</div>
+              <div>ТТН: <span class="badge info">створить Ековент</span></div>`
+    : `<div>ТТН: ${body.ttn ? `<b>${esc(body.ttn)}</b>` : '<span class="badge warn">не вказано</span>'}</div>
+            <div>Маркування: ${labels.length ? labels.map(esc).join(', ') : '<span class="badge warn">не додано</span>'}</div>`}
             ${docTypes.map((t) => { const n = [...docSaved.get(t.id).map((f) => f.name), ...docPend.get(t.id).map((f) => f.name)]; return `<div>${esc(t.name)}: ${n.length ? n.map(esc).join(', ') : `<span class="badge ${t.required ? 'bad' : 'warn'}">не додано</span>`}</div>`; }).join('')}
             ${body.comment ? `<div class="small">Коментар: ${esc(body.comment)}</div>` : ''}
           </div>

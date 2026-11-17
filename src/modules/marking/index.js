@@ -578,5 +578,12 @@ export function mountMarking(app, { db, fetchFn, onCleanup }) {
     await logAudit(db, { user, kind: mp === 'rozetka' ? 'rz' : mp, refId: cur.id, action: 'перейменовано магазин', changes: [{ field: 'name', from: cur.name, to: next }] });
     return { id: cur.id, name: next };
   }
-  return { trackTtn, marketShops, renameShop, rozetkaToken: rzToken };
+  // Кабінети НП для створення ТТН в інших модулях (B2B «ТТН створює Ековент»): список без ключів і ключ за id (лише на сервері).
+  const npAccounts = () => db.all(`SELECT id, name, sender_name, sender_code FROM np_accounts WHERE active = 1 ORDER BY hits DESC, id`);
+  const npKey = async (id) => {
+    const a = id ? await db.get(`SELECT api_key FROM np_accounts WHERE id = ? AND active = 1`, [Number(id)]) : await db.get(`SELECT api_key FROM np_accounts WHERE active = 1 ORDER BY hits DESC, id LIMIT 1`);
+    if (!a) throw fail(400, 'Немає підключеного кабінету Нової пошти (Налаштування → Доставка).');
+    return a.api_key;
+  };
+  return { trackTtn, marketShops, renameShop, rozetkaToken: rzToken, npAccounts, npKey };
 }
