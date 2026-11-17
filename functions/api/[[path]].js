@@ -20135,13 +20135,17 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
   }
   const toksOf = /* @__PURE__ */ new Map();
   const byTok = /* @__PURE__ */ new Map();
+  const atMs = /* @__PURE__ */ new Map();
   for (const r of [...sells].sort((x, y) => String(x.at).localeCompare(String(y.at)))) {
+    atMs.set(r.id, Date.parse(r.at) || 0);
     if (!r.goods) continue;
     const toks = new Set(String(r.goods).split(/[\s/]+/).filter(Boolean));
     toksOf.set(r.id, toks);
+    const uah5 = Math.round(Number(r.total) || 0);
     for (const t of toks) {
-      if (!byTok.has(t)) byTok.set(t, []);
-      byTok.get(t).push(r);
+      const k = `${t}|${uah5}`;
+      if (!byTok.has(k)) byTok.set(k, []);
+      byTok.get(k).push(r);
     }
   }
   const goodsHit = (o, r) => {
@@ -20149,17 +20153,40 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
     return Boolean(toks) && o.goodsKeys.every((keys) => keys.some((k) => toks.has(k)));
   };
   const rDay = (r) => r.day || kyivDayOf2(r.at);
-  const byGoodsOrders = orders.filter((o) => !byOrder.has(o.code) && o.goodsKeys?.length).sort((a, b) => String(a.dt || a.day).localeCompare(String(b.dt || b.day)));
-  for (const o of byGoodsOrders) {
+  const exact = (a, b) => Math.abs(Number(a || 0) - Number(b || 0)) < 5e-3;
+  const oMs = (o) => (o.dt ? Date.parse(`${String(o.dt).replace(" ", "T")}+02:00`) - 36e5 : Date.parse(`${o.day}T00:00:00+02:00`)) || 0;
+  const goodsOrders = orders.filter((o) => o.goodsKeys?.length).sort((a, b) => String(a.dt || a.day).localeCompare(String(b.dt || b.day)));
+  const cands = new Map(goodsOrders.map((o) => {
     const end = addDays6(o.day, 20);
-    const sumOk = (r) => near(r.total, o.total) || o.prepayment > 0 && (near(r.total, o.total - o.prepayment) || near(r.total, o.prepayment));
-    const orgOk = (r) => o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
-    const pool = [...new Set(o.goodsKeys[0].flatMap((k) => byTok.get(k) || []))].sort((x, y) => String(x.at).localeCompare(String(y.at)));
-    const ok = (r) => !used.has(r.id) && rDay(r) >= o.day && rDay(r) <= end && sumOk(r) && goodsHit(o, r);
-    const cb = String(cbOf(o) || "").toLowerCase();
-    const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || "").toLowerCase().includes(cb));
-    const hit = pool.find((r) => ok(r) && orgOk(r) && cbOk(r)) || pool.find((r) => ok(r) && orgOk(r)) || pool.find((r) => ok(r) && cbOk(r)) || pool.find(ok);
-    if (hit) take(o, { ...hit, byGoods: true });
+    const from = oMs(o);
+    const sumNear = (r) => near(r.total, o.total) || o.prepayment > 0 && (near(r.total, o.total - o.prepayment) || near(r.total, o.prepayment));
+    const amounts = [o.total, ...o.prepayment > 0 ? [o.total - o.prepayment, o.prepayment] : []].flatMap((a) => {
+      const x = Math.round(a);
+      return [x - 1, x, x + 1];
+    });
+    const list = [...new Set(o.goodsKeys[0].flatMap((k) => amounts.flatMap((a) => byTok.get(`${k}|${a}`) || [])))].filter((r) => atMs.get(r.id) >= from && rDay(r) >= o.day && rDay(r) <= end && sumNear(r) && goodsHit(o, r)).sort((x, y) => atMs.get(x.id) - atMs.get(y.id));
+    return [o.code, list];
+  }));
+  const PASSES = [
+    { sum: "exact", org: true, cb: true },
+    { sum: "exact", org: true, cb: false },
+    { sum: "exact", org: false, cb: true },
+    { sum: "exact", org: false, cb: false },
+    { sum: "near", org: true, cb: false },
+    { sum: "near", org: false, cb: false }
+  ];
+  for (const pass of PASSES) {
+    for (const o of goodsOrders) {
+      if (byOrder.has(o.code)) continue;
+      const list = cands.get(o.code);
+      if (!list.length) continue;
+      const sumOk = pass.sum === "exact" ? (r) => exact(r.total, o.total) || o.prepayment > 0 && (exact(r.total, o.total - o.prepayment) || exact(r.total, o.prepayment)) : () => true;
+      const orgOk = (r) => o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
+      const cb = String(cbOf(o) || "").toLowerCase();
+      const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || "").toLowerCase().includes(cb));
+      const hit = list.find((r) => !used.has(r.id) && sumOk(r) && (!pass.org || orgOk(r)) && (!pass.cb || cbOk(r)));
+      if (hit) take(o, { ...hit, byGoods: true });
+    }
   }
   const free = sells.filter((r) => !used.has(r.id));
   const key = (n) => Math.round(Number(n) * 100);
@@ -20186,16 +20213,16 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
     const rcs = rcBySum.get(k);
     if (!rcs) continue;
     for (const o of list) {
-      const cands = [];
+      const cands2 = [];
       for (const r of rcs) {
         if (used.has(r.id) || !inWin(o, r)) continue;
         if (!(o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId)) || list.length === 1)) continue;
-        cands.push(r);
-        if (cands.length > 1) break;
+        cands2.push(r);
+        if (cands2.length > 1) break;
       }
-      if (cands.length !== 1) continue;
-      const rival = list.some((x) => x !== o && !byOrder.has(x.code) && inWin(x, cands[0]));
-      if (!rival) take(o, { ...cands[0], bySum: true });
+      if (cands2.length !== 1) continue;
+      const rival = list.some((x) => x !== o && !byOrder.has(x.code) && inWin(x, cands2[0]));
+      if (!rival) take(o, { ...cands2[0], bySum: true });
     }
   }
   return byOrder;
@@ -20756,15 +20783,17 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
   }
   onCron("checks", "\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430: \u043E\u043F\u043B\u0430\u0442\u0438, \u043D\u0430\u043B\u043E\u0436\u043A\u0430 \u0439 \u0447\u0435\u043A\u0438 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u0445 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C (\u0440\u0430\u0437 \u043D\u0430 10 \u0445\u0432)", () => step());
   async function build(from, to) {
-    const recFrom = from;
-    const recTo = addDays7(to, 20);
+    const recFrom = addDays7(kyivDay(), -CHECK_DAYS - 7);
+    const recTo = addDays7(kyivDay(), 1);
     const listed = (await getJson2("chk_state", {})).listed || "";
     const cbFailRaw = (await db.get(`SELECT value FROM settings WHERE key = 'chk_cb_fail'`))?.value || "{}";
     const [rs, orders, receipts, fopsAll, offices, channels, accounts, txs, stNames, cashList] = await Promise.all([
       rules(),
-      db.all(`SELECT * FROM chk_orders WHERE listed_at != '' AND listed_at >= ? AND day BETWEEN ? AND ? ORDER BY day DESC, code DESC`, [listed, from, to]),
+      // Чеки підбираємо по ВСІХ зібраних замовленнях (не лише за обраний період) — щоб результат не залежав від періоду
+      // на екрані; показуємо потім лише замовлення періоду.
+      db.all(`SELECT * FROM chk_orders WHERE listed_at != '' AND listed_at >= ? AND day != '' ORDER BY day DESC, code DESC`, [listed]),
       // чеки за період + прив'язані в LP-CRM до замовлень періоду (можуть бути з іншого дня)
-      db.all(`SELECT * FROM chk_receipts WHERE day BETWEEN ? AND ? OR id IN (SELECT receipt_ref FROM chk_orders WHERE receipt_ref != '' AND day BETWEEN ? AND ?)`, [recFrom, recTo, from, to]),
+      db.all(`SELECT * FROM chk_receipts WHERE day BETWEEN ? AND ? OR id IN (SELECT receipt_ref FROM chk_orders WHERE receipt_ref != '')`, [recFrom, recTo]),
       db.all(`SELECT id, short_name, ipn, iban, active, checkbox_login, checkbox_password, checkbox_license, checkbox_pin FROM fops`),
       db.all(`SELECT office_id, name, fop_id FROM offices`),
       db.all(`SELECT name, fop_id FROM channels`),
@@ -20846,7 +20875,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       }
     }
     const today3 = kyivDay();
-    const rows = orders.map((o) => {
+    const rows = orders.filter((o) => o.day >= from && o.day <= to).map((o) => {
       const rule = rs[String(o.payment)];
       const part = rule?.cls === "cod" ? o.prepayment > 0 || partialOf(o.comment) : null;
       const dup = (byPhone.get(o.phone) || []).filter((x) => x !== o && Math.abs(Date.parse(x.day) - Date.parse(o.day)) <= 3 * 864e5).map((x) => x.id || x.code);
