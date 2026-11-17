@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'checks',
-  version: 4,
+  version: 5,
   tables: [
   // Замовлення LP-CRM у статусах «відправлено / очікує викупу / завершено» за останні CHECK_DAYS днів.
   // listed_at — коли востаннє бачили в цих статусах (зникло зі списку — більше не показуємо);
@@ -56,6 +56,26 @@ export const schema = {
     done INTEGER NOT NULL DEFAULT 0,
     at TEXT DEFAULT '',
     PRIMARY KEY (fop_id, day)
+  )`,
+  // Каси Checkbox для перевірки (як у модулі Checkbox LP-CRM): назва, логін і пароль касира або ключ ліцензії й PIN
+  // (секрети — лише в базі, назовні не віддаються), відділи LP-CRM, для яких каса пробиває чеки (JSON-масив номерів),
+  // lp_active — увімкнена в LP-CRM; org_title / org_code — організація каси з Checkbox (ФОП / ТОВ, ІПН / ЄДРПОУ).
+  // Чеки в chk_receipts / chk_days з версії 5 прив'язані до каси: колонка fop_id — це id каси з chk_cashiers.
+  `CREATE TABLE IF NOT EXISTS chk_cashiers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL DEFAULT '',
+    login TEXT DEFAULT '',
+    password TEXT DEFAULT '',
+    license TEXT DEFAULT '',
+    pin TEXT DEFAULT '',
+    offices TEXT NOT NULL DEFAULT '[]',
+    lp_active INTEGER NOT NULL DEFAULT 1,
+    active INTEGER NOT NULL DEFAULT 1,
+    org_title TEXT DEFAULT '',
+    org_code TEXT DEFAULT '',
+    checked_at TEXT DEFAULT '',
+    error TEXT DEFAULT '',
+    created_at TEXT DEFAULT ''
   )`,
   ],
   columns: [

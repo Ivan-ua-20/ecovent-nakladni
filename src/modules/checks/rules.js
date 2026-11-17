@@ -105,7 +105,7 @@ const addDays = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864000
 
 // Чеки ↔ замовлення: спершу чек, прив'язаний у LP-CRM; далі за номером замовлення в чеку (16-значний код або № разом із сумою),
 // потім — за сумою: чек продажу на ту саму суму від дня замовлення до +20 днів, лише якщо збіг однозначний.
-export function matchReceipts(orders, receipts) {
+export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === String(b)) {
   const sells = receipts.filter((r) => !/RETURN/i.test(r.type));
   const byOrder = new Map();
   const used = new Set();
@@ -136,7 +136,7 @@ export function matchReceipts(orders, receipts) {
     const rcs = rcBySum.get(k) || [];
     for (const o of list) {
       const inWin = (r) => { const d = kyivDayOf(r.at); return d >= o.day && d <= addDays(o.day, 20); };
-      const cands = rcs.filter((r) => !used.has(r.id) && inWin(r) && (!o.fopId || String(r.fop_id) === String(o.fopId) || list.length === 1));
+      const cands = rcs.filter((r) => !used.has(r.id) && inWin(r) && (o.fopId == null || sameOrg(r.fop_id, o.fopId) || list.length === 1));
       const rivals = list.filter((x) => x !== o && cands.some((r) => { const d = kyivDayOf(r.at); return d >= x.day && d <= addDays(x.day, 20); }));
       if (cands.length === 1 && !rivals.length) take(o, { ...cands[0], bySum: true });
     }
@@ -208,9 +208,10 @@ export function evaluate(o, ctx) {
   // 2) Чек
   const r = ctx.receipt;
   // Чек видають під час відправки (і для післяплати теж): відправлене замовлення без чека — помилка.
-  if (!r && o.receipt_ref && o.ref_state === 'nofop') add('warn', 'У LP-CRM чек прив’язано, але каса цього ФОП не підключена до сервісу — додайте доступ Checkbox у «Налаштування → ФОПи накладних», щоб звірити суму й спосіб оплати.');
+  if (!r && o.receipt_ref && o.ref_state === 'nofop') add('warn', 'У LP-CRM чек прив’язано, але жодна каса з доступом його не бачить — внесіть пароль касира в «Перевірка → Налаштування → Каси Checkbox».');
   else if (!r && o.receipt_ref) add('wait', 'У LP-CRM чек прив’язано — завантажуємо його з Checkbox.');
-  else if (!r && ctx.canReceipt === false) add('info', `Чек не звіряємо: каса ${ctx.expectedFop ? `«${fopName(ctx.expectedFop)}»` : 'цього ФОП'} не підключена до сервісу (доступ Checkbox у «Налаштування → ФОПи накладних»).`);
+  else if (!r && ctx.noCashier) add('info', `Чек не звіряємо: для відділу ${o.office || '—'} не вказано касу («Перевірка → Налаштування → Каси Checkbox»).`);
+  else if (!r && ctx.canReceipt === false) add('info', `Чек не звіряємо: до каси «${fopName(ctx.expectedFop)}» немає доступу — внесіть пароль касира в «Перевірка → Налаштування → Каси Checkbox».`);
   else if (!r) add('bad', 'Відправлено, а чек у Checkbox не знайдено.');
   else {
     const how = r.bySum ? ' (знайдено за сумою)' : r.byRef ? '' : ' (знайдено за № замовлення)';
@@ -220,8 +221,9 @@ export function evaluate(o, ctx) {
     if (rule?.cb && labels.length && !labels.some((l) => l.toLowerCase().includes(rule.cb.toLowerCase()))) {
       add('bad', `У чеку спосіб оплати «${labels.join(', ')}», а для «${rule.name}» має бути «${rule.cb}».`);
     }
-    if (ctx.expectedFop && String(ctx.expectedFop) !== String(r.fop_id)) {
-      add('warn', `Чек пробито на «${fopName(r.fop_id)}», а за відділом / полем 1 — «${fopName(ctx.expectedFop)}»`);
+    const same = ctx.sameOrg || ((a, b) => String(a) === String(b));
+    if (ctx.expectedFop != null && !same(ctx.expectedFop, r.fop_id)) {
+      add('bad', `Чек пробито на «${fopName(r.fop_id)}», а для цього відділу каса — «${fopName(ctx.expectedFop)}» (як у LP-CRM)`);
     }
   }
 
@@ -230,10 +232,17 @@ export function evaluate(o, ctx) {
     const p = ctx.payment;
     if (!p) add('warn', 'Надходження на рахунок ФОП на цю суму не знайдено (Opendatabot).');
     else {
-      const payFop = p.fop_id ? fopName(p.fop_id) : (p.account || 'рахунок');
-      if (r && p.fop_id && String(p.fop_id) !== String(r.fop_id)) add('bad', `Оплата прийшла на «${payFop}», а чек пробито на «${fopName(r.fop_id)}»`);
+      const payFop = p.account || (p.fop_id != null ? fopName(p.fop_id) : 'рахунок');
+      const same = ctx.sameOrg || ((a, b) => String(a) === String(b));
+      if (r && p.fop_id != null && !same(p.fop_id, r.fop_id)) add('bad', `Оплата прийшла на «${payFop}», а чек пробито на «${fopName(r.fop_id)}»`);
       else add('ok', `Оплата ${fmt(p.amount)} на «${payFop}» · ${p.day.split('-').reverse().join('.')}`);
     }
+  }
+
+  // 3б) Коментар менеджера: згадка про оплату, передоплату, обмін чи повернення — звірити вручну.
+  const com = String(o.comment || '').trim();
+  if (com && /(оплат|передоплат|предоплат|аванс|доплат|налож|накладен|післяплат|без\s+налож|обмін|обмен|поверн|чек|частин|знижк|безкошт)/i.test(com)) {
+    add('warn', `Коментар про оплату — звірте вручну: «${com.length > 160 ? `${com.slice(0, 157)}…` : com}»`);
   }
 
   // 4) Дублі: та сама ТТН у кількох замовленнях (одна посилка на два замовлення) або той самий телефон

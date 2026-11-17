@@ -32,10 +32,8 @@ await db.run(`UPDATE settings SET value = 'ihunt' WHERE key = 'lpcrm_subdomain'`
 await db.run(`INSERT INTO settings (key, value) VALUES ('lpcrm_subdomain', 'ihunt') ON CONFLICT(key) DO UPDATE SET value = 'ihunt'`);
 await db.run(`INSERT INTO settings (key, value) VALUES ('lpcrm_key', 'k') ON CONFLICT(key) DO UPDATE SET value = 'k'`);
 await db.run(`DELETE FROM fops`);
-await db.run(`INSERT INTO fops (id, short_name, full_name, ipn, iban, checkbox_login, checkbox_password, active) VALUES (1, 'ФОП Агафіца Д.М.', 'А Д М', '1111111111', 'UA111', 'c1', 'p', 1)`);
-await db.run(`INSERT INTO fops (id, short_name, full_name, ipn, iban, checkbox_login, checkbox_password, active) VALUES (2, 'ФОП Лупу В.Ф.', 'Л В Ф', '2222222222', 'UA222', 'c2', 'p', 1)`);
-await db.run(`INSERT INTO fops (id, short_name, full_name, active) VALUES (3, 'ТОВ Ековент-Дистрибюшн', 'ТОВ', 1)`); // каса не підключена
-await db.run(`INSERT INTO fops (id, short_name, full_name, checkbox_login, checkbox_password, active) VALUES (4, 'ФОП Ватрич Л.Д.', 'В Л Д', 'bad', 'x', 1)`); // невірний пароль
+await db.run(`INSERT INTO fops (id, short_name, full_name, ipn, iban, active) VALUES (1, 'ФОП Агафіца Д.М.', 'А Д М', '1111111111', 'UA111', 1)`);
+await db.run(`INSERT INTO fops (id, short_name, full_name, ipn, iban, active) VALUES (2, 'ФОП Лупу В.Ф.', 'Л В Ф', '2222222222', 'UA222', 1)`);
 await db.run(`DELETE FROM offices`);
 await db.run(`INSERT INTO offices (office_id, name, fop_id) VALUES ('22', 'Ecovent-Expert / ФОП Агафіца Д.М.', 1), ('12', 'Маркетплейси / ФОП ЛУПУ В.Ф.', 2), ('28', 'ТОВ «ЕКОВЕНТ-ДИСТРИБ’ЮШН»', 3), ('30', 'ФОП Ватрич', 4)`);
 await db.run(`INSERT INTO np_accounts (id, name, api_key, active, created_at) VALUES (1, 'НП', 'npk', 1, '')`);
@@ -129,6 +127,11 @@ const fetchFn = async (url, opts = {}) => {
   }
   if (u.hostname === 'api.checkbox.ua') {
     calls.cb++;
+    if (u.pathname.endsWith('/cashier/me')) {
+      const who = String(opts.headers.Authorization).replace('Bearer t-', '');
+      const org = { c1: { title: 'ФОП Агафіца Д.М.', edrpou: '1111111111' }, c2: { title: 'ФОП Лупу В.Ф.', edrpou: '2222222222' } }[who];
+      return j({ full_name: 'Касир', organization: org });
+    }
     if (u.pathname.endsWith('/cashier/signin')) {
       const login = JSON.parse(opts.body).login;
       if (login === 'bad') { calls.bad = (calls.bad || 0) + 1; return new Response(JSON.stringify({ message: 'Невірний логін або пароль' }), { status: 403 }); }
@@ -156,6 +159,24 @@ const call = async (m, path, body, cookie) => {
 };
 const H = (await call('POST', '/api/auth/setup', { login: 'o', password: 'secret123' })).r.headers.get('set-cookie').split(';')[0];
 
+// Каси Checkbox («Перевірка → Налаштування»): як у модулі LP-CRM — назва, логін, відділи; пароль вносить людина.
+const K = async (b) => (await call('POST', '/api/checks/cashiers', b, H)).j;
+const k1 = await K({ name: 'ФОП АГАФІЦА Д.М.', login: 'c1', password: 'p', offices: ['22'] });
+const k2 = await K({ name: 'ФОП ЛУПУ В.Ф.', login: 'c2', password: 'p', offices: '12' });
+const k2b = await K({ name: 'ФОП ЛУПУ В.Ф. (друга каса)', login: 'c2b', offices: ['12'], lp_active: false }); // без пароля, вимкнена в LP-CRM
+await K({ name: 'ТОВ Ековент-Дистрибюшн', login: 'tov', offices: ['28'] }); // без пароля
+await K({ name: 'ФОП Ватрич Л.Д.', login: 'bad', password: 'x', offices: ['30'] }); // невірний пароль
+assert.equal(k1.has_password, true); assert.equal(k1.password, undefined, 'пароль назовні не віддаємо');
+assert.deepEqual(k2.offices, ['12']); assert.equal(k2b.ready, false);
+// Перевірити вхід — Checkbox каже, чия каса (організація, ІПН)
+const t1 = (await call('POST', `/api/checks/cashiers/${k1.id}/test`, {}, H)).j;
+assert.equal(t1.org_title, 'ФОП Агафіца Д.М.'); assert.equal(t1.org_code, '1111111111');
+await call('POST', `/api/checks/cashiers/${k2.id}/test`, {}, H);
+// Порожній пароль під час редагування — пароль не змінюється
+await call('PUT', `/api/checks/cashiers/${k1.id}`, { name: 'ФОП АГАФІЦА Д.М.', login: 'c1', password: '' }, H);
+assert.equal((await db.get(`SELECT password FROM chk_cashiers WHERE id = ?`, [k1.id])).password, 'p');
+assert.equal((await call('GET', '/api/checks/cashiers', null, H)).j.length, 5);
+
 // Збір: кнопка «Оновити зараз» — кроками, доки more = false.
 let steps = 0;
 let maxDb = 0;
@@ -180,7 +201,7 @@ assert.ok(calls.prom >= 4, 'замовлення Prom прочитано');
 assert.equal(row(10001).level, 'ok', texts(10001));
 assert.ok(row(10001).receipt && !row(10001).receipt.bySum);
 assert.equal(row(10002).level, 'bad'); assert.match(texts(10002), /RozetkaPay.*контроль оплати/);
-assert.equal(row(10003).level, 'bad'); assert.match(texts(10003), /наложки немає/); assert.match(texts(10003), /warn: У LP-CRM чек прив’язано, але каса цього ФОП не підключена/);
+assert.equal(row(10003).level, 'bad'); assert.match(texts(10003), /наложки немає/); assert.match(texts(10003), /warn: У LP-CRM чек прив’язано, але жодна каса з доступом його не бачить/);
 assert.equal(row(10003).receipt.crmOnly, true);
 assert.equal(row(10015).level, 'ok', texts(10015)); assert.match(texts(10015), /ok: Чек 1500 грн · ФОП Лупу В\.Ф\.$|ok: Чек 1500 грн · ФОП Лупу В\.Ф\. \|/);
 assert.equal(row(10004).level, 'bad'); assert.match(texts(10004), /Оплата прийшла на «ФОП Лупу В\.Ф\.», а чек пробито на «ФОП Агафіца Д\.М\.»/);
@@ -189,20 +210,21 @@ assert.match(texts(10005), /ok: Наложка 700 грн \(часткова о�
 assert.match(texts(10005), /bad: Відправлено, а чек у Checkbox не знайдено/);
 assert.equal(row(10006).level, 'bad'); assert.match(texts(10006), /Післяплата Rozetka.*наложки немає/);
 assert.match(texts(10007), /bad: У чеку спосіб оплати «Готівка», а для «Оплата на картку» має бути «Картка»/);
-assert.match(texts(10007), /warn: Чек пробито на «ФОП Агафіца Д\.М\.», а за відділом/);
+assert.match(texts(10007), /bad: Чек пробито на «ФОП Агафіца Д\.М\.», а для цього відділу каса — «ФОП Лупу В\.Ф\.»/);
 assert.match(texts(10008), /Можливий дубль.*10009/);
 assert.match(texts(10009), /Можливий дубль.*10008/);
 assert.match(texts(10010), /bad: Та сама ТТН у замовленні № 10002/);
 assert.match(texts(10002), /Та сама ТТН у замовленні № 10010/);
 assert.ok(j.counts.bad >= 5);
-assert.equal(row(10016).level, 'ok', texts(10016)); assert.match(texts(10016), /Чек не звіряємо: каса «ТОВ Ековент-Дистрибюшн» не підключена/);
+assert.equal(row(10016).level, 'ok', texts(10016)); assert.match(texts(10016), /Чек не звіряємо: до каси «ТОВ Ековент-Дистрибюшн» немає доступу/);
 assert.match(texts(10017), /ok: Наложка 800 грн \(часткова оплата\)/);
 assert.deepEqual(j.no_checkbox, ['ТОВ Ековент-Дистрибюшн']);
-assert.equal(row(10018).level, 'ok', texts(10018)); assert.match(texts(10018), /Чек не звіряємо: каса «ФОП Ватрич Л\.Д\.» не підключена/);
+assert.equal(row(10018).level, 'ok', texts(10018)); assert.match(texts(10018), /Чек не звіряємо: до каси «ФОП Ватрич Л\.Д\.» немає доступу/);
 assert.deepEqual(j.cb_failed, ['ФОП Ватрич Л.Д. — Невірний логін або пароль']);
 assert.equal(calls.bad, 1, 'з невірним паролем до Checkbox не стукаємо повторно');
 assert.match(texts(10019), /info: Рітейл Розетки/); assert.doesNotMatch(texts(10019), /контроль оплати/);
 assert.match(texts(10020), /warn: У замовленні не вказано вид оплати/);
+assert.match(texts(10005), /warn: Коментар про оплату — звірте вручну: «Передоплата 300 грн на картку»/);
 // Prom
 assert.match(texts(10011), /ok: Prom: Пром-оплата · оплачено/);
 assert.match(texts(10011), /ok: Наложки немає/);
