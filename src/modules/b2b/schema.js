@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 43,
+  version: 44,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -376,6 +376,11 @@ export const schema = {
   // supply_id — закупівля, з якої взято товари (порожньо — «без закупівлі»); дані клієнта й ТТН партнера;
   // crm_* — передача в LP-CRM: номер замовлення в CRM (автоматично або вручну), його статус, код, з яким відправили.
   columns: [
+    // Новини: public — відкрита всім без входу (без партнерських цін; за замовчуванням), 0 — лише партнерам після входу;
+    // tg_short — «Коротко для Telegram» (до 4 рядків); tg_photo — file_id фото в Telegram (щоб не завантажувати вдруге).
+    ['b2b_news', 'public', 'INTEGER DEFAULT 1'],
+    ['b2b_news', 'tg_short', "TEXT DEFAULT ''"],
+    ['b2b_news', 'tg_photo', "TEXT DEFAULT ''"],
     // «ТТН створює Ековент»: партнер заповнює отримувача (ПІБ, телефон, відділення / поштомат / адреса НП) без ТТН і маркування,
     // ТТН створює адмін через API НП із нашого кабінету (np_accounts) перед передачею в LP-CRM.
     ['b2b_partners', 'ttn_by_us', 'INTEGER DEFAULT 0'],

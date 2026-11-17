@@ -96,7 +96,7 @@ export function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartne
   const out = (n, files = new Map(), partner = false) => ({
     id: n.id, title: n.title, summary: n.summary, category: n.category, category_name: NEWS_CATS[n.category] || NEWS_CATS.other,
     brands: parseJson(n.brands, []), cover: n.cover || null, cover_url: n.cover ? fileUrl(n.cover, partner) : n.cover_url || '',
-    pinned: Boolean(n.pinned), tg: Boolean(n.tg), status: n.status, publish_at: n.publish_at, notified_at: n.notified_at,
+    pinned: Boolean(n.pinned), tg: Boolean(n.tg), public: n.public !== 0 && !audienceOf(n).length, tg_short: n.tg_short || '', status: n.status, publish_at: n.publish_at, notified_at: n.notified_at,
     audience: audienceOf(n), created_by: n.created_by, created_at: n.created_at, updated_by: n.updated_by, updated_at: n.updated_at,
     body: parseJson(n.body, []).map((b) => {
       const f = b.file ? files.get(b.file) : null;
@@ -131,7 +131,7 @@ export function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartne
   app.get('/api/b2b/news', async (c) => {
     need(c, 'b2b.view');
     const [rows, reads, partners] = await Promise.all([
-      db.all(`SELECT id, title, summary, category, brands, cover, cover_url, body, audience, pinned, tg, status, publish_at, notified_at, created_by, created_at, updated_by, updated_at
+      db.all(`SELECT id, title, summary, category, brands, cover, cover_url, body, audience, pinned, tg, public, status, publish_at, notified_at, created_by, created_at, updated_by, updated_at
         FROM b2b_news WHERE deleted_at = '' ORDER BY CASE status WHEN 'draft' THEN 0 ELSE 1 END, publish_at DESC, id DESC LIMIT 300`),
       db.all(`SELECT news_id, COUNT(*) AS n FROM b2b_news_reads GROUP BY news_id`),
       db.get(`SELECT COUNT(*) AS n FROM b2b_partners WHERE active = 1 AND COALESCE(deleted_at, '') = ''`),
@@ -141,7 +141,7 @@ export function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartne
     return c.json({
       partners: partners?.n || 0, cats: NEWS_CATS,
       rows: rows.map((n) => ({ id: n.id, title: n.title, category: n.category, status: n.status === 'published' && n.publish_at > now ? 'planned' : n.status,
-        publish_at: n.publish_at, pinned: Boolean(n.pinned), audience: audienceOf(n).length, reads: rd.get(n.id) || 0, cover_url: coverOf(n), updated_at: n.updated_at, created_by: n.created_by, notified_at: n.notified_at, tg: Boolean(n.tg) })),
+        publish_at: n.publish_at, pinned: Boolean(n.pinned), audience: audienceOf(n).length, reads: rd.get(n.id) || 0, public: n.public !== 0 && !audienceOf(n).length, cover_url: coverOf(n), updated_at: n.updated_at, created_by: n.created_by, notified_at: n.notified_at, tg: Boolean(n.tg) })),
     });
   });
   app.get('/api/b2b/news/meta', async (c) => {
@@ -168,23 +168,27 @@ export function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartne
       cover: Number(b.cover) || null, cover_url: /^https:\/\//.test(String(b.cover_url || '')) ? str(b.cover_url, 500) : '',
       body: J(cleanBlocks(b.body)), audience: (Array.isArray(b.audience) && b.audience.length) ? J([...new Set(b.audience.map(Number).filter(Boolean))]) : '',
       pinned: b.pinned ? 1 : 0, tg: b.tg === false ? 0 : 1,
+      // для вибраних партнерів — завжди внутрішня; інакше публічна, якщо не вимкнено явно
+      public: (Array.isArray(b.audience) && b.audience.length) || b.public === false ? 0 : 1,
+      tg_short: String(b.tg_short ?? '').split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 4).map((x) => x.slice(0, 150)).join('\n'),
     };
   };
   app.post('/api/b2b/news', async (c) => {
     need(c, 'b2b.admin');
     const f = fields(await c.req.json().catch(() => ({})));
     const at = nowIso();
-    const r = await db.run(`INSERT INTO b2b_news (title, summary, category, brands, cover, cover_url, body, audience, pinned, tg, status, created_by, created_at, updated_by, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
-    [f.title, f.summary, f.category, f.brands, f.cover, f.cover_url, f.body, f.audience, f.pinned, f.tg, userName(c), at, userName(c), at]);
+    const r = await db.run(`INSERT INTO b2b_news (title, summary, category, brands, cover, cover_url, body, audience, pinned, tg, public, tg_short, status, created_by, created_at, updated_by, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
+    [f.title, f.summary, f.category, f.brands, f.cover, f.cover_url, f.body, f.audience, f.pinned, f.tg, f.public, f.tg_short, userName(c), at, userName(c), at]);
     return c.json({ id: r.lastId });
   });
   app.put('/api/b2b/news/:id{[0-9]+}', async (c) => {
     need(c, 'b2b.admin');
     const n = await get(c.req.param('id'));
     const f = fields(await c.req.json().catch(() => ({})));
-    await db.run(`UPDATE b2b_news SET title = ?, summary = ?, category = ?, brands = ?, cover = ?, cover_url = ?, body = ?, audience = ?, pinned = ?, tg = ?, updated_by = ?, updated_at = ? WHERE id = ?`,
-      [f.title, f.summary, f.category, f.brands, f.cover, f.cover_url, f.body, f.audience, f.pinned, f.tg, userName(c), nowIso(), n.id]);
+    await db.run(`UPDATE b2b_news SET title = ?, summary = ?, category = ?, brands = ?, cover = ?, cover_url = ?, body = ?, audience = ?, pinned = ?, tg = ?, public = ?, tg_short = ?,
+      tg_photo = CASE WHEN cover IS ? AND body = ? THEN tg_photo ELSE '' END, updated_by = ?, updated_at = ? WHERE id = ?`,
+      [f.title, f.summary, f.category, f.brands, f.cover, f.cover_url, f.body, f.audience, f.pinned, f.tg, f.public, f.tg_short, f.cover, f.body, userName(c), nowIso(), n.id]);
     return c.json({ ok: true, updated_at: nowIso() });
   });
   // Опублікувати одразу або на час (at — ISO у майбутньому). Сповіщення в Telegram — notify (одразу) або фоном у час публікації.
@@ -225,14 +229,12 @@ export function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartne
     const partners = await partnersOf(n);
     const done = new Set((await db.all(`SELECT partner_id FROM b2b_news_sent WHERE news_id = ?`, [n.id])).map((r) => r.partner_id));
     const todo = partners.filter((p) => !done.has(p.id)).slice(0, SEND_PER_CALL);
-    const link = base ? `${base}/#/pnews/${n.id}` : '';
-    const text = [`📰 <b>Новина від Ековент</b>${n.category && NEWS_CATS[n.category] ? ` · ${h(NEWS_CATS[n.category])}` : ''}`, '', `<b>${h(n.title)}</b>`,
-      n.summary ? h(n.summary) : '', link ? `\n<a href="${h(link)}">Читати в кабінеті партнера →</a>` : ''].filter((x) => x !== '').join('\n');
+    const card = todo.length ? await tgCard(n, base) : null;
     let sent = 0;
     for (const p of todo) {
       const claim = await db.run(`INSERT OR IGNORE INTO b2b_news_sent (news_id, partner_id, sent, at) VALUES (?, ?, 0, ?)`, [n.id, p.id, nowIso()]);
       if (!claim.changes) continue; // уже надсилає інше звернення (фонова задача)
-      const k = (await services.notify.sendText(p.tg_group ? { chatIds: [p.tg_group] } : { partnerId: p.id }, text).catch((e) => { if (e.pending) throw e; return 0; })) || 0;
+      const k = await sendCard(n, card, p.tg_group ? { chatIds: [p.tg_group] } : { partnerId: p.id });
       if (k) { sent++; await db.run(`UPDATE b2b_news_sent SET sent = ? WHERE news_id = ? AND partner_id = ?`, [k, n.id, p.id]); }
     }
     const left = partners.length - done.size - todo.length;
@@ -251,6 +253,142 @@ export function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartne
     const rows = await db.all(`SELECT partner_id, sent, at FROM b2b_news_sent WHERE news_id = ?`, [n.id]);
     return c.json({ rows });
   });
+  // ---------- превʼю в Telegram: фото + підпис + кнопки ----------
+  // Підпис: емодзі рубрики, заголовок, короткий опис, до 4 пунктів («Коротко для Telegram» або підзаголовки статті), підсумок.
+  // Фото: обкладинка → перше фото статті → кадр YouTube. Кнопки: «Читати статтю»; «Відеоогляд» і «Оформити закупівлю» — якщо є.
+  const CAT_EMOJI = { products: '🆕', promo: '🔥', guide: '📘', video: '▶️', other: '📰' };
+  const plain = (x) => String(x || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&').trim();
+  function tgCaption(n) {
+    const body = parseJson(n.body, []);
+    let bullets = String(n.tg_short || '').split('\n').map((x) => x.trim().replace(/^[-•*🔹▪️✅]+\s*/u, '')).filter(Boolean);
+    if (!bullets.length) bullets = body.filter((b) => b.t === 'text').flatMap((b) => [...String(b.html).matchAll(/<h2>([\s\S]*?)<\/h2>/g)].map((m) => plain(m[1]))).filter(Boolean);
+    bullets = bullets.slice(0, 4);
+    const video = body.some((b) => b.t === 'video');
+    const prods = body.some((b) => b.t === 'product');
+    const point = (x) => { const i = x.indexOf(' — '); return `🔹 ${i > 0 ? `<b>${h(x.slice(0, i))}</b>${h(x.slice(i))}` : h(x)}`; };
+    const foot = `${video ? '▶️ Відеоогляд, ' : ''}${video ? 'усі' : 'Усі'} деталі${prods ? ' й <b>ваша ціна</b>' : ''} — у статті.`;
+    let summary = String(n.summary || '');
+    const build = () => [`${n.pinned ? '📌' : CAT_EMOJI[n.category] || CAT_EMOJI.other} <b>${h(n.title)}</b>`, summary ? h(summary) : '', bullets.length ? bullets.map(point).join('\n') : '', foot]
+      .filter(Boolean).join('\n\n');
+    let cap = build();
+    while (plain(cap).length > 1000 && bullets.length) { bullets = bullets.slice(0, -1); cap = build(); }
+    if (plain(cap).length > 1000) { summary = `${summary.slice(0, 300)}…`; cap = build(); }
+    return cap;
+  }
+  const photoOf = (n) => {
+    const body = parseJson(n.body, []);
+    const file = n.cover || body.find((b) => b.t === 'image')?.file || null;
+    if (file) return { file };
+    const v = body.map((b) => (b.t === 'video' && b.url ? videoEmbed(b.url) : null)).find((x) => x?.thumb);
+    return v ? { url: v.thumb } : (n.cover_url ? { url: n.cover_url } : null);
+  };
+  const buttonsOf = (n, base) => {
+    const body = parseJson(n.body, []);
+    const video = body.find((b) => b.t === 'video' && b.url);
+    const v = video ? videoEmbed(video.url) : null;
+    const row2 = [
+      ...(v ? [{ text: '▶️ Відеоогляд', url: v.kind === 'youtube' ? `https://www.youtube.com/watch?v=${v.id}` : video.url }] : []),
+      ...(body.some((b) => b.t === 'product') && base ? [{ text: '🛒 Оформити закупівлю', url: `${base}/#/porders/new` }] : []),
+    ];
+    return [...(base ? [[{ text: '📖 Читати статтю', url: `${base}/#/news/${n.id}` }]] : []), ...(row2.length ? [row2] : [])];
+  };
+  async function fileBytes(id) {
+    const f = await db.get(`SELECT * FROM b2b_news_files WHERE id = ?`, [Number(id) || 0]);
+    if (!f || f.store !== 'd1') return null;
+    const parts = await db.all(`SELECT data FROM b2b_news_file_parts WHERE file_id = ? ORDER BY n`, [f.id]);
+    const chunks = parts.map((p) => fromB64(p.data));
+    const all = new Uint8Array(chunks.reduce((t, x) => t + x.length, 0));
+    let off = 0;
+    for (const ch of chunks) { all.set(ch, off); off += ch.length; }
+    return { bytes: all, name: f.name, mime: f.mime };
+  }
+  async function tgCard(n, base) {
+    const ph = photoOf(n);
+    let photo = null;
+    if (n.tg_photo) photo = { fileId: n.tg_photo };
+    else if (ph?.url) photo = { url: ph.url };
+    else if (ph?.file) photo = (await fileBytes(ph.file)) || (n.public !== 0 && base ? { url: `${base}/api/public/news/files/${ph.file}` } : null);
+    return { caption: tgCaption(n), photo, buttons: buttonsOf(n, base) };
+  }
+  // Надіслати картку; перше завантаження фото запам'ятовує file_id (наступні партнери — без повторного завантаження).
+  async function sendCard(n, card, to) {
+    if (!services.notify) return 0;
+    if (!services.notify.sendPhoto) return (await services.notify.sendText(to, card.caption).catch((e) => { if (e.pending) throw e; return 0; })) || 0;
+    const r = await services.notify.sendPhoto(to, card.photo, card.caption, card.buttons).catch((e) => { if (e.pending) throw e; return { sent: 0 }; });
+    if (r.fileId && !card.photo?.fileId) {
+      card.photo = { fileId: r.fileId };
+      await db.run(`UPDATE b2b_news SET tg_photo = ? WHERE id = ?`, [r.fileId, n.id]).catch(() => 0);
+    }
+    return r.sent || 0;
+  }
+  // Превʼю в редакторі (з поточних, ще не збережених полів) і тестове повідомлення собі.
+  app.post('/api/b2b/news/tg-preview', async (c) => {
+    need(c, 'b2b.admin');
+    const b = await c.req.json().catch(() => ({}));
+    const f = fields(b);
+    const n = { ...f, id: Number(b.id) || 0 };
+    const ph = photoOf(n);
+    const base = new URL(c.req.url).origin;
+    return c.json({ caption: tgCaption(n), image: ph?.file ? fileUrl(ph.file) : ph?.url || '', buttons: buttonsOf(n, base).map((r) => r.map((x) => x.text)) });
+  });
+  app.post('/api/b2b/news/:id{[0-9]+}/tg-test', async (c) => {
+    need(c, 'b2b.admin');
+    const n = await get(c.req.param('id'));
+    const me = await db.get(`SELECT tg_chat_id FROM users WHERE id = ?`, [c.get('user')?.id || 0]);
+    if (!me?.tg_chat_id) throw fail(400, 'Ваш Telegram не підключено — натисніть «Telegram» угорі сторінки й підключіть бота.');
+    const k = await sendCard(n, await tgCard(n, await origin(c)), { chatIds: [me.tg_chat_id] });
+    if (!k) throw fail(502, 'Telegram не прийняв повідомлення — перевірте підключення бота.');
+    return c.json({ ok: true });
+  });
+
+  // ---------- публічні новини (без входу): лише «Публічна», для всіх партнерів, опубліковані ----------
+  const PUBLIC = `status = 'published' AND publish_at <= ? AND deleted_at = '' AND public != 0 AND (audience = '' OR audience = '[]')`;
+  const pubFile = (id) => `/api/public/news/files/${id}`;
+  const pubCover = (n) => (n.cover ? pubFile(n.cover) : (() => { const x = coverOf(n); return x.startsWith('/api/') ? x.replace(/^\/api\/b2b\/news\/files\//, '/api/public/news/files/') : x; })());
+  app.get('/api/public/news', async (c) => {
+    const [rows, names] = await Promise.all([
+      db.all(`SELECT id, title, summary, category, brands, cover, cover_url, body, pinned, publish_at FROM b2b_news WHERE ${PUBLIC} ORDER BY pinned DESC, publish_at DESC LIMIT 100`, [nowIso()]),
+      brandNames(),
+    ]);
+    return c.json({ cats: NEWS_CATS, rows: rows.map((n) => ({ id: n.id, title: n.title, summary: n.summary, category: n.category, category_name: NEWS_CATS[n.category] || NEWS_CATS.other,
+      brands: parseJson(n.brands, []).map((id) => ({ id, name: names.get(id) || '' })), cover_url: pubCover(n), video: hasVideo(n), minutes: readMinutes(n), pinned: Boolean(n.pinned), publish_at: n.publish_at })) });
+  });
+  app.get('/api/public/news/:id{[0-9]+}', async (c) => {
+    const n = await db.get(`SELECT * FROM b2b_news WHERE id = ? AND ${PUBLIC}`, [Number(c.req.param('id')), nowIso()]);
+    if (!n) throw fail(404, 'Новину не знайдено — можливо, вона лише для партнерів. Увійдіть, щоб її прочитати.');
+    const [files, names, products] = await Promise.all([filesOf(n), brandNames(), productsFor(n, null)]);
+    const o = out(n, files);
+    return c.json({ id: o.id, title: o.title, summary: o.summary, category: o.category, category_name: o.category_name, publish_at: o.publish_at, pinned: o.pinned, minutes: readMinutes(n),
+      brands: o.brands.map((id) => ({ id, name: names.get(id) || '' })), cover_url: pubCover(n),
+      body: o.body.map((b) => (b.src ? { ...b, src: b.src.replace(/^\/api\/b2b\/news\/files\//, '/api/public/news/files/') } : b)),
+      products: products.map((p) => ({ id: p.id, name: p.name, image: p.image, rrp: p.rrp })) });
+  });
+  // Файл публічної статті (лише якщо він у тексті чи обкладинці опублікованої публічної новини).
+  app.get('/api/public/news/files/:id{[0-9]+}', async (c) => {
+    const id = Number(c.req.param('id'));
+    const ok = await db.get(`SELECT id FROM b2b_news WHERE ${PUBLIC} AND (cover = ? OR body LIKE ? OR body LIKE ?) LIMIT 1`, [nowIso(), id, `%"file":${id},%`, `%"file":${id}}%`]);
+    if (!ok) throw fail(404, 'Файл не знайдено.');
+    return serveFile(c);
+  });
+  // Посилання, яким діляться (Telegram, Viber, Facebook показують картку з фото): /api/n/12 → сторінка з Open Graph і переходом на новину.
+  app.get('/api/n/:id{[0-9]+}', async (c) => {
+    const id = Number(c.req.param('id'));
+    const n = await db.get(`SELECT * FROM b2b_news WHERE id = ? AND ${PUBLIC}`, [id, nowIso()]);
+    const base = new URL(c.req.url).origin;
+    const to = `/#/news/${id}`;
+    const e = (x) => h(x).replace(/"/g, '&quot;');
+    const img = n ? pubCover(n) : '';
+    const abs = img && img.startsWith('/') ? `${base}${img}` : img;
+    const title = n ? n.title : 'Новина Ековент для партнерів';
+    const desc = n ? (n.summary || plain(parseJson(n.body, []).find((b) => b.t === 'text')?.html || '').slice(0, 200)) : 'Увійдіть у кабінет партнера Ековент, щоб прочитати.';
+    const html = `<!doctype html><html lang="uk"><head><meta charset="utf-8"><title>${e(title)} — Ековент B2B</title>
+<meta name="description" content="${e(desc)}"><meta property="og:type" content="article"><meta property="og:site_name" content="Ековент B2B">
+<meta property="og:title" content="${e(title)}"><meta property="og:description" content="${e(desc)}">${abs ? `<meta property="og:image" content="${e(abs)}"><meta name="twitter:card" content="summary_large_image">` : ''}
+<meta property="og:url" content="${e(`${base}/api/n/${id}`)}"><meta http-equiv="refresh" content="0;url=${e(to)}"></head>
+<body style="font-family:sans-serif;padding:24px"><a href="${e(to)}">${e(title)} — відкрити новину</a></body></html>`;
+    return c.html(html);
+  });
+
   // Заплановані новини: сповістити, коли настав час публікації.
   onCron('b2b-news', 'B2B «Новини»: сповіщення партнерів у Telegram про заплановані новини', async () => {
     const n = await db.get(`SELECT * FROM b2b_news WHERE status = 'published' AND deleted_at = '' AND tg = 1 AND notified_at = '' AND publish_at <= ? ORDER BY publish_at LIMIT 1`, [nowIso()]);

@@ -2139,6 +2139,7 @@ function mountAuth(app, { db, runCleanup, onCleanup }) {
   const PARTNER_PATHS = ["/api/b2b/p", "/api/me/password", "/api/tg/me", "/api/tg/link", "/api/bootstrap"];
   app.use("/api/*", async (c, next) => {
     if (c.req.path.startsWith("/api/v1/")) return next();
+    if (c.req.path.startsWith("/api/public/") || c.req.path.startsWith("/api/n/")) return next();
     if (c.req.path.startsWith("/api/auth/") || c.req.path === "/api/odb/hook" || c.req.path === "/api/tg/hook" || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/rzs/hook/")) return next();
     const user = c.env?.[API_USER] || await sessionUser(c);
     if (!user) throw fail(401, "\u041F\u043E\u0442\u0440\u0456\u0431\u043D\u043E \u0443\u0432\u0456\u0439\u0442\u0438.");
@@ -6233,6 +6234,45 @@ ${h(l.alias || "")}${l.created_by ? `
     }
     return sent;
   }
+  async function sendPhoto({ chatIds = [], partnerId = null }, photo, caption, buttons = []) {
+    const s3 = await settings();
+    if (!s3.tg_token) return { sent: 0, fileId: "" };
+    const chats = new Set(chatIds.filter(Boolean).map(String));
+    if (partnerId) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'partner' AND partner_id = ?`, [partnerId])) chats.add(r.tg_chat_id);
+    const markup = buttons.length ? { inline_keyboard: buttons } : void 0;
+    let fileId = photo?.fileId || "";
+    let sent = 0;
+    for (const chat of [...chats].slice(0, 30)) {
+      try {
+        if (fileId || photo?.url) {
+          await tg(s3.tg_token, "sendPhoto", { chat_id: chat, photo: fileId || photo.url, caption: caption.slice(0, 1024), parse_mode: "HTML", ...markup ? { reply_markup: markup } : {} });
+        } else if (photo?.bytes) {
+          const fd = new FormData();
+          fd.append("chat_id", String(chat));
+          fd.append("caption", caption.slice(0, 1024));
+          fd.append("parse_mode", "HTML");
+          if (markup) fd.append("reply_markup", JSON.stringify(markup));
+          fd.append("photo", new Blob([photo.bytes], { type: photo.mime || "image/jpeg" }), photo.name || "photo.jpg");
+          const r = await fetchFn(`${TG}/bot${s3.tg_token}/sendPhoto`, { method: "POST", body: fd });
+          const j = await r.json().catch(() => null);
+          if (!j?.ok) throw new Error(j?.description || `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${r.status}`);
+          const sizes = j.result?.photo || [];
+          fileId = sizes[sizes.length - 1]?.file_id || "";
+        } else {
+          await tg(s3.tg_token, "sendMessage", { chat_id: chat, text: caption, parse_mode: "HTML", disable_web_page_preview: true, ...markup ? { reply_markup: markup } : {} });
+        }
+        sent++;
+      } catch (e) {
+        if (e.pending) throw e;
+        try {
+          await tg(s3.tg_token, "sendMessage", { chat_id: chat, text: caption, parse_mode: "HTML", disable_web_page_preview: true, ...markup ? { reply_markup: markup } : {} });
+          sent++;
+        } catch {
+        }
+      }
+    }
+    return { sent, fileId };
+  }
   let lastMessage = null;
   async function sendFile({ chatIds = [] }, { bytes, name, mime, fileId }, caption = "") {
     const s3 = await settings();
@@ -6279,7 +6319,7 @@ ${h(l.alias || "")}${l.created_by ? `
     if (!r.ok) throw fail(502, "Telegram: \u043D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0438\u0442\u0438 \u0444\u0430\u0439\u043B.");
     return new Uint8Array(await r.arrayBuffer());
   }
-  return { fillTgNames, notify, sendText, sendFile, api, download, lastFileMessage: () => lastMessage };
+  return { fillTgNames, notify, sendText, sendPhoto, sendFile, api, download, lastFileMessage: () => lastMessage };
 }
 
 // src/modules/errlog/index.js
@@ -12714,6 +12754,8 @@ function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartner, part
     cover_url: n.cover ? fileUrl(n.cover, partner) : n.cover_url || "",
     pinned: Boolean(n.pinned),
     tg: Boolean(n.tg),
+    public: n.public !== 0 && !audienceOf(n).length,
+    tg_short: n.tg_short || "",
     status: n.status,
     publish_at: n.publish_at,
     notified_at: n.notified_at,
@@ -12752,7 +12794,7 @@ function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartner, part
   app.get("/api/b2b/news", async (c) => {
     need(c, "b2b.view");
     const [rows, reads, partners] = await Promise.all([
-      db.all(`SELECT id, title, summary, category, brands, cover, cover_url, body, audience, pinned, tg, status, publish_at, notified_at, created_by, created_at, updated_by, updated_at
+      db.all(`SELECT id, title, summary, category, brands, cover, cover_url, body, audience, pinned, tg, public, status, publish_at, notified_at, created_by, created_at, updated_by, updated_at
         FROM b2b_news WHERE deleted_at = '' ORDER BY CASE status WHEN 'draft' THEN 0 ELSE 1 END, publish_at DESC, id DESC LIMIT 300`),
       db.all(`SELECT news_id, COUNT(*) AS n FROM b2b_news_reads GROUP BY news_id`),
       db.get(`SELECT COUNT(*) AS n FROM b2b_partners WHERE active = 1 AND COALESCE(deleted_at, '') = ''`)
@@ -12771,6 +12813,7 @@ function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartner, part
         pinned: Boolean(n.pinned),
         audience: audienceOf(n).length,
         reads: rd.get(n.id) || 0,
+        public: n.public !== 0 && !audienceOf(n).length,
         cover_url: coverOf(n),
         updated_at: n.updated_at,
         created_by: n.created_by,
@@ -12820,7 +12863,10 @@ function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartner, part
       body: J(cleanBlocks(b.body)),
       audience: Array.isArray(b.audience) && b.audience.length ? J([...new Set(b.audience.map(Number).filter(Boolean))]) : "",
       pinned: b.pinned ? 1 : 0,
-      tg: b.tg === false ? 0 : 1
+      tg: b.tg === false ? 0 : 1,
+      // для вибраних партнерів — завжди внутрішня; інакше публічна, якщо не вимкнено явно
+      public: Array.isArray(b.audience) && b.audience.length || b.public === false ? 0 : 1,
+      tg_short: String(b.tg_short ?? "").split("\n").map((x) => x.trim()).filter(Boolean).slice(0, 4).map((x) => x.slice(0, 150)).join("\n")
     };
   };
   app.post("/api/b2b/news", async (c) => {
@@ -12828,9 +12874,9 @@ function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartner, part
     const f = fields(await c.req.json().catch(() => ({})));
     const at = nowIso();
     const r = await db.run(
-      `INSERT INTO b2b_news (title, summary, category, brands, cover, cover_url, body, audience, pinned, tg, status, created_by, created_at, updated_by, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
-      [f.title, f.summary, f.category, f.brands, f.cover, f.cover_url, f.body, f.audience, f.pinned, f.tg, userName8(c), at, userName8(c), at]
+      `INSERT INTO b2b_news (title, summary, category, brands, cover, cover_url, body, audience, pinned, tg, public, tg_short, status, created_by, created_at, updated_by, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
+      [f.title, f.summary, f.category, f.brands, f.cover, f.cover_url, f.body, f.audience, f.pinned, f.tg, f.public, f.tg_short, userName8(c), at, userName8(c), at]
     );
     return c.json({ id: r.lastId });
   });
@@ -12839,8 +12885,9 @@ function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartner, part
     const n = await get(c.req.param("id"));
     const f = fields(await c.req.json().catch(() => ({})));
     await db.run(
-      `UPDATE b2b_news SET title = ?, summary = ?, category = ?, brands = ?, cover = ?, cover_url = ?, body = ?, audience = ?, pinned = ?, tg = ?, updated_by = ?, updated_at = ? WHERE id = ?`,
-      [f.title, f.summary, f.category, f.brands, f.cover, f.cover_url, f.body, f.audience, f.pinned, f.tg, userName8(c), nowIso(), n.id]
+      `UPDATE b2b_news SET title = ?, summary = ?, category = ?, brands = ?, cover = ?, cover_url = ?, body = ?, audience = ?, pinned = ?, tg = ?, public = ?, tg_short = ?,
+      tg_photo = CASE WHEN cover IS ? AND body = ? THEN tg_photo ELSE '' END, updated_by = ?, updated_at = ? WHERE id = ?`,
+      [f.title, f.summary, f.category, f.brands, f.cover, f.cover_url, f.body, f.audience, f.pinned, f.tg, f.public, f.tg_short, f.cover, f.body, userName8(c), nowIso(), n.id]
     );
     return c.json({ ok: true, updated_at: nowIso() });
   });
@@ -12881,23 +12928,12 @@ function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartner, part
     const partners = await partnersOf(n);
     const done = new Set((await db.all(`SELECT partner_id FROM b2b_news_sent WHERE news_id = ?`, [n.id])).map((r) => r.partner_id));
     const todo = partners.filter((p) => !done.has(p.id)).slice(0, SEND_PER_CALL);
-    const link = base ? `${base}/#/pnews/${n.id}` : "";
-    const text = [
-      `\u{1F4F0} <b>\u041D\u043E\u0432\u0438\u043D\u0430 \u0432\u0456\u0434 \u0415\u043A\u043E\u0432\u0435\u043D\u0442</b>${n.category && NEWS_CATS[n.category] ? ` \xB7 ${h8(NEWS_CATS[n.category])}` : ""}`,
-      "",
-      `<b>${h8(n.title)}</b>`,
-      n.summary ? h8(n.summary) : "",
-      link ? `
-<a href="${h8(link)}">\u0427\u0438\u0442\u0430\u0442\u0438 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u2192</a>` : ""
-    ].filter((x) => x !== "").join("\n");
+    const card = todo.length ? await tgCard(n, base) : null;
     let sent = 0;
     for (const p of todo) {
       const claim = await db.run(`INSERT OR IGNORE INTO b2b_news_sent (news_id, partner_id, sent, at) VALUES (?, ?, 0, ?)`, [n.id, p.id, nowIso()]);
       if (!claim.changes) continue;
-      const k = await services.notify.sendText(p.tg_group ? { chatIds: [p.tg_group] } : { partnerId: p.id }, text).catch((e) => {
-        if (e.pending) throw e;
-        return 0;
-      }) || 0;
+      const k = await sendCard(n, card, p.tg_group ? { chatIds: [p.tg_group] } : { partnerId: p.id });
       if (k) {
         sent++;
         await db.run(`UPDATE b2b_news_sent SET sent = ? WHERE news_id = ? AND partner_id = ?`, [k, n.id, p.id]);
@@ -12918,6 +12954,173 @@ function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartner, part
     const n = await get(c.req.param("id"));
     const rows = await db.all(`SELECT partner_id, sent, at FROM b2b_news_sent WHERE news_id = ?`, [n.id]);
     return c.json({ rows });
+  });
+  const CAT_EMOJI = { products: "\u{1F195}", promo: "\u{1F525}", guide: "\u{1F4D8}", video: "\u25B6\uFE0F", other: "\u{1F4F0}" };
+  const plain = (x) => String(x || "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&").trim();
+  function tgCaption(n) {
+    const body = parseJson(n.body, []);
+    let bullets = String(n.tg_short || "").split("\n").map((x) => x.trim().replace(/^[-•*🔹▪️✅]+\s*/u, "")).filter(Boolean);
+    if (!bullets.length) bullets = body.filter((b) => b.t === "text").flatMap((b) => [...String(b.html).matchAll(/<h2>([\s\S]*?)<\/h2>/g)].map((m) => plain(m[1]))).filter(Boolean);
+    bullets = bullets.slice(0, 4);
+    const video = body.some((b) => b.t === "video");
+    const prods = body.some((b) => b.t === "product");
+    const point = (x) => {
+      const i = x.indexOf(" \u2014 ");
+      return `\u{1F539} ${i > 0 ? `<b>${h8(x.slice(0, i))}</b>${h8(x.slice(i))}` : h8(x)}`;
+    };
+    const foot = `${video ? "\u25B6\uFE0F \u0412\u0456\u0434\u0435\u043E\u043E\u0433\u043B\u044F\u0434, " : ""}${video ? "\u0443\u0441\u0456" : "\u0423\u0441\u0456"} \u0434\u0435\u0442\u0430\u043B\u0456${prods ? " \u0439 <b>\u0432\u0430\u0448\u0430 \u0446\u0456\u043D\u0430</b>" : ""} \u2014 \u0443 \u0441\u0442\u0430\u0442\u0442\u0456.`;
+    let summary = String(n.summary || "");
+    const build = () => [`${n.pinned ? "\u{1F4CC}" : CAT_EMOJI[n.category] || CAT_EMOJI.other} <b>${h8(n.title)}</b>`, summary ? h8(summary) : "", bullets.length ? bullets.map(point).join("\n") : "", foot].filter(Boolean).join("\n\n");
+    let cap = build();
+    while (plain(cap).length > 1e3 && bullets.length) {
+      bullets = bullets.slice(0, -1);
+      cap = build();
+    }
+    if (plain(cap).length > 1e3) {
+      summary = `${summary.slice(0, 300)}\u2026`;
+      cap = build();
+    }
+    return cap;
+  }
+  const photoOf = (n) => {
+    const body = parseJson(n.body, []);
+    const file = n.cover || body.find((b) => b.t === "image")?.file || null;
+    if (file) return { file };
+    const v = body.map((b) => b.t === "video" && b.url ? videoEmbed(b.url) : null).find((x) => x?.thumb);
+    return v ? { url: v.thumb } : n.cover_url ? { url: n.cover_url } : null;
+  };
+  const buttonsOf = (n, base) => {
+    const body = parseJson(n.body, []);
+    const video = body.find((b) => b.t === "video" && b.url);
+    const v = video ? videoEmbed(video.url) : null;
+    const row2 = [
+      ...v ? [{ text: "\u25B6\uFE0F \u0412\u0456\u0434\u0435\u043E\u043E\u0433\u043B\u044F\u0434", url: v.kind === "youtube" ? `https://www.youtube.com/watch?v=${v.id}` : video.url }] : [],
+      ...body.some((b) => b.t === "product") && base ? [{ text: "\u{1F6D2} \u041E\u0444\u043E\u0440\u043C\u0438\u0442\u0438 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E", url: `${base}/#/porders/new` }] : []
+    ];
+    return [...base ? [[{ text: "\u{1F4D6} \u0427\u0438\u0442\u0430\u0442\u0438 \u0441\u0442\u0430\u0442\u0442\u044E", url: `${base}/#/news/${n.id}` }]] : [], ...row2.length ? [row2] : []];
+  };
+  async function fileBytes(id) {
+    const f = await db.get(`SELECT * FROM b2b_news_files WHERE id = ?`, [Number(id) || 0]);
+    if (!f || f.store !== "d1") return null;
+    const parts = await db.all(`SELECT data FROM b2b_news_file_parts WHERE file_id = ? ORDER BY n`, [f.id]);
+    const chunks = parts.map((p) => fromB642(p.data));
+    const all = new Uint8Array(chunks.reduce((t, x) => t + x.length, 0));
+    let off = 0;
+    for (const ch of chunks) {
+      all.set(ch, off);
+      off += ch.length;
+    }
+    return { bytes: all, name: f.name, mime: f.mime };
+  }
+  async function tgCard(n, base) {
+    const ph = photoOf(n);
+    let photo = null;
+    if (n.tg_photo) photo = { fileId: n.tg_photo };
+    else if (ph?.url) photo = { url: ph.url };
+    else if (ph?.file) photo = await fileBytes(ph.file) || (n.public !== 0 && base ? { url: `${base}/api/public/news/files/${ph.file}` } : null);
+    return { caption: tgCaption(n), photo, buttons: buttonsOf(n, base) };
+  }
+  async function sendCard(n, card, to) {
+    if (!services.notify) return 0;
+    if (!services.notify.sendPhoto) return await services.notify.sendText(to, card.caption).catch((e) => {
+      if (e.pending) throw e;
+      return 0;
+    }) || 0;
+    const r = await services.notify.sendPhoto(to, card.photo, card.caption, card.buttons).catch((e) => {
+      if (e.pending) throw e;
+      return { sent: 0 };
+    });
+    if (r.fileId && !card.photo?.fileId) {
+      card.photo = { fileId: r.fileId };
+      await db.run(`UPDATE b2b_news SET tg_photo = ? WHERE id = ?`, [r.fileId, n.id]).catch(() => 0);
+    }
+    return r.sent || 0;
+  }
+  app.post("/api/b2b/news/tg-preview", async (c) => {
+    need(c, "b2b.admin");
+    const b = await c.req.json().catch(() => ({}));
+    const f = fields(b);
+    const n = { ...f, id: Number(b.id) || 0 };
+    const ph = photoOf(n);
+    const base = new URL(c.req.url).origin;
+    return c.json({ caption: tgCaption(n), image: ph?.file ? fileUrl(ph.file) : ph?.url || "", buttons: buttonsOf(n, base).map((r) => r.map((x) => x.text)) });
+  });
+  app.post("/api/b2b/news/:id{[0-9]+}/tg-test", async (c) => {
+    need(c, "b2b.admin");
+    const n = await get(c.req.param("id"));
+    const me = await db.get(`SELECT tg_chat_id FROM users WHERE id = ?`, [c.get("user")?.id || 0]);
+    if (!me?.tg_chat_id) throw fail(400, "\u0412\u0430\u0448 Telegram \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u2014 \u043D\u0430\u0442\u0438\u0441\u043D\u0456\u0442\u044C \xABTelegram\xBB \u0443\u0433\u043E\u0440\u0456 \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0438 \u0439 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0456\u0442\u044C \u0431\u043E\u0442\u0430.");
+    const k = await sendCard(n, await tgCard(n, await origin(c)), { chatIds: [me.tg_chat_id] });
+    if (!k) throw fail(502, "Telegram \u043D\u0435 \u043F\u0440\u0438\u0439\u043D\u044F\u0432 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043D\u044F \u0431\u043E\u0442\u0430.");
+    return c.json({ ok: true });
+  });
+  const PUBLIC = `status = 'published' AND publish_at <= ? AND deleted_at = '' AND public != 0 AND (audience = '' OR audience = '[]')`;
+  const pubFile = (id) => `/api/public/news/files/${id}`;
+  const pubCover = (n) => n.cover ? pubFile(n.cover) : (() => {
+    const x = coverOf(n);
+    return x.startsWith("/api/") ? x.replace(/^\/api\/b2b\/news\/files\//, "/api/public/news/files/") : x;
+  })();
+  app.get("/api/public/news", async (c) => {
+    const [rows, names] = await Promise.all([
+      db.all(`SELECT id, title, summary, category, brands, cover, cover_url, body, pinned, publish_at FROM b2b_news WHERE ${PUBLIC} ORDER BY pinned DESC, publish_at DESC LIMIT 100`, [nowIso()]),
+      brandNames()
+    ]);
+    return c.json({ cats: NEWS_CATS, rows: rows.map((n) => ({
+      id: n.id,
+      title: n.title,
+      summary: n.summary,
+      category: n.category,
+      category_name: NEWS_CATS[n.category] || NEWS_CATS.other,
+      brands: parseJson(n.brands, []).map((id) => ({ id, name: names.get(id) || "" })),
+      cover_url: pubCover(n),
+      video: hasVideo(n),
+      minutes: readMinutes(n),
+      pinned: Boolean(n.pinned),
+      publish_at: n.publish_at
+    })) });
+  });
+  app.get("/api/public/news/:id{[0-9]+}", async (c) => {
+    const n = await db.get(`SELECT * FROM b2b_news WHERE id = ? AND ${PUBLIC}`, [Number(c.req.param("id")), nowIso()]);
+    if (!n) throw fail(404, "\u041D\u043E\u0432\u0438\u043D\u0443 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u2014 \u043C\u043E\u0436\u043B\u0438\u0432\u043E, \u0432\u043E\u043D\u0430 \u043B\u0438\u0448\u0435 \u0434\u043B\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432. \u0423\u0432\u0456\u0439\u0434\u0456\u0442\u044C, \u0449\u043E\u0431 \u0457\u0457 \u043F\u0440\u043E\u0447\u0438\u0442\u0430\u0442\u0438.");
+    const [files, names, products] = await Promise.all([filesOf(n), brandNames(), productsFor(n, null)]);
+    const o = out(n, files);
+    return c.json({
+      id: o.id,
+      title: o.title,
+      summary: o.summary,
+      category: o.category,
+      category_name: o.category_name,
+      publish_at: o.publish_at,
+      pinned: o.pinned,
+      minutes: readMinutes(n),
+      brands: o.brands.map((id) => ({ id, name: names.get(id) || "" })),
+      cover_url: pubCover(n),
+      body: o.body.map((b) => b.src ? { ...b, src: b.src.replace(/^\/api\/b2b\/news\/files\//, "/api/public/news/files/") } : b),
+      products: products.map((p) => ({ id: p.id, name: p.name, image: p.image, rrp: p.rrp }))
+    });
+  });
+  app.get("/api/public/news/files/:id{[0-9]+}", async (c) => {
+    const id = Number(c.req.param("id"));
+    const ok = await db.get(`SELECT id FROM b2b_news WHERE ${PUBLIC} AND (cover = ? OR body LIKE ? OR body LIKE ?) LIMIT 1`, [nowIso(), id, `%"file":${id},%`, `%"file":${id}}%`]);
+    if (!ok) throw fail(404, "\u0424\u0430\u0439\u043B \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return serveFile(c);
+  });
+  app.get("/api/n/:id{[0-9]+}", async (c) => {
+    const id = Number(c.req.param("id"));
+    const n = await db.get(`SELECT * FROM b2b_news WHERE id = ? AND ${PUBLIC}`, [id, nowIso()]);
+    const base = new URL(c.req.url).origin;
+    const to = `/#/news/${id}`;
+    const e = (x) => h8(x).replace(/"/g, "&quot;");
+    const img = n ? pubCover(n) : "";
+    const abs = img && img.startsWith("/") ? `${base}${img}` : img;
+    const title = n ? n.title : "\u041D\u043E\u0432\u0438\u043D\u0430 \u0415\u043A\u043E\u0432\u0435\u043D\u0442 \u0434\u043B\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432";
+    const desc = n ? n.summary || plain(parseJson(n.body, []).find((b) => b.t === "text")?.html || "").slice(0, 200) : "\u0423\u0432\u0456\u0439\u0434\u0456\u0442\u044C \u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0415\u043A\u043E\u0432\u0435\u043D\u0442, \u0449\u043E\u0431 \u043F\u0440\u043E\u0447\u0438\u0442\u0430\u0442\u0438.";
+    const html = `<!doctype html><html lang="uk"><head><meta charset="utf-8"><title>${e(title)} \u2014 \u0415\u043A\u043E\u0432\u0435\u043D\u0442 B2B</title>
+<meta name="description" content="${e(desc)}"><meta property="og:type" content="article"><meta property="og:site_name" content="\u0415\u043A\u043E\u0432\u0435\u043D\u0442 B2B">
+<meta property="og:title" content="${e(title)}"><meta property="og:description" content="${e(desc)}">${abs ? `<meta property="og:image" content="${e(abs)}"><meta name="twitter:card" content="summary_large_image">` : ""}
+<meta property="og:url" content="${e(`${base}/api/n/${id}`)}"><meta http-equiv="refresh" content="0;url=${e(to)}"></head>
+<body style="font-family:sans-serif;padding:24px"><a href="${e(to)}">${e(title)} \u2014 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0438 \u043D\u043E\u0432\u0438\u043D\u0443</a></body></html>`;
+    return c.html(html);
   });
   onCron("b2b-news", "B2B \xAB\u041D\u043E\u0432\u0438\u043D\u0438\xBB: \u0441\u043F\u043E\u0432\u0456\u0449\u0435\u043D\u043D\u044F \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432 \u0443 Telegram \u043F\u0440\u043E \u0437\u0430\u043F\u043B\u0430\u043D\u043E\u0432\u0430\u043D\u0456 \u043D\u043E\u0432\u0438\u043D\u0438", async () => {
     const n = await db.get(`SELECT * FROM b2b_news WHERE status = 'published' AND deleted_at = '' AND tg = 1 AND notified_at = '' AND publish_at <= ? ORDER BY publish_at LIMIT 1`, [nowIso()]);
@@ -21903,7 +22106,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 43,
+  version: 44,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22276,6 +22479,11 @@ var schema11 = {
   // supply_id — закупівля, з якої взято товари (порожньо — «без закупівлі»); дані клієнта й ТТН партнера;
   // crm_* — передача в LP-CRM: номер замовлення в CRM (автоматично або вручну), його статус, код, з яким відправили.
   columns: [
+    // Новини: public — відкрита всім без входу (без партнерських цін; за замовчуванням), 0 — лише партнерам після входу;
+    // tg_short — «Коротко для Telegram» (до 4 рядків); tg_photo — file_id фото в Telegram (щоб не завантажувати вдруге).
+    ["b2b_news", "public", "INTEGER DEFAULT 1"],
+    ["b2b_news", "tg_short", "TEXT DEFAULT ''"],
+    ["b2b_news", "tg_photo", "TEXT DEFAULT ''"],
     // «ТТН створює Ековент»: партнер заповнює отримувача (ПІБ, телефон, відділення / поштомат / адреса НП) без ТТН і маркування,
     // ТТН створює адмін через API НП із нашого кабінету (np_accounts) перед передачею в LP-CRM.
     ["b2b_partners", "ttn_by_us", "INTEGER DEFAULT 0"],

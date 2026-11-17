@@ -16,7 +16,16 @@ const fetchFn = async (url, opts = {}) => {
     if (url.endsWith('.png')) return new Response(PNG, { headers: { 'Content-Type': 'image/png' } });
     return new Response('<html>', { headers: { 'Content-Type': 'text/html' } });
   }
-  if (String(url).startsWith('https://api.telegram.org/')) { tg.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } })); }
+  if (String(url).startsWith('https://api.telegram.org/')) {
+    const method = String(url).split('/').pop();
+    // фото завантажується файлом (FormData) — перше повідомлення; далі — за file_id (JSON)
+    const m = opts.body instanceof FormData
+      ? { method, chat_id: opts.body.get('chat_id'), caption: opts.body.get('caption'), reply_markup: JSON.parse(opts.body.get('reply_markup') || 'null'), upload: true }
+      : { method, ...JSON.parse(opts.body) };
+    m.text = m.text || m.caption;
+    tg.push(m);
+    return new Response(JSON.stringify({ ok: true, result: { message_id: 1, photo: [{ file_id: 'SMALL' }, { file_id: 'PHOTO-BIG' }] } }));
+  }
   return new Response(JSON.stringify({ status: 'ok', data: [] }));
 };
 const app = createApp({ db, fetchFn });
@@ -99,7 +108,17 @@ let s = await req('POST', `/api/b2b/news/${id}/notify`, {});
 assert.deepEqual([s.sent, s.total, s.more], [2, 2, false]);
 assert.deepEqual(tg.map((m) => m.chat_id).sort(), ['-100500', '800']);
 assert.match(tg[0].text, /Огляд DREO HDH003S/);
-assert.ok(tg.every((m) => m.text.includes(`${BASE}/#/pnews/${id}`)), 'посилання на новину');
+// фото-повідомлення: перше — файлом, друге — тим самим file_id; кнопки: стаття, відео, закупівля
+assert.deepEqual(tg.map((m) => m.method), ['sendPhoto', 'sendPhoto']);
+assert.equal(tg[0].upload, true);
+assert.equal(tg[1].photo, 'PHOTO-BIG', 'друге — без повторного завантаження');
+assert.equal((await db.get(`SELECT tg_photo FROM b2b_news WHERE id = ?`, [id])).tg_photo, 'PHOTO-BIG');
+assert.deepEqual(tg[0].reply_markup.inline_keyboard.map((r) => r.map((b) => b.text)), [['📖 Читати статтю'], ['▶️ Відеоогляд', '🛒 Оформити закупівлю']]);
+assert.equal(tg[0].reply_markup.inline_keyboard[0][0].url, `${BASE}/#/news/${id}`);
+assert.equal(tg[0].reply_markup.inline_keyboard[1][0].url, 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+assert.match(tg[0].caption, /^🆕 <b>Огляд DREO HDH003S<\/b>/);
+assert.match(tg[0].caption, /🔹 Що нового/, 'пункти — з підзаголовків статті');
+assert.match(tg[0].caption, /Відеоогляд, усі деталі й <b>ваша ціна<\/b> — у статті/);
 tg.length = 0;
 s = await req('POST', `/api/b2b/news/${id}/notify`, {});
 assert.equal(tg.length, 0, 'повторно не надсилає');
@@ -149,8 +168,45 @@ assert.equal(tg.length, 0, 'ще не час');
 await db.run(`UPDATE b2b_news SET publish_at = ? WHERE id = ?`, [new Date(Date.now() - 1000).toISOString(), plan.id]);
 cr = await runCron();
 assert.equal(tg.length, 2, JSON.stringify(cr));
-assert.ok(tg[0].text.includes(`${BASE}/#/pnews/${plan.id}`), 'посилання — з адреси сайту, з якої публікували');
+assert.equal(tg[0].reply_markup.inline_keyboard[0][0].url, `${BASE}/#/news/${plan.id}`, 'посилання — з адреси сайту, з якої публікували');
+assert.equal(tg[0].method, 'sendMessage', 'без фото — текстом, з кнопкою');
 assert.equal((await req('GET', '/api/b2b/p/news', null, HA)).rows[0].pinned, true);
+
+// ---------- публічні новини без входу ----------
+const PUB = { 'Content-Type': 'application/json' }; // без cookie
+let pub = await call('GET', '/api/public/news', null, PUB);
+assert.equal(pub.status, 200);
+assert.ok(pub.j.rows.some((r) => r.id === id), 'публічна (за замовчуванням) — видно без входу');
+assert.ok(!pub.j.rows.some((r) => r.id === only.id), 'для вибраних партнерів — ні');
+const art2 = (await call('GET', `/api/public/news/${id}`, null, PUB)).j;
+assert.deepEqual(art2.products.map((p) => [p.id, p.rrp, p.price]), [[501, 20000, undefined]], 'без входу — лише РРЦ');
+assert.equal(art2.body.find((b) => b.t === 'image').src, `/api/public/news/files/${fileId}`);
+assert.equal((await call('GET', `/api/public/news/files/${fileId}`, null, PUB)).status, 200, 'фото публічної статті');
+assert.equal((await call('GET', `/api/public/news/files/${up.j.id + 999}`, null, PUB)).status, 404);
+assert.equal((await call('GET', `/api/public/news/${only.id}`, null, PUB)).status, 404, 'внутрішня — 404');
+const share = await app.request(`${BASE}/api/n/${id}`);
+const shareHtml = await share.text();
+assert.match(shareHtml, /<meta property="og:title" content="Огляд DREO HDH003S">/);
+assert.match(shareHtml, new RegExp(`og:image" content="${BASE}/api/public/news/files/${fileId}"`));
+assert.match(shareHtml, new RegExp(`url=/#/news/${id}`));
+// внутрішня: перемикач «Публічна» вимкнено — зникає з відкритого доступу
+const cur0 = await req('GET', `/api/b2b/news/${id}`);
+assert.equal(cur0.public, true);
+await req('PUT', `/api/b2b/news/${id}`, { ...cur0, public: false, body: cur0.body.map(({ t, html, file, url, caption, product_id }) => ({ t, html, file, url, caption, product_id })) });
+assert.ok(!(await call('GET', '/api/public/news', null, PUB)).j.rows.some((r) => r.id === id));
+assert.equal((await call('GET', `/api/public/news/files/${fileId}`, null, PUB)).status, 404, 'фото внутрішньої — ні');
+assert.doesNotMatch(await (await app.request(`${BASE}/api/n/${id}`)).text(), /Огляд DREO/, 'картка посилання — без деталей');
+assert.equal((await req('GET', '/api/b2b/p/news', null, HA)).rows.some((r) => r.id === id), true, 'партнери бачать і далі');
+// превʼю для редактора і «Коротко для Telegram»
+const pv = await req('POST', '/api/b2b/news/tg-preview', { ...cur0, tg_short: 'Warmix 1500 — до 20 м²\nWarmix 2000 — ECO', body: cur0.body.map(({ t, html, file, url, caption, product_id }) => ({ t, html, file, url, caption, product_id })) });
+assert.match(pv.caption, /🔹 <b>Warmix 1500<\/b> — до 20 м²\n🔹 <b>Warmix 2000<\/b> — ECO/);
+assert.equal(pv.image, `/api/b2b/news/files/${fileId}`);
+assert.deepEqual(pv.buttons, [['📖 Читати статтю'], ['▶️ Відеоогляд', '🛒 Оформити закупівлю']]);
+assert.equal((await call('POST', `/api/b2b/news/${id}/tg-test`, {})).status, 400, 'без підключеного Telegram — підказка');
+await db.run(`UPDATE users SET tg_chat_id = '555' WHERE login = 'owner'`);
+tg.length = 0;
+await req('POST', `/api/b2b/news/${id}/tg-test`, {});
+assert.deepEqual(tg.map((m) => [m.method, m.chat_id]), [['sendPhoto', '555']]);
 
 // ---------- зняти з публікації, видалити ----------
 await req('POST', `/api/b2b/news/${plan.id}/unpublish`, {});

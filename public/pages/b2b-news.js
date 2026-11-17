@@ -34,11 +34,13 @@ const filesHtml = (body) => {
   const fs = body.filter((b) => b.t === 'file' && b.src);
   return fs.length ? `<section class="card nw-side"><b>Файли</b>${fs.map((f) => `<a class="nw-file" href="${esc(f.src)}?dl=1" download="${esc(f.name)}"><span aria-hidden="true">📄</span><span><b>${esc(f.caption || f.name)}</b><span class="small muted">${esc(f.name)} · ${mb(f.size)}</span></span><span aria-hidden="true">⬇</span></a>`).join('')}</section>` : '';
 };
-const productsHtml = (products, partner) => (products?.length ? `<section class="card nw-side"><b>Товари з цієї новини</b>
+const shopUrl = (name) => `https://ecovent-expert.com.ua/index.php?route=product/search&search=${encodeURIComponent(String(name || '').replace(/^\S+\s+/, '').slice(0, 60))}`;
+const productsHtml = (products, partner, pub = false) => (products?.length ? `<section class="card nw-side"><b>Товари з цієї новини</b>
   ${products.map((p) => `<div class="nw-prod">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy">` : '<span class="nw-ph"></span>'}<div><b>${esc(p.name)}</b>
-    <div class="small muted">${partner && p.price != null ? `ваша ціна <b>${uah(p.price)}</b> · ` : ''}РРЦ ${uah(p.rrp)}</div></div></div>`).join('')}
-  ${partner ? (products.some((p) => p.price != null) ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : '<div class="small muted">Цих товарів немає у ваших брендах — запитайте менеджера.</div>') : ''}</section>` : '');
-function articleHtml(n, { partner = false, back = '' } = {}) {
+    <div class="small muted">${partner && p.price != null ? `ваша ціна <b>${uah(p.price)}</b> · ` : ''}РРЦ ${uah(p.rrp)}${pub ? ` · <a href="${esc(shopUrl(p.name))}" target="_blank" rel="noopener">купити ↗</a>` : ''}</div></div></div>`).join('')}
+  ${partner ? (products.some((p) => p.price != null) ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a>' : '<div class="small muted">Цих товарів немає у ваших брендах — запитайте менеджера.</div>') : ''}
+  ${pub ? '<div class="small muted">Без входу — лише РРЦ. Партнерська ціна — після входу.</div><button type="button" class="btn primary" data-login>Увійти, щоб побачити свою ціну</button>' : ''}</section>` : '');
+export function articleHtml(n, { partner = false, back = '', pub = false } = {}) {
   const brands = (n.brands || []).map((b) => (typeof b === 'object' ? b.name : '')).filter(Boolean);
   return `<div class="nw-art">
     <article>
@@ -49,14 +51,15 @@ function articleHtml(n, { partner = false, back = '' } = {}) {
       ${n.summary ? `<p class="nw-lead">${esc(n.summary)}</p>` : ''}
       ${n.body.map(blockHtml).join('')}
     </article>
-    <aside class="nw-aside">${productsHtml(n.products, partner)}${filesHtml(n.body)}
+    <aside class="nw-aside">${productsHtml(n.products, partner, pub)}${filesHtml(n.body)}
+      ${pub ? '<section class="card nw-side"><b>Поділитися</b><span class="small muted">Посилання відкривається без входу — з фото й заголовком у Telegram, Viber, Facebook.</span><button type="button" class="btn sm" data-share>🔗 Копіювати посилання</button></section>' : ''}
       ${partner ? '<section class="card nw-side"><b>Є питання?</b><span class="small muted">Пишіть у вашу Telegram-групу з Ековент — менеджер відповість.</span></section>' : ''}</aside>
   </div>`;
 }
-const cardHtml = (r, big = false) => `<a class="card nw-card ${big ? 'big' : ''} ${r.read ? '' : 'unread'}" href="#/pnews/${r.id}">
+export const cardHtml = (r, big = false, href = '#/pnews/') => `<a class="card nw-card ${big ? 'big' : ''} ${r.read || r.read === undefined ? '' : 'unread'}" href="${href}${r.id}">
   <span class="nw-cover">${r.cover_url ? `<img src="${esc(r.cover_url)}" alt="" loading="lazy">` : ''}${r.video ? `<span class="nw-play">${ICO.play}</span>` : ''}</span>
   <span class="nw-cb">
-    <span class="nw-badges">${r.pinned ? '<span class="badge bad">📌 Важливо</span>' : ''}${r.read ? '' : '<span class="badge warn">Нове</span>'}<span class="badge info">${esc(r.category_name)}</span>${r.video ? '<span class="badge">▶ Відео</span>' : ''}</span>
+    <span class="nw-badges">${r.pinned ? '<span class="badge bad">📌 Важливо</span>' : ''}${r.read === false ? '<span class="badge warn">Нове</span>' : ''}<span class="badge info">${esc(r.category_name)}</span>${r.video ? '<span class="badge">▶ Відео</span>' : ''}</span>
     <b class="nw-title">${esc(r.title)}</b>
     ${r.summary ? `<span class="muted nw-sum">${esc(r.summary)}</span>` : ''}
     <span class="small muted nw-meta">${esc(dDay(r.publish_at))}${r.brands.length ? ` · ${esc(r.brands.map((b) => b.name).filter(Boolean).join(', '))}` : ''}${r.files ? ` · 📎 ${r.files}` : ''}${r.read ? ' · прочитано ✓' : ''}</span>
@@ -134,7 +137,7 @@ export function createB2bNewsPages({ can }) {
         <div class="nw-list-h"><h2>Новини</h2>${edit ? '<button class="btn primary sm" id="nwNew">+ Нова стаття</button>' : ''}</div>
         <div class="small" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"><span class="badge ok">Опубліковані ${cnt('published')}</span><span class="badge info">Заплановані ${cnt('planned')}</span><span class="badge">Чернетки ${cnt('draft')}</span></div>
         ${list.rows.length ? list.rows.map((r) => `<a class="nw-li ${r.id === sel ? 'on' : ''}" href="#/b2bnews/${r.id}">
-          <span class="nw-li-h"><span class="badge ${STATUS[r.status][0]}">${r.status === 'planned' ? `${esc(dDay(r.publish_at))} о ${esc(kyivLocal(r.publish_at).slice(11))}` : STATUS[r.status][1]}</span>${r.pinned ? '<span class="badge bad">📌</span>' : ''}
+          <span class="nw-li-h"><span class="badge ${STATUS[r.status][0]}">${r.status === 'planned' ? `${esc(dDay(r.publish_at))} о ${esc(kyivLocal(r.publish_at).slice(11))}` : STATUS[r.status][1]}</span>${r.pinned ? '<span class="badge bad">📌</span>' : ''}<span class="badge ${r.public ? 'ok' : ''}" title="${r.public ? 'Публічна — відкривається без входу' : 'Внутрішня — лише партнерам після входу'}">${r.public ? '🌐' : '🔒'}</span>
             <span class="small muted" style="margin-left:auto">${esc(r.status === 'published' ? dDay(r.publish_at) : r.updated_at ? fmtDateTime(r.updated_at) : '')}</span></span>
           <b>${esc(r.title || 'Без заголовка')}</b>
           <span class="small muted">${esc(meta.cats[r.category] || '')}${r.status === 'published' ? ` · 👁 прочитали ${r.reads} з ${r.audience || list.partners}` : ''}${r.audience ? ` · ${r.audience} партн.` : ''}</span></a>`).join('')
@@ -180,7 +183,13 @@ export function createB2bNewsPages({ can }) {
         <label class="f"><span>Кому показувати</span><select id="nwAud" ${ro}><option value="all">Усім партнерам (${meta.partners.length})</option><option value="some" ${n.audience.length ? 'selected' : ''}>Вибраним партнерам</option></select></label>
         <div class="nw-chk" id="nwAudList" ${n.audience.length ? '' : 'hidden'}>${meta.partners.map((p) => `<label class="chk-chip"><input type="checkbox" data-aud="${p.id}" ${n.audience.includes(p.id) ? 'checked' : ''} ${ro}> ${esc(p.name)}</label>`).join('')}</div>
         <label class="check"><input type="checkbox" id="nwPin" ${n.pinned ? 'checked' : ''} ${ro}> 📌 Закріпити як «Важливо»</label>
+        <div class="f"><span>Хто бачить статтю</span>
+          <div class="nw-seg" role="radiogroup" aria-label="Публічна чи внутрішня"><label><input type="radio" name="nwPub" value="1" ${n.public ? 'checked' : ''} ${ro}> 🌐 Публічна</label><label><input type="radio" name="nwPub" value="0" ${n.public ? '' : 'checked'} ${ro}> 🔒 Внутрішня</label></div>
+          <span class="small muted" id="nwPubHint"></span></div>
         <label class="check"><input type="checkbox" id="nwTg" ${n.tg ? 'checked' : ''} ${ro}> Надіслати в Telegram-групи партнерів (з посиланням)</label>
+        <label class="f"><span>Коротко для Telegram <span class="muted" style="font-weight:400">(необов'язково, до 4 рядків; «Назва — опис»)</span></span><textarea id="nwShort" rows="4" ${ro} placeholder="Warmix 1500 Wi-Fi — до 20 м²&#10;Warmix 2000 Smart — ECO, Child Lock">${esc(n.tg_short || '')}</textarea></label>
+        <div class="f"><span>Як виглядатиме в Telegram</span><div class="nw-tg" id="nwTgPrev"><span class="small muted">Завантаження…</span></div></div>
+        ${edit ? '<button type="button" class="btn sm" id="nwTgTest">📨 Надіслати тестове собі</button>' : ''}
         ${n.status === 'draft' || n.publish_at > new Date().toISOString() ? `<label class="f"><span>Коли опублікувати</span><select id="nwWhen" ${ro}><option value="now">Одразу</option><option value="at" ${n.status === 'published' ? 'selected' : ''}>Дата й час (Київ)</option></select></label>
           <input type="datetime-local" id="nwAt" value="${esc(kyivLocal(n.status === 'published' ? n.publish_at : ''))}" ${n.status === 'published' ? '' : 'hidden'} ${ro}>` : ''}
         ${edit ? `<div class="btn-row nw-actions">
@@ -193,13 +202,24 @@ export function createB2bNewsPages({ can }) {
       </aside>`;
     drawBlocks(edit);
     drawCover(edit);
+    pubHint();
+    tgPreview();
     if (!edit) return;
     // Автозбереження за 2 с після зміни; якщо за цей час пішли зі сторінки — зберігається останній стан форми.
-    const touch = () => { dirty = true; cur.last = payload(); $('#nwSaved').textContent = 'є незбережені зміни…'; clearTimeout(saveT); saveT = setTimeout(() => save(true), 2000); };
+    const touch = () => { tgPreview(); dirty = true; cur.last = payload(); $('#nwSaved').textContent = 'є незбережені зміни…'; clearTimeout(saveT); saveT = setTimeout(() => save(true), 2000); };
     ['#nwTitle', '#nwSum'].forEach((s) => ($(s).oninput = touch));
     ['#nwCat', '#nwPin', '#nwTg'].forEach((s) => ($(s).onchange = touch));
+    $('#nwShort').oninput = touch;
+    $$('input[name="nwPub"]').forEach((x) => (x.onchange = () => { pubHint(); touch(); }));
+    $('#nwTgTest').onclick = async (e) => {
+      const b = e.currentTarget;
+      if (!(await save(true))) return;
+      b.disabled = true;
+      try { await api('POST', `/api/b2b/news/${cur.id}/tg-test`); toast('Надіслано вам у Telegram — перевірте, як виглядає'); } catch (er) { toast(er.message, true); }
+      b.disabled = false;
+    };
     $$('[data-brand], [data-aud]').forEach((x) => (x.onchange = touch));
-    $('#nwAud').onchange = (e) => { $('#nwAudList').hidden = e.target.value !== 'some'; touch(); };
+    $('#nwAud').onchange = (e) => { $('#nwAudList').hidden = e.target.value !== 'some'; pubHint(); touch(); };
     if ($('#nwWhen')) $('#nwWhen').onchange = (e) => { $('#nwAt').hidden = e.target.value !== 'at'; };
     $('#nwPrev').onclick = () => preview();
     $('#nwSave').onclick = () => save(false);
@@ -227,6 +247,29 @@ export function createB2bNewsPages({ can }) {
     drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); for (const f of e.dataTransfer.files) uploadBlock(f, /^image\//.test(f.type) ? 'image' : /^video\//.test(f.type) ? 'video' : 'file', touch); };
     window.onbeforeunload = () => (dirty ? true : undefined);
     cur.touch = touch;
+  }
+
+  // Публічна — відкривається всім без входу; для вибраних партнерів — завжди внутрішня.
+  function pubHint() {
+    const some = $('#nwAud')?.value === 'some';
+    $$('input[name="nwPub"]').forEach((x) => { x.disabled = some || !can('b2b.admin'); if (some && x.value === '0') x.checked = true; x.closest('label').classList.toggle('on', x.checked); });
+    const pub = !some && $('input[name="nwPub"]:checked')?.value === '1';
+    $('#nwPubHint').textContent = some ? 'Для вибраних партнерів стаття завжди внутрішня.' : pub ? 'Відкривається всім, навіть без входу (без партнерських цін). Ціни, умови й закриті акції — робіть внутрішніми.' : 'Лише партнерам після входу.';
+  }
+  // Превʼю повідомлення в Telegram з поточних (ще не збережених) полів.
+  let tgT = 0;
+  function tgPreview() {
+    clearTimeout(tgT);
+    tgT = setTimeout(async () => {
+      const box = $('#nwTgPrev');
+      if (!box || !$('#nwTitle')) return;
+      if (!can('b2b.admin')) { box.closest('.f').hidden = true; return; }
+      try {
+        const r = await api('POST', '/api/b2b/news/tg-preview', { ...payload(), id: cur.id });
+        box.innerHTML = `<div class="nw-tg-msg">${r.image ? `<img src="${esc(r.image)}" alt="">` : ''}<div class="nw-tg-cap">${r.caption.replace(/\n/g, '<br>')}</div></div>
+          ${r.buttons.length ? `<div class="nw-tg-kb">${r.buttons.map((row) => row.map((t) => `<span style="grid-column:span ${2 / row.length}">${esc(t)}</span>`).join('')).join('')}</div>` : ''}`;
+      } catch (er) { box.innerHTML = `<span class="small muted">${esc(er.message)}</span>`; }
+    }, 500);
   }
 
   function drawCover(edit) {
@@ -357,6 +400,7 @@ export function createB2bNewsPages({ can }) {
     brands: $$('[data-brand]').filter((x) => x.checked).map((x) => Number(x.dataset.brand)),
     audience: $('#nwAud').value === 'some' ? $$('[data-aud]').filter((x) => x.checked).map((x) => Number(x.dataset.aud)) : [],
     pinned: $('#nwPin').checked, tg: $('#nwTg').checked, cover: cur.cover || null,
+    public: $('#nwAud').value !== 'some' && $('input[name="nwPub"]:checked')?.value === '1', tg_short: $('#nwShort')?.value || '',
     body: cur.body.filter((b) => b.t !== 'uploading').map(({ t, html, file, url, caption, product_id }) => ({ t, html, file, url, caption, product_id })),
   });
   async function save(quiet) {
@@ -384,7 +428,7 @@ export function createB2bNewsPages({ can }) {
     const p = payload();
     const who = p.audience.length ? `вибрані партнери (${p.audience.length})` : 'усі партнери';
     const ok = await new Promise((res) => {
-      const md = modal(at ? 'Запланувати публікацію?' : 'Опублікувати новину?', `<p style="margin:0">«${esc(p.title || 'Без заголовка')}» побачать ${who} у вкладці «Новини»${at ? ` з ${esc(dDay(at))} ${esc(kyivLocal(at).slice(11))}` : ' одразу'}.</p>
+      const md = modal(at ? 'Запланувати публікацію?' : 'Опублікувати новину?', `<p style="margin:0">«${esc(p.title || 'Без заголовка')}» — <b>${p.public ? '🌐 публічна' : '🔒 внутрішня'}</b>: її побачать ${who} у вкладці «Новини»${p.public ? ', а також будь-хто за посиланням (без партнерських цін)' : ''}${at ? ` з ${esc(dDay(at))} ${esc(kyivLocal(at).slice(11))}` : ' одразу'}.</p>
         ${p.tg ? `<p class="small muted">${at ? 'У цей час' : 'Одразу'} в Telegram-групу кожного партнера прийде повідомлення з посиланням на новину (немає групи — користувачам партнера з Telegram).</p>` : '<p class="small muted">Без повідомлення в Telegram.</p>'}`,
       { footer: `<button class="btn" data-close>Скасувати</button><button class="btn primary" id="nwPok">${at ? 'Запланувати' : 'Опублікувати'}</button>` });
       $('#nwPok', md.el).onclick = () => { md.close(); res(true); };
