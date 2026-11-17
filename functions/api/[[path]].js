@@ -13623,6 +13623,60 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const state = await catalogState(today3);
     return c.json({ ok: true, checked: todo.length, changed, items, discovered, left: state.stale, lastSync: at });
   });
+  app.get("/api/b2b/price-list", async (c) => {
+    need(c, "b2b.admin");
+    const ids = String(c.req.query("brands") || "").split(",").map((x) => parseInt(x, 10)).filter((x) => x >= 0).slice(0, 200);
+    const [counts, names, cats, defs] = await Promise.all([
+      db.all(`SELECT brand_id, COUNT(*) AS n FROM b2b_catalog WHERE hidden = 0 AND rrp > 0 GROUP BY brand_id`),
+      brandNames(),
+      db.all(`SELECT id, name FROM an_categories`).catch(() => []),
+      marginDefaults()
+    ]);
+    const catName = new Map(cats.map((x) => [x.id, x.name]));
+    const rows = ids.length ? await db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.brand_id, COALESCE(a.cat_manual, a.category_id, 0) AS cat
+      FROM b2b_catalog c LEFT JOIN an_products a ON a.product_id = c.product_id
+      WHERE c.hidden = 0 AND c.rrp > 0 AND c.brand_id IN (SELECT value FROM json_each(?)) ORDER BY c.name`, [JSON.stringify(ids)]) : [];
+    return c.json({
+      defaults: defs,
+      brands: counts.map((r) => ({ id: r.brand_id, name: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456", n: r.n })).sort((a, b) => a.name.localeCompare(b.name, "uk")),
+      products: rows.map((r) => ({ id: r.product_id, name: r.name, article: r.article || "", rrp: r.rrp, brand_id: r.brand_id, brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456", category: catName.get(r.cat) || "\u0406\u043D\u0448\u0435" }))
+    });
+  });
+  app.get("/api/b2b/partners/:id/price-list", async (c) => {
+    need(c, "b2b.admin");
+    const p = await getPartner(c.req.param("id"));
+    const [rows, names, cats] = await Promise.all([
+      db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.brand_id, ${PM_COLS}, m.margin AS brand_margin, m.margin_wh AS brand_margin_wh, COALESCE(a.cat_manual, a.category_id, 0) AS cat
+        FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN} LEFT JOIN an_products a ON a.product_id = c.product_id
+        WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 ORDER BY c.name`, [kyivDay(), p.id]).then((r) => withGrace(db, p, r)),
+      brandNames(),
+      db.all(`SELECT id, name FROM an_categories`).catch(() => [])
+    ]);
+    const catName = new Map(cats.map((x) => [x.id, x.name]));
+    const brands = /* @__PURE__ */ new Map();
+    for (const r of rows) {
+      const b = brands.get(r.brand_id) || { id: r.brand_id, name: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456", margin: r.brand_margin, margin_wh: r.brand_margin_wh, n: 0, special: 0 };
+      b.n++;
+      if (r.special) b.special++;
+      brands.set(r.brand_id, b);
+    }
+    return c.json({
+      partner: { id: p.id, name: p.name },
+      brands: [...brands.values()].sort((a, b) => a.name.localeCompare(b.name, "uk")),
+      products: rows.map((r) => ({
+        id: r.product_id,
+        name: r.name,
+        article: r.article || "",
+        brand_id: r.brand_id,
+        brand: names.get(r.brand_id) || "\u0406\u043D\u0448\u0456",
+        category: catName.get(r.cat) || "\u0406\u043D\u0448\u0435",
+        rrp: r.rrp,
+        price: partnerPrice(r.rrp, r.margin),
+        price_wh: partnerPrice(r.rrp, r.margin_wh),
+        special: Boolean(r.special)
+      }))
+    });
+  });
   app.get("/api/b2b/brands", async (c) => {
     need(c, "b2b.admin");
     return c.json([...await brandNames()].map(([id, name]) => ({ id, name })));
