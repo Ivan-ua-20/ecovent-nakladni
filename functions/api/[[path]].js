@@ -6135,10 +6135,12 @@ function mountTg(app, { db, fetchFn, services = {} }) {
       const b2b = services.b2b;
       if (msg.migrate_to_chat_id) {
         await b2b?.tgGroupMoved?.(String(chat), String(msg.migrate_to_chat_id));
+        await services.checks?.tgGroupMoved?.(String(chat), String(msg.migrate_to_chat_id));
         return c.json({ ok: true });
       }
       if (msg.left_chat_member?.is_bot && msg.left_chat_member.username === s3.tg_bot) {
         await b2b?.tgGroupLeft?.(String(chat));
+        await services.checks?.tgGroupLeft?.(String(chat));
         return c.json({ ok: true });
       }
       if (msg.document || msg.photo) {
@@ -6151,7 +6153,7 @@ function mountTg(app, { db, fetchFn, services = {} }) {
       }
       const g = /^\/(?:link|start)(?:@\w+)?\s+([0-9a-f]{12,24})\b/i.exec(String(msg.text || ""));
       if (!g) return c.json({ ok: true });
-      const reply2 = await b2b?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || "") || "\u041A\u043E\u0434 \u043D\u0435 \u043F\u0456\u0434\u0456\u0439\u0448\u043E\u0432. \u0412\u0456\u0437\u044C\u043C\u0456\u0442\u044C \u043D\u043E\u0432\u0438\u0439 \u043A\u043E\u0434 \u0443 \u043A\u0430\u0440\u0442\u0446\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0430 \u0441\u0430\u0439\u0442\u0456.";
+      const reply2 = await b2b?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || "") || await services.checks?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || "") || "\u041A\u043E\u0434 \u043D\u0435 \u043F\u0456\u0434\u0456\u0439\u0448\u043E\u0432. \u0412\u0456\u0437\u044C\u043C\u0456\u0442\u044C \u043D\u043E\u0432\u0438\u0439 \u043A\u043E\u0434 \u0443 \u043A\u0430\u0440\u0442\u0446\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0430 \u0441\u0430\u0439\u0442\u0456.";
       await tg(s3.tg_token, "sendMessage", { chat_id: chat, text: reply2, parse_mode: "HTML" }).catch(() => {
       });
       return c.json({ ok: true });
@@ -20598,9 +20600,9 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     };
     for (const f of fops) {
       for (let d = today3; d >= from; d = addDays7(d, -1)) {
-        const h10 = have.get(`${f.dbId}|${d}`);
-        if (h10?.done) continue;
-        if (h10 && d >= addDays7(today3, -1) && Date.now() - Date.parse(h10.at || 0) < EVERY_MS - 3e4) continue;
+        const h11 = have.get(`${f.dbId}|${d}`);
+        if (h11?.done) continue;
+        if (h11 && d >= addDays7(today3, -1) && Date.now() - Date.parse(h11.at || 0) < EVERY_MS - 3e4) continue;
         const fromIso = new Date(Date.parse(`${d}T00:00:00Z`) - 3 * 36e5).toISOString();
         const toIso = new Date(Date.parse(`${d}T00:00:00Z`) + 27 * 36e5).toISOString();
         let offset = 0;
@@ -20802,6 +20804,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       getJson2("chk_statuses", {}),
       db.all(`SELECT id, name, login, password, license, pin, offices, lp_active, active, org_title, org_code FROM chk_cashiers ORDER BY lp_active DESC, id`)
     ]);
+    const marks = new Map((await db.all(`SELECT * FROM chk_marks`)).map((m) => [m.code, m]));
     const fops = Object.fromEntries(cashList.map((k) => [String(k.id), k.org_title || k.name]));
     const orgOf = new Map(cashList.map((k) => [String(k.id), orgKey(k)]));
     const sameOrg = (a, b) => a != null && b != null && orgOf.get(String(a)) === orgOf.get(String(b));
@@ -20907,7 +20910,10 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         mp_pay: o.mp_pay ? o.mp_pay_name || o.mp_pay : "",
         receipt: receipt ? { id: receipt.id, total: receipt.total, fop: fops[String(receipt.fop_id)] || "", at: receipt.at, pays: receipt.pays.map((p) => p.label || p.type).filter(Boolean), bySum: Boolean(receipt.bySum), url: `https://check.checkbox.ua/${receipt.id}` } : o.receipt_ref ? { id: o.receipt_ref, total: null, fop: "", at: "", pays: [], bySum: false, url: `https://check.checkbox.ua/${o.receipt_ref}`, crmOnly: true } : null,
         expected_fop: o.fopId ? fops[String(o.fopId)] || "" : "",
-        level: ev.level,
+        // Рішення людини: «усе добре» / «не зважати» — замовлення більше не рахується проблемою; «надіслано в групу» — лишається.
+        check_level: ev.level,
+        level: marks.get(o.code)?.mark === "ok" && ev.level !== "skip" ? "ok" : marks.get(o.code)?.mark === "skip" ? "skip" : ev.level,
+        mark: marks.get(o.code) ? { mark: marks.get(o.code).mark, who: marks.get(o.code).who, at: marks.get(o.code).at, sent_at: marks.get(o.code).sent_at, sent_by: marks.get(o.code).sent_by } : null,
         items: ev.items
       };
     });
@@ -21063,12 +21069,87 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     }
     return c.json(pubCashier(await db.get(`SELECT * FROM chk_cashiers WHERE id = ?`, [k.id])));
   });
+  app.put("/api/checks/orders/:code/mark", async (c) => {
+    need(c, "users");
+    const b = await c.req.json();
+    const code = String(c.req.param("code"));
+    const mark = ["ok", "skip", ""].includes(b.mark) ? b.mark : null;
+    if (mark === null) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0435 \u0440\u0456\u0448\u0435\u043D\u043D\u044F.");
+    if (!await db.get(`SELECT 1 FROM chk_orders WHERE code = ?`, [code])) throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0441\u0435\u0440\u0435\u0434 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043D\u0438\u0445.");
+    await db.run(
+      `INSERT INTO chk_marks (code, mark, note, who, at) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(code) DO UPDATE SET mark = excluded.mark, note = excluded.note, who = excluded.who, at = excluded.at`,
+      [code, mark, String(b.note || "").slice(0, 500), userName(c), nowIso()]
+    );
+    return c.json({ ok: true });
+  });
+  const h10 = (x) => String(x ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  app.post("/api/checks/orders/:code/send", async (c) => {
+    need(c, "users");
+    const s3 = await loadSettings(db);
+    if (!s3.tg_token) throw fail(400, "Telegram-\u0431\u043E\u0442\u0430 \u0449\u0435 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 Telegram).");
+    if (!s3.chk_tg_chat) throw fail(400, "\u0413\u0440\u0443\u043F\u0443 \xAB\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\xBB \u0449\u0435 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E: \xAB\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430 \u2192 \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u0413\u0440\u0443\u043F\u0430 \u0432 Telegram\xBB.");
+    const code = String(c.req.param("code"));
+    const o = await db.get(`SELECT day FROM chk_orders WHERE code = ?`, [code]);
+    if (!o) throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0441\u0435\u0440\u0435\u0434 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043D\u0438\u0445.");
+    const { rows } = await build(o.day, o.day);
+    const r = rows.find((x) => x.code === code);
+    if (!r) throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0441\u0435\u0440\u0435\u0434 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043D\u0438\u0445.");
+    const probs = r.items.filter((i) => i.level === "bad" || i.level === "warn");
+    const site = new URL(c.req.url).origin;
+    const text = [
+      `\u26A0\uFE0F <b>\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2116 ${h10(r.id || r.code)}</b> \u0432\u0456\u0434 ${h10(r.day.split("-").reverse().join("."))}`,
+      `${h10(r.buyer || "")}${r.channel || r.office ? ` \xB7 ${h10(r.channel || r.office)}` : ""}`,
+      `\u0421\u0443\u043C\u0430 ${h10(r.total)} \u0433\u0440\u043D \xB7 ${h10(r.payment)}${r.ttn ? ` \xB7 \u0422\u0422\u041D ${h10(r.ttn)}` : ""}${r.user ? ` \xB7 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 ${h10(r.user)}` : ""}`,
+      "",
+      ...(probs.length ? probs : r.items.filter((i) => i.level !== "ok")).slice(0, 8).map((i) => `${i.level === "bad" ? "\u274C" : "\u2757"} ${h10(i.text)}`),
+      "",
+      `\u041D\u0430\u0434\u0456\u0441\u043B\u0430\u0432: ${h10(userName(c))}`,
+      /^https:/.test(site) ? `<a href="${h10(site)}/#/checks">\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0438 \xAB\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0443\xBB</a>` : ""
+    ].filter((x, i, a) => x !== "" || a[i - 1] !== "").join("\n");
+    const sent = await services.notify?.sendText?.({ chatIds: [s3.chk_tg_chat] }, text).catch(() => 0);
+    if (!sent) throw fail(502, "Telegram \u043D\u0435 \u043F\u0440\u0438\u0439\u043D\u044F\u0432 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F. \u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0449\u043E \u0431\u043E\u0442 \u0454 \u0432 \u0433\u0440\u0443\u043F\u0456 \xAB\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\xBB.");
+    await db.run(`INSERT INTO chk_marks (code, mark, sent_at, sent_by) VALUES (?, '', ?, ?)
+      ON CONFLICT(code) DO UPDATE SET sent_at = excluded.sent_at, sent_by = excluded.sent_by`, [code, nowIso(), userName(c)]);
+    return c.json({ ok: true });
+  });
+  app.get("/api/checks/tg", async (c) => {
+    need(c, "users");
+    const s3 = await loadSettings(db);
+    return c.json({ bot: s3.tg_bot || "", linked: Boolean(s3.chk_tg_chat), title: s3.chk_tg_title || "" });
+  });
+  app.post("/api/checks/tg/code", async (c) => {
+    need(c, "users");
+    const s3 = await loadSettings(db);
+    if (!s3.tg_token || !s3.tg_bot) throw fail(400, "Telegram-\u0431\u043E\u0442\u0430 \u0449\u0435 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 Telegram).");
+    const code = randomToken(6);
+    await db.run(`INSERT INTO settings (key, value) VALUES ('chk_tg_code', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [`${code}|${Date.now() + 30 * 6e4}`]);
+    return c.json({ code, bot: s3.tg_bot });
+  });
+  app.delete("/api/checks/tg", async (c) => {
+    need(c, "users");
+    await db.run(`DELETE FROM settings WHERE key IN ('chk_tg_chat', 'chk_tg_title', 'chk_tg_code')`);
+    return c.json({ ok: true });
+  });
+  async function tgGroupLink(code, chat, title) {
+    const v = (await db.get(`SELECT value FROM settings WHERE key = 'chk_tg_code'`))?.value || "";
+    const [want, exp] = v.split("|");
+    if (!want || want !== code || (Number(exp) || 0) < Date.now()) return "";
+    await db.batch([
+      [`INSERT INTO settings (key, value) VALUES ('chk_tg_chat', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(chat)]],
+      [`INSERT INTO settings (key, value) VALUES ('chk_tg_title', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(title).slice(0, 120)]],
+      [`DELETE FROM settings WHERE key = 'chk_tg_code'`, []]
+    ]);
+    return "\u2705 \u0413\u0440\u0443\u043F\u0443 \u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u043E \u0434\u043E <b>\xAB\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0438\xBB</b>: \u0441\u044E\u0434\u0438 \u043D\u0430\u0434\u0445\u043E\u0434\u0438\u0442\u0438\u043C\u0443\u0442\u044C \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F, \u044F\u043A\u0456 \u043D\u0430 \u0441\u0430\u0439\u0442\u0456 \u043F\u043E\u0437\u043D\u0430\u0447\u0438\u043B\u0438 \u0437\u043D\u0430\u043A\u043E\u043C \xAB!\xBB.";
+  }
+  const tgGroupMoved = (from, to) => db.run(`UPDATE settings SET value = ? WHERE key = 'chk_tg_chat' AND value = ?`, [String(to), String(from)]);
+  const tgGroupLeft = (chat) => db.run(`DELETE FROM settings WHERE key IN ('chk_tg_chat', 'chk_tg_title') AND (SELECT value FROM settings WHERE key = 'chk_tg_chat') = ?`, [String(chat)]);
   app.post("/api/checks/refresh", async (c) => {
     need(c, "users");
     const r = await step({ force: true });
     return c.json({ more: Boolean(r.more), busy: Boolean(r.busy), skipped: r.skipped || "" });
   });
-  return { step };
+  return { step, tgGroupLink, tgGroupMoved, tgGroupLeft };
 }
 
 // src/integrations/binotel.js
@@ -23165,7 +23246,7 @@ var schema15 = {
 // src/modules/checks/schema.js
 var schema16 = {
   name: "checks",
-  version: 6,
+  version: 7,
   tables: [
     // Замовлення LP-CRM у статусах «відправлено / очікує викупу / завершено» за останні CHECK_DAYS днів.
     // listed_at — коли востаннє бачили в цих статусах (зникло зі списку — більше не показуємо);
@@ -23238,6 +23319,17 @@ var schema16 = {
     checked_at TEXT DEFAULT '',
     error TEXT DEFAULT '',
     created_at TEXT DEFAULT ''
+  )`,
+    // Рішення людини щодо замовлення: ok — «усе добре» (підтверджено), skip — «не зважати», sent — надіслано в групу
+    // «Маркетплейс» у Telegram (проблема лишається видимою). who / at — хто й коли; note — коротко, що було не так.
+    `CREATE TABLE IF NOT EXISTS chk_marks (
+    code TEXT PRIMARY KEY,
+    mark TEXT NOT NULL DEFAULT '',
+    note TEXT DEFAULT '',
+    who TEXT DEFAULT '',
+    at TEXT DEFAULT '',
+    sent_at TEXT DEFAULT '',
+    sent_by TEXT DEFAULT ''
   )`
   ],
   columns: [
