@@ -123,8 +123,8 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
     // Групи (B2B: група партнера). Бота додають у групу і пишуть /link КОД із картки партнера.
     if (['group', 'supergroup'].includes(msg.chat.type)) {
       const b2b = services.b2b;
-      if (msg.migrate_to_chat_id) { await b2b?.tgGroupMoved?.(String(chat), String(msg.migrate_to_chat_id)); return c.json({ ok: true }); }
-      if (msg.left_chat_member?.is_bot && msg.left_chat_member.username === s.tg_bot) { await b2b?.tgGroupLeft?.(String(chat)); return c.json({ ok: true }); }
+      if (msg.migrate_to_chat_id) { await b2b?.tgGroupMoved?.(String(chat), String(msg.migrate_to_chat_id)); await services.checks?.tgGroupMoved?.(String(chat), String(msg.migrate_to_chat_id)); return c.json({ ok: true }); }
+      if (msg.left_chat_member?.is_bot && msg.left_chat_member.username === s.tg_bot) { await b2b?.tgGroupLeft?.(String(chat)); await services.checks?.tgGroupLeft?.(String(chat)); return c.json({ ok: true }); }
       // Файл у групі: маркування (відповідь боту в групі партнера) або рахунок / накладна («Фінансові питання»).
       if (msg.document || msg.photo) {
         try { await services.b2b?.tgGroupMessage?.(msg, base); } catch (e) { console.error('tg group file', e); }
@@ -132,7 +132,8 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
       }
       const g = /^\/(?:link|start)(?:@\w+)?\s+([0-9a-f]{12,24})\b/i.exec(String(msg.text || ''));
       if (!g) return c.json({ ok: true }); // звичайні повідомлення в групі бот ігнорує
-      const reply = (await b2b?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || '')) || 'Код не підійшов. Візьміть новий код у картці партнера на сайті.';
+      const reply = (await b2b?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || ''))
+        || (await services.checks?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || '')) || 'Код не підійшов. Візьміть новий код у картці партнера на сайті.';
       await tg(s.tg_token, 'sendMessage', { chat_id: chat, text: reply, parse_mode: 'HTML' }).catch(() => {});
       return c.json({ ok: true });
     }

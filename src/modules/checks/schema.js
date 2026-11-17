@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'checks',
-  version: 6,
+  version: 7,
   tables: [
   // Замовлення LP-CRM у статусах «відправлено / очікує викупу / завершено» за останні CHECK_DAYS днів.
   // listed_at — коли востаннє бачили в цих статусах (зникло зі списку — більше не показуємо);
@@ -76,6 +76,17 @@ export const schema = {
     checked_at TEXT DEFAULT '',
     error TEXT DEFAULT '',
     created_at TEXT DEFAULT ''
+  )`,
+  // Рішення людини щодо замовлення: ok — «усе добре» (підтверджено), skip — «не зважати», sent — надіслано в групу
+  // «Маркетплейс» у Telegram (проблема лишається видимою). who / at — хто й коли; note — коротко, що було не так.
+  `CREATE TABLE IF NOT EXISTS chk_marks (
+    code TEXT PRIMARY KEY,
+    mark TEXT NOT NULL DEFAULT '',
+    note TEXT DEFAULT '',
+    who TEXT DEFAULT '',
+    at TEXT DEFAULT '',
+    sent_at TEXT DEFAULT '',
+    sent_by TEXT DEFAULT ''
   )`,
   ],
   columns: [

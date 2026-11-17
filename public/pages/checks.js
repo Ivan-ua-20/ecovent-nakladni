@@ -39,13 +39,29 @@ export function createChecksPages() {
     return `<div class="chk-stage"><div class="chk-stage-h chk-${esc(worst(its))}"><span class="chk-ic" aria-hidden="true">${ICON[worst(its)] || ''}</span>${esc(label)}</div>
       <ul class="chk-items">${its.map((i) => `<li class="chk-${esc(i.level)}"><span class="chk-ic" aria-hidden="true">${ICON[i.level] || ''}</span><span>${esc(i.text)}</span></li>`).join('')}</ul></div>`; }).join('')}
     ${r.comment ? `<div class="chk-stage"><div class="chk-stage-h">Повний коментар</div><div class="small chk-com-full">${esc(r.comment)}</div></div>` : ''}</div>`;
+  // Рішення людини: ✓ «усе добре», ! «надіслати в групу «Маркетплейс»», ✕ «не зважати».
+  const actions = (r) => (r.check_level === 'bad' || r.check_level === 'warn' || r.mark?.mark) ? `<span class="chk-acts">
+    <button type="button" class="btn sm icon chk-act-ok" data-cmark="ok" data-code="${esc(r.code)}" title="Усе добре — підтвердити" aria-label="Усе добре — підтвердити замовлення № ${esc(r.id)}">✓</button>
+    <button type="button" class="btn sm icon chk-act-send" data-csend="${esc(r.code)}" title="Надіслати в групу «Маркетплейс» у Telegram" aria-label="Надіслати замовлення № ${esc(r.id)} в групу «Маркетплейс»">!</button>
+    <button type="button" class="btn sm icon chk-act-skip" data-cmark="skip" data-code="${esc(r.code)}" title="Не зважати на помилку" aria-label="Не зважати на помилки замовлення № ${esc(r.id)}">✕</button></span>` : '';
+  const when = (iso) => (iso ? fmtDateTime(iso) : '');
+  const markLine = (r) => {
+    const m = r.mark || {};
+    const parts = [];
+    if (m.mark === 'ok') parts.push(`<span class="chk-ok">✓ Підтверджено: ${esc(m.who || '')} · ${esc(when(m.at))}</span>`);
+    if (m.mark === 'skip') parts.push(`<span class="muted">✕ Не зважати: ${esc(m.who || '')} · ${esc(when(m.at))}</span>`);
+    if (m.sent_at) parts.push(`<span class="chk-warn">! Надіслано в групу: ${esc(m.sent_by || '')} · ${esc(when(m.sent_at))}</span>`);
+    if (!parts.length) return '';
+    return `<div class="small chk-mark">${parts.join(' · ')}${m.mark ? ` <button type="button" class="btn sm link" data-cmark="" data-code="${esc(r.code)}">Скасувати</button>` : ''}</div>`;
+  };
   const open = new Set();
   const row = (r) => `<tr class="chk-row chk-row-${esc(r.level)}" data-code="${esc(r.code)}" tabindex="0" aria-expanded="${open.has(r.code)}">
     <td class="nowrap"><b>№ ${esc(r.id || r.code)}</b><div class="small muted">${dmy(r.day)} · ${esc(r.status)}</div><div class="small muted">${esc(r.user || '')}</div></td>
     <td>${esc(r.buyer || '—')}${r.phone ? `<div class="small muted">${phoneFmt(r.phone)}</div>` : ''}<div class="small muted">${esc(r.channel || r.office || '')}</div></td>
     <td class="nowrap"><b>${uah(r.total)}</b><div class="small">${esc(r.payment)}</div>${r.ttn ? `<div class="small muted">${esc(r.carrier)} · ${esc(r.ttn)}</div>` : ''}</td>
-    <td><span class="badge ${LV[r.level]?.[0] || ''}">${LV[r.level]?.[1] || ''}</span>${strip(r)}
-      ${r.items.filter((i) => i.level === 'bad' || i.level === 'warn').slice(0, 2).map((i) => `<div class="small chk-${esc(i.level)}">${esc(i.text)}</div>`).join('')}</td>
+    <td><div class="chk-head"><span class="badge ${LV[r.level]?.[0] || ''}">${LV[r.level]?.[1] || ''}</span>${actions(r)}</div>${strip(r)}
+      ${markLine(r)}
+      ${r.mark?.mark ? '' : r.items.filter((i) => i.level === 'bad' || i.level === 'warn').slice(0, 2).map((i) => `<div class="small chk-${esc(i.level)}">${esc(i.text)}</div>`).join('')}</td>
   </tr>${open.has(r.code) ? `<tr class="chk-detail"><td colspan="4">${card(r)}</td></tr>` : ''}`;
 
   async function viewChecks() {
@@ -85,6 +101,15 @@ export function createChecksPages() {
         : `<div class="card empty"><div class="big">${d.rows.length ? 'Нічого не знайдено' : 'Ще немає даних'}</div>${d.rows.length ? (f.lv === 'problems' ? 'Проблем не знайдено 🎉' : 'Змініть фільтр або пошук.') : 'Натисніть «Оновити зараз» — перший збір займає кілька хвилин.'}</div>`}`,
       { summary: LEVELS.find(([k]) => k === f.lv)?.[1] || '' })}`;
     wireFp();
+    $$('[data-cmark]').forEach((b) => (b.onclick = async (e) => {
+      e.stopPropagation();
+      try { await api('PUT', `/api/checks/orders/${encodeURIComponent(b.dataset.code)}/mark`, { mark: b.dataset.cmark }); toast(b.dataset.cmark === 'ok' ? 'Підтверджено' : b.dataset.cmark === 'skip' ? 'Не зважаємо' : 'Рішення скасовано'); viewChecks(); } catch (err) { toast(err.message, true); }
+    }));
+    $$('[data-csend]').forEach((b) => (b.onclick = async (e) => {
+      e.stopPropagation();
+      b.disabled = true;
+      try { await api('POST', `/api/checks/orders/${encodeURIComponent(b.dataset.csend)}/send`, {}); toast('Надіслано в групу «Маркетплейс»'); viewChecks(); } catch (err) { toast(err.message, true); b.disabled = false; }
+    }));
     const toggle = (tr) => { const c = tr.dataset.code; if (open.has(c)) open.delete(c); else open.add(c); viewChecks(); };
     $$('tr.chk-row').forEach((tr) => { tr.onclick = (e) => { if (!e.target.closest('a,button,input,select')) toggle(tr); }; tr.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(tr); } }; });
     $$('[data-clv]').forEach((b) => (b.onclick = () => { f.lv = b.dataset.clv; viewChecks(); }));
@@ -175,9 +200,12 @@ export function createChecksPages() {
   }
 
   async function viewPay() {
-    const [d, cash] = await Promise.all([api('GET', '/api/checks/pay'), api('GET', '/api/checks/cashiers')]);
+    const [d, cash, tgc] = await Promise.all([api('GET', '/api/checks/pay'), api('GET', '/api/checks/cashiers'), api('GET', '/api/checks/tg')]);
     main.innerHTML = `
       <div class="head-row"><h2>Налаштування перевірки</h2></div>
+      <div class="card"><div class="head-row"><h3>Група в Telegram</h3><div class="btn-row">${tgc.linked ? '<button class="btn sm" id="tgUnlink">Відв\'язати</button>' : ''}<button class="btn sm" id="tgLink">${tgc.linked ? 'Підключити іншу' : 'Підключити групу'}</button></div></div>
+        <div class="small">${tgc.linked ? `Підключено: <b>${esc(tgc.title || 'група')}</b>. Кнопка «!» біля замовлення надсилає його сюди.` : 'Кнопка «!» біля замовлення надсилає його в групу «Маркетплейс». Підключіть групу, щоб це працювало.'}</div>
+        <div id="tgHow" class="small" style="margin-top:6px"></div></div>
       ${cashiersHtml(cash)}
       <div class="head-row" style="margin-top:20px"><h3>Види оплат</h3><div class="btn-row"><button class="btn primary" id="payKeep">Зберегти види оплат</button></div></div>
       <div class="small muted" style="margin-bottom:10px">Що очікувати для кожного виду оплати LP-CRM: <b>післяплата</b> — у ТТН має бути наложка на суму замовлення;
@@ -188,6 +216,16 @@ export function createChecksPages() {
         <td><select data-pcls aria-label="Що перевіряти для «${esc(r.name)}»">${Object.entries(d.classes).map(([k, v]) => `<option value="${k}" ${r.cls === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></td>
         <td><input data-pcb value="${esc(r.cb || '')}" placeholder="напр. NovaPay" aria-label="Спосіб оплати в чеку для «${esc(r.name)}»"></td></tr>`).join('')}
       </tbody></table></div>`;
+    $('#tgLink').onclick = async () => {
+      try {
+        const r = await api('POST', '/api/checks/tg/code', {});
+        $('#tgHow').innerHTML = `1) Додайте бота <b>@${esc(r.bot)}</b> у групу «Маркетплейс».<br>2) Напишіть у групі: <code>/link ${esc(r.code)}</code> (код діє 30 хв).<br>3) Оновіть цю сторінку.`;
+      } catch (e) { toast(e.message, true); }
+    };
+    if ($('#tgUnlink')) $('#tgUnlink').onclick = async () => {
+      if (!(await confirmDanger('Відв\'язати групу?', 'Кнопка «!» перестане надсилати замовлення в цю групу.', 'Відв\'язати'))) return;
+      try { await api('DELETE', '/api/checks/tg'); viewPay(); } catch (e) { toast(e.message, true); }
+    };
     $('#cashAdd').onclick = () => cashierForm(null, viewPay);
     $$('[data-cedit]').forEach((b) => (b.onclick = () => cashierForm(cash.find((k) => String(k.id) === b.dataset.cedit), viewPay)));
     $$('[data-ctest]').forEach((b) => (b.onclick = async () => {
