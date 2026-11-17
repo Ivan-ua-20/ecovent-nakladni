@@ -28,20 +28,26 @@ function book(products, { priceCols, extra = () => [] }) {
 }
 
 // ---------- прайс з каталогу: бренди й відсотки вручну ----------
+// Дві знижки від РРЦ на кожен бренд — як у картці партнера: «Дропшипінг» (маржа клієнтам — відправка клієнтам партнера)
+// і «B2B» (закупівля на склад партнера). Порожня — цієї ціни для бренду в прайсі немає (клітинки порожні).
+const KINDS = [['ds', 'Дропшипінг', 'маржа клієнтам'], ['b2b', 'B2B', 'на склад партнера']];
 export async function catalogPriceModal() {
   let d;
   try { d = await api('GET', '/api/b2b/price-list'); } catch (er) { toast(er.message, true); return; }
   if (!d.brands.length) { toast('У каталозі немає товарів з РРЦ — спершу оновіть каталог з LP-CRM.', true); return; }
-  const def = d.defaults?.margin ?? '';
+  const def = { ds: d.defaults?.margin ?? '', b2b: d.defaults?.margin_wh ?? '' };
   const m = modal('Excel прайс з каталогу', `<form id="plF" class="form-stack">
-      <div class="small muted">Оберіть бренди й знижку від РРЦ для кожного — у книзі буде аркуш на бренд: товар, артикул, категорія, РРЦ, ціна зі знижкою і знижка у %.</div>
+      <div class="small muted">Оберіть бренди й знижку від РРЦ: <b>Дропшипінг</b> (маржа клієнтам — відправка клієнтам партнера) і <b>B2B</b> (закупівля на склад партнера).
+        Можна вписати обидві або одну. У книзі — аркуш на бренд: товар, артикул, категорія, РРЦ і ціни зі знижками.</div>
       <div class="btn-row" style="align-items:end;flex-wrap:wrap">
-        <label class="f" style="width:150px"><span>Знижка для всіх, %</span><input type="number" id="plAll" min="0" max="100" step="0.5" value="${esc(def)}" placeholder="напр. 20"></label>
+        ${KINDS.map(([k, t]) => `<label class="f" style="width:150px"><span>${t} для всіх, %</span><input type="number" id="plAll_${k}" min="0" max="99" step="0.5" value="${esc(def[k])}" placeholder="напр. ${k === 'ds' ? 20 : 25}"></label>`).join('')}
         <button type="button" class="btn" id="plApply">Застосувати до вибраних</button>
         <label class="check" style="margin-left:auto"><input type="checkbox" id="plTog" checked> Усі бренди</label>
       </div>
-      <div class="pl-list">${d.brands.map((b) => `<div class="pl-row"><label class="check"><input type="checkbox" data-b="${b.id}" checked> <b>${esc(b.name)}</b> <span class="small muted">${b.n} тов.</span></label>
-        <label class="pl-pct"><input type="number" data-pct="${b.id}" min="0" max="100" step="0.5" value="${esc(def)}" aria-label="Знижка ${esc(b.name)}, %"> %</label></div>`).join('')}</div>
+      <div class="pl-list">
+        <div class="pl-row pl-head"><span class="pl-name">Бренд</span>${KINDS.map(([, t, h]) => `<span class="pl-pct" title="${esc(h)}">${t}<span class="small muted">${h}, %</span></span>`).join('')}</div>
+        ${d.brands.map((b) => `<div class="pl-row"><label class="check pl-name"><input type="checkbox" data-b="${b.id}" checked> <b>${esc(b.name)}</b> <span class="small muted">${b.n} тов.</span></label>
+          ${KINDS.map(([k, t]) => `<label class="pl-pct"><input type="number" data-pct="${k}:${b.id}" min="0" max="99" step="0.5" value="${esc(def[k])}" aria-label="${t}: знижка ${esc(b.name)}, %"> %</label>`).join('')}</div>`).join('')}</div>
       <label class="f"><span>Для кого (у назві файлу, необов'язково)</span><input id="plFor" placeholder="напр. ТОВ «Кліматика»"></label>
       <label class="check"><input type="checkbox" id="plRrp" checked> Показувати РРЦ і знижку у %</label>
     </form>`, { wide: true, footer: '<span class="small muted" id="plSum" style="margin-right:auto"></span><button class="btn" data-close>Скасувати</button><button class="btn primary" id="plGo">⬇ Завантажити</button>' });
@@ -54,24 +60,42 @@ export async function catalogPriceModal() {
   };
   $$('[data-b]', el).forEach((x) => (x.onchange = sum));
   $('#plTog', el).onchange = (e) => { $$('[data-b]', el).forEach((x) => { x.checked = e.target.checked; }); sum(); };
-  $('#plApply', el).onclick = () => { const v = $('#plAll', el).value; picked().forEach((id) => { $(`[data-pct="${id}"]`, el).value = v; }); };
+  $('#plApply', el).onclick = () => {
+    for (const [k] of KINDS) { const v = $(`#plAll_${k}`, el).value; picked().forEach((id) => { $(`[data-pct="${k}:${id}"]`, el).value = v; }); }
+  };
   sum();
   $('#plGo', el).onclick = async (e) => {
     const ids = picked();
     if (!ids.length) { toast('Оберіть хоча б один бренд', true); return; }
-    const pct = new Map(ids.map((id) => [id, Number($(`[data-pct="${id}"]`, el).value)]));
-    const bad = ids.find((id) => !(pct.get(id) >= 0 && pct.get(id) < 100));
-    if (bad != null) { toast(`Вкажіть знижку від 0 до 99 % для «${d.brands.find((b) => b.id === bad)?.name}»`, true); $(`[data-pct="${bad}"]`, el).focus(); return; }
+    // знижка: число 0–99 або null (порожньо — цієї ціни для бренду немає)
+    const pct = {};
+    for (const [k, t] of KINDS) {
+      pct[k] = new Map();
+      for (const id of ids) {
+        const inp = $(`[data-pct="${k}:${id}"]`, el);
+        const v = inp.value.trim() === '' ? null : Number(inp.value);
+        if (v != null && !(v >= 0 && v < 100)) { toast(`${t}: знижка від 0 до 99 % для «${d.brands.find((b) => b.id === id)?.name}»`, true); inp.focus(); return; }
+        pct[k].set(id, v);
+      }
+    }
+    const empty = ids.find((id) => pct.ds.get(id) == null && pct.b2b.get(id) == null);
+    if (empty != null) { toast(`«${d.brands.find((b) => b.id === empty)?.name}»: вкажіть знижку для дропшипінгу або B2B (або зніміть бренд)`, true); $(`[data-pct="ds:${empty}"]`, el).focus(); return; }
+    const used = KINDS.filter(([k]) => ids.some((id) => pct[k].get(id) != null));
     const b = e.currentTarget;
     b.disabled = true;
     try {
       const r = await api('GET', `/api/b2b/price-list?brands=${ids.join(',')}`);
       const rrp = $('#plRrp', el).checked;
       let sheets = book(r.products, {
-        priceCols: [{ title: 'Ціна, грн', width: 14, fmt: 'money' }, ...(rrp ? [{ title: 'Знижка від РРЦ', width: 14, fmt: 'pct' }] : [])],
-        extra: (p) => { const price = priceOf(p.rrp, pct.get(p.brand_id)); return [price, ...(rrp ? [pctOf(p.rrp, price)] : [])]; },
+        priceCols: used.flatMap(([, t, h]) => [{ title: `${t} (${h}), грн`, width: 16, fmt: 'money' }, ...(rrp ? [{ title: `${t}: знижка від РРЦ`, width: 14, fmt: 'pct' }] : [])]),
+        extra: (p) => used.flatMap(([k]) => {
+          const v = pct[k].get(p.brand_id);
+          if (v == null) return rrp ? ['', ''] : [''];
+          const price = priceOf(p.rrp, v);
+          return [price, ...(rrp ? [pctOf(p.rrp, price)] : [])];
+        }),
       });
-      if (!rrp) sheets = sheets.map((s) => ({ ...s, cols: s.cols.filter((c) => c.title !== 'РРЦ, грн'), rows: s.rows.map((row) => row.filter((_, i) => i !== 3)) }));
+      if (!rrp) sheets = sheets.map((sh) => ({ ...sh, cols: sh.cols.filter((c) => c.title !== 'РРЦ, грн'), rows: sh.rows.map((row) => row.filter((_, i) => i !== 3)) }));
       const who = $('#plFor', el).value.trim();
       downloadXlsx(safeName(`Прайс Ековент${who ? ` — ${who}` : ''} ${today()}.xlsx`), sheets);
       m.close();
