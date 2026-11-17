@@ -388,15 +388,17 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
   // ---------------------------------------------------------------- показ
   // Усе для оцінки за період: замовлення, чеки, надходження, ФОП, відділи. Відповідь рахується тут, з rules.js.
   async function build(from, to) {
-    const recFrom = from; const recTo = addDays(to, 20);
+    const recFrom = addDays(kyivDay(), -CHECK_DAYS - 7); const recTo = addDays(kyivDay(), 1);
     // Останній завершений прохід списків (state.listed): замовлення, яких у ньому немає, вийшли з цих статусів.
     const listed = (await getJson('chk_state', {})).listed || '';
     const cbFailRaw = (await db.get(`SELECT value FROM settings WHERE key = 'chk_cb_fail'`))?.value || '{}';
     const [rs, orders, receipts, fopsAll, offices, channels, accounts, txs, stNames, cashList] = await Promise.all([
       rules(),
-      db.all(`SELECT * FROM chk_orders WHERE listed_at != '' AND listed_at >= ? AND day BETWEEN ? AND ? ORDER BY day DESC, code DESC`, [listed, from, to]),
+      // Чеки підбираємо по ВСІХ зібраних замовленнях (не лише за обраний період) — щоб результат не залежав від періоду
+      // на екрані; показуємо потім лише замовлення періоду.
+      db.all(`SELECT * FROM chk_orders WHERE listed_at != '' AND listed_at >= ? AND day != '' ORDER BY day DESC, code DESC`, [listed]),
       // чеки за період + прив'язані в LP-CRM до замовлень періоду (можуть бути з іншого дня)
-      db.all(`SELECT * FROM chk_receipts WHERE day BETWEEN ? AND ? OR id IN (SELECT receipt_ref FROM chk_orders WHERE receipt_ref != '' AND day BETWEEN ? AND ?)`, [recFrom, recTo, from, to]),
+      db.all(`SELECT * FROM chk_receipts WHERE day BETWEEN ? AND ? OR id IN (SELECT receipt_ref FROM chk_orders WHERE receipt_ref != '')`, [recFrom, recTo]),
       db.all(`SELECT id, short_name, ipn, iban, active, checkbox_login, checkbox_password, checkbox_license, checkbox_pin FROM fops`),
       db.all(`SELECT office_id, name, fop_id FROM offices`),
       db.all(`SELECT name, fop_id FROM channels`),
@@ -461,7 +463,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const byTtn = new Map();
     for (const o of orders) { const t = String(o.ttn || '').replace(/\s/g, '').toUpperCase(); if (t) { if (!byTtn.has(t)) byTtn.set(t, []); byTtn.get(t).push(o); } }
     const today = kyivDay();
-    const rows = orders.map((o) => {
+    const rows = orders.filter((o) => o.day >= from && o.day <= to).map((o) => {
       const rule = rs[String(o.payment)];
       const part = rule?.cls === 'cod' ? (o.prepayment > 0 || partialOf(o.comment)) : null;
       const dup = (byPhone.get(o.phone) || []).filter((x) => x !== o && Math.abs(Date.parse(x.day) - Date.parse(o.day)) <= 3 * 86400e3).map((x) => x.id || x.code);

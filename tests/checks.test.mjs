@@ -38,7 +38,7 @@ await db.run(`DELETE FROM offices`);
 await db.run(`INSERT INTO offices (office_id, name, fop_id) VALUES ('22', 'Ecovent-Expert / ФОП Агафіца Д.М.', 1), ('12', 'Маркетплейси / ФОП ЛУПУ В.Ф.', 2), ('28', 'ТОВ «ЕКОВЕНТ-ДИСТРИБ’ЮШН»', 3), ('30', 'ФОП Ватрич', 4)`);
 await db.run(`INSERT INTO np_accounts (id, name, api_key, active, created_at) VALUES (1, 'НП', 'npk', 1, '')`);
 await db.run(`INSERT INTO rz_accounts (id, name, username, password) VALUES (1, 'Ековент', 'u', 'p')`);
-await raw.run(`INSERT INTO crm_products (product_id, name, code) VALUES (697, 'Тепловентилятор DREO [80173]', '80173'), (698, 'Осушувач [30499]', '30499')`);
+await raw.run(`INSERT INTO crm_products (product_id, name, code) VALUES (697, 'Тепловентилятор DREO [80173]', '80173'), (698, 'Осушувач [30499]', '30499'), (699, 'Осушувач HUMIX DUO [31599]', '31599')`);
 await db.run(`INSERT INTO prom_accounts (id, name, token, active) VALUES (1, 'Prom Amsterdam', 'ptok', 1)`);
 for (const [id, ttn] of [['p11', '2045 0000 0000 11'], ['p12', 'PRM-0000012'], ['p13', 'PRM-0000013'], ['p14', '20450000000014'], ['p21', '20450000000021']]) {
   await db.run(`INSERT INTO mp_orders (mp, account_id, id, number, created_at, total, ttn) VALUES ('prom', 1, ?, ?, ?, 0, ?)`, [id, id, `${D} 09:00:00`, ttn]);
@@ -74,6 +74,9 @@ const ORDERS = [
   // Однакові товар і сума, різні види оплати: чек підбирається з правильним способом оплати, навіть якщо інший чек раніший
   O(10026, 16, 4100, '20450000000026', { office: '12', datetime: `${D} 08:00:00`, products: [{ product_id: '698', name: 'Осушувач', price: '4100', quantity: '1' }] }),
   O(10027, 15, 4100, 'RMP-100000027', { office: '12', datetime: `${D} 08:30:00`, products: [{ product_id: '698', name: 'Осушувач', price: '4100', quantity: '1' }] }),
+  // Сума 3799 ≈ 3800 (допуск 1 грн) не повинна «забрати» чек, що точно належить іншому замовленню
+  O(10028, 15, 3799, 'RMP-100000028', { office: '12', datetime: `${D} 08:00:00`, products: [{ product_id: '699', name: 'Осушувач HUMIX', price: '3799', quantity: '1' }] }),
+  O(10029, 11, 3800, '20450000000029', { office: '22', datetime: `${D} 09:00:00`, products: [{ product_id: '699', name: 'Осушувач HUMIX', price: '3800', quantity: '1' }] }),
   O(10011, 10, 610, '20450000000011', { office: '12' }), // Пром-оплата, у Prom оплачено — гаразд
   O(10012, 10, 620, 'PRM-0000012', { office: '12' }), // Пром-оплата, а в Prom «Оплата при отриманні» (Розетка Делівері з Prom)
   O(10013, 4, 630, 'PRM-0000013', { office: '12' }), // післяплата, у Prom оплата при отриманні — наложка є
@@ -88,7 +91,7 @@ const PROM = {
   p21: { id: 21, full_price: '650', payment_option: { name: 'Оплатить частями' } },
   p14: { id: 14, full_price: '640', payment_option: { name: 'Пром-оплата' }, payment_data: { type: 'prosale', status: 'unpaid' } },
 };
-const TRACK = { 20450000000026: { AfterpaymentOnGoodsCost: '4100' }, 20450000000024: {}, 20450000000025: {}, 20450000000023: {}, 20450000000022: {}, 20450000000021: {}, 20450000000018: {}, 20450000000019: { AfterpaymentOnGoodsCost: '1000' }, 20450000000020: {}, 20450000000016: { AfterpaymentOnGoodsCost: '2989' }, 20450000000017: { AfterpaymentOnGoodsCost: '800' }, 20450000000015: {}, 20450000000011: {}, 20450000000014: {}, 20450000000001: { AfterpaymentOnGoodsCost: '1000' }, 20450000000002: { AfterpaymentOnGoodsCost: '500' }, 20450000000003: {}, 20450000000004: {},
+const TRACK = { 20450000000029: {}, 20450000000026: { AfterpaymentOnGoodsCost: '4100' }, 20450000000024: {}, 20450000000025: {}, 20450000000023: {}, 20450000000022: {}, 20450000000021: {}, 20450000000018: {}, 20450000000019: { AfterpaymentOnGoodsCost: '1000' }, 20450000000020: {}, 20450000000016: { AfterpaymentOnGoodsCost: '2989' }, 20450000000017: { AfterpaymentOnGoodsCost: '800' }, 20450000000015: {}, 20450000000011: {}, 20450000000014: {}, 20450000000001: { AfterpaymentOnGoodsCost: '1000' }, 20450000000002: { AfterpaymentOnGoodsCost: '500' }, 20450000000003: {}, 20450000000004: {},
   20450000000005: { RedeliverySum: '700' }, 20450000000007: {}, 20450000000008: {}, 20450000000009: {} };
 const RC = {
   old: [
@@ -96,6 +99,7 @@ const RC = {
     { id: 'o23', type: 'SELL', fiscal_date: `${D}T14:05:00+02:00`, total_sum: 72000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 72000 }], header: '1790000000010023' },
   ],
   c1: [
+    { id: 'h29', type: 'SELL', fiscal_date: `${D}T10:00:00+02:00`, total_sum: 380000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора mono', value: 380000 }], goods: [{ good: { name: 'Осушувач повітря evoair HUMIX DUO (HUMIXDUO) [31599]' } }] },
     { id: 'r1', type: 'SELL', fiscal_date: `${D}T12:00:00+02:00`, total_sum: 100000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора NovaPay', value: 100000 }], header: 'Замовлення 1790000000010001' },
     { id: 'r4', type: 'SELL', fiscal_date: `${D}T12:05:00+02:00`, total_sum: 70000, payments: [{ type: 'CASHLESS', label: 'Картка', value: 70000 }] },
     { id: 'r7', type: 'SELL', fiscal_date: `${D}T12:10:00+02:00`, total_sum: 45000, payments: [{ type: 'CASH', label: 'Готівка', value: 45000 }], footer: '10007' },
@@ -246,6 +250,11 @@ assert.equal(row(10024).receipt?.id, 'g1', 'раніше замовлення �
 assert.equal(row(10024).level, 'ok', texts(10024)); assert.equal(row(10024).receipt.bySum, false);
 assert.equal(row(10026).receipt?.id, 'p26', 'NovaPay-замовлення — чек NovaPay, хоч RozetkaPay-чек раніший'); assert.equal(row(10027).receipt?.id, 'p27');
 assert.doesNotMatch(texts(10026) + texts(10027), /спосіб оплати/);
+assert.equal(row(10029).receipt?.id, 'h29', 'чек на 3800 — замовленню на 3800, а не раніше створеному на 3799');
+assert.ok(!row(10028).receipt || row(10028).receipt.id !== 'h29');
+// Результат не залежить від обраного періоду
+const one = (await call('GET', `/api/checks?from=${D}&to=${D}`, null, H)).j.rows.find((r) => r.id === '10029');
+assert.equal(one.receipt?.id, 'h29');
 assert.equal(row(10022).level, 'ok', texts(10022)); assert.match(texts(10022), /ok: Чек 710 грн · ФОП Стара каса/);
 assert.equal(row(10023).level, 'ok', texts(10023)); assert.doesNotMatch(texts(10023), /для цього відділу каса/, 'чек від вимкненої каси відділу — правильний');
 assert.doesNotMatch(texts(10020), /Коментар/, 'звичайний «оплата через …» — без попередження');
@@ -263,7 +272,7 @@ assert.equal(row(10011).mp_pay, 'Пром-оплата');
 // Чеки за день по ФОП: чек без замовлення видно окремо.
 const rc = (await call('GET', `/api/checks/receipts?day=${D}`, null, H)).j;
 const g1 = rc.groups.find((g) => g.fop === 'ФОП Агафіца Д.М.');
-assert.equal(g1.rows.length, 4);
+assert.equal(g1.rows.length, 5); // r1, r4, r7, rx + h29
 assert.equal(g1.free, 1);
 assert.equal(g1.rows.find((r) => r.id === 'rx').order, null);
 assert.equal(g1.rows.find((r) => r.id === 'r1').order.id, '10001');
