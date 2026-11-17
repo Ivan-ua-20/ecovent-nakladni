@@ -1325,3 +1325,12 @@ body.pub-mode { background: var(--bg); }
 @media (max-width: 760px) { .pub-top { padding: 10px 14px; } .pub-top .muted { display: none; } }
 body.pub-mode #auth { display: block; padding: 0; min-height: 100vh; background: var(--bg); place-items: initial; }
 #authNews { display: inline-block; margin-bottom: 4px; color: var(--accent); }
+
+/* «Перевірка»: кнопки рішення ✓ ! ✕ */
+.chk-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.chk-acts { display: inline-flex; gap: 4px; }
+.chk-acts .btn.icon { min-width: 30px; min-height: 30px; font-weight: 700; }
+.chk-act-ok { color: var(--ok); }
+.chk-act-send { color: var(--warn); }
+.chk-act-skip { color: var(--muted, #6b7280); }
+.chk-mark { margin: 2px 0 4px; }

@@ -140,6 +140,11 @@ const fetchFn = async (url, opts = {}) => {
     if (u.pathname === '/sites') return j({ success: true, content: { access_token: 'tok', market: { id: 1, title: 'Ековент' } } });
     if (u.pathname === '/delivery-rozetka/ttn-list') return j({ success: true, content: { models: u.searchParams.get('ttn') === 'RMP-100000006' ? [{ ttn: 'RMP-100000006', cod_amount: 0, declared_price: 1200 }] : [], _meta: { pageCount: 1 } } });
   }
+  if (u.hostname === 'api.telegram.org') {
+    const b = JSON.parse(opts.body || '{}');
+    (calls.tg ||= []).push(b);
+    return j({ ok: true, result: { message_id: 1 } });
+  }
   if (u.hostname === 'my.prom.ua') {
     calls.prom = (calls.prom || 0) + 1;
     assert.equal(opts.headers.Authorization, 'Bearer ptok');
@@ -276,6 +281,33 @@ assert.equal(g1.rows.length, 5); // r1, r4, r7, rx + h29
 assert.equal(g1.free, 1);
 assert.equal(g1.rows.find((r) => r.id === 'rx').order, null);
 assert.equal(g1.rows.find((r) => r.id === 'r1').order.id, '10001');
+
+// Рішення людини: ✓ «усе добре» — помилка більше не рахується; ✕ «не зважати»; «Скасувати» — повертає як було.
+const code2 = row(10002).code;
+assert.equal(row(10002).level, 'bad');
+await call('PUT', `/api/checks/orders/${code2}/mark`, { mark: 'ok' }, H);
+let r2 = (await call('GET', '/api/checks', null, H)).j.rows.find((r) => r.id === '10002');
+assert.equal(r2.level, 'ok'); assert.equal(r2.check_level, 'bad'); assert.equal(r2.mark.mark, 'ok'); assert.equal(r2.mark.who, 'o');
+await call('PUT', `/api/checks/orders/${code2}/mark`, { mark: 'skip' }, H);
+assert.equal((await call('GET', '/api/checks', null, H)).j.rows.find((r) => r.id === '10002').level, 'skip');
+await call('PUT', `/api/checks/orders/${code2}/mark`, { mark: '' }, H);
+assert.equal((await call('GET', '/api/checks', null, H)).j.rows.find((r) => r.id === '10002').level, 'bad');
+// ! — у групу «Маркетплейс»: спершу треба підключити групу
+await raw.batch([['tg_token', '1:x'], ['tg_bot', 'ecobot'], ['tg_secret', 'sec'], ['tg_hook_v', '2']].map(([k, v]) => [`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [k, v]]));
+assert.equal((await call('POST', `/api/checks/orders/${code2}/send`, {}, H)).r.status, 400, 'група ще не підключена');
+const tgCode = (await call('POST', '/api/checks/tg/code', {}, H)).j.code;
+const hook = (message) => mk().request('/api/tg/hook', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-telegram-bot-api-secret-token': 'sec' }, body: JSON.stringify({ message }) });
+await hook({ chat: { id: -100777, type: 'supergroup', title: 'Маркетплейс' }, from: { id: 5 }, text: `/link ${tgCode}` });
+assert.ok(calls.tg.some((m) => /Перевірки/.test(m.text || '')), 'бот підтвердив підключення групи');
+const tgs = (await call('GET', '/api/checks/tg', null, H)).j;
+assert.equal(tgs.linked, true); assert.equal(tgs.title, 'Маркетплейс');
+calls.tg = [];
+assert.equal((await call('POST', `/api/checks/orders/${code2}/send`, {}, H)).r.status, 200);
+assert.equal(calls.tg.length, 1); assert.equal(String(calls.tg[0].chat_id), '-100777');
+assert.match(calls.tg[0].text, /№ 10002/); assert.match(calls.tg[0].text, /❌ Оплата «RozetkaPay», а в ТТН стоїть контроль оплати/);
+r2 = (await call('GET', '/api/checks', null, H)).j.rows.find((r) => r.id === '10002');
+assert.equal(r2.level, 'bad', 'надіслано — проблема лишається видимою'); assert.ok(r2.mark.sent_at); assert.equal(r2.mark.sent_by, 'o');
+assert.equal((await call('PUT', `/api/checks/orders/${code2}/mark`, { mark: 'bad' }, H)).r.status, 400);
 
 // Види оплат: «Післяплата NovaPay» → не перевіряти — замовлення 10003 більше не помилка.
 const pay = (await call('GET', '/api/checks/pay', null, H)).j;

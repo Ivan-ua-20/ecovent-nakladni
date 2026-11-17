@@ -11,7 +11,8 @@
 // Надходження на рахунки беремо з модуля платежів (Opendatabot) — він уже збирає їх сам.
 // Сповіщень у Telegram модуль не надсилає (сповіщення про дублі ТТН / телефонів, як і раніше, надсилає аналітика).
 // Висновки (що не так із замовленням) не зберігаємо: рахуємо під час показу сторінки з rules.js — завжди за свіжими даними.
-import { need, fail, nowIso, kyivDay, num, round2, loadSettings } from '../../core/common.js';
+import { need, fail, nowIso, kyivDay, num, round2, loadSettings, userName } from '../../core/common.js';
+import { randomToken } from '../../core/auth.js';
 import { getOrderCodesByStatus, getOrdersBatch, getStatuses, lpcrmBusy } from '../../integrations/lpcrm.js';
 import { npTrackMany } from '../../integrations/novaposhta.js';
 import { rzDeliveryList } from '../../integrations/rozetka.js';
@@ -407,6 +408,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       getJson('chk_statuses', {}),
       db.all(`SELECT id, name, login, password, license, pin, offices, lp_active, active, org_title, org_code FROM chk_cashiers ORDER BY lp_active DESC, id`),
     ]);
+    const marks = new Map((await db.all(`SELECT * FROM chk_marks`)).map((m) => [m.code, m]));
     // Каси: назва (організація з Checkbox або як у LP-CRM), організація, відділи LP-CRM.
     const fops = Object.fromEntries(cashList.map((k) => [String(k.id), k.org_title || k.name]));
     const orgOf = new Map(cashList.map((k) => [String(k.id), orgKey(k)]));
@@ -481,7 +483,11 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         receipt: receipt ? { id: receipt.id, total: receipt.total, fop: fops[String(receipt.fop_id)] || '', at: receipt.at, pays: receipt.pays.map((p) => p.label || p.type).filter(Boolean), bySum: Boolean(receipt.bySum), url: `https://check.checkbox.ua/${receipt.id}` }
           : o.receipt_ref ? { id: o.receipt_ref, total: null, fop: '', at: '', pays: [], bySum: false, url: `https://check.checkbox.ua/${o.receipt_ref}`, crmOnly: true } : null,
         expected_fop: o.fopId ? fops[String(o.fopId)] || '' : '',
-        level: ev.level, items: ev.items,
+        // Рішення людини: «усе добре» / «не зважати» — замовлення більше не рахується проблемою; «надіслано в групу» — лишається.
+        check_level: ev.level,
+        level: marks.get(o.code)?.mark === 'ok' && ev.level !== 'skip' ? 'ok' : marks.get(o.code)?.mark === 'skip' ? 'skip' : ev.level,
+        mark: marks.get(o.code) ? { mark: marks.get(o.code).mark, who: marks.get(o.code).who, at: marks.get(o.code).at, sent_at: marks.get(o.code).sent_at, sent_by: marks.get(o.code).sent_by } : null,
+        items: ev.items,
       };
     });
     return { rows, recs, matched, orders, fops, failed: Object.entries(failed).map(([id, v]) => `${fops[id] || id} — ${v.msg}`), cashList };
@@ -622,6 +628,78 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     return c.json(pubCashier(await db.get(`SELECT * FROM chk_cashiers WHERE id = ?`, [k.id])));
   });
 
+  // ---------------------------------------------------------------- рішення людини і група «Маркетплейс»
+  // ✓ «Усе добре» (mark = ok) і ✕ «Не зважати» (mark = skip); mark = '' — скасувати рішення.
+  app.put('/api/checks/orders/:code/mark', async (c) => {
+    need(c, 'users');
+    const b = await c.req.json();
+    const code = String(c.req.param('code'));
+    const mark = ['ok', 'skip', ''].includes(b.mark) ? b.mark : null;
+    if (mark === null) throw fail(400, 'Невідоме рішення.');
+    if (!await db.get(`SELECT 1 FROM chk_orders WHERE code = ?`, [code])) throw fail(404, 'Замовлення не знайдено серед перевірених.');
+    await db.run(`INSERT INTO chk_marks (code, mark, note, who, at) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(code) DO UPDATE SET mark = excluded.mark, note = excluded.note, who = excluded.who, at = excluded.at`,
+    [code, mark, String(b.note || '').slice(0, 500), userName(c), nowIso()]);
+    return c.json({ ok: true });
+  });
+  // ! — надіслати замовлення з проблемами в групу «Маркетплейс» у Telegram.
+  const h = (x) => String(x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  app.post('/api/checks/orders/:code/send', async (c) => {
+    need(c, 'users');
+    const s = await loadSettings(db);
+    if (!s.tg_token) throw fail(400, 'Telegram-бота ще не підключено (Налаштування → Telegram).');
+    if (!s.chk_tg_chat) throw fail(400, 'Групу «Маркетплейс» ще не підключено: «Перевірка → Налаштування → Група в Telegram».');
+    const code = String(c.req.param('code'));
+    const o = await db.get(`SELECT day FROM chk_orders WHERE code = ?`, [code]);
+    if (!o) throw fail(404, 'Замовлення не знайдено серед перевірених.');
+    const { rows } = await build(o.day, o.day);
+    const r = rows.find((x) => x.code === code);
+    if (!r) throw fail(404, 'Замовлення не знайдено серед перевірених.');
+    const probs = r.items.filter((i) => i.level === 'bad' || i.level === 'warn');
+    const site = new URL(c.req.url).origin;
+    const text = [`⚠️ <b>Перевірка: замовлення № ${h(r.id || r.code)}</b> від ${h(r.day.split('-').reverse().join('.'))}`,
+      `${h(r.buyer || '')}${r.channel || r.office ? ` · ${h(r.channel || r.office)}` : ''}`,
+      `Сума ${h(r.total)} грн · ${h(r.payment)}${r.ttn ? ` · ТТН ${h(r.ttn)}` : ''}${r.user ? ` · менеджер ${h(r.user)}` : ''}`,
+      '', ...(probs.length ? probs : r.items.filter((i) => i.level !== 'ok')).slice(0, 8).map((i) => `${i.level === 'bad' ? '❌' : '❗'} ${h(i.text)}`),
+      '', `Надіслав: ${h(userName(c))}`, /^https:/.test(site) ? `<a href="${h(site)}/#/checks">Відкрити «Перевірку»</a>` : ''].filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n');
+    const sent = await services.notify?.sendText?.({ chatIds: [s.chk_tg_chat] }, text).catch(() => 0);
+    if (!sent) throw fail(502, 'Telegram не прийняв повідомлення. Перевірте, що бот є в групі «Маркетплейс».');
+    await db.run(`INSERT INTO chk_marks (code, mark, sent_at, sent_by) VALUES (?, '', ?, ?)
+      ON CONFLICT(code) DO UPDATE SET sent_at = excluded.sent_at, sent_by = excluded.sent_by`, [code, nowIso(), userName(c)]);
+    return c.json({ ok: true });
+  });
+  // Група в Telegram: код → бота додають у групу і пишуть там «/link КОД» (код діє 30 хв).
+  app.get('/api/checks/tg', async (c) => {
+    need(c, 'users');
+    const s = await loadSettings(db);
+    return c.json({ bot: s.tg_bot || '', linked: Boolean(s.chk_tg_chat), title: s.chk_tg_title || '' });
+  });
+  app.post('/api/checks/tg/code', async (c) => {
+    need(c, 'users');
+    const s = await loadSettings(db);
+    if (!s.tg_token || !s.tg_bot) throw fail(400, 'Telegram-бота ще не підключено (Налаштування → Telegram).');
+    const code = randomToken(6);
+    await db.run(`INSERT INTO settings (key, value) VALUES ('chk_tg_code', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [`${code}|${Date.now() + 30 * 60000}`]);
+    return c.json({ code, bot: s.tg_bot });
+  });
+  app.delete('/api/checks/tg', async (c) => {
+    need(c, 'users');
+    await db.run(`DELETE FROM settings WHERE key IN ('chk_tg_chat', 'chk_tg_title', 'chk_tg_code')`);
+    return c.json({ ok: true });
+  });
+  // Викликає модуль Telegram, коли в групі написали «/link КОД».
+  async function tgGroupLink(code, chat, title) {
+    const v = (await db.get(`SELECT value FROM settings WHERE key = 'chk_tg_code'`))?.value || '';
+    const [want, exp] = v.split('|');
+    if (!want || want !== code || (Number(exp) || 0) < Date.now()) return '';
+    await db.batch([[`INSERT INTO settings (key, value) VALUES ('chk_tg_chat', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(chat)]],
+      [`INSERT INTO settings (key, value) VALUES ('chk_tg_title', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(title).slice(0, 120)]],
+      [`DELETE FROM settings WHERE key = 'chk_tg_code'`, []]]);
+    return '✅ Групу прив\'язано до <b>«Перевірки»</b>: сюди надходитимуть замовлення, які на сайті позначили знаком «!».';
+  }
+  const tgGroupMoved = (from, to) => db.run(`UPDATE settings SET value = ? WHERE key = 'chk_tg_chat' AND value = ?`, [String(to), String(from)]);
+  const tgGroupLeft = (chat) => db.run(`DELETE FROM settings WHERE key IN ('chk_tg_chat', 'chk_tg_title') AND (SELECT value FROM settings WHERE key = 'chk_tg_chat') = ?`, [String(chat)]);
+
   // «Оновити зараз»: один крок збору; сторінка повторює, доки more = true.
   app.post('/api/checks/refresh', async (c) => {
     need(c, 'users');
@@ -629,5 +707,5 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     return c.json({ more: Boolean(r.more), busy: Boolean(r.busy), skipped: r.skipped || '' });
   });
 
-  return { step };
+  return { step, tgGroupLink, tgGroupMoved, tgGroupLeft };
 }
