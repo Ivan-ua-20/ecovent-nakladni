@@ -7230,6 +7230,7 @@ ${e.email}` : ""}`;
     [orderId, i.product_id, i.name, i.article, i.qty, i.price, i.rrp]
   ]);
   const isHead = (c) => can(c.get("user"), "b2b.team");
+  const canSend = async (c, p) => isHead(c) || can(c.get("user"), "b2b.order") && Boolean(await db.get(`SELECT 1 AS ok FROM b2b_team_send WHERE user_id = ? AND partner_id = ?`, [c.get("user").id, p.id]));
   app.post("/api/b2b/p/orders", async (c) => {
     const p = await myPartner(c);
     const b = await c.req.json();
@@ -7253,7 +7254,7 @@ ${e.email}` : ""}`;
       await log(d.id, c.get("user"), `\u0434\u043E\u0434\u0430\u043D\u043E \u0434\u043E \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438: ${itemsTxt(add.map((a) => ({ ...byId.get(Number(a.product_id)) || { name: `ID ${a.product_id}` }, qty: Math.floor(Number(a.qty)) })))} \u2014 \u0440\u0430\u0437\u043E\u043C \u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u0446\u0456 ${uah3(total2)}`);
       return c.json({ id: d.id, number: orderNo(d.id), total: total2, draft: true });
     }
-    const draft = Boolean(b.draft) || !isHead(c);
+    const draft = Boolean(b.draft) || !await canSend(c, p);
     const e = await myEntity(p, b.entity_id);
     const delivery = deliveryOf(b.delivery);
     const ship = delivery === "warehouse" ? shipToOf(b.ship_to, p) : null;
@@ -7383,6 +7384,8 @@ ${link(c, `b2borders/${r.lastId}`)}`);
     const cnt = open ? (await db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled'`, [open.id])).n : 0;
     const drafts = await hooks.draftsOf?.(p.id) || [];
     return c.json({
+      can_send: await canSend(c, p),
+      // може відправляти закупівлі (керівник або менеджер з дозволом)
       open: { id: open?.id || null, number: open ? orderNo(open.id) : "", total: open?.total || 0, limit: lim.open, orders: cnt },
       // чернетки закупівель, куди за замовчуванням ідуть замовлення клієнтів без закупівлі (найновіша — першою)
       drafts: drafts.map((d) => ({ id: d.id, number: orderNo(d.id), total: d.total, entity: String(d.entity || "").split("\n")[0].split(",")[0] })),
@@ -7666,7 +7669,7 @@ ${link(c, `porders/${open.id}`)}`);
     const p = await myPartner(c);
     const o = await orderOf(c.req.param("id"), p.id);
     if (o.kind !== "supply") throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
-    return c.json(await orderDetail(o));
+    return c.json({ ...await orderDetail(o), can_send: await canSend(c, p) });
   });
   app.put("/api/b2b/p/orders/:id", async (c) => {
     const p = await myPartner(c);
@@ -7717,7 +7720,7 @@ ${link(c, `b2borders/${o.id}`)}`);
   });
   app.post("/api/b2b/p/orders/:id/send", async (c) => {
     const p = await myPartner(c);
-    if (!isHead(c)) throw fail(403, "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u0438\u0442\u0438 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043C\u043E\u0436\u0435 \u043B\u0438\u0448\u0435 \u043A\u0435\u0440\u0456\u0432\u043D\u0438\u043A \u0432\u0430\u0448\u043E\u0457 \u043A\u043E\u043C\u0430\u043D\u0434\u0438.");
+    if (!await canSend(c, p)) throw fail(403, "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u0438\u0442\u0438 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043C\u043E\u0436\u0435 \u043B\u0438\u0448\u0435 \u043A\u0435\u0440\u0456\u0432\u043D\u0438\u043A \u0432\u0430\u0448\u043E\u0457 \u043A\u043E\u043C\u0430\u043D\u0434\u0438 (\u0430\u0431\u043E \u043F\u043E\u043F\u0440\u043E\u0441\u0456\u0442\u044C \u0439\u043E\u0433\u043E \u0434\u043E\u0437\u0432\u043E\u043B\u0438\u0442\u0438 \u0446\u0435 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430\u043C \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445\xBB).");
     return c.json(await sendDraft(c, p, await orderOf(c.req.param("id"), p.id)));
   });
   app.post("/api/b2b/orders/:id/send", async (c) => {
@@ -7867,7 +7870,7 @@ ${link(c, `porders/${r.lastId}`)}`;
   });
   app.post("/api/b2b/p/orders/:id/confirm", async (c) => {
     const p = await myPartner(c);
-    if (!isHead(c)) throw fail(403, "\u041F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0438 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043C\u043E\u0436\u0435 \u043A\u0435\u0440\u0456\u0432\u043D\u0438\u043A \u0432\u0430\u0448\u043E\u0457 \u043A\u043E\u043C\u0430\u043D\u0434\u0438.");
+    if (!await canSend(c, p)) throw fail(403, "\u041F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0438 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043C\u043E\u0436\u0435 \u043A\u0435\u0440\u0456\u0432\u043D\u0438\u043A \u0432\u0430\u0448\u043E\u0457 \u043A\u043E\u043C\u0430\u043D\u0434\u0438.");
     const o = await orderOf(c.req.param("id"), p.id);
     if (o.kind !== "supply" || o.status !== "confirm") throw fail(400, "\u0426\u044E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0432\u0436\u0435 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E \u0430\u0431\u043E \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443.");
     const b = await c.req.json().catch(() => ({}));
@@ -13163,9 +13166,10 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     }));
     const lim = orders.limitsOf(p);
     const open = await orders.getOpen(p.id);
+    const senders = await sendersOf(p.id);
     return c.json({
       partner: p,
-      users: users.map(teamRow),
+      users: users.map((u) => teamRow(u, senders)),
       brands,
       entities,
       roles: PARTNER_ROLES,
@@ -13402,7 +13406,8 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     return c.json(await marginDefaults());
   });
   const MAX_TEAM = 30;
-  const teamRow = (u) => {
+  const sendersOf = async (partnerId) => new Set((await db.all(`SELECT user_id FROM b2b_team_send WHERE partner_id = ?`, [partnerId])).map((r) => r.user_id));
+  const teamRow = (u, senders = /* @__PURE__ */ new Set()) => {
     const [by, ...who] = String(u.added_by || "").split(":");
     return {
       id: u.id,
@@ -13411,6 +13416,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       active: u.active,
       created_at: u.created_at,
       partner_role: partnerRole(u),
+      can_send: partnerRole(u) === "head" || partnerRole(u) === "staff" && senders.has(u.id),
       partner_role_name: PARTNER_ROLES[partnerRole(u)],
       added_by_partner: by === "partner",
       added_by_name: who.join(":"),
@@ -13431,7 +13437,15 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
       [login, String(b.name || "").trim().slice(0, 100), await hashPassword(b.password), nowIso(), p.id, role, addedBy]
     );
     await audit(c, p.id, `\u0434\u043E\u0434\u0430\u043D\u043E \u043A\u043E\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \xAB${p.name}\xBB: ${login} (${PARTNER_ROLES[role]})${addedBy.startsWith("partner:") ? " \u2014 \u0434\u043E\u0434\u0430\u0432 \u043F\u0430\u0440\u0442\u043D\u0435\u0440" : ""}`);
+    if (role === "staff" && b.can_send) await setSend(c, p, { id: r.lastId, login }, true);
     return { id: r.lastId, login, role };
+  }
+  async function setSend(c, p, u, on) {
+    const had = Boolean(await db.get(`SELECT 1 AS ok FROM b2b_team_send WHERE user_id = ?`, [u.id]));
+    if (had === Boolean(on)) return false;
+    if (on) await db.run(`INSERT OR REPLACE INTO b2b_team_send (user_id, partner_id, granted_by, granted_at) VALUES (?, ?, ?, ?)`, [u.id, p.id, actorName(c), nowIso()]);
+    else await db.run(`DELETE FROM b2b_team_send WHERE user_id = ?`, [u.id]);
+    return true;
   }
   async function updateTeamUser(c, p, u, b, { byPartner = false } = {}) {
     const sets = [];
@@ -13465,6 +13479,11 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     if (!willBeHead && partnerRole(u) === "head" && u.active) {
       const heads = (await db.all(`SELECT id, partner_role FROM users WHERE partner_id = ? AND role = 'partner' AND active = 1 AND id != ?`, [p.id, u.id])).filter((x) => partnerRole(x) === "head").length;
       if (!heads) throw fail(400, "\u0423 \u043A\u043E\u043C\u0430\u043D\u0434\u0456 \u043C\u0430\u0454 \u043B\u0438\u0448\u0438\u0442\u0438\u0441\u044F \u0445\u043E\u0447\u0430 \u0431 \u043E\u0434\u0438\u043D \u0430\u043A\u0442\u0438\u0432\u043D\u0438\u0439 \u043A\u0435\u0440\u0456\u0432\u043D\u0438\u043A.");
+    }
+    const newRole = b.partner_role !== void 0 ? roleOf(b.partner_role) : partnerRole(u);
+    if (b.can_send !== void 0 || newRole !== "staff") {
+      const want = newRole === "staff" && (b.can_send !== void 0 ? Boolean(b.can_send) : Boolean(await db.get(`SELECT 1 AS ok FROM b2b_team_send WHERE user_id = ?`, [u.id])));
+      if (await setSend(c, p, u, want) && newRole === "staff") changes.push(want ? "\u0434\u043E\u0437\u0432\u043E\u043B\u0435\u043D\u043E \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u044F\u0442\u0438 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456" : "\u0437\u0430\u0431\u043E\u0440\u043E\u043D\u0435\u043D\u043E \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u044F\u0442\u0438 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456");
     }
     if (sets.length) await db.run(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`, [...vals, u.id]);
     if (b.password || b.active === false) await db.run(`DELETE FROM sessions WHERE user_id = ? AND user_id != ?`, [u.id, me.id]);
@@ -13620,7 +13639,8 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     need(c, "b2b.team");
     await services.notify?.fillTgNames?.(5).catch(() => 0);
     const rows = await db.all(`SELECT * FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY active DESC, login`, [p.id]);
-    return c.json({ users: rows.map(teamRow), roles: PARTNER_ROLES, max: MAX_TEAM, me: c.get("user").id });
+    const senders = await sendersOf(p.id);
+    return c.json({ users: rows.map((u) => teamRow(u, senders)), roles: PARTNER_ROLES, max: MAX_TEAM, me: c.get("user").id });
   });
   app.post("/api/b2b/p/team", async (c) => {
     const p = await myPartner(c);
@@ -21465,7 +21485,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 41,
+  version: 42,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -21767,6 +21787,13 @@ var schema11 = {
     created_by TEXT DEFAULT '',
     created_at TEXT NOT NULL,
     PRIMARY KEY (partner_id, product_id)
+  )`,
+    // Менеджер партнера, якому керівник дозволив самому відправляти (оформлювати, підтверджувати) закупівлі.
+    `CREATE TABLE IF NOT EXISTS b2b_team_send (
+    user_id INTEGER PRIMARY KEY,
+    partner_id INTEGER NOT NULL,
+    granted_by TEXT DEFAULT '',
+    granted_at TEXT NOT NULL
   )`,
     // ---------- Новини для партнерів (news.js) ----------
     // body — JSON блоків статті (текст, фото, відео, файл, товар); audience — JSON id партнерів ('' — усім);

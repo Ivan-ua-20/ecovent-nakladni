@@ -2,7 +2,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi, psBar, wirePsBar, psMatch, psHl, psEmpty, urgentBadge, urgentRow, cancelNote, askDeliveryChange, deliveryReqText, deliveryReqMoney, askCancel } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, wireTeamForm, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi, psBar, wirePsBar, psMatch, psHl, psEmpty, urgentBadge, urgentRow, cancelNote, askDeliveryChange, deliveryReqText, deliveryReqMoney, askCancel } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
@@ -344,7 +344,8 @@ export function createPartnerPages(ctx = {}) {
     const head = ctx.can ? ctx.can('b2b.team') : true;
     const pickup = o.delivery === 'pickup' || o.delivery === 'warehouse';
     const toConfirm = o.status === 'confirm';
-    const ents = toConfirm && head ? await api('GET', '/api/b2b/p/entities').catch(() => []) : [];
+    const send = o.can_send ?? head; // керівник або менеджер, якому керівник дозволив відправляти закупівлі
+    const ents = toConfirm && send ? await api('GET', '/api/b2b/p/entities').catch(() => []) : [];
     const hasLeft = !pickup && !['cancelled', 'open', 'confirm'].includes(o.status) && left.some((r) => r.left > 0);
     const ob = o.status === 'open' ? await openBanner() : { html: '', wire: () => {} };
     const pkLast = o.delivery === 'pickup' && !o.pickup_by ? (await api('GET', '/api/b2b/p/limits').catch(() => null))?.pickup_last || null : null;
@@ -356,7 +357,7 @@ export function createPartnerPages(ctx = {}) {
       <div class="head-row"><h2>Закупівля ${esc(o.number)} ${statusBadge(o)}</h2>
         <div class="btn-row"><a class="btn" href="#/porders">← До списку</a>
           ${['pay_wait', 'partial', 'paid', 'done'].includes(o.status) && canEdit() ? '<button class="btn" id="oClaim">🛠 Брак / обмін</button>' : ''}
-          ${isDraft && head ? '<button class="btn primary" id="oSend">Відправити закупівлю</button>' : ''}
+          ${isDraft && send ? '<button class="btn primary" id="oSend">Відправити закупівлю</button>' : ''}
           ${editable ? `<a class="btn" href="#/porders/${o.id}/edit">Змінити</a><button class="btn danger" id="oCancel">${isDraft ? 'Видалити чернетку' : 'Скасувати'}</button>` : ''}</div></div>
       ${cancelNote(o)}
       ${o.delivery_req?.from === 'partner' ? `<div class="alert warn dr-req"><div>⏳ <b>Запит на зміну способу отримання чекає підтвердження менеджера:</b> ${deliveryReqText(o.delivery_req)}.${deliveryReqMoney(o.delivery_req)}<div class="small">Поки що діє поточний спосіб — «${esc(o.delivery_name || '')}».</div></div>
@@ -367,13 +368,13 @@ export function createPartnerPages(ctx = {}) {
       ${toConfirm ? `<div class="card form-stack" style="margin-bottom:12px;border-color:var(--warn)">
         <h3 style="margin:0">📝 Цю закупівлю підготував наш менеджер — підтвердіть її</h3>
         <div class="small">${o.pay_terms === 'postpay' ? `Оплата: <b>відстрочка ${o.pay_days} дн.</b> від дати рахунку.` : 'Оплата: передоплата за рахунком.'} Отримання: <b>${esc(o.delivery_name || '')}</b>${o.ship_to ? ` — ${esc([o.ship_to.name, o.ship_to.phone, o.ship_to.address].filter(Boolean).join(', '))}` : ''}.</div>
-        ${head ? (ents.length ? `<label class="f" style="max-width:480px"><span>Юрособа, на яку виставити рахунок</span><select id="oEntSel">${ents.map((e) => `<option value="${e.id}" ${e.is_default ? 'selected' : ''}>${esc(e.name)} · ${esc(e.code)}</option>`).join('')}</select></label>
+        ${send ? (ents.length ? `<label class="f" style="max-width:480px"><span>Юрособа, на яку виставити рахунок</span><select id="oEntSel">${ents.map((e) => `<option value="${e.id}" ${e.is_default ? 'selected' : ''}>${esc(e.name)} · ${esc(e.code)}</option>`).join('')}</select></label>
             <div class="btn-row"><button class="btn primary" id="oConfirm">✅ Підтвердити закупівлю</button><button class="btn danger" id="oReject">Відхилити</button></div>`
           : '<div class="alert warn small">Щоб підтвердити, спершу додайте юрособу в «Мої юрособи».</div><div class="btn-row"><a class="btn primary" href="#/pentities">Додати юрособу</a><button class="btn danger" id="oReject">Відхилити</button></div>')
           : '<div class="small muted">Підтвердити або відхилити може керівник вашої команди.</div>'}
       </div>` : ''}
       ${isDraft ? `<div class="alert warn" style="margin-bottom:12px"><b>Чернетка</b> — її бачить лише ваша команда, нам вона ще не надійшла.
-        Менеджери додають товари (у «Нова закупівля» → «Додати до чернетки» або «Змінити»), ${head ? 'а ви натискаєте «Відправити закупівлю», коли все зібрано.' : 'а керівник вашої команди відправляє її нам.'}</div>` : ''}
+        Менеджери додають товари (у «Нова закупівля» → «Додати до чернетки» або «Змінити»), ${send ? 'а ви натискаєте «Відправити закупівлю», коли все зібрано.' : 'а керівник вашої команди відправляє її нам.'}</div>` : ''}
       <div class="form-page">
         <div class="form-stack">
           <div class="card">${itemsTable(items)}</div>
@@ -483,6 +484,7 @@ export function createPartnerPages(ctx = {}) {
     const drafts = id ? [] : (await api('GET', '/api/b2b/p/orders?status=draft').catch(() => ({ rows: [] }))).rows || [];
     const qty = new Map((cur?.items || []).map((i) => [i.product_id, i.qty]));
     const [plim, couriers] = await Promise.all([api('GET', '/api/b2b/p/limits').catch(() => null), api('GET', '/api/b2b/p/couriers').catch(() => [])]);
+    const send = plim?.can_send ?? head; // керівник або менеджер з дозволом відправляти закупівлі
     const pp = plim?.postpay || { days: 0 };
     let fb = '';
     const ps = { q: '', sel: false }; // пошук у списку товарів
@@ -530,9 +532,9 @@ export function createPartnerPages(ctx = {}) {
             ${drafts.length ? `<label class="f"><span>Чернетка</span><select id="ofDraft"><option value="">Нова закупівля</option>
               ${drafts.map((d) => `<option value="${d.id}">Додати до чернетки ${esc(d.number)} (${uah(d.total)}, ${esc(d.created_by || '')})</option>`).join('')}</select></label>` : ''}
             ${id ? `<button class="btn primary" id="ofSave">Зберегти зміни</button>`
-              : `${head ? '<button class="btn primary" id="ofSave">Оформити закупівлю</button>' : ''}<button class="btn ${head ? '' : 'primary'}" id="ofDraftSave">${head ? 'Зберегти як чернетку' : 'Зберегти в чернетку'}</button>`}
-            <div class="small muted">${head ? 'Після оформлення бухгалтер підготує рахунок — він з’явиться в закупівлі, а вам прийде повідомлення в Telegram. Доки рахунку немає, замовлення можна змінити або скасувати. Чернетку бачить лише ваша команда — її відправляєте ви.'
-              : 'Закупівля зберігається в чернетку вашої команди — її відправляє нам керівник. Кілька менеджерів можуть додавати товари в одну чернетку.'}</div>
+              : `${send ? '<button class="btn primary" id="ofSave">Оформити закупівлю</button>' : ''}<button class="btn ${send ? '' : 'primary'}" id="ofDraftSave">${send ? 'Зберегти як чернетку' : 'Зберегти в чернетку'}</button>`}
+            <div class="small muted">${send ? 'Після оформлення бухгалтер підготує рахунок — він з’явиться в закупівлі, а вам прийде повідомлення в Telegram. Доки рахунку немає, замовлення можна змінити або скасувати. Чернетку бачить лише ваша команда — відправити її можете ви або колега з таким дозволом.'
+              : 'Закупівля зберігається в чернетку вашої команди — її відправляє нам керівник (або попросіть його дозволити вам відправляти самостійно). Кілька менеджерів можуть додавати товари в одну чернетку.'}</div>
           </div>
         </div>
       </div>`;
@@ -1031,13 +1033,14 @@ export function createPartnerPages(ctx = {}) {
     box.innerHTML = `
       <div class="head-row" style="margin:0"><h3 style="margin:0">Команда</h3>${users.length < max ? '<button class="btn primary sm" id="uNew">+ Додати колегу</button>' : ''}</div>
       <div class="small muted">Додавайте колег, щоб кожен входив під своїм логіном. Ролі:
-        <b>Керівник</b> — усе, включно з командою, налаштуваннями й відправкою закупівель; <b>Менеджер</b> — каталог, чернетки закупівель, замовлення клієнтів, юрособи;
+        <b>Керівник</b> — усе, включно з командою, налаштуваннями й відправкою закупівель; <b>Менеджер</b> — каталог, чернетки закупівель, замовлення клієнтів, юрособи; відправляти закупівлі сам — якщо ви поставите йому галочку «Може сам відправляти закупівлі» («Змінити»);
         <b>Лише перегляд</b> — бачить усе, але нічого не змінює. Ваш менеджер у Ековент бачить склад команди. До ${max} користувачів.</div>
       ${teamTable(users, { me, showAdded: false })}`;
     const form = (u) => {
       const self = u && u.id === me;
       const m = modal(u ? `Користувач ${u.login}` : 'Новий колега', teamFormHtml(u, roles, { self }),
         { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="puSave">Зберегти</button>' });
+      wireTeamForm($('#puF', m.el));
       $('#puSave', m.el).onclick = async () => {
         try {
           const d = teamFormData($('#puF', m.el));
@@ -1068,7 +1071,7 @@ export function createPartnerPages(ctx = {}) {
         <p>«Закупівлі» → «+ Нова закупівля»: вкажіть кількість товарів, юрособу і спосіб отримання — <b>Нова пошта</b> (відправляємо вашим клієнтам за замовленнями)
           або <b>самовивіз</b> усієї закупівлі.</p>
         <p><b>Чернетки.</b> Менеджер вашої команди зберігає закупівлю в чернетку (кілька людей можуть додавати товари в одну), а відправляє її нам керівник
-          кнопкою «Відправити закупівлю». Керівник може й одразу «Оформити закупівлю».</p>
+          кнопкою «Відправити закупівлю». Керівник може й одразу «Оформити закупівлю». Менеджеру, якому керівник поставив галочку «Може сам відправляти закупівлі», — так само.</p>
         <p><b>Статуси:</b> Чернетка → Очікує рахунок → Очікує оплату (рахунок готовий — файл у закупівлі) → Частково оплачено → Оплачено → Завершено.
           Позначка <b>«Закрито»</b> — усі товари закупівлі вже розписані на замовлення клієнтів. Доки рахунку немає, закупівлю можна змінити або скасувати.
           Файли рахунку й накладної зберігаються 30 днів — завантажте їх собі.</p>
@@ -1100,7 +1103,7 @@ export function createPartnerPages(ctx = {}) {
 
         <h3>7. Налаштування і команда</h3>
         <p>У «Налаштуваннях» керівник додає колег із власним логіном і паролем (блок «Команда») і обирає роль: <b>Керівник</b> (усе, включно з командою і відправленням закупівель),
-          <b>Менеджер</b> (каталог, закупівлі в чернетку, замовлення клієнтів, юрособи) або <b>Лише перегляд</b>. Вимкнений користувач більше не зможе увійти.
+          <b>Менеджер</b> (каталог, закупівлі в чернетку, замовлення клієнтів, юрособи; з галочкою «Може сам відправляти закупівлі» — ще й відправляє їх) або <b>Лише перегляд</b>. Вимкнений користувач більше не зможе увійти.
           Там же — документи до замовлень клієнтів (до 5): «Обов'язковий» і «Друкувати» (ми вкладемо його в посилку).</p>
 
         <h3>8. Telegram</h3>

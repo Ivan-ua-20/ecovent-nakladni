@@ -4,7 +4,7 @@ import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
 import { viewAdminSupplyForm } from './b2b-supply.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard, urgentBadge, urgentRow, askCancel, cancelNote, deliveryReqText, deliveryReqMoney } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, wireTeamForm, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard, urgentBadge, urgentRow, askCancel, cancelNote, deliveryReqText, deliveryReqMoney } from './b2b-shared.js';
 
 const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
 
@@ -549,6 +549,7 @@ export function createB2bPages(ctx = {}) {
       const isNew = !u;
       const m = modal(isNew ? `Новий користувач — ${p.name}` : `Користувач ${u.login}`, teamFormHtml(u, roles, { defaultRole: users.length ? 'staff' : 'head' }),
         { footer: `<button class="btn" data-close>Скасувати</button><button class="btn primary" id="puSave">Зберегти</button>` });
+      wireTeamForm($('#puF', m.el));
       $('#puSave', m.el).onclick = async () => {
         const d = teamFormData($('#puF', m.el));
         try {
