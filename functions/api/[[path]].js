@@ -13099,8 +13099,9 @@ async function npCall(fetchFn, apiKey, modelName, calledMethod, methodProperties
   const j = await res.json().catch(() => null);
   if (!j) throw Object.assign(new Error(`\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430: \u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${res.status}`), { status: 502 });
   if (!j.success) {
-    const msg = [...j.errors || [], ...j.warnings || []].filter((x) => typeof x === "string").join("; ");
-    throw Object.assign(new Error(`\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430: ${msg || "\u0437\u0430\u043F\u0438\u0442 \u043D\u0435 \u0432\u0438\u043A\u043E\u043D\u0430\u043D\u043E"}`), { status: 400, npErrors: j.errorCodes || [] });
+    const list = (v) => Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : v ? [v] : [];
+    const msg = [...list(j.errors), ...list(j.warnings)].filter((x) => typeof x === "string" && x.trim()).join("; ");
+    throw Object.assign(new Error(`\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430: ${msg || "\u0437\u0430\u043F\u0438\u0442 \u043D\u0435 \u0432\u0438\u043A\u043E\u043D\u0430\u043D\u043E"}`), { status: 400, npErrors: list(j.errorCodes).map(String) });
   }
   return Array.isArray(j.data) ? j.data : [];
 }
@@ -13486,9 +13487,17 @@ ${link(c, `pclients/${o.id}`)}`).catch(() => 0);
     const o = await orderOf(c.req.param("id"));
     if (o.kind !== "client" || !o.np_doc_ref) throw fail(400, "\u0423 \u0446\u044C\u043E\u043C\u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u043D\u0435\u043C\u0430\u0454 \u0422\u0422\u041D, \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E\u0457 \u0447\u0435\u0440\u0435\u0437 \u0441\u0435\u0440\u0432\u0456\u0441.");
     if (o.status !== "new" || o.crm_id) throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u0435 \u0432 LP-CRM \u2014 \u0422\u0422\u041D \u0432\u0438\u0434\u0430\u043B\u044F\u0439\u0442\u0435 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438.");
-    await npDeleteDocument(fetchFn, await keyOf(o.np_account), o.np_doc_ref);
+    const force = c.req.query("force") === "1";
+    if (!force) {
+      try {
+        await npDeleteDocument(fetchFn, await keyOf(o.np_account), o.np_doc_ref);
+      } catch (e) {
+        if (e.pending || e.status !== 400) throw e;
+        throw Object.assign(fail(409, `${e.message}. \u042F\u043A\u0449\u043E \u0422\u0422\u041D ${o.ttn} \u0443\u0436\u0435 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 \u2014 \u0457\u0457 \u043C\u043E\u0436\u043D\u0430 \u043F\u0440\u043E\u0441\u0442\u043E \u043F\u0440\u0438\u0431\u0440\u0430\u0442\u0438 \u0456\u0437 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.`), { extra: { can_force: true } });
+      }
+    }
     await db.run(`UPDATE b2b_orders SET ttn = '', np_doc_ref = '', np_meta = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
-    await log(o.id, c.get("user"), `\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u0422\u0422\u041D ${o.ttn}`);
+    await log(o.id, c.get("user"), force ? `\u0422\u0422\u041D ${o.ttn} \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0456\u0437 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F (\u0443 \u041D\u043E\u0432\u0456\u0439 \u043F\u043E\u0448\u0442\u0456 \u0457\u0457 \u0432\u0436\u0435 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E)` : `\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u0422\u0422\u041D ${o.ttn}`);
     return c.json({ ok: true });
   });
 }
