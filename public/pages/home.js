@@ -40,11 +40,12 @@ export function createHomePages(ctx = {}) {
   async function viewPartnerHome() {
     main.innerHTML = '<div class="card muted">Завантаження…</div>';
     const from14 = shiftDay(kyivToday(), -14);
-    const [d, lim, feed, prices] = await Promise.all([
+    const [d, lim, feed, prices, news] = await Promise.all([
       api('GET', '/api/b2b/p/home'),
       api('GET', '/api/b2b/p/limits').catch(() => null),
       api('GET', '/api/b2b/p/feed?limit=40').catch(() => ({})),
       api('GET', `/api/b2b/p/price-log?from=${from14}`).catch(() => ({})),
+      ctx.newsBlock ? ctx.newsBlock().catch(() => '') : '',
     ]);
     const canEdit = !ctx.can || ctx.can('b2b.order');
     const paused = d.partner.paused;
@@ -70,6 +71,7 @@ export function createHomePages(ctx = {}) {
       ${paused ? '<div class="alert bad" style="margin-bottom:14px">Нові закупівлі й замовлення тимчасово призупинено. Зверніться до менеджера.</div>' : ''}
       <div class="home2">
         <aside class="home2-side">
+          ${news || ''}
           <div class="card home2-act">
             <span class="an7-h">Швидкі дії</span>
             ${canEdit && !paused ? '<a class="btn primary" href="#/porders/new">+ Нова закупівля</a><a class="btn" href="#/pclients/new">+ Замовлення клієнта</a>' : ''}

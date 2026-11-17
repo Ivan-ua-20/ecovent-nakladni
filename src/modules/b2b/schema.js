@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 40,
+  version: 41,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -305,6 +305,64 @@ export const schema = {
     created_by TEXT DEFAULT '',
     created_at TEXT NOT NULL,
     PRIMARY KEY (partner_id, product_id)
+  )`,
+  // ---------- Новини для партнерів (news.js) ----------
+  // body — JSON блоків статті (текст, фото, відео, файл, товар); audience — JSON id партнерів ('' — усім);
+  // status — draft | published; publish_at — з якого часу видно (у майбутньому — заплановано);
+  // tg — сповістити Telegram-групи партнерів; notified_at — розсилку завершено.
+  `CREATE TABLE IF NOT EXISTS b2b_news (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL DEFAULT '',
+    summary TEXT DEFAULT '',
+    category TEXT DEFAULT 'other',
+    brands TEXT DEFAULT '',
+    cover INTEGER,
+    cover_url TEXT DEFAULT '',
+    body TEXT DEFAULT '[]',
+    audience TEXT DEFAULT '',
+    pinned INTEGER DEFAULT 0,
+    tg INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'draft',
+    publish_at TEXT DEFAULT '',
+    notified_at TEXT DEFAULT '',
+    created_by TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_by TEXT DEFAULT '',
+    updated_at TEXT DEFAULT '',
+    deleted_at TEXT DEFAULT ''
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_news_pub ON b2b_news (status, publish_at)`,
+  // Файли новин (фото, PDF, відео): до 5 МБ — частинами в D1 (store = 'd1'), більші — у сховищі R2 (store = 'r2').
+  `CREATE TABLE IF NOT EXISTS b2b_news_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    mime TEXT DEFAULT '',
+    size INTEGER NOT NULL DEFAULT 0,
+    store TEXT DEFAULT 'd1',
+    parts INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS b2b_news_file_parts (
+    file_id INTEGER NOT NULL,
+    n INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (file_id, n)
+  )`,
+  // Хто з партнерів прочитав (перший, хто відкрив) і кому вже надіслано в Telegram.
+  `CREATE TABLE IF NOT EXISTS b2b_news_reads (
+    news_id INTEGER NOT NULL,
+    partner_id INTEGER NOT NULL,
+    user_id INTEGER,
+    at TEXT NOT NULL,
+    PRIMARY KEY (news_id, partner_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS b2b_news_sent (
+    news_id INTEGER NOT NULL,
+    partner_id INTEGER NOT NULL,
+    sent INTEGER DEFAULT 0,
+    at TEXT NOT NULL,
+    PRIMARY KEY (news_id, partner_id)
   )`,
   ],
   // ---------- етап 3: замовлення для клієнтів партнера ----------

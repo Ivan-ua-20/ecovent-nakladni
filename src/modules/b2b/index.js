@@ -22,6 +22,7 @@ import { mountB2bNewProducts } from './newproducts.js';
 import { mountB2bClaims } from './claims.js';
 import { mountB2bFeeds } from './feeds.js';
 import { mountB2bApi } from './api.js';
+import { mountB2bNews } from './news.js';
 
 export const partnerPrice = (rrp, margin) => round2((Number(rrp) || 0) * (1 - (Number(margin) || 0) / 100));
 
@@ -675,6 +676,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   const newProducts = mountB2bNewProducts(app, { db, services, partnerPrice, brandNames });
   const attention = async (user) => [...await home.attention(), ...await crm.attention(user), ...await newProducts.attention()];
   mountB2bPrices(app, { db, services, partnerPrice, myPartner });
+  mountB2bNews(app, { db, services, myPartner, partnerPrice, brandNames, onCron });
 
   // ---------- Telegram-група партнера ----------
   // Адмін бере код у картці партнера, додає бота в групу і пишe там «/link КОД» (код діє 30 хв).

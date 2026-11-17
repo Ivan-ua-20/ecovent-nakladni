@@ -12,6 +12,15 @@ export function takeHashQuery() {
   return q;
 }
 export const main = $('#main');
+// Лічильник біля вкладки (напр. непрочитані «Новини» партнера): зберігається між перемальовуваннями меню.
+export const tabBadges = {};
+export function setTabBadge(id, n) {
+  tabBadges[id] = Number(n) || 0;
+  const a = document.querySelector(`.subnav a[href="#/${id}"]`);
+  if (!a) return;
+  a.querySelector('.tab-dot')?.remove();
+  if (tabBadges[id]) a.insertAdjacentHTML('beforeend', ` <b class="tab-dot">${tabBadges[id]}</b>`);
+}
 export const MASK = '••••••';
 export const todayKyiv = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv' }).format(new Date());
 
@@ -98,7 +107,7 @@ export function modal(title, bodyHtml, { footer = '', wide = false, focus = '' }
   bg.addEventListener('click', (e) => { if (e.target === bg || e.target.closest('[data-close]')) close(); });
   document.addEventListener('keydown', onKey, true);
   document.body.appendChild(bg);
-  const start = (focus && bg.querySelector(focus)) || bg.querySelector('.modal-body ' + FOCUSABLE) || bg.querySelector('[data-close]');
+  const start = (focus && bg.querySelector(focus)) || bg.querySelector('.modal-body')?.querySelector(FOCUSABLE) || bg.querySelector('[data-close]');
   start?.focus();
   return { el: bg, close };
 }
