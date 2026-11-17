@@ -20492,7 +20492,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const failed = cbFails(Object.fromEntries([["chk_cb_fail", cbFailRaw]]));
     const readable = new Set(readers(cashList, failed).map((f) => orgOf.get(String(f.dbId))));
     const cashByOffice = /* @__PURE__ */ new Map();
-    for (const k of cashList) {
+    for (const k of cashList.filter((x) => x.lp_active)) {
       let offs = [];
       try {
         offs = JSON.parse(k.offices || "[]");
