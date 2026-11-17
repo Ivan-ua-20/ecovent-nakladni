@@ -3,6 +3,7 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
+import { catalogPriceModal, partnerPriceModal } from './b2b-price.js';
 import { viewAdminSupplyForm } from './b2b-supply.js';
 import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, wireTeamForm, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard, urgentBadge, urgentRow, askCancel, cancelNote, deliveryReqText, deliveryReqMoney } from './b2b-shared.js';
 
@@ -56,7 +57,7 @@ export function createB2bPages(ctx = {}) {
         <input id="pQ" placeholder="Пошук: назва, телефон, email, примітка" value="${esc(pFilter.q)}" style="max-width:340px">
         ${pFilter.id ? `<a class="btn sm" href="#/b2bpartners/${esc(pFilter.id)}">Відкрити картку</a>` : ''}</div>
       <div id="pBulk" class="btn-row card" hidden style="position:sticky;top:8px;z-index:5;margin-bottom:10px;padding:8px 12px;flex-wrap:wrap;align-items:center"></div>` : ''}
-      ${rows.length ? `<table class="list"><thead><tr><th style="width:34px"><input type="checkbox" id="pSelAll" aria-label="Обрати всіх"></th><th>Партнер</th><th class="hide-m">Контакти</th><th class="r">Борг</th><th class="r hide-m">Користувачі</th><th class="r hide-m">Бренди</th><th>Стан</th></tr></thead><tbody>
+      ${rows.length ? `<table class="list"><thead><tr><th style="width:34px"><input type="checkbox" id="pSelAll" aria-label="Обрати всіх"></th><th>Партнер</th><th class="hide-m">Контакти</th><th class="r">Борг</th><th class="r hide-m">Користувачі</th><th class="r hide-m">Бренди</th><th>Стан</th><th class="r">Excel прайс</th></tr></thead><tbody>
         ${rows.map((p) => `<tr class="click" data-p="${p.id}">
           <td data-nosel style="width:34px"><input type="checkbox" data-psel="${p.id}" aria-label="Обрати"></td>
           <td><b>${esc(p.name)}</b>${limTxt(p) ? `<div class="small muted">ліміти: ${limTxt(p)}</div>` : ''}<div class="small muted">${sinceOrder(p) == null ? 'ще не замовляв' : sinceOrder(p) === 0 ? 'замовляв сьогодні' : `останнє замовлення ${sinceOrder(p)} дн. тому`}</div></td>
@@ -65,13 +66,15 @@ export function createB2bPages(ctx = {}) {
             ${p.debt_overdue ? `<div><span class="badge bad">прострочено ${money(p.debt_overdue)}</span></div>` : ''}</td>
           <td class="r hide-m">${p.users}${p.users_by_partner ? `<div class="small muted">з них додав партнер: ${p.users_by_partner}</div>` : ''}</td><td class="r hide-m">${p.brands}</td>
           <td>${pState(p)}</td>
+          <td class="r" data-nosel>${p.brands ? `<button type="button" class="btn sm" data-xp="${p.id}" title="Прайс партнера: його бренди й ціни, аркуш на бренд">⬇ Excel</button>` : '<span class="small muted" title="Брендів не відкрито">—</span>'}</td>
         </tr>`).join('')}
         <tr class="bk-total"><td></td><td><b>Усього борг</b></td><td class="hide-m"></td><td class="r nowrap"><b>${money(rows.reduce((t, p) => t + (p.debt || 0), 0))} грн</b>
-          ${rows.some((p) => p.debt_overdue) ? `<div><span class="badge bad">прострочено ${money(rows.reduce((t, p) => t + (p.debt_overdue || 0), 0))}</span></div>` : ''}</td><td class="hide-m"></td><td class="hide-m"></td><td></td></tr></tbody></table>`
+          ${rows.some((p) => p.debt_overdue) ? `<div><span class="badge bad">прострочено ${money(rows.reduce((t, p) => t + (p.debt_overdue || 0), 0))}</span></div>` : ''}</td><td class="hide-m"></td><td class="hide-m"></td><td></td><td></td></tr></tbody></table>`
         : all.length ? '<div class="card empty"><div class="big">Нікого не знайдено</div>Змініть фільтр або пошук.</div>'
         : '<div class="card empty"><div class="big">Партнерів ще немає</div>Створіть першого партнера, додайте йому користувача і ввімкніть бренди.</div>'}`;
     $$('[data-p]').forEach((tr) => (tr.onclick = () => { location.hash = `#/b2bpartners/${tr.dataset.p}`; }));
     $$('[data-nosel]').forEach((td) => (td.onclick = (e) => e.stopPropagation()));
+    $$('[data-xp]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); partnerPriceModal(b.dataset.xp); }));
     $('#pNew').onclick = () => partnerForm(null);
     $('#pAnn').onclick = () => announce();
     $('#pAuto').onclick = async () => {
@@ -789,7 +792,7 @@ export function createB2bPages(ctx = {}) {
     const qs = new URLSearchParams(Object.entries(catFilter).filter(([, v]) => v !== '')).toString();
     const [{ rows, state }, brands] = await Promise.all([api('GET', `/api/b2b/catalog${qs ? `?${qs}` : ''}`), api('GET', '/api/b2b/brands')]);
     main.innerHTML = `
-      <div class="head-row"><h2>Каталог і ціни</h2><div class="btn-row"><button class="btn" id="cAdd">+ Товари за ID</button><button class="btn" id="cNew">Нові товари</button><button class="btn" id="cSend">Надіслати зміни цін</button><button class="btn" id="cAnn">📢 Оголошення</button><button class="btn primary" id="cSync">Оновити з LP-CRM</button></div></div>
+      <div class="head-row"><h2>Каталог і ціни</h2><div class="btn-row"><button class="btn" id="cAdd">+ Товари за ID</button><button class="btn" id="cNew">Нові товари</button><button class="btn" id="cSend">Надіслати зміни цін</button><button class="btn" id="cAnn">📢 Оголошення</button><button class="btn" id="cXlsx">⬇ Excel прайс</button><button class="btn primary" id="cSync">Оновити з LP-CRM</button></div></div>
       <div class="alert info help" style="margin-bottom:14px">Товари — з аналітики (усе, що продавалося) і додані вручну за ID з LP-CRM. Назва, РРЦ і фото оновлюються з LP-CRM
         для брендів, увімкнених хоча б одному партнеру. ${state.lastSync ? `Останнє оновлення: ${esc(fmtDateTime(state.lastSync))}.` : 'Ще не оновлювався.'}
         ${state.stale ? `<b>Чекають оновлення: ${state.stale}.</b>` : ''}</div>
@@ -810,6 +813,7 @@ export function createB2bPages(ctx = {}) {
     let t;
     $('#cQ').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { catFilter.q = e.target.value.trim(); viewCatalog(); }, 400); };
     $('#cSync').onclick = (e) => syncCatalog(e.currentTarget);
+    $('#cXlsx').onclick = () => catalogPriceModal();
     $('#cSend').onclick = () => sendPrices();
     $('#cNew').onclick = () => newProducts();
     // Скільки новинок чекає перевірки — у підписі кнопки.

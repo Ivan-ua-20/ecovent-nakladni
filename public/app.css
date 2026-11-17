@@ -1266,3 +1266,11 @@ tr.chk-detail > td { background: var(--bg2, #fafafa); padding: 10px 14px 14px; }
   .nw-ctl { display: flex; position: static; margin-top: 6px; }
 }
 .nw-filters input[type=search], #nwPq, .nw-urlrow input, .nw-cap, .nw-opts input[type=datetime-local] { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: #fff; color: var(--ink); font-size: 14px; box-sizing: border-box; }
+
+/* B2B: Excel-прайс з каталогу (b2b-price.js) */
+.pl-list { display: flex; flex-direction: column; max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.pl-row { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-top: 1px solid var(--line); }
+.pl-row:first-child { border-top: 0; }
+.pl-row .check { flex: 1; }
+.pl-pct { display: inline-flex; align-items: center; gap: 4px; }
+.pl-pct input { width: 80px; text-align: right; }
