@@ -1393,7 +1393,13 @@ export function createB2bPages(ctx = {}) {
     $('#clTtn') && ($('#clTtn').onclick = () => npTtnModal(o, items, () => viewClient(id)));
     $('#clTtnDel') && ($('#clTtnDel').onclick = async () => {
       if (!(await confirmDanger(`Видалити ТТН ${o.ttn}?`, 'ТТН буде видалено і в кабінеті Нової пошти. Потім можна створити нову.', 'Видалити ТТН'))) return;
-      try { await api('DELETE', `/api/b2b/clients/${o.id}/ttn`); toast('ТТН видалено'); viewClient(id); } catch (er) { toast(er.message, true); }
+      try { await api('DELETE', `/api/b2b/clients/${o.id}/ttn`); toast('ТТН видалено'); viewClient(id); }
+      catch (er) {
+        // ТТН уже видалили в кабінеті НП (або НП її не знаходить) — прибрати із замовлення, щоб створити нову.
+        if (!er.data?.can_force) { toast(er.message, true); return; }
+        if (!(await confirmDanger(`Прибрати ТТН ${o.ttn} із замовлення?`, `${esc(er.message)}<br><br>ТТН зникне із замовлення, і можна буде створити нову. У Новій пошті нічого не зміниться.`, 'Прибрати ТТН'))) return;
+        try { await api('DELETE', `/api/b2b/clients/${o.id}/ttn?force=1`); toast('ТТН прибрано — можна створити нову'); viewClient(id); } catch (e2) { toast(e2.message, true); }
+      }
     });
     $('#clCrm') && ($('#clCrm').onclick = async (e) => {
       e.currentTarget.disabled = true;

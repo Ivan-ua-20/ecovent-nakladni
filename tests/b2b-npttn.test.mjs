@@ -36,7 +36,7 @@ const fetchFn = async (url, opts = {}) => {
     const b = JSON.parse(opts.body);
     np.push(b);
     const fn = NP[`${b.modelName}.${b.calledMethod}`];
-    return new Response(JSON.stringify(fn ? { success: true, data: fn(b) } : { success: false, errors: ['unknown'] }));
+    return new Response(JSON.stringify(fn ? { success: true, data: fn(b) } : { success: false, errors: { 20000400346: 'Документ не знайдено' }, errorCodes: { 20000400346: '20000400346' } }));
   }
   const p = new URLSearchParams(opts.body);
   if (!p.get('product_id')) return new Response(JSON.stringify({ status: 'ok', data: [] }));
@@ -147,6 +147,25 @@ assert.equal(JSON.parse((await db.get(`SELECT value FROM settings WHERE key = 'b
 await req('DELETE', `/api/b2b/clients/${ord.id}/ttn`);
 assert.equal((await db.get(`SELECT ttn, np_doc_ref FROM b2b_orders WHERE id = ?`, [ord.id])).ttn, '');
 assert.equal(np.at(-1).calledMethod, 'delete');
+
+// ТТН уже видалили в кабінеті НП: delete повертає помилку об'єктом — зрозуміле повідомлення й «прибрати із замовлення»
+await req('POST', `/api/b2b/clients/${ord.id}/ttn`, body);
+const realDelete = NP['InternetDocument.delete'];
+NP['InternetDocument.delete'] = null;
+const origFetch = fetchFn;
+const delErr = await call('DELETE', `/api/b2b/clients/${ord.id}/ttn`);
+NP['InternetDocument.delete'] = realDelete;
+assert.equal(delErr.status, 409, JSON.stringify(delErr.j));
+assert.equal(delErr.j.can_force, true);
+assert.match(delErr.j.error, /уже видалено в кабінеті/);
+assert.ok((await db.get(`SELECT ttn FROM b2b_orders WHERE id = ?`, [ord.id])).ttn, 'без force — ТТН лишається');
+np.length = 0;
+await req('DELETE', `/api/b2b/clients/${ord.id}/ttn?force=1`);
+assert.equal(np.length, 0, 'force — без запиту до НП');
+assert.equal((await db.get(`SELECT ttn, np_doc_ref FROM b2b_orders WHERE id = ?`, [ord.id])).ttn, '');
+assert.equal((await req('POST', `/api/b2b/clients/${ord.id}/ttn`, body)).ttn, '20450000000001', 'можна створити нову');
+await req('DELETE', `/api/b2b/clients/${ord.id}/ttn`);
+void origFetch;
 
 // ---------- адресна доставка ----------
 const doors = { ...W, type: 'doors', warehouse: null, street: { ref: 'ST-1', name: 'вул. Хрещатик' }, house: '10', flat: '5' };

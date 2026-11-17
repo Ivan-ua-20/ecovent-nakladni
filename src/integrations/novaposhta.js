@@ -20,8 +20,10 @@ export async function npCall(fetchFn, apiKey, modelName, calledMethod, methodPro
   const j = await res.json().catch(() => null);
   if (!j) throw Object.assign(new Error(`Нова пошта: помилка ${res.status}`), { status: 502 });
   if (!j.success) {
-    const msg = [...(j.errors || []), ...(j.warnings || [])].filter((x) => typeof x === 'string').join('; ');
-    throw Object.assign(new Error(`Нова пошта: ${msg || 'запит не виконано'}`), { status: 400, npErrors: j.errorCodes || [] });
+    // errors / warnings / errorCodes бувають масивом, об'єктом {код: текст} або рядком — приводимо до списку.
+    const list = (v) => (Array.isArray(v) ? v : v && typeof v === 'object' ? Object.values(v) : v ? [v] : []);
+    const msg = [...list(j.errors), ...list(j.warnings)].filter((x) => typeof x === 'string' && x.trim()).join('; ');
+    throw Object.assign(new Error(`Нова пошта: ${msg || 'запит не виконано'}`), { status: 400, npErrors: list(j.errorCodes).map(String) });
   }
   return Array.isArray(j.data) ? j.data : [];
 }

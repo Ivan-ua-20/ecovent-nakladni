@@ -181,9 +181,17 @@ export function mountB2bNpTtn(app, { db, fetchFn, services = {}, myPartner, orde
     const o = await orderOf(c.req.param('id'));
     if (o.kind !== 'client' || !o.np_doc_ref) throw fail(400, 'У цьому замовленні немає ТТН, створеної через сервіс.');
     if (o.status !== 'new' || o.crm_id) throw fail(400, 'Замовлення вже передане в LP-CRM — ТТН видаляйте в кабінеті Нової пошти.');
-    await npDeleteDocument(fetchFn, await keyOf(o.np_account), o.np_doc_ref);
+    // force — ТТН уже видалили в кабінеті НП (або НП її не знаходить): лише прибрати із замовлення, щоб створити нову.
+    const force = c.req.query('force') === '1';
+    if (!force) {
+      try { await npDeleteDocument(fetchFn, await keyOf(o.np_account), o.np_doc_ref); }
+      catch (e) {
+        if (e.pending || e.status !== 400) throw e;
+        throw Object.assign(fail(409, `${e.message}. Якщо ТТН ${o.ttn} уже видалено в кабінеті Нової пошти — її можна просто прибрати із замовлення.`), { extra: { can_force: true } });
+      }
+    }
     await db.run(`UPDATE b2b_orders SET ttn = '', np_doc_ref = '', np_meta = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
-    await log(o.id, c.get('user'), `видалено ТТН ${o.ttn}`);
+    await log(o.id, c.get('user'), force ? `ТТН ${o.ttn} прибрано із замовлення (у Новій пошті її вже видалено)` : `видалено ТТН ${o.ttn}`);
     return c.json({ ok: true });
   });
 }
