@@ -4,6 +4,7 @@
 // відгуки на товари — фільтр «хто ще не залишив відгук» і нагадування (Viber, Telegram, дзвінок, чат Розетки).
 import { esc } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime, todayKyiv } from '../core/ui.js';
+import { crmCreateFlow } from './mpcrm.js';
 
 const uah = (n) => `${Number(n || 0).toLocaleString('uk-UA', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} ₴`;
 const dt = (s) => String(s || '').slice(0, 16).replace(/^(\d{4})-(\d{2})-(\d{2})/, '$3.$2.$1');
@@ -74,8 +75,6 @@ const stColor = (o) => {
   return '#2F6FED';
 };
 const VIA = { viber: 'Viber', telegram: 'Telegram', phone: 'дзвінок', copy: 'текст', chat: 'чат Розетки', manual: 'вручну' };
-// Звідки взято товар LP-CRM у формі «Створити в LP-CRM» (довідник товарів: лише однозначний збіг, без вгадування за назвою).
-const FROM_TXT = { saved: 'як минулого разу', copied: 'як у такого ж товару', code: 'за кодом товару', sku: 'за артикулом' };
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch { /* немає доступу до буфера — старий спосіб */ }
   const ta = document.createElement('textarea');
@@ -146,7 +145,7 @@ export function createMarketPages({ can }) {
           ${shops.map((s) => `<a class="chip ${acc?.id === s.id ? 'on' : ''}" href="#/${route}/${s.id}" title="${esc(syncInfo(s))} · замовлень у базі за весь час">${esc(s.name)} · ${s.orders}${s.error ? ' ⚠️' : ''}</a>`).join('')}
         </nav>
         <span class="small muted">${acc ? syncInfo(acc) : 'оновлюється само кожні кілька хвилин'}</span>
-        ${rz && can('api') ? '<button class="btn sm" id="mpRemind">Ранкове нагадування</button>' : ''}${acc && can('api') ? '<button class="btn sm" id="mpRename">Перейменувати</button>' : ''}${acc && rz && can('api') ? '<button class="btn sm" id="mpCrmSet">Налаштування LP-CRM</button>' : ''}${acc && can('market.edit') ? `<button class="btn sm" id="mpSync" ${acc.active ? '' : 'disabled'}>Оновити зараз</button>` : ''}
+        ${rz ? '<a class="btn sm" href="#/mpset" title="Передача в LP-CRM, товари, ранкове нагадування, LP-CRM магазинів">⚙ Налаштування</a>' : ''}${acc && can('api') ? '<button class="btn sm" id="mpRename">Перейменувати</button>' : ''}${acc && can('market.edit') ? `<button class="btn sm" id="mpSync" ${acc.active ? '' : 'disabled'}>Оновити зараз</button>` : ''}
       </div>
       ${(acc ? [acc] : shops).filter((s) => s.error).map((s) => `<div class="alert warn small" style="margin-bottom:10px">⚠️ «${esc(s.name)}»: не вдалося оновити${s.error_at ? ` (${esc(fmtDateTime(s.error_at))})` : ''} — ${esc(s.error)}</div>`).join('')}
       ${(acc ? [acc] : shops).filter((s) => s.active).map(hist).join('')}
@@ -431,52 +430,8 @@ export function createMarketPages({ can }) {
         b.disabled = false; b.textContent = 'Знайти в LP-CRM';
       };
     }
-    async function crmCreate(o) {
-      let pre;
-      try { pre = await api('GET', `/api/mp/crm/prefill/${o.account_id}/${encodeURIComponent(o.id)}`); } catch (er) { toast(er.message, true); return; }
-      if (!pre.configured) { toast('Не налаштовано LP-CRM у «Налаштуваннях»', true); return; }
-      const rows = pre.items.map((it, i) => `<div class="mp-crm-line" data-i="${i}">
-          <div class="small"><b>${esc(it.name)}</b> <span class="muted">код ${esc(it.item_id)}</span></div>
-          <div class="mp-crm-pick"><input type="search" data-q placeholder="Товар LP-CRM: почніть вводити назву" value="${esc(it.product_name)}" autocomplete="off">
-            <input type="hidden" data-pid value="${esc(it.product_id || '')}"><div class="mp-crm-res" data-res></div>
-            <div class="small ${it.product_id ? '' : 'muted'}" data-sel>${it.product_id ? `№${esc(it.product_id)}${FROM_TXT[it.from] ? ` · ${FROM_TXT[it.from]}` : ''}` : 'товар не обрано — оберіть зі списку'}</div></div>
-          <label class="f"><span>К-сть</span><input data-qty type="number" min="1" step="1" value="${it.qty}"></label>
-          <label class="f"><span>Ціна, ₴</span><input data-price type="number" min="0" step="0.01" value="${it.price}"></label>
-        </div>`).join('');
-      const md = modal(`Створити в LP-CRM: Розетка №${o.number}`, `<div class="form-stack">
-          <div class="small">Нове замовлення в LP-CRM (статус «Нові»), відділ <b>5 · Маркетплейси</b>, вид оплати <b>${esc(pre.pay?.name || '')}</b>. Покупець <b>${esc(o.customer || '')}</b>, ${esc(intlPhone(o.phone) || '')}. У коментар підуть номер, дата й час замовлення, повна інформація про оплату, доставка й коментар покупця.</div>
-          ${rows}</div>`, { wide: true, footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="mpCrmGo">Створити в LP-CRM</button>' });
-      const el = md.el;
-      $$('.mp-crm-line', el).forEach((line) => {
-        const q = $('[data-q]', line);
-        const res = $('[data-res]', line);
-        let t = 0;
-        q.oninput = () => {
-          clearTimeout(t);
-          t = setTimeout(async () => {
-            if (q.value.trim().length < 2) { res.innerHTML = ''; return; }
-            try {
-              const r = await api('GET', `/api/mp/crm/products?q=${encodeURIComponent(q.value)}`);
-              res.innerHTML = r.products.length ? r.products.map((p) => `<button type="button" data-p="${p.id}" data-n="${esc(p.name)}">№${p.id} · ${esc(p.name)}</button>`).join('') : '<div class="small muted">Не знайдено</div>';
-              $$('[data-p]', res).forEach((x) => (x.onclick = () => { $('[data-pid]', line).value = x.dataset.p; q.value = x.dataset.n; $('[data-sel]', line).textContent = `№${x.dataset.p}`; $('[data-sel]', line).classList.remove('muted'); res.innerHTML = ''; }));
-            } catch (er) { res.innerHTML = `<div class="small">${esc(er.message)}</div>`; }
-          }, 300);
-        };
-      });
-      $('#mpCrmGo', el).onclick = async (e) => {
-        const items = $$('.mp-crm-line', el).map((line, i) => ({ item_id: pre.items[i].item_id, product_id: Number($('[data-pid]', line).value) || null, product_name: $('[data-q]', line).value,
-          qty: Number($('[data-qty]', line).value) || 1, price: Number($('[data-price]', line).value) || 0 }));
-        if (items.some((x) => !x.product_id)) { toast('Оберіть товар LP-CRM для кожного рядка', true); return; }
-        const b = e.currentTarget;
-        b.disabled = true; b.innerHTML = '<span class="spinner"></span> Створюю…';
-        try {
-          const r = await api('POST', '/api/mp/crm/create', { account: o.account_id, id: o.id, items, shop_name: name.get(o.account_id) || '' });
-          md.close();
-          toast(`Створено в LP-CRM${r.crm_id ? `: №${r.crm_id}` : ''}`);
-          load();
-        } catch (er) { toast(er.message, true); b.disabled = false; b.textContent = 'Створити в LP-CRM'; }
-      };
-    }
+    // «Створити в LP-CRM»: перше підтвердження товарів, перевірка даних (вікна — у mpcrm.js) і створення.
+    const crmCreate = (o) => crmCreateFlow(o, { can, done: load });
     // дубль можна скасувати лише в межах магазину відкритого замовлення
     const cancelIn = (x, o) => canCancel(x) && x.account_id === o.account_id;
     // перейти до замовлення (і в іншому магазині): сторінка магазину, пошук за номером за весь час, картка відкрита
@@ -715,38 +670,6 @@ export function createMarketPages({ can }) {
         catch (er) { toast(er.message, true); b.disabled = false; b.textContent = 'Надіслати в чат Розетки'; }
       };
     }
-    if ($('#mpRemind')) $('#mpRemind').onclick = async () => {
-      let st;
-      try { st = await api('GET', '/api/mp/remind/settings'); } catch (er) { toast(er.message, true); return; }
-      const DAYS = [[1, 'Пн'], [2, 'Вт'], [3, 'Ср'], [4, 'Чт'], [5, 'Пт'], [6, 'Сб'], [7, 'Нд']];
-      const ck = (n, t, on) => `<label class="check"><input type="checkbox" name="${n}" ${on ? 'checked' : ''}> ${t}</label>`;
-      const md = modal('Ранкове нагадування в Telegram', `<form id="rmF" class="form-stack">
-          <div class="small muted">Щоранку менеджерам із сповіщеннями «Маркетплейси» (кожному — лише його магазини) приходить список «Передзвонити»: скасовані за добу й неоплачені, кому ще не дзвонили. Не потрапляють покупці, які вже зробили нове замовлення, і ті, кому дзвонили (Binotel) або відмітили «Подзвонив».</div>
-          ${ck('on', '<b>Надсилати нагадування</b>', st.on)}
-          <div class="btn-row" style="align-items:center;flex-wrap:wrap"><label class="f" style="width:120px"><span>Час (Київ)</span><select name="hour">${Array.from({ length: 16 }, (_, i) => i + 5).map((h) => `<option value="${h}" ${h === st.hour ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('')}</select></label>
-            <span class="small muted">Дні:</span>${DAYS.map(([d, t]) => `<label class="chk-chip"><input type="checkbox" data-day="${d}" ${st.days.includes(d) ? 'checked' : ''}> ${t}</label>`).join('')}</div>
-          <div class="small muted">Що включати</div>
-          ${ck('client', 'Скасовані (запропонувати інший варіант, знижку)', st.client)}
-          ${ck('unpaid', '«Клієнт не оплатив» — оплата не пройшла', st.unpaid)}
-          ${ck('admins', 'Власнику й адміністраторам — зведення по всіх магазинах', st.admins)}
-          ${ck('empty', 'Надсилати й тоді, коли передзвонювати нікому', st.empty)}
-          ${st.last?.at ? `<div class="small muted">Востаннє: ${esc(fmtDateTime(st.last.at))} · менеджерів ${st.last.users || 0}, замовлень ${st.last.orders || 0}</div>` : ''}
-        </form>`, { footer: '<button class="btn" id="rmTest">Надіслати тестове собі</button><button class="btn" data-close>Скасувати</button><button class="btn primary" id="rmSave">Зберегти</button>' });
-      const f = $('#rmF', md.el);
-      $('#rmSave', md.el).onclick = async () => {
-        try {
-          await api('PUT', '/api/mp/remind/settings', { on: f.on.checked, hour: Number(f.hour.value), days: $$('[data-day]', f).filter((x) => x.checked).map((x) => Number(x.dataset.day)),
-            client: f.client.checked, unpaid: f.unpaid.checked, admins: f.admins.checked, empty: f.empty.checked });
-          md.close(); toast('Збережено');
-        } catch (er) { toast(er.message, true); }
-      };
-      $('#rmTest', md.el).onclick = async (e) => {
-        const b = e.currentTarget;
-        b.disabled = true;
-        try { const r = await api('POST', '/api/mp/remind/test'); toast(`Надіслано вам у Telegram · замовлень: ${r.orders}`); } catch (er) { toast(er.message, true); }
-        b.disabled = false;
-      };
-    };
     if ($('#mpRvSet')) $('#mpRvSet').onclick = () => {
       const md = modal('Нагадування про відгук', `<form id="rvSetF" class="form-stack">
         <label class="f"><span>Пропонувати нагадати через (днів після отримання)</span><input name="days" type="number" min="0" max="60" value="${esc(rvSet.days)}" required></label>
@@ -797,22 +720,6 @@ export function createMarketPages({ can }) {
         if (r.linked.length) load();
       } catch (er) { toast(er.message, true); }
       b.disabled = false; b.textContent = 'Знайти в LP-CRM';
-    };
-    if ($('#mpCrmSet')) $('#mpCrmSet').onclick = async () => {
-      let cfg = {};
-      try { cfg = (await api('GET', '/api/mp/crm/settings')).shops?.[acc.id] || {}; } catch { /* */ }
-      const md = modal(`LP-CRM для «${acc.name}»`, `<form id="mpCs" class="form-stack">
-          <div class="small muted">З цими даними кнопка «Створити в LP-CRM» створює замовлення в LP-CRM (статус «Нові»).</div>
-          <div class="small muted">Відділ LP-CRM для всіх замовлень з «Маркетплейсів» — <b>5 · Маркетплейси</b>; вид оплати визначається сам (RozetkaPay або післяплата RozetkaPay / NovaPay / Meest).</div><input type="hidden" name="office" value="${esc(cfg.office || '')}">
-          <label class="f"><span>Сайт (поле «Сайт» у LP-CRM)</span><input name="site" value="${esc(cfg.site || '')}" placeholder="напр. rozetka.com.ua"></label>
-          <label class="f"><span>ID служби доставки в LP-CRM</span><input name="delivery" inputmode="numeric" value="${esc(cfg.delivery || '')}"></label>
-          <label class="f"><span>«Додаткове поле 1» — канал продажу (за ним аналітика визначає джерело)</span><input name="field1" value="${esc(cfg.field1 || '')}" placeholder="напр. Rozetka(Ecovent)"></label>
-        </form>`, { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="mpCsSave">Зберегти</button>' });
-      $('#mpCsSave', md.el).onclick = async () => {
-        const f = $('#mpCs', md.el);
-        try { await api('PUT', `/api/mp/crm/settings/${acc.id}`, { office: f.office.value, site: f.site.value, delivery: f.delivery.value, field1: f.field1.value }); md.close(); toast('Збережено'); }
-        catch (er) { toast(er.message, true); }
-      };
     };
     // Період історії: типово 4 роки до сьогодні; можна давніший (старий кабінет) або інший відрізок.
     $$('[data-hstart]').forEach((b) => (b.onclick = () => {

@@ -6507,7 +6507,7 @@ function mountCatalog(app, { db, fetchFn, onCron = () => {
   }
   onCron("catalog", "\u0422\u043E\u0432\u0430\u0440\u0438 LP-CRM: \u0441\u043B\u043E\u0432\u043D\u0438\u043A \u0434\u043B\u044F \u043F\u0440\u0438\u0432'\u044F\u0437\u043A\u0438 \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0456\u0432 (\u043F\u043E 50 \u0437\u0430 \u0437\u0430\u043F\u0438\u0442, \u043A\u0456\u043B\u044C\u043A\u0430 \u043F\u0430\u0440\u0442\u0456\u0439 \u0437\u0430 \u0437\u0430\u043F\u0443\u0441\u043A, \u043F\u043E\u0432\u043D\u0438\u0439 \u043F\u0440\u043E\u0445\u0456\u0434 \u0440\u0430\u0437 \u043D\u0430 \u0434\u043E\u0431\u0443)", () => scan());
   const J3 = (a) => JSON.stringify(a);
-  const pick2 = (r) => ({ id: r.product_id, name: r.name, code: r.code, sku: r.sku, active: Boolean(r.active) });
+  const pick2 = (r) => ({ id: r.product_id, name: r.name, code: r.code, sku: r.sku, price: Number(r.price) || 0, active: Boolean(r.active) });
   const byIds = async (ids) => {
     const list = [...new Set(ids.map((x) => Number(x)).filter(Boolean))];
     return list.length ? (await db.all(`SELECT * FROM crm_products WHERE product_id IN (SELECT value FROM json_each(?))`, [J3(list)])).map(pick2) : [];
@@ -8715,11 +8715,11 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
     ]);
   }
   const neg = (items) => items.map((i) => ({ ...i, qty: -i.qty }));
-  const r22 = (x) => Math.round(Number(x) * 100) / 100;
+  const r23 = (x) => Math.round(Number(x) * 100) / 100;
   const moneyIn = (v, what) => {
     const raw2 = v === void 0 || v === null ? "" : String(v).replace(/\s/g, "").replace(",", ".");
     if (raw2 === "") return null;
-    const x = r22(raw2);
+    const x = r23(raw2);
     if (!(x >= 0 && x < 1e8)) throw fail(400, `${what} \u2014 \u0447\u0438\u0441\u043B\u043E \u0432\u0456\u0434 0.`);
     return x;
   };
@@ -8732,10 +8732,10 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
       if (!w) continue;
       let price = w.price ?? i.price;
       const rrp = w.rrp ?? i.rrp;
-      if (w.price == null && w.rrp != null && r22(w.rrp) !== r22(i.rrp) && i.rrp > 0) price = r22(i.price / i.rrp * w.rrp);
-      if (r22(rrp) !== r22(i.rrp)) list.push(`${i.name}: \u0420\u0420\u0426 ${uah5(i.rrp)} \u2192 ${uah5(rrp)}`);
-      if (r22(price) !== r22(i.price)) list.push(`${i.name}: \u0446\u0456\u043D\u0430 ${uah5(i.price)} \u2192 ${uah5(price)}`);
-      if (r22(price) !== r22(i.price) || r22(rrp) !== r22(i.rrp)) ch.set(i.product_id, { price, rrp });
+      if (w.price == null && w.rrp != null && r23(w.rrp) !== r23(i.rrp) && i.rrp > 0) price = r23(i.price / i.rrp * w.rrp);
+      if (r23(rrp) !== r23(i.rrp)) list.push(`${i.name}: \u0420\u0420\u0426 ${uah5(i.rrp)} \u2192 ${uah5(rrp)}`);
+      if (r23(price) !== r23(i.price)) list.push(`${i.name}: \u0446\u0456\u043D\u0430 ${uah5(i.price)} \u2192 ${uah5(price)}`);
+      if (r23(price) !== r23(i.price) || r23(rrp) !== r23(i.rrp)) ch.set(i.product_id, { price, rrp });
     }
     if (!ch.size) return [];
     const s2 = await supplyOf(o.supply_id);
@@ -8854,7 +8854,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
     }
     return { paid: false, text: `${head("\u23F3 \u041E\u0427\u0406\u041A\u0423\u0404\u041C\u041E \u041E\u041F\u041B\u0410\u0422\u0423")}${inv}; ${payer}` };
   }
-  async function crmComment(o, partnerName) {
+  async function crmComment2(o, partnerName) {
     const pay = await payText(o, partnerName);
     const comment = [o.urgent ? "\u{1F525} \u0422\u0415\u0420\u041C\u0406\u041D\u041E\u0412\u041E" : "", `${orderNo(o.id)} \xB7 B2B \xAB${partnerName}\xBB`, o.ttn ? `\u0422\u0422\u041D \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430: ${o.ttn}` : "", pay.text, o.comment || ""].filter(Boolean).join("\n");
     return { paid: pay.paid, comment };
@@ -8863,7 +8863,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
     const rows = await db.all(`SELECT o.*, p.name AS partner FROM b2b_orders o JOIN b2b_partners p ON p.id = o.partner_id
       WHERE o.supply_id = ? AND o.kind = 'client' AND o.status = 'crm'`, [supplyId]);
     for (const o of rows) {
-      const { comment } = await crmComment(o, o.partner);
+      const { comment } = await crmComment2(o, o.partner);
       await tgAdmins(`\u{1F4B0} <b>\u041E\u043F\u043B\u0430\u0442\u0443 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E</b>, \u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u0432 LP-CRM: <b>${orderNo(o.id)}</b>${o.crm_id ? ` \xB7 CRM \u2116 <b>${h8(o.crm_id)}</b>` : ""} (${h8(o.client_name)})
 \u041F\u043E\u0441\u0442\u0430\u0432\u0442\u0435 \u0432 CRM \u0432\u0438\u0434 \u043E\u043F\u043B\u0430\u0442\u0438 \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0456 \u0437\u0430\u043C\u0456\u043D\u0456\u0442\u044C \u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440 \u043D\u0430:
 <pre>${h8(comment)}</pre>${base ? `
@@ -9201,7 +9201,7 @@ ${x.items.map((i) => `   ${i.name} \xD7 ${i.qty} \u2014 ${uah5(i.price)}`).join(
     const want = pricesIn((Array.isArray(b.items) ? b.items : []).map((x) => {
       const w = was.get(parseInt(x.product_id, 10));
       const rrp = moneyIn(x.rrp, "\u0420\u0420\u0426");
-      const price = x.price ?? (rrp != null && w?.rrp > 0 ? r22(w.price / w.rrp * rrp) : void 0);
+      const price = x.price ?? (rrp != null && w?.rrp > 0 ? r23(w.price / w.rrp * rrp) : void 0);
       return { product_id: x.product_id, price, rrp };
     }));
     if (want.size) await setClientPrices(c, await orderOf(o.id), want, { quiet: true });
@@ -9416,7 +9416,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
       db.all(`SELECT product_id, qty, price FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [o.id]),
       db.get(`SELECT name FROM b2b_partners WHERE id = ?`, [o.partner_id])
     ]);
-    const { paid, comment } = await crmComment(o, p?.name || "");
+    const { paid, comment } = await crmComment2(o, p?.name || "");
     const address = /НП:\s*([^\n]+)/.exec(o.comment || "")?.[1]?.trim() || "";
     let res;
     try {
@@ -12128,10 +12128,10 @@ ${link(c, `b2bclaims/${r.id}`)}`);
         const mode = RETURN_MODE[b.return_mode] ? b.return_mode : "";
         if (!mode) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C, \u0449\u043E \u0440\u043E\u0431\u0438\u0442\u0438 \u0437 \u0431\u0440\u0430\u043A\u043E\u0432\u0430\u043D\u0438\u043C \u0442\u043E\u0432\u0430\u0440\u043E\u043C.");
         const refund = cl.want === "refund" || cl.want === "other" ? Math.max(0, round2(Number(String(b.refund_amount ?? "").replace(",", ".")) || 0)) : 0;
-        const r22 = await set({ status: "approved", return_mode: mode, decision_note: note, refund_amount: refund, defect: mode === "warehouse" ? "awaiting" : "" });
+        const r23 = await set({ status: "approved", return_mode: mode, decision_note: note, refund_amount: refund, defect: mode === "warehouse" ? "awaiting" : "" });
         await notify(
           c,
-          r22,
+          r23,
           `\u2705 <b>\u0417\u0430\u044F\u0432\u043A\u0443 \u043F\u043E\u0433\u043E\u0434\u0436\u0435\u043D\u043E</b>${mode === "warehouse" ? "\n\u{1F4E6} \u0412\u0456\u0434\u043F\u0440\u0430\u0432\u0442\u0435 \u0431\u0440\u0430\u043A \u043D\u0430\u043C \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u0456 \u0432\u043D\u0435\u0441\u0456\u0442\u044C \u0422\u0422\u041D \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u0432 \u0437\u0430\u044F\u0432\u0446\u0456." : ""}`,
           { history: `\u043F\u043E\u0433\u043E\u0434\u0436\u0435\u043D\u043E: ${RETURN_MODE[mode]}${note ? ` \u2014 ${note}` : ""}${refund ? `; \u0434\u043E \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F ${uah5(refund)}` : ""}` }
         );
@@ -12156,10 +12156,10 @@ ${link(c, `b2bclaims/${r.id}`)}`);
         if (!["same", "other", "repair"].includes(cl.want)) throw fail(400, "\u041F\u0430\u0440\u0442\u043D\u0435\u0440 \u043F\u0440\u043E\u0441\u0438\u0442\u044C \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u043A\u043E\u0448\u0442\u0456\u0432 \u2014 \u043F\u043E\u0437\u043D\u0430\u0447\u0442\u0435 \xAB\u041A\u043E\u0448\u0442\u0438 \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043E\xBB.");
         const delivery = b.delivery === "pickup" ? "pickup" : "np";
         const sid = await exchangeSupply(c, cl, delivery);
-        const r22 = await set({ status: "resolved", exch_supply_id: sid });
+        const r23 = await set({ status: "resolved", exch_supply_id: sid });
         await notify(
           c,
-          r22,
+          r23,
           `\u{1F501} <b>\u0417\u0430\u043C\u0456\u043D\u0443 \u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E</b> \u2014 \u043E\u0431\u043C\u0456\u043D\u043D\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(sid)} (0 \u0433\u0440\u043D, \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E)
 ${delivery === "pickup" ? "\u{1F697} \u0421\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u0443 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456, \u0445\u0442\u043E \u0437\u0430\u0431\u0438\u0440\u0430\u0454." : cl.deliver_to === "client" ? "\u{1F4EE} \u041E\u0444\u043E\u0440\u043C\u0456\u0442\u044C \u0456\u0437 \u043D\u0435\u0457 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 (\u0422\u0422\u041D \u0456 \u043C\u0430\u0440\u043A\u0443\u0432\u0430\u043D\u043D\u044F) \u2014 \u044F\u043A \u0437\u0432\u0438\u0447\u0430\u0439\u043D\u043E." : "\u{1F4EE} \u041E\u0444\u043E\u0440\u043C\u0456\u0442\u044C \u0456\u0437 \u043D\u0435\u0457 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u0441\u043E\u0431\u0456 \u0430\u0431\u043E \u043A\u043B\u0456\u0454\u043D\u0442\u0443 \u2014 \u044F\u043A \u0437\u0432\u0438\u0447\u0430\u0439\u043D\u043E."}`,
           { history: `\u0437\u0430\u043C\u0456\u043D\u0443 \u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E: \u043E\u0431\u043C\u0456\u043D\u043D\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(sid)}${note ? ` \u2014 ${note}` : ""}` }
@@ -12620,14 +12620,14 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     const ship = new Map((await db.all(`SELECT s.partner_id, SUM(co.total) AS sum, COUNT(co.id) AS n FROM b2b_orders s
       JOIN b2b_orders co ON co.supply_id = s.id AND co.kind = 'client' AND co.status = 'crm'
       WHERE s.kind = 'supply' AND s.status IN ('open', 'invoice_wait') GROUP BY s.partner_id`)).map((r) => [r.partner_id, r]));
-    const r22 = (n) => Math.round((n || 0) * 100) / 100;
+    const r23 = (n) => Math.round((n || 0) * 100) / 100;
     return c.json(rows.map((r) => ({
       ...r,
-      debt: r22((debt.get(r.id)?.due || 0) + (ship.get(r.id)?.sum || 0)),
-      debt_invoiced: r22(debt.get(r.id)?.due),
-      debt_shipped: r22(ship.get(r.id)?.sum),
+      debt: r23((debt.get(r.id)?.due || 0) + (ship.get(r.id)?.sum || 0)),
+      debt_invoiced: r23(debt.get(r.id)?.due),
+      debt_shipped: r23(ship.get(r.id)?.sum),
       debt_shipped_cnt: ship.get(r.id)?.n || 0,
-      debt_overdue: r22(debt.get(r.id)?.overdue),
+      debt_overdue: r23(debt.get(r.id)?.overdue),
       debt_cnt: debt.get(r.id)?.n || 0
     })));
   });
@@ -16930,8 +16930,39 @@ function crmPayment(o) {
   }
   return { payment: "14", cod: false, text: `${o.paid ? "\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E \u043E\u0434\u0440\u0430\u0437\u0443 \u043D\u0430 \u0420\u043E\u0437\u0435\u0442\u0446\u0456" : "\u041E\u043F\u043B\u0430\u0442\u0430 \u043D\u0430 \u0420\u043E\u0437\u0435\u0442\u0446\u0456, \u0449\u0435 \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u043E"} (RozetkaPay): ${type || "\u0441\u043F\u043E\u0441\u0456\u0431 \u043D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E"}, ${money2(o.total)}${o.pay_status && !o.paid ? ` \u2014 ${o.pay_status}` : ""}` };
 }
+function crmComment(o, shop = "") {
+  return [
+    `Rozetka ${o.number}${shop ? ` \xB7 ${shop}` : ""}`,
+    `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0456\u0434 ${fmtAt(o.created_at)}`,
+    `\u041E\u043F\u043B\u0430\u0442\u0430: ${crmPayment(o).text}`,
+    o.delivery ? `\u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430: ${o.delivery}` : "",
+    o.recipient && o.recipient !== o.customer ? `\u041E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0447: ${o.recipient}${o.recipient_phone ? ` ${o.recipient_phone}` : ""}` : "",
+    o.comment ? `\u041A\u043E\u043C\u0435\u043D\u0442\u0430\u0440 \u043F\u043E\u043A\u0443\u043F\u0446\u044F: ${o.comment}` : ""
+  ].filter(Boolean).join("\n");
+}
+var FLOW_DEFAULT = { check: true, newItem: true };
+var r22 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+function partsToLines(parts, qty, price) {
+  const q = Math.max(1, Number(qty) || 1);
+  const [head, ...extra] = parts;
+  if (!head) return [];
+  const rest = extra.reduce((a, p) => a + (Number(p.price) || 0) * (Number(p.qty) || 1), 0);
+  const headPrice = r22((Number(price) - rest) / (Number(head.qty) || 1));
+  return [
+    { product_id: head.product_id, count: r22((Number(head.qty) || 1) * q), price: headPrice },
+    ...extra.map((p) => ({ product_id: p.product_id, count: r22((Number(p.qty) || 1) * q), price: r22(p.price) }))
+  ];
+}
 function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
-}, rzOrderOf, items }) {
+}, rzOrderOf, items, shopsOf = async () => ({}) }) {
+  const flowOf = async () => {
+    try {
+      return { ...FLOW_DEFAULT, ...JSON.parse((await db.get(`SELECT value FROM settings WHERE key = 'mp_crm_flow'`))?.value || "{}") };
+    } catch {
+      return { ...FLOW_DEFAULT };
+    }
+  };
+  const shopName = async (acc) => String(((await shopsOf()).rozetka || []).find((a) => String(a.id) === String(acc))?.name || "");
   const userName8 = (u) => String(u?.name || u?.login || "").slice(0, 80);
   const creds = async () => {
     const s2 = await loadSettings(db);
@@ -16948,6 +16979,18 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
   app.get("/api/mp/crm/settings", async (c) => {
     need(c, "market.view");
     return c.json({ configured: Boolean(await creds()), shops: await shopCfgAll() });
+  });
+  app.get("/api/mp/crm/flow", async (c) => {
+    need(c, "market.view");
+    return c.json(await flowOf());
+  });
+  app.put("/api/mp/crm/flow", async (c) => {
+    need(c, "api");
+    const b = await c.req.json().catch(() => ({}));
+    const cur = await flowOf();
+    const next = { check: b.check === void 0 ? cur.check : Boolean(b.check), newItem: b.newItem === void 0 ? cur.newItem : Boolean(b.newItem) };
+    await db.run(`INSERT INTO settings (key, value) VALUES ('mp_crm_flow', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [J(next)]);
+    return c.json(next);
   });
   app.put("/api/mp/crm/settings/:account", async (c) => {
     need(c, "api");
@@ -16980,8 +17023,39 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
       db.all(`SELECT product_id AS id, name FROM rzs_products WHERE product_id IS NOT NULL AND ${like} LIMIT 60`, args).catch(() => [])
     ]);
     const seen = /* @__PURE__ */ new Set();
-    return [...k, ...a, ...b].filter((p) => p.id && !seen.has(p.id) && seen.add(p.id)).map((p) => ({ id: p.id, name: p.name })).slice(0, limit);
+    return [...k, ...a, ...b].filter((p) => p.id && !seen.has(p.id) && seen.add(p.id)).map((p) => ({ id: p.id, name: p.name, price: Number(p.price) || 0 })).slice(0, limit);
   };
+  const userAllowed = (c, acc) => {
+    const u = c.get("user");
+    return !u || shopAllowed(u, "rozetka", Number(acc));
+  };
+  async function orderGoods(o) {
+    const list = JSON.parse(o.items || "[]");
+    const [found, rec] = await Promise.all([items.resolve("rozetka", o.account_id, list), items.recipes("rozetka", o.account_id, list.map((it) => String(it.id || "")))]);
+    const out = list.map((it) => {
+      const id = String(it.id || "");
+      const r = rec.get(id);
+      const f = found.find((x) => x.item_id === id);
+      const parts = r?.parts?.length ? r.parts : f?.product_id ? [{ product_id: f.product_id, qty: 1, price: null }] : [];
+      return {
+        item_id: id,
+        name: String(it.name || ""),
+        article: String(it.article || ""),
+        offer: String(it.offer || ""),
+        photo: String(it.photo || ""),
+        qty: Number(it.qty) || 1,
+        price: Number(it.price) || 0,
+        confirmed: Boolean(r?.confirmed && parts.length),
+        from: r?.confirmed ? "confirmed" : f?.from || "",
+        parts
+      };
+    });
+    const ids = out.flatMap((x) => x.parts.map((p) => p.product_id));
+    const [names, cat] = await Promise.all([items.namesOf(ids), services.catalog?.byIds(ids) ?? []]);
+    const priceOf = new Map(cat.map((p) => [p.id, p.price]));
+    for (const x of out) for (const p of x.parts) Object.assign(p, { name: names.get(p.product_id) || "", list_price: priceOf.get(p.product_id) || 0 });
+    return out;
+  }
   app.get("/api/mp/crm/products", async (c) => {
     need(c, "market.edit");
     return c.json({ products: await searchProducts(c.req.query("q")) });
@@ -16989,23 +17063,50 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
   app.get("/api/mp/crm/prefill/:account/:id", async (c) => {
     need(c, "market.edit");
     const o = await rzOrderOf({ account: c.req.param("account"), id: c.req.param("id") }, c);
-    const list = JSON.parse(o.items || "[]");
-    const found = await items.resolve("rozetka", o.account_id, list);
-    const out = list.map((it) => {
-      const f = found.find((x) => x.item_id === String(it.id || ""));
-      return {
-        item_id: String(it.id || ""),
-        name: it.name,
-        qty: Number(it.qty) || 1,
-        price: Number(it.price) || 0,
-        product_id: f?.product_id || null,
-        product_name: f?.product_name || "",
-        from: f?.from || ""
-      };
-    });
-    const cfg = (await shopCfgAll())[String(o.account_id)] || {};
+    const [goods, all, flow, configured, shop] = await Promise.all([orderGoods(o), shopCfgAll(), flowOf(), creds(), shopName(o.account_id)]);
+    const cfg = all[String(o.account_id)] || {};
     const pay = crmPayment(o);
-    return c.json({ items: out, shop: cfg, configured: Boolean(await creds()), pay: { id: pay.payment, name: PAY_NAMES[pay.payment] } });
+    return c.json({
+      items: goods,
+      shop: cfg,
+      shop_name: shop,
+      configured: Boolean(configured),
+      flow,
+      pay: { id: pay.payment, name: PAY_NAMES[pay.payment], cod: pay.cod },
+      office: { id: MP_OFFICE, name: "\u041C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0438" },
+      created_at: o.created_at,
+      total: Number(o.total) || 0,
+      send: {
+        bayer_name: o.customer || o.recipient || "",
+        phone: String(o.phone || o.recipient_phone || "").replace(/\D/g, ""),
+        delivery: o.delivery || "",
+        address: [o.address, o.ttn ? `\u0422\u0422\u041D ${o.ttn}` : ""].filter(Boolean).join(", "),
+        site: cfg.site || new URL(c.req.url).host,
+        field1: cfg.field1 || "",
+        comment: crmComment(o, shop)
+      }
+    });
+  });
+  app.post("/api/mp/crm/confirm", async (c) => {
+    need(c, "market.edit");
+    const b = await c.req.json().catch(() => ({}));
+    const acc = Number(b.account) || 0;
+    if (!acc) throw fail(400, "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u043C\u0430\u0433\u0430\u0437\u0438\u043D.");
+    if (!userAllowed(c, acc)) throw fail(403, "\u041D\u0435\u043C\u0430\u0454 \u0434\u043E\u0441\u0442\u0443\u043F\u0443 \u0434\u043E \u0446\u044C\u043E\u0433\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0443.");
+    const list = (Array.isArray(b.items) ? b.items : []).slice(0, 50);
+    if (!list.length) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u0442\u043E\u0432\u0430\u0440\u0456\u0432.");
+    if (list.some((x) => !Array.isArray(x.parts) || !x.parts.length || x.parts.some((p) => !Number(p.product_id)))) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u0442\u043E\u0432\u0430\u0440 LP-CRM \u0434\u043B\u044F \u043A\u043E\u0436\u043D\u043E\u0433\u043E \u0442\u043E\u0432\u0430\u0440\u0443 \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0443.");
+    const n = await items.confirm("rozetka", acc, list, userName8(c.get("user")));
+    return c.json({ ok: true, confirmed: n });
+  });
+  app.get("/api/mp/items", async (c) => {
+    need(c, "market.view");
+    const u = c.get("user");
+    const shops = ((await shopsOf()).rozetka || []).filter((a) => !u || shopAllowed(u, "rozetka", a.id));
+    const acc = Number(c.req.query("account")) || 0;
+    const accounts = acc ? shops.filter((a) => a.id === acc).map((a) => a.id) : shops.map((a) => a.id);
+    const r = await items.list({ mp: "rozetka", accounts, q: c.req.query("q") || "", only: c.req.query("only") || "", limit: Number(c.req.query("limit")) || 100, offset: Number(c.req.query("offset")) || 0 });
+    return c.json({ ...r, shops: shops.map((a) => ({ id: a.id, name: a.name })) });
   });
   app.post("/api/mp/crm/create", async (c) => {
     need(c, "market.edit");
@@ -17016,29 +17117,28 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
     const cr = await creds();
     if (!cr) throw fail(400, "\u041D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E LP-CRM \u0443 \xAB\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F\u0445\xBB.");
     const cfg = (await shopCfgAll())[String(o.account_id)] || {};
-    const lines = (Array.isArray(b.items) ? b.items : []).slice(0, 50).map((x) => ({
+    let lines = (Array.isArray(b.items) ? b.items : []).slice(0, 50).map((x) => ({
       item_id: String(x.item_id || ""),
       product_id: Number(x.product_id) || 0,
-      price: Math.round((Number(x.price) || 0) * 100) / 100,
-      count: Math.max(1, Math.round(Number(x.qty) || 1)),
+      price: r22(x.price),
+      count: Math.max(1e-3, r22(x.qty) || 1),
       name: String(x.product_name || "").slice(0, 300)
     }));
+    if (!lines.length && b.auto) {
+      const goods = await orderGoods(o);
+      if (goods.some((g) => !g.parts.length)) throw fail(400, "\u041D\u0435 \u0434\u043B\u044F \u0432\u0441\u0456\u0445 \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u043E\u0431\u0440\u0430\u043D\u043E \u0442\u043E\u0432\u0430\u0440 LP-CRM \u2014 \u0432\u0456\u0434\u043A\u0440\u0438\u0439\u0442\u0435 \xAB\u0421\u0442\u0432\u043E\u0440\u0438\u0442\u0438 \u0432 LP-CRM\xBB \u0456 \u043E\u0431\u0435\u0440\u0456\u0442\u044C.");
+      lines = goods.flatMap((g) => partsToLines(g.parts, g.qty, g.price).map((l) => ({ ...l, item_id: g.item_id })));
+    }
     if (!lines.length) throw fail(400, "\u041D\u0435\u043C\u0430\u0454 \u0442\u043E\u0432\u0430\u0440\u0456\u0432.");
-    const bad = lines.filter((l) => !l.product_id || !(l.price > 0));
-    if (bad.length) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u0442\u043E\u0432\u0430\u0440 LP-CRM \u0456 \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u0446\u0456\u043D\u0443 \u0434\u043B\u044F \u043A\u043E\u0436\u043D\u043E\u0433\u043E \u0440\u044F\u0434\u043A\u0430.");
+    if (lines.some((l) => !l.product_id || l.price < 0) || !lines.some((l) => l.price > 0)) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u0442\u043E\u0432\u0430\u0440 LP-CRM \u0456 \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u0446\u0456\u043D\u0443 \u0434\u043B\u044F \u043A\u043E\u0436\u043D\u043E\u0433\u043E \u0440\u044F\u0434\u043A\u0430 (\u0446\u0456\u043D\u0430 \u043E\u0441\u043D\u043E\u0432\u043D\u043E\u0433\u043E \u0442\u043E\u0432\u0430\u0440\u0443 \u043D\u0435 \u043C\u043E\u0436\u0435 \u0431\u0443\u0442\u0438 \u043C\u0435\u043D\u0448\u0435 \u043D\u0443\u043B\u044F).");
+    const over = (k, max) => typeof b[k] === "string" ? b[k].trim().slice(0, max) : null;
     const code = newCode3();
     const claim = await db.run(`UPDATE mp_orders SET crm_code = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ? AND crm_code = '' AND crm_id = ''`, [code, o.account_id, o.id]);
     if (!claim.changes) throw fail(409, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u0454\u0442\u044C\u0441\u044F \u0432 LP-CRM.");
-    const shop = String(b.shop_name || "").slice(0, 80);
+    const shop = await shopName(o.account_id) || String(b.shop_name || "").slice(0, 80);
     const pay = crmPayment(o);
-    const comment = [
-      `Rozetka ${o.number}${shop ? ` \xB7 ${shop}` : ""}`,
-      `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0456\u0434 ${fmtAt(o.created_at)}`,
-      `\u041E\u043F\u043B\u0430\u0442\u0430: ${pay.text}`,
-      o.delivery ? `\u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430: ${o.delivery}` : "",
-      o.recipient && o.recipient !== o.customer ? `\u041E\u0442\u0440\u0438\u043C\u0443\u0432\u0430\u0447: ${o.recipient}${o.recipient_phone ? ` ${o.recipient_phone}` : ""}` : "",
-      o.comment ? `\u041A\u043E\u043C\u0435\u043D\u0442\u0430\u0440 \u043F\u043E\u043A\u0443\u043F\u0446\u044F: ${o.comment}` : ""
-    ].filter(Boolean).join("\n");
+    const comment = over("comment", 3e3) || crmComment(o, shop);
+    const phone = (over("phone", 30) ?? "").replace(/\D/g, "") || String(o.phone || o.recipient_phone || "").replace(/\D/g, "");
     const host = cfg.site || new URL(c.req.url).host;
     let res;
     try {
@@ -17046,11 +17146,11 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
         code,
         office: MP_OFFICE,
         payment: pay.payment,
-        bayer_name: o.customer || o.recipient || "",
-        phone: String(o.phone || o.recipient_phone || "").replace(/\D/g, ""),
+        bayer_name: over("bayer_name", 120) || o.customer || o.recipient || "",
+        phone,
         comment,
         delivery: cfg.delivery || "",
-        delivery_adress: [o.address, o.ttn ? `\u0422\u0422\u041D ${o.ttn}` : ""].filter(Boolean).join(", "),
+        delivery_adress: over("address", 300) || [o.address, o.ttn ? `\u0422\u0422\u041D ${o.ttn}` : ""].filter(Boolean).join(", "),
         site: host,
         additional_1: cfg.field1 || "",
         products: lines.map((l) => ({ product_id: l.product_id, price: l.price, count: l.count }))
@@ -17076,10 +17176,11 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
     ]];
     await db.batch(st);
     const ordered = JSON.parse(o.items || "[]");
-    await items.linkMany("rozetka", o.account_id, lines.filter((l) => l.item_id && ordered.some((i) => String(i.id) === l.item_id)).map((l) => {
+    const single = lines.filter((l) => l.item_id && lines.filter((x) => x.item_id === l.item_id).length === 1 && ordered.some((i) => String(i.id) === l.item_id));
+    await items.linkMany("rozetka", o.account_id, single.map((l) => {
       const it = ordered.find((i) => String(i.id) === l.item_id);
       return { item_id: l.item_id, name: it?.name || "", article: it?.article || "", offer: it?.offer || "", product_id: l.product_id, source: "manual" };
-    }), by);
+    }), by, { onlyEmpty: true });
     return c.json({ ok: true, crm_id: crmId, code });
   });
   async function findCrm(rows) {
@@ -17238,25 +17339,25 @@ function mountMarketItems({ db, services = {}, onCron = () => {
 } }) {
   const cat = () => services.catalog;
   async function namesOf(ids) {
-    const list = [...new Set(ids.map(Number).filter(Boolean))];
+    const list2 = [...new Set(ids.map(Number).filter(Boolean))];
     const out = /* @__PURE__ */ new Map();
-    if (!list.length) return out;
-    for (const p of await (cat()?.byIds(list) ?? [])) out.set(p.id, p.name);
-    const missing = list.filter((id) => !out.has(id));
+    if (!list2.length) return out;
+    for (const p of await (cat()?.byIds(list2) ?? [])) out.set(p.id, p.name);
+    const missing = list2.filter((id) => !out.has(id));
     if (missing.length) {
       for (const r of await db.all(`SELECT product_id, name FROM an_products WHERE product_id IN (SELECT value FROM json_each(?))`, [J2(missing)]).catch(() => [])) out.set(r.product_id, r.name || "");
     }
     return out;
   }
   async function resolve(mp, account, items, { persist = true } = {}) {
-    const list = items.filter((it) => it && String(it.id || "")).map((it) => ({ id: String(it.id), name: String(it.name || ""), article: String(it.article || ""), offer: String(it.offer || "") }));
-    if (!list.length) return [];
-    const ids = list.map((it) => it.id);
+    const list2 = items.filter((it) => it && String(it.id || "")).map((it) => ({ id: String(it.id), name: String(it.name || ""), article: String(it.article || ""), offer: String(it.offer || "") }));
+    if (!list2.length) return [];
+    const ids = list2.map((it) => it.id);
     const result = /* @__PURE__ */ new Map();
     for (const r of await db.all(`SELECT item_id, product_id, link_source FROM mp_items WHERE mp = ? AND account_id = ? AND product_id IS NOT NULL AND item_id IN (SELECT value FROM json_each(?))`, [mp, account, J2(ids)])) {
       result.set(r.item_id, { product_id: r.product_id, from: "saved" });
     }
-    let rest = list.filter((it) => !result.has(it.id));
+    let rest = list2.filter((it) => !result.has(it.id));
     if (rest.length) {
       for (const r of await db.all(`SELECT item_id, product_id FROM mp_crm_items WHERE mp = ? AND item_id IN (SELECT value FROM json_each(?))`, [mp, J2(rest.map((it) => it.id))]).catch(() => [])) {
         if (!result.has(r.item_id)) result.set(r.item_id, { product_id: r.product_id, from: "saved", write: "manual" });
@@ -17266,13 +17367,13 @@ function mountMarketItems({ db, services = {}, onCron = () => {
     if (rest.length) {
       const arts = rest.map((it) => it.article).filter(Boolean);
       const offers = rest.map((it) => it.offer).filter(Boolean);
-      const rows = await db.all(
-        `SELECT account_id, item_id, article, offer_id, product_id FROM mp_items WHERE mp = ? AND product_id IS NOT NULL
-        AND (item_id IN (SELECT value FROM json_each(?)) OR (article != '' AND article IN (SELECT value FROM json_each(?))) OR (offer_id != '' AND offer_id IN (SELECT value FROM json_each(?))))`,
-        [mp, J2(rest.map((it) => it.id)), J2(arts), J2(offers)]
-      );
+      const rows = arts.length || offers.length ? await db.all(
+        `SELECT item_id, article, offer_id, product_id FROM mp_items WHERE mp = ? AND account_id = ? AND product_id IS NOT NULL
+        AND ((article != '' AND article IN (SELECT value FROM json_each(?))) OR (offer_id != '' AND offer_id IN (SELECT value FROM json_each(?))))`,
+        [mp, account, J2(arts), J2(offers)]
+      ) : [];
       for (const it of rest) {
-        const hits = rows.filter((r) => !(String(r.account_id) === String(account) && r.item_id === it.id) && (r.item_id === it.id || it.article && r.article === it.article || it.offer && r.offer_id === it.offer));
+        const hits = rows.filter((r) => r.item_id !== it.id && (it.article && r.article === it.article || it.offer && r.offer_id === it.offer));
         const pid = uniq(hits.map((r) => r.product_id));
         if (pid) result.set(it.id, { product_id: pid, from: "copied", write: "copied" });
       }
@@ -17304,16 +17405,16 @@ function mountMarketItems({ db, services = {}, onCron = () => {
     }
     const names = await namesOf([...result.values()].map((r) => r.product_id));
     if (persist) {
-      const todo = list.filter((it) => result.get(it.id)?.write).map((it) => ({ ...it, product_id: result.get(it.id).product_id, source: result.get(it.id).write }));
+      const todo = list2.filter((it) => result.get(it.id)?.write).map((it) => ({ ...it, product_id: result.get(it.id).product_id, source: result.get(it.id).write }));
       if (todo.length) await linkMany(mp, account, todo, "\u0430\u0432\u0442\u043E", { onlyEmpty: true });
     }
-    return list.map((it) => {
+    return list2.map((it) => {
       const r = result.get(it.id);
       return { item_id: it.id, name: it.name, product_id: r?.product_id || null, product_name: r ? names.get(r.product_id) || "" : "", from: r?.from || "" };
     });
   }
-  async function linkMany(mp, account, list, by = "", { onlyEmpty = false } = {}) {
-    const items = list.filter((x) => x && String(x.item_id || x.id || ""));
+  async function linkMany(mp, account, list2, by = "", { onlyEmpty = false } = {}) {
+    const items = list2.filter((x) => x && String(x.item_id || x.id || ""));
     if (!items.length) return 0;
     const cur = new Map((await db.all(
       `SELECT item_id, product_id FROM mp_items WHERE mp = ? AND account_id = ? AND item_id IN (SELECT value FROM json_each(?))`,
@@ -17347,6 +17448,126 @@ function mountMarketItems({ db, services = {}, onCron = () => {
     if (st.length) await db.batch(st);
     return n;
   }
+  async function recipes(mp, account, ids) {
+    const out = /* @__PURE__ */ new Map();
+    const list2 = [...new Set(ids.map(String).filter(Boolean))];
+    if (!list2.length) return out;
+    const [main, parts] = await Promise.all([
+      db.all(`SELECT item_id, product_id, qty, confirmed_at, confirmed_by FROM mp_items WHERE mp = ? AND account_id = ? AND item_id IN (SELECT value FROM json_each(?))`, [mp, account, J2(list2)]),
+      db.all(`SELECT item_id, pos, product_id, qty, price FROM mp_item_parts WHERE mp = ? AND account_id = ? AND item_id IN (SELECT value FROM json_each(?)) ORDER BY item_id, pos`, [mp, account, J2(list2)])
+    ]);
+    for (const r of main) {
+      if (!r.product_id) {
+        out.set(r.item_id, { confirmed: false, parts: [] });
+        continue;
+      }
+      const extra = parts.filter((x) => x.item_id === r.item_id).map((x) => ({ product_id: x.product_id, qty: Number(x.qty) || 1, price: Number(x.price) || 0 }));
+      out.set(r.item_id, {
+        confirmed: Boolean(r.confirmed_at),
+        confirmed_at: r.confirmed_at || "",
+        confirmed_by: r.confirmed_by || "",
+        parts: [{ product_id: r.product_id, qty: Number(r.qty) || 1, price: null }, ...extra]
+      });
+    }
+    return out;
+  }
+  async function confirm(mp, account, list2, by = "") {
+    const at = nowIso();
+    const items = list2.filter((x) => x && String(x.item_id || "") && Array.isArray(x.parts) && x.parts.length);
+    if (!items.length) return 0;
+    const cur = new Map((await db.all(
+      `SELECT item_id, product_id FROM mp_items WHERE mp = ? AND account_id = ? AND item_id IN (SELECT value FROM json_each(?))`,
+      [mp, account, J2(items.map((x) => String(x.item_id)))]
+    )).map((r) => [r.item_id, r.product_id]));
+    const who = String(by).slice(0, 80);
+    const st = [];
+    let n = 0;
+    for (const x of items) {
+      const id = String(x.item_id);
+      const parts = x.parts.slice(0, 10).map((p) => ({
+        product_id: Number(p.product_id) || 0,
+        qty: Math.max(1e-3, Math.round((Number(p.qty) || 1) * 1e3) / 1e3),
+        price: Math.max(0, Math.round((Number(p.price) || 0) * 100) / 100)
+      }));
+      if (parts.some((p) => !p.product_id)) continue;
+      const [head, ...extra] = parts;
+      const was = cur.has(id) ? cur.get(id) : null;
+      st.push([
+        `INSERT INTO mp_items (mp, account_id, item_id, name, article, offer_id, product_id, qty, link_source, link_by, link_at, confirmed_at, confirmed_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?)
+        ON CONFLICT(mp, account_id, item_id) DO UPDATE SET qty = excluded.qty, confirmed_at = excluded.confirmed_at, confirmed_by = excluded.confirmed_by,
+          link_source = CASE WHEN mp_items.product_id = excluded.product_id THEN mp_items.link_source ELSE 'manual' END,
+          link_by = CASE WHEN mp_items.product_id = excluded.product_id THEN mp_items.link_by ELSE excluded.link_by END,
+          link_at = CASE WHEN mp_items.product_id = excluded.product_id THEN mp_items.link_at ELSE excluded.link_at END,
+          product_id = excluded.product_id,
+          name = CASE WHEN mp_items.name = '' THEN excluded.name ELSE mp_items.name END,
+          article = CASE WHEN mp_items.article = '' THEN excluded.article ELSE mp_items.article END,
+          offer_id = CASE WHEN mp_items.offer_id = '' THEN excluded.offer_id ELSE mp_items.offer_id END`,
+        [
+          mp,
+          account,
+          id,
+          String(x.name || "").slice(0, 300),
+          String(x.article || "").slice(0, 120),
+          String(x.offer || "").slice(0, 40),
+          head.product_id,
+          head.qty === 1 ? null : head.qty,
+          who,
+          at,
+          at,
+          who
+        ]
+      ]);
+      st.push([`DELETE FROM mp_item_parts WHERE mp = ? AND account_id = ? AND item_id = ?`, [mp, account, id]]);
+      extra.forEach((p, i) => st.push([`INSERT INTO mp_item_parts (mp, account_id, item_id, pos, product_id, qty, price) VALUES (?, ?, ?, ?, ?, ?, ?)`, [mp, account, id, i + 1, p.product_id, p.qty, p.price]]));
+      st.push([
+        `INSERT INTO mp_items_log (mp, account_id, item_id, old_product_id, new_product_id, source, by, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [mp, account, id, was, head.product_id, extra.length ? `confirm+${extra.length}` : "confirm", who, at]
+      ]);
+      n++;
+    }
+    if (st.length) await db.batch(st);
+    return n;
+  }
+  async function list({ mp = "rozetka", accounts = null, q = "", only = "", limit = 100, offset = 0 } = {}) {
+    const where = ["mp = ?"];
+    const args = [mp];
+    if (accounts) {
+      where.push("account_id IN (SELECT value FROM json_each(?))");
+      args.push(J2(accounts.map(Number)));
+    }
+    const base = where.join(" AND ");
+    const baseArgs = [...args];
+    if (only === "todo") where.push("(confirmed_at IS NULL OR confirmed_at = '')");
+    if (only === "none") where.push("product_id IS NULL");
+    for (const w of String(q || "").toLowerCase().split(/\s+/).filter(Boolean).slice(0, 5)) {
+      where.push("(LOWER(name) LIKE ? OR LOWER(article) LIKE ? OR item_id = ?)");
+      args.push(`%${w}%`, `%${w}%`, w);
+    }
+    const [rows, cnt] = await Promise.all([
+      db.all(
+        `SELECT account_id, item_id, name, article, offer_id, photo, url, last_seen, product_id, link_source, link_by, link_at, confirmed_at, confirmed_by
+        FROM mp_items WHERE ${where.join(" AND ")} ORDER BY (confirmed_at IS NULL OR confirmed_at = '') DESC, last_seen DESC, item_id LIMIT ? OFFSET ?`,
+        [...args, Math.min(200, Number(limit) || 100), Number(offset) || 0]
+      ),
+      db.get(`SELECT COUNT(*) AS n, SUM(CASE WHEN confirmed_at != '' THEN 1 ELSE 0 END) AS done, SUM(CASE WHEN product_id IS NULL THEN 1 ELSE 0 END) AS none
+        FROM mp_items WHERE ${base}`, baseArgs)
+    ]);
+    const byAcc = /* @__PURE__ */ new Map();
+    for (const r of rows) {
+      if (!byAcc.has(r.account_id)) byAcc.set(r.account_id, []);
+      byAcc.get(r.account_id).push(r.item_id);
+    }
+    const rec = /* @__PURE__ */ new Map();
+    for (const [acc, ids] of byAcc) for (const [k, v] of await recipes(mp, acc, ids)) rec.set(`${acc}|${k}`, v);
+    const names = await namesOf([...rec.values()].flatMap((v) => v.parts.map((p) => p.product_id)));
+    return {
+      total: Number(cnt?.n || 0),
+      done: Number(cnt?.done || 0),
+      none: Number(cnt?.none || 0),
+      items: rows.map((r) => ({ ...r, confirmed: Boolean(r.confirmed_at), parts: (rec.get(`${r.account_id}|${r.item_id}`)?.parts || []).map((p) => ({ ...p, name: names.get(p.product_id) || "" })) }))
+    };
+  }
   async function autoLink(limit = AUTO_LIMIT) {
     const rows = await db.all(`SELECT mp, account_id, item_id AS id, name, article, offer_id AS offer FROM mp_items WHERE product_id IS NULL AND article != '' ORDER BY last_seen DESC, item_id LIMIT ?`, [limit]);
     if (!rows.length) return { checked: 0, linked: 0 };
@@ -17357,15 +17578,15 @@ function mountMarketItems({ db, services = {}, onCron = () => {
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k).push(r);
     }
-    for (const [k, list] of groups) {
+    for (const [k, list2] of groups) {
       const [mp, account] = k.split("|");
-      const res = await resolve(mp, Number(account), list, { persist: true });
+      const res = await resolve(mp, Number(account), list2, { persist: true });
       linked += res.filter((x) => x.product_id).length;
     }
     return { checked: rows.length, linked };
   }
   onCron("market-items", "\u0422\u043E\u0432\u0430\u0440\u0438 \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0456\u0432 \u2192 \u0442\u043E\u0432\u0430\u0440\u0438 LP-CRM: \u0430\u0432\u0442\u043E\u043F\u0456\u0434\u0431\u0456\u0440 \u0437\u0430 \u043A\u043E\u0434\u043E\u043C \u0456 \u0430\u0440\u0442\u0438\u043A\u0443\u043B\u043E\u043C (\u0431\u0435\u0437 \u0432\u0433\u0430\u0434\u0443\u0432\u0430\u043D\u043D\u044F \u0437\u0430 \u043D\u0430\u0437\u0432\u043E\u044E)", () => autoLink());
-  return { resolve, linkMany, autoLink };
+  return { resolve, linkMany, autoLink, recipes, confirm, list, namesOf };
 }
 
 // src/modules/market/remind.js
@@ -18536,7 +18757,7 @@ ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc3(it.ch.user_fio
     return o;
   };
   const items = mountMarketItems({ db, services, onCron });
-  mountMarketCrm(app, { db, fetchFn, services, onCron, rzOrderOf, items });
+  mountMarketCrm(app, { db, fetchFn, services, onCron, rzOrderOf, items, shopsOf });
   mountMarketRemind(app, { db, services, onCron, shopsOf, kyivDT, failed: RZ_FAILED, rzOrderOf, shared: shared2, clock: shared2.clock });
   const markAsked = async (o, user, via) => {
     const at = nowIso();
@@ -21275,7 +21496,7 @@ var schema13 = {
 // src/modules/market/schema.js
 var schema14 = {
   name: "market",
-  version: 10,
+  version: 11,
   tables: [
     // Товари магазинів маркетплейсів (з замовлень) і їх прив'язка до товарів LP-CRM (див. items.js).
     // Кілька товарів маркетплейсу (дублі, інший магазин) можуть вести до одного product_id; link_source — manual | learned |
@@ -21312,6 +21533,18 @@ var schema14 = {
     source TEXT DEFAULT '',
     by TEXT DEFAULT '',
     at TEXT DEFAULT ''
+  )`,
+    // Комплект: додаткові товари LP-CRM для одного товару маркетплейсу (pos ≥ 1; основний — mp_items.product_id і qty).
+    // qty — скільки штук на 1 шт товару маркетплейсу; price — фіксована ціна за штуку (основний отримує решту ціни).
+    `CREATE TABLE IF NOT EXISTS mp_item_parts (
+    mp TEXT NOT NULL,
+    account_id INTEGER NOT NULL,
+    item_id TEXT NOT NULL,
+    pos INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    qty REAL NOT NULL DEFAULT 1,
+    price REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (mp, account_id, item_id, pos)
   )`,
     // Товар Розетки → товар LP-CRM (для «Створити в LP-CRM»; запам'ятовується після першого разу).
     `CREATE TABLE IF NOT EXISTS mp_crm_items (
@@ -21381,6 +21614,11 @@ var schema14 = {
     `CREATE INDEX IF NOT EXISTS mp_orders_active ON mp_orders (mp, status_group)`
   ],
   columns: [
+    // Прив'язка товару, підтверджена людиною (вікно «Підтвердіть товари для LP-CRM») — окремо для кожного магазину;
+    // qty — скільки штук основного товару LP-CRM на 1 шт товару маркетплейсу.
+    ["mp_items", "qty", "REAL"],
+    ["mp_items", "confirmed_at", "TEXT DEFAULT ''"],
+    ["mp_items", "confirmed_by", "TEXT DEFAULT ''"],
     // Історія магазину (Розетка — за 4 роки): по місяцях назад від сьогодні за датою створення.
     // hist_from — найдавніша дата; hist_to — кінець наступного місяця-вікна; hist_page — сторінка у вікні; hist_done — усе.
     ["mp_sync", "hist_from", "TEXT DEFAULT ''"],

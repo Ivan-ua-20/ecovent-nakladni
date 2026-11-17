@@ -11,6 +11,7 @@ import { createSettingsPages } from './pages/settings.js';
 import { createNpPages } from './pages/np.js';
 import { createCronPages } from './pages/cron.js';
 import { createMarketPages } from './pages/market.js';
+import { createMpSettingsPage } from './pages/mpcrm.js';
 import { createAnAiPages } from './pages/anai.js';
 import { createRahunkyPages } from './pages/rahunky.js';
 import { createUsersPages } from './pages/users.js';
@@ -81,6 +82,7 @@ const SECTIONS = [
     { id: 'mprz', label: 'Розетка' },
     { id: 'mpprom', label: 'Prom' },
     { id: 'mpepc', label: 'Епіцентр' },
+    { id: 'mpset', label: 'Налаштування' },
   ] },
   { id: 'retail', label: 'Рітейл', perm: 'retail.view', home: 'rzorders', tabs: [
     { id: 'rzorders', label: 'Розетка' },
@@ -294,6 +296,7 @@ const { viewSettings, viewNakladniSettings, viewRahunkySettings } = createSettin
 const { viewNp } = createNpPages();
 const { viewCron } = createCronPages();
 const { viewMarket } = createMarketPages({ can });
+const { viewMpSettings } = createMpSettingsPage({ can });
 const { viewAsk } = createAnAiPages({ can });
 const { viewRahunky, viewRahunkyList } = createRahunkyPages(ctx);
 const { viewUsers } = createUsersPages(ctx);
@@ -359,6 +362,7 @@ const routes = {
   mprz: (id) => viewMarket('rozetka', id),
   mpprom: (id) => viewMarket('prom', id),
   mpepc: (id) => viewMarket('epc', id),
+  mpset: (tab) => viewMpSettings(tab),
   rzorders: () => RETAIL.viewOrders(),
   rzproducts: () => RETAIL.viewProducts(),
   rzsettings: () => RETAIL.viewSettings(),
