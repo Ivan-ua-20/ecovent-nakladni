@@ -4,7 +4,7 @@ import { iconize } from './core/icons.js';
 import { createAnalyticsUI } from './an.js';
 import { createPayUI } from './pay.js';
 import { createPayStatsUI } from './anpay.js';
-import { $, $$, main, api, setPending, setUnauthorized, toast, modal, fmtDateTime, confirmDanger } from './core/ui.js';
+import { $, $$, main, api, setPending, setUnauthorized, toast, modal, fmtDateTime, confirmDanger, tabBadges, setTabBadge } from './core/ui.js';
 import { createNakladnaPages } from './pages/nakladna.js';
 import { createRefsPages } from './pages/refs.js';
 import { createSettingsPages } from './pages/settings.js';
@@ -22,6 +22,7 @@ import { createHomePages } from './pages/home.js';
 import { createB2bStats } from './pages/b2b-stats.js';
 import { createPriceLogPages } from './pages/b2b-pricelog.js';
 import { createClaimPages } from './pages/b2b-claims.js';
+import { createB2bNewsPages } from './pages/b2b-news.js';
 import { createRetailPages } from './pages/retail.js';
 import { createReturnsPages } from './pages/returns.js';
 import { createChecksPages } from './pages/checks.js';
@@ -57,6 +58,7 @@ const SECTIONS = [
     { id: 'b2bclaims', label: 'Обміни' },
     { id: 'b2bpartners', label: 'Партнери' },
     { id: 'b2bcatalog', label: 'Каталог і ціни' },
+    { id: 'b2bnews', label: 'Новини' },
     { id: 'b2bprices', label: 'Журнал цін' },
     { id: 'b2bstats', label: 'Аналітика' },
     { id: 'b2bstatement', label: 'Взаєморозрахунки' },
@@ -65,6 +67,7 @@ const SECTIONS = [
   // Кабінет партнера — єдиний розділ, який бачить партнер.
   { id: 'partner', label: 'Кабінет партнера', perm: 'b2b.partner', home: 'phome', tabs: [
     { id: 'phome', label: 'Головна' },
+    { id: 'pnews', label: 'Новини' },
     { id: 'pcatalog', label: 'Каталог' },
     { id: 'pprices', label: 'Зміни цін' },
     { id: 'porders', label: 'Закупівлі' },
@@ -142,9 +145,11 @@ function renderNav(active = 'invoice') {
     </div>`;
   const tabs = visibleTabs(cur);
   $('.subnav').innerHTML = tabs.length > 1
-    ? tabs.map((t) => `<a href="#/${t.id}" class="${t.id === active ? 'active' : ''}">${esc(t.label)}</a>`).join('')
+    ? tabs.map((t) => `<a href="#/${t.id}" class="${t.id === active ? 'active' : ''}">${esc(t.label)}${tabBadges[t.id] ? ` <b class="tab-dot">${tabBadges[t.id]}</b>` : ''}</a>`).join('')
     : '';
   $('.subnav').hidden = tabs.length <= 1;
+  // непрочитані новини — лічильник біля вкладки «Новини» (один раз після входу; далі оновлює сторінка новин)
+  if (can('b2b.partner') && !('pnews' in tabBadges)) { tabBadges.pnews = 0; api('GET', '/api/b2b/p/news/unread').then((r) => setTabBadge('pnews', r.n)).catch(() => {}); }
   $('#navOut').onclick = async (e) => {
     e.preventDefault();
     await api('POST', '/api/auth/logout');
@@ -304,6 +309,8 @@ const { viewErrors } = createErrorsPages(ctx);
 const B2BSTATS = createB2bStats();
 const PRICELOG = createPriceLogPages();
 const CLAIMS = createClaimPages(ctx);
+const NEWS = createB2bNewsPages(ctx);
+ctx.newsBlock = () => NEWS.partnerHomeBlock(); // «Нове від Ековент» на головній кабінету партнера
 ctx.openClaimForm = CLAIMS.openClaimForm;
 const RETAIL = createRetailPages(ctx);
 const RETURNS = createReturnsPages(ctx);
@@ -347,6 +354,8 @@ const routes = {
   b2btrash: viewB2bTrash,
   b2bprices: () => PRICELOG.viewAdmin(),
   b2bclaims: CLAIMS.viewAdminClaims,
+  b2bnews: (id) => NEWS.viewNewsAdmin(id),
+  pnews: (id) => NEWS.viewPartnerNews(id),
   pclaims: CLAIMS.viewPartnerClaims,
   pprices: () => PRICELOG.viewPartner(),
   ptrash: viewPartnerTrash,

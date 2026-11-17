@@ -41,7 +41,7 @@ const MIME = {
 };
 // Ті самі заголовки безпеки, що й на Cloudflare (public/_headers): чужий скрипт на сторінці не виконається.
 const SECURITY_HEADERS = {
-  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'; font-src 'self' data:; frame-src https://www.youtube-nocookie.com https://player.vimeo.com https://drive.google.com; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'same-origin',
 };

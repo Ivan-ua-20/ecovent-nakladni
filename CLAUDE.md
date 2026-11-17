@@ -28,7 +28,7 @@
 
 - **Сервер:** [Hono](https://hono.dev) на JavaScript (ES-модулі, без TypeScript, без фреймворків на фронті).
 - **Хостинг:** Cloudflare Pages (статика з `public/`) + Pages Functions (`functions/api/[[path]].js` — обробляє всі `/api/*`).
-- **База:** Cloudflare D1 (SQLite), binding **`DB`**. Локально — SQLite через `node:sqlite` (`src/core/db-node.js`).
+- **База:** Cloudflare D1 (SQLite), binding **`DB`**. Необов'язково — R2, binding **`FILES`** (великі файли «Новин»; у маршруті — `c.env?.FILES`). Локально — SQLite через `node:sqlite` (`src/core/db-node.js`).
 - **Фонові задачі:** окремий Cloudflare Worker `cron-worker/` (кожні 3 хв), викликає `/api/cron/...`.
 - **Збірка:** esbuild (`scripts/build.mjs`). Залежності: `hono`, `@hono/node-server`, `docx`.
 - **Node.js 22.13+** (потрібен `node:sqlite`).
@@ -167,5 +167,6 @@ for t in tests/*.test.mjs; do node --no-warnings "$t" || break; done   # усі 
 | Товари маркетплейсів ↔ товари LP-CRM (довідник, правила прив'язки) | `src/modules/market/items.js`, словник LP-CRM — `src/modules/catalog/index.js` |
 | Вікна «Підтвердіть товари» / «Перевірте, що піде в LP-CRM», «Маркетплейси → Налаштування» | `public/pages/mpcrm.js`, сервер — `src/modules/market/crm.js` |
 | B2B: закупівлі, рахунки, Telegram | `src/modules/b2b/orders.js`, `edits.js`, `tgdocs.js` |
+| B2B «Новини» (статті, файли D1/R2, Telegram-групи партнерів) | `src/modules/b2b/news.js`, сторінки — `public/pages/b2b-news.js` |
 | Змінні середовища Cloudflare | `README.md` → «Cloudflare Pages» |
 | Опис для користувачів | `README.md` |
