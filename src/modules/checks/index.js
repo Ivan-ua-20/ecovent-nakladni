@@ -409,11 +409,12 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const sameOrg = (a, b) => a != null && b != null && orgOf.get(String(a)) === orgOf.get(String(b));
     const failed = cbFails(Object.fromEntries([['chk_cb_fail', cbFailRaw]]));
     const readable = new Set(readers(cashList, failed).map((f) => orgOf.get(String(f.dbId))));
+    // Каси відділу — усі, де цей відділ вказано (і ввімкнені, і вимкнені в LP-CRM; ввімкнені — першими).
+    // Чек будь-якої з цих організацій для відділу правильний.
     const cashByOffice = new Map();
-    // Як у LP-CRM: касу для відділу шукаємо лише серед увімкнених у LP-CRM, згори вниз.
-    for (const k of cashList.filter((x) => x.lp_active)) {
+    for (const k of cashList) {
       let offs = []; try { offs = JSON.parse(k.offices || '[]'); } catch { /* порожньо */ }
-      for (const off of offs) if (!cashByOffice.has(String(off))) cashByOffice.set(String(off), k.id);
+      for (const off of offs) { if (!cashByOffice.has(String(off))) cashByOffice.set(String(off), []); cashByOffice.get(String(off)).push(k.id); }
     }
     const cashByCode = new Map(cashList.filter((k) => k.org_code).map((k) => [String(k.org_code).trim(), k.id]));
     const fopByIpn = new Map(fopsAll.filter((f) => f.ipn).map((f) => [String(f.ipn).trim(), f.id]));
@@ -425,7 +426,11 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     // Яка каса має пробити чек — як у модулі Checkbox LP-CRM: за відділом замовлення.
     for (const o of orders) {
       o.status_name = names[o.status] || '';
-      o.fopId = cashByOffice.get(String(o.office)) ?? null;
+      const ids = cashByOffice.get(String(o.office)) || [];
+      const orgs = new Set(ids.map((id) => orgOf.get(String(id))));
+      o.fopId = ids[0] ?? null; // для показу «каса відділу»
+      o.fopOk = ids.length ? (id) => orgs.has(orgOf.get(String(id))) : null; // чек цієї каси підходить відділу?
+      o.canRead = ids.some((id) => readable.has(orgOf.get(String(id))));
     }
     const recs = receipts.map((r) => ({ ...r, pays: (() => { try { return JSON.parse(r.pays); } catch { return []; } })() }));
     const matched = matchReceipts(orders, recs, sameOrg);
@@ -451,8 +456,8 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       const payment = rule?.cls === 'bank' ? findPayment(o, txRows, o.total) : null;
       const dupTtn = (byTtn.get(String(o.ttn || '').replace(/\s/g, '').toUpperCase()) || []).filter((x) => x !== o).map((x) => x.id || x.code);
       // Чек можна вимагати, лише якщо касу відділу внесено й до неї є доступ.
-      const canReceipt = o.fopId != null && readable.has(orgOf.get(String(o.fopId)));
-      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn, canReceipt, sameOrg, noCashier: o.fopId == null });
+      const canReceipt = o.fopId != null && o.canRead;
+      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn, canReceipt, sameOrg, fopOk: o.fopOk, noCashier: o.fopId == null });
       return {
         code: o.code, id: o.id, day: o.day, status: o.status_name || String(o.status), total: o.total,
         payment: rule?.name || (o.payment ? `Оплата ${o.payment}` : '—'), cls: rule?.cls || '', partial: Boolean(part),
