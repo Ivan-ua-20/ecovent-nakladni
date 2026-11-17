@@ -26,7 +26,7 @@ export const PAY_DEFAULTS = {
   10: { name: 'Пром-оплата', cls: 'prepay', cb: 'RozetkaPay' },
   11: { name: 'Онлайн-оплата', cls: 'prepay', cb: 'mono' },
   12: { name: 'OLX доставка', cls: 'prepay' },
-  1: { name: 'Оплачено', cls: 'prepay', cb: 'еквайринг' },
+  1: { name: 'Оплачено', cls: 'prepay' }, // загальний «оплачено» (RozetkaPay, mono, NovaPay…) — спосіб оплати в чеку не звіряємо
   8: { name: 'Повернення коштів', cls: 'skip' },
   5: { name: 'Обмін', cls: 'skip' },
   3: { name: 'POS-термінал', cls: 'skip' },
@@ -105,7 +105,9 @@ const addDays = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864000
 
 // Чеки ↔ замовлення: спершу чек, прив'язаний у LP-CRM; далі за номером замовлення в чеку (16-значний код або № разом із сумою),
 // потім — за сумою: чек продажу на ту саму суму від дня замовлення до +20 днів, лише якщо збіг однозначний.
-export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === String(b)) {
+// cbOf(o) — слово, яке має бути в способі оплати чека (за видом оплати замовлення): серед однакових за товарами й сумою
+// чеків спершу беремо той, де спосіб оплати збігається.
+export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === String(b), cbOf = () => '') {
   const sells = receipts.filter((r) => !/RETURN/i.test(r.type));
   const byOrder = new Map();
   const used = new Set();
@@ -145,7 +147,10 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
     // кандидати — чеки з першим товаром замовлення (за будь-яким його кодом), уже впорядковані за часом
     const pool = [...new Set(o.goodsKeys[0].flatMap((k) => byTok.get(k) || []))].sort((x, y) => String(x.at).localeCompare(String(y.at)));
     const ok = (r) => !used.has(r.id) && rDay(r) >= o.day && rDay(r) <= end && sumOk(r) && goodsHit(o, r);
-    const hit = pool.find((r) => ok(r) && orgOk(r)) || pool.find(ok); // інша каса — теж знайдемо, перевірка ФОП покаже помилку
+    const cb = String(cbOf(o) || '').toLowerCase();
+    const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || '').toLowerCase().includes(cb));
+    // спершу — каса відділу й правильний спосіб оплати; далі поступаємось (інша каса — перевірка ФОП покаже помилку)
+    const hit = pool.find((r) => ok(r) && orgOk(r) && cbOk(r)) || pool.find((r) => ok(r) && orgOk(r)) || pool.find((r) => ok(r) && cbOk(r)) || pool.find(ok);
     if (hit) take(o, { ...hit, byGoods: true });
   }
 

@@ -38,7 +38,7 @@ await db.run(`DELETE FROM offices`);
 await db.run(`INSERT INTO offices (office_id, name, fop_id) VALUES ('22', 'Ecovent-Expert / ФОП Агафіца Д.М.', 1), ('12', 'Маркетплейси / ФОП ЛУПУ В.Ф.', 2), ('28', 'ТОВ «ЕКОВЕНТ-ДИСТРИБ’ЮШН»', 3), ('30', 'ФОП Ватрич', 4)`);
 await db.run(`INSERT INTO np_accounts (id, name, api_key, active, created_at) VALUES (1, 'НП', 'npk', 1, '')`);
 await db.run(`INSERT INTO rz_accounts (id, name, username, password) VALUES (1, 'Ековент', 'u', 'p')`);
-await raw.run(`INSERT INTO crm_products (product_id, name, code) VALUES (697, 'Тепловентилятор DREO [80173]', '80173')`);
+await raw.run(`INSERT INTO crm_products (product_id, name, code) VALUES (697, 'Тепловентилятор DREO [80173]', '80173'), (698, 'Осушувач [30499]', '30499')`);
 await db.run(`INSERT INTO prom_accounts (id, name, token, active) VALUES (1, 'Prom Amsterdam', 'ptok', 1)`);
 for (const [id, ttn] of [['p11', '2045 0000 0000 11'], ['p12', 'PRM-0000012'], ['p13', 'PRM-0000013'], ['p14', '20450000000014'], ['p21', '20450000000021']]) {
   await db.run(`INSERT INTO mp_orders (mp, account_id, id, number, created_at, total, ttn) VALUES ('prom', 1, ?, ?, ?, 0, ?)`, [id, id, `${D} 09:00:00`, ttn]);
@@ -71,6 +71,9 @@ const ORDERS = [
   // Однакові замовлення (той самий товар і сума): чеки без № замовлення — зіставлення за товаром і часом, по черзі
   O(10024, 14, 3174, '20450000000024', { office: '12', datetime: `${D} 09:00:00`, products: [{ product_id: '697', name: 'Тепловентилятор', price: '3174', quantity: '1' }] }),
   O(10025, 14, 3174, '20450000000025', { office: '12', datetime: `${D} 11:00:00`, products: [{ product_id: '697', name: 'Тепловентилятор', price: '3174', quantity: '1' }] }),
+  // Однакові товар і сума, різні види оплати: чек підбирається з правильним способом оплати, навіть якщо інший чек раніший
+  O(10026, 16, 4100, '20450000000026', { office: '12', datetime: `${D} 08:00:00`, products: [{ product_id: '698', name: 'Осушувач', price: '4100', quantity: '1' }] }),
+  O(10027, 15, 4100, 'RMP-100000027', { office: '12', datetime: `${D} 08:30:00`, products: [{ product_id: '698', name: 'Осушувач', price: '4100', quantity: '1' }] }),
   O(10011, 10, 610, '20450000000011', { office: '12' }), // Пром-оплата, у Prom оплачено — гаразд
   O(10012, 10, 620, 'PRM-0000012', { office: '12' }), // Пром-оплата, а в Prom «Оплата при отриманні» (Розетка Делівері з Prom)
   O(10013, 4, 630, 'PRM-0000013', { office: '12' }), // післяплата, у Prom оплата при отриманні — наложка є
@@ -85,7 +88,7 @@ const PROM = {
   p21: { id: 21, full_price: '650', payment_option: { name: 'Оплатить частями' } },
   p14: { id: 14, full_price: '640', payment_option: { name: 'Пром-оплата' }, payment_data: { type: 'prosale', status: 'unpaid' } },
 };
-const TRACK = { 20450000000024: {}, 20450000000025: {}, 20450000000023: {}, 20450000000022: {}, 20450000000021: {}, 20450000000018: {}, 20450000000019: { AfterpaymentOnGoodsCost: '1000' }, 20450000000020: {}, 20450000000016: { AfterpaymentOnGoodsCost: '2989' }, 20450000000017: { AfterpaymentOnGoodsCost: '800' }, 20450000000015: {}, 20450000000011: {}, 20450000000014: {}, 20450000000001: { AfterpaymentOnGoodsCost: '1000' }, 20450000000002: { AfterpaymentOnGoodsCost: '500' }, 20450000000003: {}, 20450000000004: {},
+const TRACK = { 20450000000026: { AfterpaymentOnGoodsCost: '4100' }, 20450000000024: {}, 20450000000025: {}, 20450000000023: {}, 20450000000022: {}, 20450000000021: {}, 20450000000018: {}, 20450000000019: { AfterpaymentOnGoodsCost: '1000' }, 20450000000020: {}, 20450000000016: { AfterpaymentOnGoodsCost: '2989' }, 20450000000017: { AfterpaymentOnGoodsCost: '800' }, 20450000000015: {}, 20450000000011: {}, 20450000000014: {}, 20450000000001: { AfterpaymentOnGoodsCost: '1000' }, 20450000000002: { AfterpaymentOnGoodsCost: '500' }, 20450000000003: {}, 20450000000004: {},
   20450000000005: { RedeliverySum: '700' }, 20450000000007: {}, 20450000000008: {}, 20450000000009: {} };
 const RC = {
   old: [
@@ -99,6 +102,8 @@ const RC = {
     { id: 'rx', type: 'SELL', fiscal_date: `${D}T13:00:00+02:00`, total_sum: 12345, payments: [{ type: 'CASH', label: 'Готівка', value: 12345 }] }, // без замовлення
   ],
   c2: [
+    { id: 'p27', type: 'SELL', fiscal_date: `${D}T09:00:00+02:00`, total_sum: 410000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 410000 }], goods: [{ good: { name: 'Осушувач [30499]' } }] },
+    { id: 'p26', type: 'SELL', fiscal_date: `${D}T09:10:00+02:00`, total_sum: 410000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора NovaPay', value: 410000 }], goods: [{ good: { name: 'Осушувач [30499]' } }] },
     { id: 'g2', type: 'SELL', fiscal_date: `${D}T12:00:00+02:00`, total_sum: 317400, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 317400 }], goods: [{ good: { code: '80173', name: 'Тепловентилятор DREO (DR-HSH-030) [80173]' } }] },
     { id: 'g1', type: 'SELL', fiscal_date: `${D}T10:00:00+02:00`, total_sum: 317400, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 317400 }], goods: [{ good: { code: '', name: 'Тепловентилятор DREO (DR-HSH-030) [80173]' } }] },
     { id: 'r2', type: 'SELL', fiscal_date: `${D}T12:20:00+02:00`, total_sum: 50000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 50000 }], header: '1790000000010002' },
@@ -239,6 +244,8 @@ assert.match(texts(10019), /info: Рітейл Розетки/); assert.doesNotM
 assert.match(texts(10020), /warn: У замовленні не вказано вид оплати/);
 assert.equal(row(10024).receipt?.id, 'g1', 'раніше замовлення — раніший чек'); assert.equal(row(10025).receipt?.id, 'g2');
 assert.equal(row(10024).level, 'ok', texts(10024)); assert.equal(row(10024).receipt.bySum, false);
+assert.equal(row(10026).receipt?.id, 'p26', 'NovaPay-замовлення — чек NovaPay, хоч RozetkaPay-чек раніший'); assert.equal(row(10027).receipt?.id, 'p27');
+assert.doesNotMatch(texts(10026) + texts(10027), /спосіб оплати/);
 assert.equal(row(10022).level, 'ok', texts(10022)); assert.match(texts(10022), /ok: Чек 710 грн · ФОП Стара каса/);
 assert.equal(row(10023).level, 'ok', texts(10023)); assert.doesNotMatch(texts(10023), /для цього відділу каса/, 'чек від вимкненої каси відділу — правильний');
 assert.doesNotMatch(texts(10020), /Коментар/, 'звичайний «оплата через …» — без попередження');
