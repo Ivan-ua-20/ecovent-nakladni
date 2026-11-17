@@ -126,37 +126,63 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
       || (refIndex.get(String(o.id)) || []).find((r) => !used.has(r.id) && near(r.total, o.total));
     if (hit) take(o, hit);
   }
-  // За товарами: усі товари замовлення є в чеку (код товару LP-CRM або його номер), сума та сама (або є передоплата),
-  // чек — не раніше дня замовлення і не пізніше +20 днів, каса відділу. Однакові замовлення (той самий товар і сума) —
-  // по черзі в часі: найраніше замовлення отримує найраніший підхожий чек.
+  // За товарами: усі товари замовлення є в чеку (код товару LP-CRM у квадратних дужках назви або код Checkbox),
+  // чек — не раніше дня замовлення і не пізніше +20 днів. Підбираємо ПРОХОДАМИ від найточнішого збігу до найслабшого —
+  // кожен прохід по всіх замовленнях, перш ніж послабити умови. Так замовлення, якому підходить чек лише «приблизно»,
+  // не забере чек, який точно належить іншому замовленню:
+  //   1) сума до копійки + каса відділу + правильний спосіб оплати;  2) сума + каса відділу;  3) сума + спосіб оплати;
+  //   4) сума;  5–6) те саме з допуском суми 1 грн (округлення) і з урахуванням передоплати.
+  // Серед підхожих чеків беремо найближчий за часом після створення замовлення.
   const toksOf = new Map();
-  const byTok = new Map(); // код товару → чеки (за часом)
+  const byTok = new Map(); // «код товару|сума, грн» → чеки (за часом)
+  const atMs = new Map();
   for (const r of [...sells].sort((x, y) => String(x.at).localeCompare(String(y.at)))) {
+    atMs.set(r.id, Date.parse(r.at) || 0);
     if (!r.goods) continue;
     const toks = new Set(String(r.goods).split(/[\s/]+/).filter(Boolean));
     toksOf.set(r.id, toks);
-    for (const t of toks) { if (!byTok.has(t)) byTok.set(t, []); byTok.get(t).push(r); }
+    // індекс «код товару + сума в гривнях» — кандидатів одразу мало навіть для популярних товарів
+    const uah = Math.round(Number(r.total) || 0);
+    for (const t of toks) { const k = `${t}|${uah}`; if (!byTok.has(k)) byTok.set(k, []); byTok.get(k).push(r); }
   }
   const goodsHit = (o, r) => { const toks = toksOf.get(r.id); return Boolean(toks) && o.goodsKeys.every((keys) => keys.some((k) => toks.has(k))); };
   const rDay = (r) => r.day || kyivDayOf(r.at);
-  const byGoodsOrders = orders.filter((o) => !byOrder.has(o.code) && o.goodsKeys?.length).sort((a, b) => String(a.dt || a.day).localeCompare(String(b.dt || b.day)));
-  for (const o of byGoodsOrders) {
+  const exact = (a, b) => Math.abs(Number(a || 0) - Number(b || 0)) < 0.005;
+  // час створення замовлення (київський) → мс; ±1 год на перехід часу не важить: беремо чеки не раніше ніж за 1 год до замовлення
+  const oMs = (o) => (o.dt ? Date.parse(`${String(o.dt).replace(' ', 'T')}+02:00`) - 3600e3 : Date.parse(`${o.day}T00:00:00+02:00`)) || 0;
+  const goodsOrders = orders.filter((o) => o.goodsKeys?.length).sort((a, b) => String(a.dt || a.day).localeCompare(String(b.dt || b.day)));
+  // Кандидати кожного замовлення рахуємо один раз: ті самі товари, вікно часу, сума з допуском (або з передоплатою).
+  const cands = new Map(goodsOrders.map((o) => {
     const end = addDays(o.day, 20);
-    const sumOk = (r) => near(r.total, o.total) || (o.prepayment > 0 && (near(r.total, o.total - o.prepayment) || near(r.total, o.prepayment)));
-    const orgOk = (r) => o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
-    // кандидати — чеки з першим товаром замовлення (за будь-яким його кодом), уже впорядковані за часом
-    const pool = [...new Set(o.goodsKeys[0].flatMap((k) => byTok.get(k) || []))].sort((x, y) => String(x.at).localeCompare(String(y.at)));
-    const ok = (r) => !used.has(r.id) && rDay(r) >= o.day && rDay(r) <= end && sumOk(r) && goodsHit(o, r);
-    const cb = String(cbOf(o) || '').toLowerCase();
-    const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || '').toLowerCase().includes(cb));
-    // спершу — каса відділу й правильний спосіб оплати; далі поступаємось (інша каса — перевірка ФОП покаже помилку)
-    const hit = pool.find((r) => ok(r) && orgOk(r) && cbOk(r)) || pool.find((r) => ok(r) && orgOk(r)) || pool.find((r) => ok(r) && cbOk(r)) || pool.find(ok);
-    if (hit) take(o, { ...hit, byGoods: true });
+    const from = oMs(o);
+    const sumNear = (r) => near(r.total, o.total) || (o.prepayment > 0 && (near(r.total, o.total - o.prepayment) || near(r.total, o.prepayment)));
+    const amounts = [o.total, ...(o.prepayment > 0 ? [o.total - o.prepayment, o.prepayment] : [])].flatMap((a) => { const x = Math.round(a); return [x - 1, x, x + 1]; });
+    const list = [...new Set(o.goodsKeys[0].flatMap((k) => amounts.flatMap((a) => byTok.get(`${k}|${a}`) || [])))]
+      .filter((r) => atMs.get(r.id) >= from && rDay(r) >= o.day && rDay(r) <= end && sumNear(r) && goodsHit(o, r))
+      .sort((x, y) => atMs.get(x.id) - atMs.get(y.id));
+    return [o.code, list];
+  }));
+  const PASSES = [
+    { sum: 'exact', org: true, cb: true }, { sum: 'exact', org: true, cb: false }, { sum: 'exact', org: false, cb: true }, { sum: 'exact', org: false, cb: false },
+    { sum: 'near', org: true, cb: false }, { sum: 'near', org: false, cb: false },
+  ];
+  for (const pass of PASSES) {
+    for (const o of goodsOrders) {
+      if (byOrder.has(o.code)) continue;
+      const list = cands.get(o.code);
+      if (!list.length) continue;
+      const sumOk = pass.sum === 'exact' ? (r) => exact(r.total, o.total) || (o.prepayment > 0 && (exact(r.total, o.total - o.prepayment) || exact(r.total, o.prepayment))) : () => true;
+      const orgOk = (r) => o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
+      const cb = String(cbOf(o) || '').toLowerCase();
+      const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || '').toLowerCase().includes(cb));
+      const hit = list.find((r) => !used.has(r.id) && sumOk(r) && (!pass.org || orgOk(r)) && (!pass.cb || cbOk(r)));
+      if (hit) take(o, { ...hit, byGoods: true });
+    }
   }
 
   // За сумою: групи «сума → замовлення» і «сума → чеки»; однозначний збіг — лише якщо в групі одне замовлення в цьому вікні.
   const free = sells.filter((r) => !used.has(r.id));
-  const key = (n) => Math.round(Number(n) * 100);
+  const key = (n) => Math.round(Number(n) * 100); // лише точна сума (до копійки)
   const rcBySum = new Map();
   for (const r of free) { const k = key(r.total); if (!rcBySum.has(k)) rcBySum.set(k, []); rcBySum.get(k).push(r); }
   const left = orders.filter((o) => !byOrder.has(o.code) && o.total > 0);
