@@ -140,7 +140,8 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     }));
     const lim = orders.limitsOf(p);
     const open = await orders.getOpen(p.id);
-    return c.json({ partner: p, users: users.map(teamRow), brands, entities, roles: PARTNER_ROLES, margin_defaults: await marginDefaults(), wh_price: [...WH_PRICE],
+    const senders = await sendersOf(p.id);
+    return c.json({ partner: p, users: users.map((u) => teamRow(u, senders)), brands, entities, roles: PARTNER_ROLES, margin_defaults: await marginDefaults(), wh_price: [...WH_PRICE],
       limits: { open: lim.open, unpaid: lim.unpaid, openTotal: open?.total || 0, openId: open?.id || null, unpaidTotal: await orders.unpaidTotal(p.id) },
       postpay: await orders.postpayInfo(p), debt: await orders.debtOf(p.id) });
   });
@@ -390,9 +391,12 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   // Додає адмін (у картці партнера) або керівник партнера (вкладка «Команда» в кабінеті).
   // added_by: «staff:Ім'я» — додав наш співробітник; «partner:Ім'я» — додав сам партнер.
   const MAX_TEAM = 30;
-  const teamRow = (u) => {
+  // Менеджери, яким керівник дозволив відправляти закупівлі (b2b_team_send).
+  const sendersOf = async (partnerId) => new Set((await db.all(`SELECT user_id FROM b2b_team_send WHERE partner_id = ?`, [partnerId])).map((r) => r.user_id));
+  const teamRow = (u, senders = new Set()) => {
     const [by, ...who] = String(u.added_by || '').split(':');
     return { id: u.id, login: u.login, name: u.name || '', active: u.active, created_at: u.created_at, partner_role: partnerRole(u),
+      can_send: partnerRole(u) === 'head' || (partnerRole(u) === 'staff' && senders.has(u.id)),
       partner_role_name: PARTNER_ROLES[partnerRole(u)], added_by_partner: by === 'partner', added_by_name: who.join(':'),
       tg: { connected: Boolean(u.tg_chat_id), name: u.tg_name || '', at: u.tg_linked_at || '' } };
   };
@@ -409,7 +413,17 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     const r = await db.run(`INSERT INTO users (login, name, password_hash, role, active, created_at, partner_id, partner_role, added_by) VALUES (?, ?, ?, 'partner', 1, ?, ?, ?, ?)`,
       [login, String(b.name || '').trim().slice(0, 100), await hashPassword(b.password), nowIso(), p.id, role, addedBy]);
     await audit(c, p.id, `додано користувача партнера «${p.name}»: ${login} (${PARTNER_ROLES[role]})${addedBy.startsWith('partner:') ? ' — додав партнер' : ''}`);
+    if (role === 'staff' && b.can_send) await setSend(c, p, { id: r.lastId, login }, true);
     return { id: r.lastId, login, role };
+  }
+
+  // Дозвіл менеджеру відправляти закупівлі (дає керівник партнера або адмін).
+  async function setSend(c, p, u, on) {
+    const had = Boolean(await db.get(`SELECT 1 AS ok FROM b2b_team_send WHERE user_id = ?`, [u.id]));
+    if (had === Boolean(on)) return false;
+    if (on) await db.run(`INSERT OR REPLACE INTO b2b_team_send (user_id, partner_id, granted_by, granted_at) VALUES (?, ?, ?, ?)`, [u.id, p.id, actorName(c), nowIso()]);
+    else await db.run(`DELETE FROM b2b_team_send WHERE user_id = ?`, [u.id]);
+    return true;
   }
 
   // Зміна користувача; guard — перевірки керівника партнера (не себе, лишається хоча б один активний керівник).
@@ -436,6 +450,12 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
       const heads = (await db.all(`SELECT id, partner_role FROM users WHERE partner_id = ? AND role = 'partner' AND active = 1 AND id != ?`, [p.id, u.id]))
         .filter((x) => partnerRole(x) === 'head').length;
       if (!heads) throw fail(400, 'У команді має лишитися хоча б один активний керівник.');
+    }
+    // Відправляти закупівлі: керівник — завжди; менеджер — якщо дозволено; «Лише перегляд» — ніколи (дозвіл знімається).
+    const newRole = b.partner_role !== undefined ? roleOf(b.partner_role) : partnerRole(u);
+    if (b.can_send !== undefined || newRole !== 'staff') {
+      const want = newRole === 'staff' && (b.can_send !== undefined ? Boolean(b.can_send) : Boolean(await db.get(`SELECT 1 AS ok FROM b2b_team_send WHERE user_id = ?`, [u.id])));
+      if (await setSend(c, p, u, want) && newRole === 'staff') changes.push(want ? 'дозволено відправляти закупівлі' : 'заборонено відправляти закупівлі');
     }
     if (sets.length) await db.run(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, [...vals, u.id]);
     if (b.password || b.active === false) await db.run(`DELETE FROM sessions WHERE user_id = ? AND user_id != ?`, [u.id, me.id]);
@@ -596,7 +616,8 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     need(c, 'b2b.team');
     await services.notify?.fillTgNames?.(5).catch(() => 0);
     const rows = await db.all(`SELECT * FROM users WHERE partner_id = ? AND role = 'partner' ORDER BY active DESC, login`, [p.id]);
-    return c.json({ users: rows.map(teamRow), roles: PARTNER_ROLES, max: MAX_TEAM, me: c.get('user').id });
+    const senders = await sendersOf(p.id);
+    return c.json({ users: rows.map((u) => teamRow(u, senders)), roles: PARTNER_ROLES, max: MAX_TEAM, me: c.get('user').id });
   });
   app.post('/api/b2b/p/team', async (c) => {
     const p = await myPartner(c);

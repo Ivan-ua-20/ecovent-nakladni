@@ -342,6 +342,9 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   // Чернетка закупівлі: менеджери партнера збирають товари (можна в одну спільну — товари додаються),
   // керівник партнера відправляє її нам («Відправити закупівлю»). Чернетки бачить лише команда партнера.
   const isHead = (c) => can(c.get('user'), 'b2b.team');
+  // Відправити / оформити / підтвердити закупівлю: керівник, або менеджер, якому керівник це дозволив (b2b_team_send).
+  const canSend = async (c, p) => isHead(c) || (can(c.get('user'), 'b2b.order')
+    && Boolean(await db.get(`SELECT 1 AS ok FROM b2b_team_send WHERE user_id = ? AND partner_id = ?`, [c.get('user').id, p.id])));
   app.post('/api/b2b/p/orders', async (c) => {
     const p = await myPartner(c);
     const b = await c.req.json();
@@ -363,7 +366,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       await log(d.id, c.get('user'), `додано до чернетки: ${itemsTxt(add.map((a) => ({ ...(byId.get(Number(a.product_id)) || { name: `ID ${a.product_id}` }), qty: Math.floor(Number(a.qty)) })))} — разом у чернетці ${uah(total)}`);
       return c.json({ id: d.id, number: orderNo(d.id), total, draft: true });
     }
-    const draft = Boolean(b.draft) || !isHead(c); // менеджер партнера — лише чернетка
+    const draft = Boolean(b.draft) || !await canSend(c, p); // менеджер партнера — лише чернетка (якщо відправку менеджерам не дозволено)
     const e = await myEntity(p, b.entity_id);
     const delivery = deliveryOf(b.delivery);
     const ship = delivery === 'warehouse' ? shipToOf(b.ship_to, p) : null; // на свій склад — отримувач, телефон, відділення
@@ -489,6 +492,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const cnt = open ? (await db.get(`SELECT COUNT(*) AS n FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled'`, [open.id])).n : 0;
     const drafts = (await hooks.draftsOf?.(p.id)) || [];
     return c.json({
+      can_send: await canSend(c, p), // може відправляти закупівлі (керівник або менеджер з дозволом)
       open: { id: open?.id || null, number: open ? orderNo(open.id) : '', total: open?.total || 0, limit: lim.open, orders: cnt },
       // чернетки закупівель, куди за замовчуванням ідуть замовлення клієнтів без закупівлі (найновіша — першою)
       drafts: drafts.map((d) => ({ id: d.id, number: orderNo(d.id), total: d.total, entity: String(d.entity || '').split('\n')[0].split(',')[0] })),
@@ -732,7 +736,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const p = await myPartner(c);
     const o = await orderOf(c.req.param('id'), p.id);
     if (o.kind !== 'supply') throw fail(404, 'Замовлення не знайдено.');
-    return c.json(await orderDetail(o));
+    return c.json({ ...await orderDetail(o), can_send: await canSend(c, p) });
   });
 
   // Зміна закупівлі партнером — доки бухгалтер не вніс рахунок. Ціни перераховуються за поточними.
@@ -784,7 +788,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   // Чернетку відправляє керівник партнера або наш адмін: тепер це звичайна закупівля («Очікує рахунок»), з усіма сповіщеннями.
   app.post('/api/b2b/p/orders/:id/send', async (c) => {
     const p = await myPartner(c);
-    if (!isHead(c)) throw fail(403, 'Відправити закупівлю може лише керівник вашої команди.');
+    if (!await canSend(c, p)) throw fail(403, 'Відправити закупівлю може лише керівник вашої команди (або попросіть його дозволити це менеджерам у «Налаштуваннях»).');
     return c.json(await sendDraft(c, p, await orderOf(c.req.param('id'), p.id)));
   });
   app.post('/api/b2b/orders/:id/send', async (c) => {
@@ -908,7 +912,7 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
   // Партнер (керівник команди) підтверджує закупівлю від менеджера: юрособа → «Очікує рахунок», запит рахунку.
   app.post('/api/b2b/p/orders/:id/confirm', async (c) => {
     const p = await myPartner(c);
-    if (!isHead(c)) throw fail(403, 'Підтвердити закупівлю може керівник вашої команди.');
+    if (!await canSend(c, p)) throw fail(403, 'Підтвердити закупівлю може керівник вашої команди.');
     const o = await orderOf(c.req.param('id'), p.id);
     if (o.kind !== 'supply' || o.status !== 'confirm') throw fail(400, 'Цю закупівлю вже підтверджено або скасовано — оновіть сторінку.');
     const b = await c.req.json().catch(() => ({}));

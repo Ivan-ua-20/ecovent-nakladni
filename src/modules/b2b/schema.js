@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 41,
+  version: 42,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -305,6 +305,13 @@ export const schema = {
     created_by TEXT DEFAULT '',
     created_at TEXT NOT NULL,
     PRIMARY KEY (partner_id, product_id)
+  )`,
+  // Менеджер партнера, якому керівник дозволив самому відправляти (оформлювати, підтверджувати) закупівлі.
+  `CREATE TABLE IF NOT EXISTS b2b_team_send (
+    user_id INTEGER PRIMARY KEY,
+    partner_id INTEGER NOT NULL,
+    granted_by TEXT DEFAULT '',
+    granted_at TEXT NOT NULL
   )`,
   // ---------- Новини для партнерів (news.js) ----------
   // body — JSON блоків статті (текст, фото, відео, файл, товар); audience — JSON id партнерів ('' — усім);
