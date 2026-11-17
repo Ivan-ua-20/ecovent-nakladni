@@ -19938,19 +19938,26 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
     if (!ordBySum.has(k)) ordBySum.set(k, []);
     ordBySum.get(k).push(o);
   }
+  const dayOf2 = new Map(free.map((r) => [r.id, r.day || kyivDayOf2(r.at)]));
+  const winEnd = new Map(left.map((o) => [o.code, addDays6(o.day, 20)]));
+  const inWin = (o, r) => {
+    const d = dayOf2.get(r.id);
+    return d >= o.day && d <= winEnd.get(o.code);
+  };
   for (const [k, list] of ordBySum) {
-    const rcs = rcBySum.get(k) || [];
+    const rcs = rcBySum.get(k);
+    if (!rcs) continue;
     for (const o of list) {
-      const inWin = (r) => {
-        const d = kyivDayOf2(r.at);
-        return d >= o.day && d <= addDays6(o.day, 20);
-      };
-      const cands = rcs.filter((r) => !used.has(r.id) && inWin(r) && (o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId)) || list.length === 1));
-      const rivals = list.filter((x) => x !== o && cands.some((r) => {
-        const d = kyivDayOf2(r.at);
-        return d >= x.day && d <= addDays6(x.day, 20);
-      }));
-      if (cands.length === 1 && !rivals.length) take(o, { ...cands[0], bySum: true });
+      const cands = [];
+      for (const r of rcs) {
+        if (used.has(r.id) || !inWin(o, r)) continue;
+        if (!(o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId)) || list.length === 1)) continue;
+        cands.push(r);
+        if (cands.length > 1) break;
+      }
+      if (cands.length !== 1) continue;
+      const rival = list.some((x) => x !== o && !byOrder.has(x.code) && inWin(x, cands[0]));
+      if (!rival) take(o, { ...cands[0], bySum: true });
     }
   }
   return byOrder;
@@ -20573,6 +20580,11 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       const fid = fopByIban.get(iban) || fopByIpn.get(code);
       return { ...t, day: String(t.date).slice(0, 10), fop_id: cashByCode.get(code) ?? null, account: fid && fopName[String(fid)] || acc?.alias || acc?.name || iban.slice(-8) };
     });
+    const txByAmount = /* @__PURE__ */ new Map();
+    for (const t of txRows) for (const k of [Math.round(t.amount), Math.round(t.amount) - 1, Math.round(t.amount) + 1]) {
+      if (!txByAmount.has(k)) txByAmount.set(k, []);
+      txByAmount.get(k).push(t);
+    }
     const byPhone = /* @__PURE__ */ new Map();
     for (const o of orders) if (o.phone.length === 9) {
       if (!byPhone.has(o.phone)) byPhone.set(o.phone, []);
@@ -20592,7 +20604,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       const part = rule?.cls === "cod" ? o.prepayment > 0 || partialOf(o.comment) : null;
       const dup = (byPhone.get(o.phone) || []).filter((x) => x !== o && Math.abs(Date.parse(x.day) - Date.parse(o.day)) <= 3 * 864e5).map((x) => x.id || x.code);
       const receipt = matched.get(o.code) || null;
-      const payment = rule?.cls === "bank" ? findPayment(o, txRows, o.total) : null;
+      const payment = rule?.cls === "bank" ? findPayment(o, txByAmount.get(Math.round(o.total)) || [], o.total) : null;
       const dupTtn = (byTtn.get(String(o.ttn || "").replace(/\s/g, "").toUpperCase()) || []).filter((x) => x !== o).map((x) => x.id || x.code);
       const canReceipt = o.fopId != null && o.canRead;
       const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today: today3, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn, canReceipt, sameOrg, fopOk: o.fopOk, noCashier: o.fopId == null });
@@ -20628,7 +20640,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
   const period = (c) => {
     const today3 = kyivDay();
     const ok = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d || "");
-    let from = ok(c.req.query("from")) ? c.req.query("from") : addDays7(today3, -CHECK_DAYS);
+    let from = ok(c.req.query("from")) ? c.req.query("from") : addDays7(today3, -6);
     let to = ok(c.req.query("to")) ? c.req.query("to") : today3;
     if (from < addDays7(today3, -CHECK_DAYS - 7)) from = addDays7(today3, -CHECK_DAYS - 7);
     if (to < from) to = from;
