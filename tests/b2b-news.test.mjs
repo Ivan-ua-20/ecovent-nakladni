@@ -10,7 +10,12 @@ import { cleanHtml, videoEmbed } from '../src/modules/b2b/news.js';
 const db = openDb(':memory:');
 await migrate(db);
 const tg = [];
+const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 9, 9]);
 const fetchFn = async (url, opts = {}) => {
+  if (String(url).startsWith('https://img.example/')) {
+    if (url.endsWith('.png')) return new Response(PNG, { headers: { 'Content-Type': 'image/png' } });
+    return new Response('<html>', { headers: { 'Content-Type': 'text/html' } });
+  }
   if (String(url).startsWith('https://api.telegram.org/')) { tg.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } })); }
   return new Response(JSON.stringify({ status: 'ok', data: [] }));
 };
@@ -59,6 +64,13 @@ const fileId = up.j.id;
 const big = await call('POST', '/api/b2b/news/files?name=video.mp4', new Uint8Array(10), { Cookie: H.Cookie, 'Content-Type': 'video/mp4', 'Content-Length': String(6 * 1024 * 1024) });
 assert.equal(big.status, 400, 'відео понад 5 МБ без R2 — ні');
 assert.match(big.j.error, /R2/);
+
+// фото за посиланням: сервер завантажує й зберігає
+const fu = await req('POST', '/api/b2b/news/files/url', { url: 'https://img.example/catalog/Warmix%201500%20black.png' });
+assert.equal(fu.name, 'Warmix 1500 black.png');
+assert.equal((await db.get(`SELECT size, mime FROM b2b_news_files WHERE id = ?`, [fu.id])).size, PNG.length);
+assert.equal((await call('POST', '/api/b2b/news/files/url', { url: 'https://img.example/page.html' })).status, 400, 'не фото — ні');
+assert.equal((await call('POST', '/api/b2b/news/files/url', { url: 'http://img.example/x.png' })).status, 400, 'лише https');
 
 // ---------- чернетка → публікація ----------
 assert.equal((await call('POST', '/api/b2b/news', { title: 'x' }, HA)).status, 403, 'партнер не пише новин');

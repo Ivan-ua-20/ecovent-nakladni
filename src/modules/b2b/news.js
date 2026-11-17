@@ -73,7 +73,7 @@ export function cleanBlocks(list) {
   return out;
 }
 
-export function mountB2bNews(app, { db, services = {}, myPartner, partnerPrice, brandNames, onCron = () => {} }) {
+export function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartner, partnerPrice, brandNames, onCron = () => {} }) {
   const userName = (c) => { const u = c.get('user'); return str(u?.name || u?.login, 80); };
   const origin = async (c) => {
     if (c) {
@@ -279,6 +279,30 @@ export function mountB2bNews(app, { db, services = {}, myPartner, partnerPrice, 
     if (bytes.length > MAX_D1 && !bucket) throw fail(400, 'Файл більший за 5 МБ.');
     const parts = Math.ceil(bytes.length / PART);
     const r = await db.run(`INSERT INTO b2b_news_files (name, mime, size, store, parts, created_by, created_at) VALUES (?, ?, ?, 'd1', ?, ?, ?)`, [name, mime, bytes.length, parts, userName(c), at]);
+    const st = [];
+    for (let i = 0; i < parts; i++) st.push([`INSERT INTO b2b_news_file_parts (file_id, n, data) VALUES (?, ?, ?)`, [r.lastId, i, toB64(bytes.subarray(i * PART, (i + 1) * PART))]]);
+    await db.batch(st);
+    return c.json({ id: r.lastId, name, mime, size: bytes.length, src: fileUrl(r.lastId) });
+  });
+  // Фото за посиланням: сервер завантажує картинку (https, лише зображення до 5 МБ) і зберігає як файл новини.
+  app.post('/api/b2b/news/files/url', async (c) => {
+    need(c, 'b2b.admin');
+    const url = str((await c.req.json().catch(() => ({}))).url, 1000);
+    let u;
+    try { u = new URL(url); } catch { throw fail(400, 'Вставте посилання на фото (https://…).'); }
+    if (u.protocol !== 'https:' || /^(localhost|127\.|10\.|192\.168\.|169\.254\.)/.test(u.hostname)) throw fail(400, 'Посилання на фото має починатися з https://.');
+    let res;
+    try { res = await fetchFn(u.href, { headers: { Accept: 'image/*', 'User-Agent': 'Mozilla/5.0 (EcoventNews)' } }); }
+    catch (e) { if (e.pending) throw e; throw fail(502, 'Не вдалося завантажити фото за посиланням — перевірте адресу.'); }
+    const mime = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!res.ok) throw fail(400, `Сайт не віддав фото (помилка ${res.status}).`);
+    if (!/^image\/(png|jpe?g|webp|gif|avif)$/.test(mime)) throw fail(400, 'За посиланням не фото (потрібно JPG, PNG, WEBP або GIF).');
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (!bytes.length || bytes.length > MAX_D1) throw fail(400, 'Фото більше за 5 МБ — оберіть менше (наприклад, версію 800×800).');
+    const ext = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg' }[mime] || mime.split('/')[1];
+    const name = (decodeURIComponent(u.pathname.split('/').pop() || '').replace(/\.[a-z0-9]+$/i, '').replace(/[\\/:*?"<>|\r\n]+/g, '_').slice(0, 120) || 'photo') + `.${ext}`;
+    const parts = Math.ceil(bytes.length / PART);
+    const r = await db.run(`INSERT INTO b2b_news_files (name, mime, size, store, parts, created_by, created_at) VALUES (?, ?, ?, 'd1', ?, ?, ?)`, [name, mime, bytes.length, parts, userName(c), nowIso()]);
     const st = [];
     for (let i = 0; i < parts; i++) st.push([`INSERT INTO b2b_news_file_parts (file_id, n, data) VALUES (?, ?, ?)`, [r.lastId, i, toB64(bytes.subarray(i * PART, (i + 1) * PART))]]);
     await db.batch(st);

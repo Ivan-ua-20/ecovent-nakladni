@@ -12680,7 +12680,7 @@ function cleanBlocks(list) {
   }
   return out;
 }
-function mountB2bNews(app, { db, services = {}, myPartner, partnerPrice: partnerPrice2, brandNames, onCron = () => {
+function mountB2bNews(app, { db, fetchFn = fetch, services = {}, myPartner, partnerPrice: partnerPrice2, brandNames, onCron = () => {
 } }) {
   const userName8 = (c) => {
     const u = c.get("user");
@@ -12948,6 +12948,37 @@ function mountB2bNews(app, { db, services = {}, myPartner, partnerPrice: partner
     if (bytes.length > MAX_D1 && !bucket) throw fail(400, "\u0424\u0430\u0439\u043B \u0431\u0456\u043B\u044C\u0448\u0438\u0439 \u0437\u0430 5 \u041C\u0411.");
     const parts = Math.ceil(bytes.length / PART2);
     const r = await db.run(`INSERT INTO b2b_news_files (name, mime, size, store, parts, created_by, created_at) VALUES (?, ?, ?, 'd1', ?, ?, ?)`, [name, mime, bytes.length, parts, userName8(c), at]);
+    const st = [];
+    for (let i = 0; i < parts; i++) st.push([`INSERT INTO b2b_news_file_parts (file_id, n, data) VALUES (?, ?, ?)`, [r.lastId, i, toB642(bytes.subarray(i * PART2, (i + 1) * PART2))]]);
+    await db.batch(st);
+    return c.json({ id: r.lastId, name, mime, size: bytes.length, src: fileUrl(r.lastId) });
+  });
+  app.post("/api/b2b/news/files/url", async (c) => {
+    need(c, "b2b.admin");
+    const url = str2((await c.req.json().catch(() => ({}))).url, 1e3);
+    let u;
+    try {
+      u = new URL(url);
+    } catch {
+      throw fail(400, "\u0412\u0441\u0442\u0430\u0432\u0442\u0435 \u043F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u043D\u0430 \u0444\u043E\u0442\u043E (https://\u2026).");
+    }
+    if (u.protocol !== "https:" || /^(localhost|127\.|10\.|192\.168\.|169\.254\.)/.test(u.hostname)) throw fail(400, "\u041F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F \u043D\u0430 \u0444\u043E\u0442\u043E \u043C\u0430\u0454 \u043F\u043E\u0447\u0438\u043D\u0430\u0442\u0438\u0441\u044F \u0437 https://.");
+    let res;
+    try {
+      res = await fetchFn(u.href, { headers: { Accept: "image/*", "User-Agent": "Mozilla/5.0 (EcoventNews)" } });
+    } catch (e) {
+      if (e.pending) throw e;
+      throw fail(502, "\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0438\u0442\u0438 \u0444\u043E\u0442\u043E \u0437\u0430 \u043F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F\u043C \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0430\u0434\u0440\u0435\u0441\u0443.");
+    }
+    const mime = String(res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    if (!res.ok) throw fail(400, `\u0421\u0430\u0439\u0442 \u043D\u0435 \u0432\u0456\u0434\u0434\u0430\u0432 \u0444\u043E\u0442\u043E (\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${res.status}).`);
+    if (!/^image\/(png|jpe?g|webp|gif|avif)$/.test(mime)) throw fail(400, "\u0417\u0430 \u043F\u043E\u0441\u0438\u043B\u0430\u043D\u043D\u044F\u043C \u043D\u0435 \u0444\u043E\u0442\u043E (\u043F\u043E\u0442\u0440\u0456\u0431\u043D\u043E JPG, PNG, WEBP \u0430\u0431\u043E GIF).");
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (!bytes.length || bytes.length > MAX_D1) throw fail(400, "\u0424\u043E\u0442\u043E \u0431\u0456\u043B\u044C\u0448\u0435 \u0437\u0430 5 \u041C\u0411 \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u043C\u0435\u043D\u0448\u0435 (\u043D\u0430\u043F\u0440\u0438\u043A\u043B\u0430\u0434, \u0432\u0435\u0440\u0441\u0456\u044E 800\xD7800).");
+    const ext = { "image/jpeg": "jpg", "image/jpg": "jpg" }[mime] || mime.split("/")[1];
+    const name = (decodeURIComponent(u.pathname.split("/").pop() || "").replace(/\.[a-z0-9]+$/i, "").replace(/[\\/:*?"<>|\r\n]+/g, "_").slice(0, 120) || "photo") + `.${ext}`;
+    const parts = Math.ceil(bytes.length / PART2);
+    const r = await db.run(`INSERT INTO b2b_news_files (name, mime, size, store, parts, created_by, created_at) VALUES (?, ?, ?, 'd1', ?, ?, ?)`, [name, mime, bytes.length, parts, userName8(c), nowIso()]);
     const st = [];
     for (let i = 0; i < parts; i++) st.push([`INSERT INTO b2b_news_file_parts (file_id, n, data) VALUES (?, ?, ?)`, [r.lastId, i, toB642(bytes.subarray(i * PART2, (i + 1) * PART2))]]);
     await db.batch(st);
@@ -14237,7 +14268,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   const newProducts = mountB2bNewProducts(app, { db, services, partnerPrice, brandNames });
   const attention = async (user) => [...await home.attention(), ...await crm.attention(user), ...await newProducts.attention()];
   mountB2bPrices(app, { db, services, partnerPrice, myPartner });
-  mountB2bNews(app, { db, services, myPartner, partnerPrice, brandNames, onCron });
+  mountB2bNews(app, { db, fetchFn, services, myPartner, partnerPrice, brandNames, onCron });
   app.post("/api/b2b/partners/:id/tg-group", async (c) => {
     need(c, "b2b.admin");
     const p = await getPartner(c.req.param("id"));
