@@ -159,17 +159,22 @@ export function findPayment(o, txs, expected) {
 // Повертає { level: ok | warn | bad | wait | skip, items: [{ level, text }] }.
 export function evaluate(o, ctx) {
   const items = [];
-  const add = (level, text) => items.push({ level, text });
+  // group — етап перевірки: mp (маркетплейс), pay (вид оплати в CRM), ttn (ТТН і наложка), comment, fact (оплата по факту),
+  // receipt (чек), dup (дублі). Сторінка показує етапи по порядку.
+  let grp = 'pay';
+  const add = (level, text, group = grp) => items.push({ level, text, group });
   const rule = ctx.rules[String(o.payment)] || null;
   const fopName = (id) => ctx.fops[String(id)] || `ФОП ${id}`;
   const noPay = !o.payment || o.payment === '0';
   if (!rule) add('warn', noPay ? 'У замовленні не вказано вид оплати.' : `Вид оплати ${o.payment} невідомий — оберіть, що перевіряти, у «Перевірка → Налаштування».`);
   const cls = rule?.cls || '';
-  if (cls === 'skip') return { level: 'skip', items: [{ level: 'skip', text: `«${rule.name}» — не перевіряємо` }] };
+  if (cls === 'skip') return { level: 'skip', items: [{ level: 'skip', text: `«${rule.name}» — не перевіряємо`, group: 'pay' }] };
+  if (rule) add('ok', `${rule.name} — ${{ cod: 'післяплата: у ТТН має бути наложка', prepay: 'оплата через сервіс: наложки бути не повинно', bank: 'оплата на рахунок ФОП: наложки бути не повинно' }[cls] || ''}`);
   // Часткова оплата: поле «передоплата» LP-CRM, інакше — сума з коментаря.
   const part = cls === 'cod' ? (o.prepayment > 0 ? { sum: o.prepayment } : partialOf(o.comment)) : null;
   const expCod = part ? (part.sum ? o.total - part.sum : null) : o.total;
 
+  grp = 'ttn';
   // 1) Наложка в ТТН. Рітейл Розетки (дропшипінг): наложку (контроль оплати за ціною Розетки) ставить Розетка — не звіряємо.
   const retail = /riteil|рітейл|ритейл|retail/i.test(o.channel || '');
   if (!o.ttn) add('warn', 'Немає ТТН у замовленні.');
@@ -194,6 +199,7 @@ export function evaluate(o, ctx) {
   else if (o.carrier === 'prm') add(o.day < ctx.today ? 'info' : 'wait', o.day < ctx.today ? 'ТТН Prom: замовлення з цією ТТН серед замовлень Prom не знайдено — перевірте вручну.' : 'ТТН Prom: замовлення в Prom ще не знайдено.');
   else add('info', `${CARRIERS[o.carrier] || 'Служба доставки'}: наложка не перевіряється.`);
 
+  grp = 'mp';
   // 1б) Оплата в Prom (замовлення Prom з тією самою ТТН): Пром-оплата отримана / ні / при отриманні — проти виду оплати в CRM.
   if (o.mp_pay && cls) {
     const isProsale = /пром[\s-]*оплат/i.test(rule?.name || '');
@@ -207,6 +213,7 @@ export function evaluate(o, ctx) {
 
   // 2) Чек
   const r = ctx.receipt;
+  grp = 'receipt';
   // Чек видають під час відправки (і для післяплати теж): відправлене замовлення без чека — помилка.
   if (!r && o.receipt_ref && o.ref_state === 'nofop') add('warn', 'У LP-CRM чек прив’язано, але жодна каса з доступом його не бачить — внесіть пароль касира в «Перевірка → Налаштування → Каси Checkbox».');
   else if (!r && o.receipt_ref) add('wait', 'У LP-CRM чек прив’язано — завантажуємо його з Checkbox.');
@@ -227,6 +234,10 @@ export function evaluate(o, ctx) {
     }
   }
 
+  grp = 'fact';
+  if (cls === 'cod' && o.cod > 0) add('info', `Наложка ${fmt(o.cod)}: гроші прийдуть після отримання посилки.`);
+  else if (cls === 'prepay' && o.mp_pay === 'prosale_paid') add('ok', 'Оплачено через Prom.');
+  else if (cls === 'prepay' && !o.mp_pay) add('info', `«${rule.name}»: надходження від сервісу (Розетка, Prom тощо) приходять загальною сумою — окремо не звіряємо.`);
   // 3) Оплата на рахунок
   if (cls === 'bank') {
     const p = ctx.payment;
@@ -239,6 +250,7 @@ export function evaluate(o, ctx) {
     }
   }
 
+  grp = 'comment';
   // 3б) Коментар менеджера про особливу оплату (передоплата, доплата, без наложки, обмін, повернення) — звірити вручну.
   // Звичайні «оплата через …» (автокоментарі замовлень маркетплейсів) не позначаємо.
   const com = String(o.comment || '').trim();
@@ -246,6 +258,7 @@ export function evaluate(o, ctx) {
     add('warn', `Коментар про особливу оплату — звірте вручну: «${com.length > 160 ? `${com.slice(0, 157)}…` : com}»`);
   }
 
+  grp = 'dup';
   // 4) Дублі: та сама ТТН у кількох замовленнях (одна посилка на два замовлення) або той самий телефон
   if (ctx.dupTtn?.length) add('bad', `Та сама ТТН у замовленні № ${ctx.dupTtn.join(', № ')} — одна посилка на кілька замовлень?`);
   if (ctx.dup?.length) add('warn', `Можливий дубль: той самий телефон у відправленому замовленні № ${ctx.dup.join(', № ')}.`);

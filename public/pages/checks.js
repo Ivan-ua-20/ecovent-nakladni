@@ -26,16 +26,27 @@ export function createChecksPages() {
 
   const lvMatch = (r, lv) => (lv === 'all' ? true : lv === 'problems' ? r.level === 'bad' || r.level === 'warn' : r.level === lv);
   const hay = (r) => [r.id, r.code, r.ttn, r.buyer, r.phone, r.channel, r.office, r.payment, r.comment].join(' ').toLowerCase();
-  const items = (r) => `<ul class="chk-items">${r.items.map((i) => `<li class="chk-${esc(i.level)}"><span class="chk-ic" aria-hidden="true">${ICON[i.level] || ''}</span><span>${esc(i.text)}</span></li>`).join('')}</ul>`;
-  const row = (r) => `<tr class="chk-row-${esc(r.level)}">
+  // Етапи перевірки замовлення — по порядку, як їх проходить людина.
+  const STAGES = [['mp', 'Маркетплейс'], ['pay', 'Вид оплати'], ['ttn', 'ТТН і наложка'], ['comment', 'Коментар'], ['fact', 'Оплата по факту'], ['receipt', 'Чек'], ['dup', 'Дублі']];
+  const ORDER = ['bad', 'warn', 'wait', 'info', 'ok', 'skip'];
+  const worst = (list) => list.reduce((lv, it) => (ORDER.indexOf(it.level) < ORDER.indexOf(lv) ? it.level : lv), 'skip');
+  const stageOf = (r, g) => r.items.filter((i) => (i.group || 'pay') === g);
+  // Смужка етапів у рядку: кожен етап — значок за найгіршим результатом; етапів без даних немає.
+  const strip = (r) => `<div class="chk-strip">${STAGES.map(([g, label]) => { const its = stageOf(r, g); if (!its.length) return ''; const lv = worst(its);
+    return `<span class="chk-st chk-st-${esc(lv)}" title="${esc(`${label}: ${its.map((i) => i.text).join(' · ')}`)}"><span class="chk-ic" aria-hidden="true">${ICON[lv] || ''}</span>${esc(label)}</span>`; }).join('')}</div>`;
+  // Повна картка перевірки замовлення (розгортається кліком по рядку).
+  const card = (r) => `<div class="chk-card">${STAGES.map(([g, label]) => { const its = stageOf(r, g); if (!its.length) return '';
+    return `<div class="chk-stage"><div class="chk-stage-h chk-${esc(worst(its))}"><span class="chk-ic" aria-hidden="true">${ICON[worst(its)] || ''}</span>${esc(label)}</div>
+      <ul class="chk-items">${its.map((i) => `<li class="chk-${esc(i.level)}"><span class="chk-ic" aria-hidden="true">${ICON[i.level] || ''}</span><span>${esc(i.text)}</span></li>`).join('')}</ul></div>`; }).join('')}
+    ${r.comment ? `<div class="chk-stage"><div class="chk-stage-h">Повний коментар</div><div class="small chk-com-full">${esc(r.comment)}</div></div>` : ''}</div>`;
+  const open = new Set();
+  const row = (r) => `<tr class="chk-row chk-row-${esc(r.level)}" data-code="${esc(r.code)}" tabindex="0" aria-expanded="${open.has(r.code)}">
     <td class="nowrap"><b>№ ${esc(r.id || r.code)}</b><div class="small muted">${dmy(r.day)} · ${esc(r.status)}</div><div class="small muted">${esc(r.user || '')}</div></td>
     <td>${esc(r.buyer || '—')}${r.phone ? `<div class="small muted">${phoneFmt(r.phone)}</div>` : ''}<div class="small muted">${esc(r.channel || r.office || '')}</div></td>
-    <td class="nowrap"><b>${uah(r.total)}</b><div class="small">${esc(r.payment)}</div><div class="small muted">${esc(CLS_NAME[r.cls] || '')}${r.partial ? ' · часткова' : ''}</div></td>
-    <td class="nowrap">${r.ttn ? `<b>${esc(r.ttn)}</b>` : '<span class="muted">—</span>'}<div class="small muted">${esc(r.carrier)}</div>${r.cod ? `<div class="small">наложка ${uah(r.cod)}${r.cod_kind === 'ctrl' ? ' · контроль оплати' : ''}</div>` : ''}${r.mp_pay ? `<div class="small muted">Prom: ${esc(r.mp_pay)}</div>` : ''}</td>
-    <td>${r.receipt?.crmOnly ? `<a href="${esc(r.receipt.url)}" target="_blank" rel="noopener">чек з LP-CRM</a><div class="small muted">суму не звірено</div>` : r.receipt ? `<a href="${esc(r.receipt.url)}" target="_blank" rel="noopener">${uah(r.receipt.total)}</a><div class="small">${esc(r.receipt.fop)}</div><div class="small muted">${esc(r.receipt.pays.join(', '))}${r.receipt.bySum ? ' · за сумою' : ''}</div>`
-    : '<span class="muted">—</span>'}${r.expected_fop && (!r.receipt || r.receipt.fop !== r.expected_fop) ? `<div class="small muted">за відділом: ${esc(r.expected_fop)}</div>` : ''}</td>
-    <td style="min-width:260px"><span class="badge ${LV[r.level]?.[0] || ''}">${LV[r.level]?.[1] || ''}</span>${items(r)}${r.comment ? `<div class="small muted chk-com">Коментар: ${esc(r.comment)}</div>` : ''}</td>
-  </tr>`;
+    <td class="nowrap"><b>${uah(r.total)}</b><div class="small">${esc(r.payment)}</div>${r.ttn ? `<div class="small muted">${esc(r.carrier)} · ${esc(r.ttn)}</div>` : ''}</td>
+    <td><span class="badge ${LV[r.level]?.[0] || ''}">${LV[r.level]?.[1] || ''}</span>${strip(r)}
+      ${r.items.filter((i) => i.level === 'bad' || i.level === 'warn').slice(0, 2).map((i) => `<div class="small chk-${esc(i.level)}">${esc(i.text)}</div>`).join('')}</td>
+  </tr>${open.has(r.code) ? `<tr class="chk-detail"><td colspan="4">${card(r)}</td></tr>` : ''}`;
 
   async function viewChecks() {
     const q = new URLSearchParams();
@@ -69,11 +80,13 @@ export function createChecksPages() {
         ${f.q || f.office || f.pay || f.from || f.to ? '<button type="button" class="btn sm" id="chkReset">Скинути</button>' : ''}
       </div>
       <div class="small muted">${rows.length} замовлень</div>
-      ${rows.length ? `<div class="table-wrap"><table class="list chk"><thead><tr><th>Замовлення</th><th>Покупець</th><th>Сума й оплата</th><th>ТТН</th><th>Чек</th><th>Що перевірено</th></tr></thead><tbody>
+      ${rows.length ? `<div class="table-wrap"><table class="list chk"><thead><tr><th>Замовлення</th><th>Покупець</th><th>Сума, оплата, ТТН</th><th>Перевірка (клік по рядку — усі етапи)</th></tr></thead><tbody>
         ${rows.slice(0, 500).map(row).join('')}</tbody></table></div>${rows.length > 500 ? `<div class="small muted">Показано 500 з ${rows.length} — звузьте фільтр.</div>` : ''}`
         : `<div class="card empty"><div class="big">${d.rows.length ? 'Нічого не знайдено' : 'Ще немає даних'}</div>${d.rows.length ? (f.lv === 'problems' ? 'Проблем не знайдено 🎉' : 'Змініть фільтр або пошук.') : 'Натисніть «Оновити зараз» — перший збір займає кілька хвилин.'}</div>`}`,
       { summary: LEVELS.find(([k]) => k === f.lv)?.[1] || '' })}`;
     wireFp();
+    const toggle = (tr) => { const c = tr.dataset.code; if (open.has(c)) open.delete(c); else open.add(c); viewChecks(); };
+    $$('tr.chk-row').forEach((tr) => { tr.onclick = (e) => { if (!e.target.closest('a,button,input,select')) toggle(tr); }; tr.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(tr); } }; });
     $$('[data-clv]').forEach((b) => (b.onclick = () => { f.lv = b.dataset.clv; viewChecks(); }));
     $('#chkOff').onchange = (e) => { f.office = e.target.value; viewChecks(); };
     $('#chkPay').onchange = (e) => { f.pay = e.target.value; viewChecks(); };
