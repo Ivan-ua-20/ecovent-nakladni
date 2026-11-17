@@ -165,7 +165,7 @@ export function createB2bNewsPages({ can }) {
             <button type="button" data-cmd="h2" title="Підзаголовок">H2</button><button type="button" data-cmd="p" title="Звичайний текст">¶</button>
             <button type="button" data-cmd="insertUnorderedList">• Список</button><button type="button" data-cmd="insertOrderedList">1. Список</button><button type="button" data-cmd="link">🔗 Посилання</button>
             <span class="sep"></span>
-            <button type="button" class="add" data-add="text">✎ Текст</button><button type="button" class="add" data-add="image">🖼 Фото</button><button type="button" class="add" data-add="url">▶ YouTube / посилання</button>
+            <button type="button" class="add" data-add="text">✎ Текст</button><button type="button" class="add" data-add="image">🖼 Фото</button><button type="button" class="add" data-add="imgurl">🔗 Фото за посиланням</button><button type="button" class="add" data-add="url">▶ YouTube / посилання</button>
             <button type="button" class="add" data-add="video">🎬 Відео-файл</button><button type="button" class="add" data-add="file">📎 Файл</button><button type="button" class="add" data-add="product">🛒 Товар з каталогу</button>
           </div>` : ''}
           <div id="nwBlocks" class="nw-blocks"></div>
@@ -306,6 +306,22 @@ export function createB2bNewsPages({ can }) {
         if (!/^https?:\/\//i.test(url)) { toast('Посилання має починатися з https://', true); return; }
         cur.body.push({ t: 'video', url, caption: f.cap.value.trim() });
         md.close(); touch(); await save(true); reloadBody();
+      };
+      return;
+    }
+    if (kind === 'imgurl') {
+      const md = modal('Фото за посиланням', `<form id="nwIf" class="form-stack"><label class="f"><span>Посилання на фото (https://…)</span><input name="url" placeholder="https://…/photo.jpg" required autocomplete="off"></label>
+        <label class="f"><span>Підпис (необов'язково)</span><input name="cap"></label><div class="small muted">Фото завантажиться в сервіс і буде в статті, навіть якщо на сайті-джерелі його приберуть. До 5 МБ.</div></form>`,
+      { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="nwIok">Додати</button>', focus: '[name=url]' });
+      $('#nwIok', md.el).onclick = async (e) => {
+        const f = $('#nwIf', md.el);
+        const b = e.currentTarget;
+        b.disabled = true; b.innerHTML = '<span class="spinner"></span> Завантажую…';
+        try {
+          const r = await api('POST', '/api/b2b/news/files/url', { url: f.url.value.trim() });
+          cur.body.push({ t: 'image', file: r.id, name: r.name, size: r.size, src: r.src, caption: f.cap.value.trim() });
+          md.close(); drawBlocks(true); touch();
+        } catch (er) { toast(er.message, true); b.disabled = false; b.textContent = 'Додати'; }
       };
       return;
     }
