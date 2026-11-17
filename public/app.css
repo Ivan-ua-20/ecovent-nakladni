@@ -1303,3 +1303,25 @@ tr.chk-detail > td { background: var(--bg2, #fafafa); padding: 10px 14px 14px; }
 .pl-head { position: sticky; top: 0; background: var(--surface); z-index: 1; font-size: 12px; font-weight: 600; color: var(--muted); }
 .pl-head .pl-pct { width: 150px; flex-direction: column; align-items: flex-end; gap: 0; text-align: right; }
 .pl-row > .pl-pct { width: 150px; justify-content: flex-end; }
+
+/* Новини: публічна / внутрішня, превʼю Telegram, сторінка без входу (b2b-news.js, news-public.js) */
+.nw-seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.nw-seg label { display: flex; align-items: center; justify-content: center; padding: 8px; font-weight: 700; font-size: 13px; cursor: pointer; color: var(--ink); }
+.nw-seg label.on { background: var(--accent); color: #fff; }
+.nw-seg input { position: absolute; opacity: 0; pointer-events: none; }
+.nw-tg { background: #cfdcc6; border-radius: 12px; padding: 10px; }
+.nw-tg-msg { background: #fff; border-radius: 12px; overflow: hidden; font-size: 12.5px; line-height: 1.45; color: #17201d; }
+.nw-tg-msg img { width: 100%; max-height: 200px; object-fit: cover; display: block; }
+.nw-tg-cap { padding: 8px 10px; }
+.nw-tg-kb { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin-top: 3px; }
+.nw-tg-kb span { background: rgba(70,100,80,.55); color: #fff; border-radius: 8px; padding: 6px; text-align: center; font-size: 12px; font-weight: 600; }
+.pub-top { display: flex; align-items: center; gap: 14px; padding: 12px 24px; background: #12261f; color: #dfe9e4; }
+.pub-top .brand { color: #fff; }
+.pub-top .grow { flex: 1; }
+.pub-body { max-width: 1240px; margin: 0 auto; padding: 22px 20px 40px; }
+.pub-cta { background: #12261f; color: #dfe9e4; border-radius: 14px; padding: 16px 18px; margin: 16px 0; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.pub-cta b { color: #fff; font-size: 16px; }
+body.pub-mode { background: var(--bg); }
+@media (max-width: 760px) { .pub-top { padding: 10px 14px; } .pub-top .muted { display: none; } }
+body.pub-mode #auth { display: block; padding: 0; min-height: 100vh; background: var(--bg); place-items: initial; }
+#authNews { display: inline-block; margin-bottom: 4px; color: var(--accent); }

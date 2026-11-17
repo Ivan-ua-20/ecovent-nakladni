@@ -79,6 +79,8 @@ export function mountAuth(app, { db, runCleanup, onCleanup }) {
     // /api/cron/* — для запуску за розкладом (Cloudflare Worker): без входу, але з ключем, який перевіряє сам маршрут.
     // /api/v1/* — API партнерів: вхід ключем перевіряє сам модуль (b2b/api.js).
     if (c.req.path.startsWith('/api/v1/')) return next();
+    // /api/public/* і /api/n/* — публічні новини B2B (лише статті з позначкою «Публічна», без цін партнерів).
+    if (c.req.path.startsWith('/api/public/') || c.req.path.startsWith('/api/n/')) return next();
     if (c.req.path.startsWith('/api/auth/') || c.req.path === '/api/odb/hook' || c.req.path === '/api/tg/hook' || c.req.path.startsWith('/api/cron/') || c.req.path.startsWith('/api/rzs/hook/')) return next();
     // Внутрішній виклик від імені API-ключа (лише з b2b/api.js): користувач — у env під символом, ззовні недоступним.
     const user = c.env?.[API_USER] || await sessionUser(c);

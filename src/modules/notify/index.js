@@ -213,6 +213,46 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
     return sent;
   }
 
+  // Фото з підписом і кнопками-посиланнями (новини B2B). photo: { bytes, name, mime } — завантажити, { fileId } або { url };
+  // buttons — рядки кнопок [[{ text, url }]]. Перше завантаження повертає file_id — далі те саме фото без повторного завантаження.
+  // Повертає { sent, fileId }. Помилка фото в чаті — пробуємо текстом (підпис + посилання), щоб повідомлення все одно дійшло.
+  async function sendPhoto({ chatIds = [], partnerId = null }, photo, caption, buttons = []) {
+    const s = await settings();
+    if (!s.tg_token) return { sent: 0, fileId: '' };
+    const chats = new Set(chatIds.filter(Boolean).map(String));
+    if (partnerId) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'partner' AND partner_id = ?`, [partnerId])) chats.add(r.tg_chat_id);
+    const markup = buttons.length ? { inline_keyboard: buttons } : undefined;
+    let fileId = photo?.fileId || '';
+    let sent = 0;
+    for (const chat of [...chats].slice(0, 30)) {
+      try {
+        if (fileId || photo?.url) {
+          await tg(s.tg_token, 'sendPhoto', { chat_id: chat, photo: fileId || photo.url, caption: caption.slice(0, 1024), parse_mode: 'HTML', ...(markup ? { reply_markup: markup } : {}) });
+        } else if (photo?.bytes) {
+          const fd = new FormData();
+          fd.append('chat_id', String(chat));
+          fd.append('caption', caption.slice(0, 1024));
+          fd.append('parse_mode', 'HTML');
+          if (markup) fd.append('reply_markup', JSON.stringify(markup));
+          fd.append('photo', new Blob([photo.bytes], { type: photo.mime || 'image/jpeg' }), photo.name || 'photo.jpg');
+          const r = await fetchFn(`${TG}/bot${s.tg_token}/sendPhoto`, { method: 'POST', body: fd });
+          const j = await r.json().catch(() => null);
+          if (!j?.ok) throw new Error(j?.description || `помилка ${r.status}`);
+          const sizes = j.result?.photo || [];
+          fileId = sizes[sizes.length - 1]?.file_id || '';
+        } else {
+          await tg(s.tg_token, 'sendMessage', { chat_id: chat, text: caption, parse_mode: 'HTML', disable_web_page_preview: true, ...(markup ? { reply_markup: markup } : {}) });
+        }
+        sent++;
+      } catch (e) {
+        if (e.pending) throw e;
+        // фото не прийнято (формат, розмір) — те саме текстом з кнопками
+        try { await tg(s.tg_token, 'sendMessage', { chat_id: chat, text: caption, parse_mode: 'HTML', disable_web_page_preview: true, ...(markup ? { reply_markup: markup } : {}) }); sent++; } catch { /* бота прибрали з групи */ }
+      }
+    }
+    return { sent, fileId };
+  }
+
   // Файл (рахунок, накладна) у чати/групи — sendDocument; підпис — HTML.
   let lastMessage = null; // останнє надіслане повідомлення з файлом (щоб можна було видалити при «Скасувати»)
   async function sendFile({ chatIds = [] }, { bytes, name, mime, fileId }, caption = '') {
@@ -254,5 +294,5 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
     return new Uint8Array(await r.arrayBuffer());
   }
 
-  return { fillTgNames, notify, sendText, sendFile, api, download, lastFileMessage: () => lastMessage };
+  return { fillTgNames, notify, sendText, sendPhoto, sendFile, api, download, lastFileMessage: () => lastMessage };
 }

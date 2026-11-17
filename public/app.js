@@ -23,6 +23,7 @@ import { createB2bStats } from './pages/b2b-stats.js';
 import { createPriceLogPages } from './pages/b2b-pricelog.js';
 import { createClaimPages } from './pages/b2b-claims.js';
 import { createB2bNewsPages } from './pages/b2b-news.js';
+import { renderPublicNews } from './pages/news-public.js';
 import { createRetailPages } from './pages/retail.js';
 import { createReturnsPages } from './pages/returns.js';
 import { createChecksPages } from './pages/checks.js';
@@ -247,14 +248,21 @@ const fopById = (id) => boot.fops.find((f) => String(f.id) === String(id));
 const tplById = (id) => boot.templates.find((t) => String(t.id) === String(id));
 
 // ---------- вхід ----------
-async function showAuth() {
+// Без входу спершу — публічні новини (якщо є або відкрито посилання на новину); «Увійти» — форма входу (login = true).
+let authLogin = false;
+async function showAuth(login = authLogin) {
+  authLogin = login;
   document.body.classList.add('auth-mode');
   const st = await fetch('/api/auth/state').then((r) => r.json()).catch(() => ({}));
-  if (st.user) { document.body.classList.remove('auth-mode'); return start(); }
+  if (st.user) { document.body.classList.remove('auth-mode', 'pub-mode'); return start(); }
   const setup = st.needsSetup;
   let box = $('#auth');
   if (!box) { box = document.createElement('div'); box.id = 'auth'; document.body.appendChild(box); }
+  if (!setup && !login && await renderPublicNews(box, { onLogin: () => showAuth(true) })) return;
+  document.body.classList.remove('pub-mode');
+  const hasNews = !setup && await fetch('/api/public/news').then((r) => r.json()).then((j) => j.rows?.length > 0).catch(() => false);
   box.innerHTML = `<form class="auth-card" id="authForm">
+      ${hasNews ? '<a href="#/news" class="small" id="authNews">← Новини Ековент</a>' : ''}
       <div class="brand dark"><span class="brand-mark"></span>Накладні</div>
       <h2>${setup ? 'Створення акаунта власника' : 'Вхід'}</h2>
       ${setup ? '<p class="muted small">Перший запуск. Власник має повний доступ і створює акаунти для інших. Власник лише один.</p>' : ''}
@@ -266,6 +274,7 @@ async function showAuth() {
       <button class="btn primary">${setup ? 'Створити і увійти' : 'Увійти'}</button>
       ${setup ? '' : '<p class="muted small">Забули пароль? Зверніться до адміністратора. Пароль власника скидається на комп’ютері з програмою (див. README).</p>'}
     </form>`;
+  if ($('#authNews')) $('#authNews').onclick = (e) => { e.preventDefault(); history.replaceState(null, '', '#/news'); showAuth(false); };
   $('#authForm').onsubmit = async (e) => {
     e.preventDefault();
     const d = Object.fromEntries(new FormData(e.target));
@@ -275,7 +284,9 @@ async function showAuth() {
     try {
       await api('POST', setup ? '/api/auth/setup' : '/api/auth/login', d);
       box.remove();
-      document.body.classList.remove('auth-mode');
+      authLogin = false;
+      document.body.classList.remove('auth-mode', 'pub-mode');
+      document.title = 'Накладні';
       start();
     } catch (ex) { err.textContent = ex.message; err.hidden = false; }
   };
@@ -318,7 +329,7 @@ const CHECKS = createChecksPages(ctx);
 const { viewPartners, viewCatalog, viewOrders: viewB2bOrders, viewClients: viewB2bClients, viewTrash: viewB2bTrash } = createB2bPages(ctx);
 const HOME = createHomePages(ctx);
 const { viewCouriers, viewPartnerCatalog, viewPartnerHelp, viewEntities, viewOrders: viewPartnerOrders, viewClients: viewPartnerClients, viewTeam: viewPartnerTeam, viewSettings: viewPartnerSettings, viewTrash: viewPartnerTrash } = createPartnerPages(ctx);
-setUnauthorized(() => showAuth());
+setUnauthorized(() => showAuth(true)); // сесія закінчилася під час роботи — одразу форма входу
 
 const routes = {
   invoice: viewInvoice,
@@ -386,6 +397,12 @@ async function route() {
   if (!boot.user) return;
   // Після «?» — параметри сторінки (напр. період виписки); у маршрут не входять.
   let [, name = homeRoute(), ...args] = location.hash.replace(/^#/, '').split('?')[0].split('/');
+  // #/news/12 — посилання на новину (Telegram, публічна сторінка): після входу — новина в кабінеті партнера або в адмінці.
+  if (name === 'news') {
+    const nid = /^\d+$/.test(args[0] || '') ? args[0] : '';
+    location.replace(can('b2b.partner') ? `#/pnews/${nid}` : can('b2b.view') ? `#/b2bnews/${nid}` : `#/${homeRoute()}`);
+    return;
+  }
   if (!routes[name]) name = homeRoute();
   let sec = sectionOf(name);
   // Посилання з нашого розділу B2B відкрив партнер (закладка, переслане, інший акаунт у цьому браузері) —
@@ -416,6 +433,8 @@ async function route() {
   window.scrollTo(0, 0);
 }
 window.addEventListener('hashchange', route);
+// Без входу: перехід між стрічкою й статтею публічних новин.
+window.addEventListener('hashchange', () => { if (document.body.classList.contains('pub-mode')) showAuth(false); });
 
 // Таблиці на телефоні показуються картками (app.css): кожна клітинка отримує підпис зі свого заголовка.
 function labelTables() {
