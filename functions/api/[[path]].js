@@ -2502,6 +2502,11 @@ async function listReceipts(fetchFn, fop, fromIso, toIso, offset = 0) {
 function receiptRow(rc) {
   const text = [rc.header, rc.footer, rc.barcode, rc.order_id, rc.external_id, ...(rc.goods || []).map((g) => g.good?.code || "")].filter(Boolean).join(" ");
   const refs = [...new Set(String(text).match(/\d{5,20}/g) || [])].slice(0, 20).join(" ");
+  const goods = (rc.goods || []).map((g) => {
+    const name = String(g.good?.name || "");
+    const br = [...name.matchAll(/\[\s*(\d{3,12})\s*\]/g)].pop()?.[1] || "";
+    return [String(g.good?.code || "").trim(), br].filter(Boolean).join("/");
+  }).filter(Boolean).slice(0, 30).join(" ");
   return {
     id: String(rc.id || ""),
     type: String(rc.type || ""),
@@ -2509,7 +2514,8 @@ function receiptRow(rc) {
     total: rc.total_sum != null ? rc.total_sum / 100 : 0,
     fiscal: String(rc.fiscal_code || ""),
     pays: (rc.payments || []).map((p) => ({ type: String(p.type || ""), label: String(p.label || ""), value: p.value != null ? p.value / 100 : 0 })),
-    refs
+    refs,
+    goods
   };
 }
 async function getReceipt(fetchFn, fop, id) {
@@ -20126,6 +20132,32 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
     const hit = (refIndex.get(o.code) || []).find((r) => !used.has(r.id)) || (refIndex.get(String(o.id)) || []).find((r) => !used.has(r.id) && near(r.total, o.total));
     if (hit) take(o, hit);
   }
+  const toksOf = /* @__PURE__ */ new Map();
+  const byTok = /* @__PURE__ */ new Map();
+  for (const r of [...sells].sort((x, y) => String(x.at).localeCompare(String(y.at)))) {
+    if (!r.goods) continue;
+    const toks = new Set(String(r.goods).split(/[\s/]+/).filter(Boolean));
+    toksOf.set(r.id, toks);
+    for (const t of toks) {
+      if (!byTok.has(t)) byTok.set(t, []);
+      byTok.get(t).push(r);
+    }
+  }
+  const goodsHit = (o, r) => {
+    const toks = toksOf.get(r.id);
+    return Boolean(toks) && o.goodsKeys.every((keys) => keys.some((k) => toks.has(k)));
+  };
+  const rDay = (r) => r.day || kyivDayOf2(r.at);
+  const byGoodsOrders = orders.filter((o) => !byOrder.has(o.code) && o.goodsKeys?.length).sort((a, b) => String(a.dt || a.day).localeCompare(String(b.dt || b.day)));
+  for (const o of byGoodsOrders) {
+    const end = addDays6(o.day, 20);
+    const sumOk = (r) => near(r.total, o.total) || o.prepayment > 0 && (near(r.total, o.total - o.prepayment) || near(r.total, o.prepayment));
+    const orgOk = (r) => o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
+    const pool = [...new Set(o.goodsKeys[0].flatMap((k) => byTok.get(k) || []))].sort((x, y) => String(x.at).localeCompare(String(y.at)));
+    const ok = (r) => !used.has(r.id) && rDay(r) >= o.day && rDay(r) <= end && sumOk(r) && goodsHit(o, r);
+    const hit = pool.find((r) => ok(r) && orgOk(r)) || pool.find(ok);
+    if (hit) take(o, { ...hit, byGoods: true });
+  }
   const free = sells.filter((r) => !used.has(r.id));
   const key = (n) => Math.round(Number(n) * 100);
   const rcBySum = /* @__PURE__ */ new Map();
@@ -20231,7 +20263,7 @@ function evaluate(o, ctx) {
   else if (!r && ctx.canReceipt === false) add("info", `\u0427\u0435\u043A \u043D\u0435 \u0437\u0432\u0456\u0440\u044F\u0454\u043C\u043E: \u0434\u043E \u043A\u0430\u0441\u0438 \xAB${fopName(ctx.expectedFop)}\xBB \u043D\u0435\u043C\u0430\u0454 \u0434\u043E\u0441\u0442\u0443\u043F\u0443 \u2014 \u0432\u043D\u0435\u0441\u0456\u0442\u044C \u043F\u0430\u0440\u043E\u043B\u044C \u043A\u0430\u0441\u0438\u0440\u0430 \u0432 \xAB\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430 \u2192 \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u041A\u0430\u0441\u0438 Checkbox\xBB.`);
   else if (!r) add("bad", "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E, \u0430 \u0447\u0435\u043A \u0443 Checkbox \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
   else {
-    const how = r.bySum ? " (\u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0437\u0430 \u0441\u0443\u043C\u043E\u044E)" : r.byRef ? "" : " (\u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0437\u0430 \u2116 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F)";
+    const how = r.bySum ? " (\u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u043B\u0438\u0448\u0435 \u0437\u0430 \u0441\u0443\u043C\u043E\u044E \u2014 \u043C\u043E\u0436\u043B\u0438\u0432\u043E, \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0432\u0440\u0443\u0447\u043D\u0443)" : r.byRef || r.byGoods ? "" : " (\u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0437\u0430 \u2116 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F)";
     if (!part && !near(r.total, o.total)) add("bad", `\u0427\u0435\u043A \u043D\u0430 ${fmt(r.total)}, \u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0430 ${fmt(o.total)}${how}.`);
     else add("ok", `\u0427\u0435\u043A ${fmt(r.total)} \xB7 ${fopName(r.fop_id)}${how}`);
     const labels = (r.pays || []).map((p) => p.label).filter(Boolean);
@@ -20325,7 +20357,9 @@ function normalizeCheckOrder(raw2) {
     user: String(raw2.user || "").trim().slice(0, 40),
     comment: String(raw2.comment || "").trim().slice(0, 500),
     receipt_ref: receiptRefOf(raw2),
-    prepayment: round2(num(raw2.prepayment))
+    prepayment: round2(num(raw2.prepayment)),
+    dt: String(raw2.datetime || "").slice(0, 19),
+    goods: (Array.isArray(raw2.products) ? raw2.products : Object.values(raw2.products || {})).map((p) => String(p?.product_id || "").trim()).filter((x) => /^\d+$/.test(x)).slice(0, 30).join(" ")
   };
 }
 function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
@@ -20399,10 +20433,10 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         await db.batch(got.map((o) => [
           `UPDATE chk_orders SET id = ?, day = ?, fetched_status = status, payment = ?, total = ?, office = ?, channel = ?, site = ?,
           delivery = ?, phone = ?, buyer = ?, user = ?, comment = ?,
-          ref_state = CASE WHEN receipt_ref = ? THEN ref_state ELSE '' END, receipt_ref = ?, prepayment = ?,
+          ref_state = CASE WHEN receipt_ref = ? THEN ref_state ELSE '' END, receipt_ref = ?, prepayment = ?, dt = ?, goods = ?,
           ttn_at = CASE WHEN ttn = ? THEN ttn_at ELSE '' END, cod = CASE WHEN ttn = ? THEN cod ELSE 0 END, cod_kind = CASE WHEN ttn = ? THEN cod_kind ELSE '' END,
           ttn_err = CASE WHEN ttn = ? THEN ttn_err ELSE '' END, ttn = ?, carrier = ? WHERE code = ?`,
-          [o.id, o.day, o.payment, o.total, o.office, o.channel, o.site, o.delivery, o.phone, o.buyer, o.user, o.comment, o.receipt_ref, o.receipt_ref, o.prepayment, o.ttn, o.ttn, o.ttn, o.ttn, o.ttn, o.carrier, o.code]
+          [o.id, o.day, o.payment, o.total, o.office, o.channel, o.site, o.delivery, o.phone, o.buyer, o.user, o.comment, o.receipt_ref, o.receipt_ref, o.prepayment, o.dt, o.goods, o.ttn, o.ttn, o.ttn, o.ttn, o.ttn, o.carrier, o.code]
         ]));
       }
       const seen = new Set(got.map((o) => o.code));
@@ -20568,9 +20602,9 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         }
         rows = rows.filter((r) => kyivDayOf3(r.at) === d);
         stmts.push(...rows.map((r) => [
-          `INSERT INTO chk_receipts (id, fop_id, day, at, type, total, fiscal, pays, refs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET type = excluded.type, total = excluded.total, pays = excluded.pays, refs = excluded.refs`,
-          [r.id, f.dbId, d, r.at, r.type, r.total, r.fiscal, JSON.stringify(r.pays), r.refs]
+          `INSERT INTO chk_receipts (id, fop_id, day, at, type, total, fiscal, pays, refs, goods) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET type = excluded.type, total = excluded.total, pays = excluded.pays, refs = excluded.refs, goods = excluded.goods`,
+          [r.id, f.dbId, d, r.at, r.type, r.total, r.fiscal, JSON.stringify(r.pays), r.refs, r.goods || ""]
         ]));
         stmts.push([
           `INSERT INTO chk_days (fop_id, day, done, at) VALUES (?, ?, ?, ?) ON CONFLICT(fop_id, day) DO UPDATE SET done = excluded.done, at = excluded.at`,
@@ -20626,8 +20660,8 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       if (more) break;
       if (got) {
         ups.push([
-          `INSERT INTO chk_receipts (id, fop_id, day, at, type, total, fiscal, pays, refs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
-          [got.id, fopId, kyivDayOf3(got.at) || kyivDay(), got.at, got.type, got.total, got.fiscal, JSON.stringify(got.pays), got.refs]
+          `INSERT INTO chk_receipts (id, fop_id, day, at, type, total, fiscal, pays, refs, goods) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+          [got.id, fopId, kyivDayOf3(got.at) || kyivDay(), got.at, got.type, got.total, got.fiscal, JSON.stringify(got.pays), got.refs, got.goods || ""]
         ]);
         ups.push([`UPDATE chk_orders SET ref_state = 'ok' WHERE code = ?`, [r.code]]);
       } else ups.push([`UPDATE chk_orders SET ref_state = 'nofop' WHERE code = ?`, [r.code]]);
@@ -20647,18 +20681,18 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       [nowIso(), new Date(Date.now() - 5 * 6e4).toISOString()]
     );
     if (!lock.changes) return { busy: true };
-    if (state.data_v !== 4) {
+    if (state.data_v !== 5) {
       await db.run(`UPDATE chk_orders SET fetched_status = 0`);
-      state.data_v = 4;
+      state.data_v = 5;
     }
-    if (state.cash_v !== 1) {
+    if (state.cash_v !== 2) {
       await db.batch([
         [`DELETE FROM chk_receipts`, []],
         [`DELETE FROM chk_days`, []],
         [`UPDATE chk_orders SET ref_state = ''`, []],
         [`DELETE FROM settings WHERE key IN ('chk_cb_fail', 'chk_ref_tried')`, []]
       ]);
-      state.cash_v = 1;
+      state.cash_v = 2;
       for (const k of ["chk_cb_fail", "chk_ref_tried"]) delete s3[k];
     }
     if (state.prom_v !== 2) {
@@ -20768,6 +20802,13 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       o.fopOk = ids.length ? (id) => orgs.has(orgOf.get(String(id))) : null;
       o.canRead = ids.some((id) => readable.has(orgOf.get(String(id))));
     }
+    const pids = [...new Set(orders.flatMap((o) => String(o.goods || "").split(" ").filter(Boolean)))];
+    const codeOf = /* @__PURE__ */ new Map();
+    for (let i = 0; i < pids.length; i += 500) {
+      const part = await db.all(`SELECT product_id, code FROM crm_products WHERE product_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(pids.slice(i, i + 500).map(Number))]).catch(() => []);
+      for (const p of part) codeOf.set(String(p.product_id), String(p.code || ""));
+    }
+    for (const o of orders) o.goodsKeys = String(o.goods || "").split(" ").filter(Boolean).map((id) => [id, codeOf.get(id)].filter(Boolean));
     const recs = receipts.map((r) => ({ ...r, pays: (() => {
       try {
         return JSON.parse(r.pays);
@@ -23092,7 +23133,7 @@ var schema15 = {
 // src/modules/checks/schema.js
 var schema16 = {
   name: "checks",
-  version: 5,
+  version: 6,
   tables: [
     // Замовлення LP-CRM у статусах «відправлено / очікує викупу / завершено» за останні CHECK_DAYS днів.
     // listed_at — коли востаннє бачили в цих статусах (зникло зі списку — більше не показуємо);
@@ -23178,7 +23219,12 @@ var schema16 = {
     ["chk_orders", "receipt_ref", "TEXT DEFAULT ''"],
     ["chk_orders", "ref_state", "TEXT DEFAULT ''"],
     // Передоплата з LP-CRM (поле prepayment): часткова оплата — наложка має бути на суму мінус передоплата.
-    ["chk_orders", "prepayment", "REAL NOT NULL DEFAULT 0"]
+    ["chk_orders", "prepayment", "REAL NOT NULL DEFAULT 0"],
+    // Для зіставлення з чеком за товарами: час замовлення LP-CRM і товари (product_id через пробіл);
+    // у чеку — товари «код Checkbox/код з назви» через пробіл.
+    ["chk_orders", "dt", "TEXT DEFAULT ''"],
+    ["chk_orders", "goods", "TEXT DEFAULT ''"],
+    ["chk_receipts", "goods", "TEXT DEFAULT ''"]
   ]
 };
 

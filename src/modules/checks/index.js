@@ -67,6 +67,8 @@ export function normalizeCheckOrder(raw) {
     comment: String(raw.comment || '').trim().slice(0, 500),
     receipt_ref: receiptRefOf(raw),
     prepayment: round2(num(raw.prepayment)),
+    dt: String(raw.datetime || '').slice(0, 19),
+    goods: (Array.isArray(raw.products) ? raw.products : Object.values(raw.products || {})).map((p) => String(p?.product_id || '').trim()).filter((x) => /^\d+$/.test(x)).slice(0, 30).join(' '),
   };
 }
 
@@ -124,10 +126,10 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       if (got.length) {
         await db.batch(got.map((o) => [`UPDATE chk_orders SET id = ?, day = ?, fetched_status = status, payment = ?, total = ?, office = ?, channel = ?, site = ?,
           delivery = ?, phone = ?, buyer = ?, user = ?, comment = ?,
-          ref_state = CASE WHEN receipt_ref = ? THEN ref_state ELSE '' END, receipt_ref = ?, prepayment = ?,
+          ref_state = CASE WHEN receipt_ref = ? THEN ref_state ELSE '' END, receipt_ref = ?, prepayment = ?, dt = ?, goods = ?,
           ttn_at = CASE WHEN ttn = ? THEN ttn_at ELSE '' END, cod = CASE WHEN ttn = ? THEN cod ELSE 0 END, cod_kind = CASE WHEN ttn = ? THEN cod_kind ELSE '' END,
           ttn_err = CASE WHEN ttn = ? THEN ttn_err ELSE '' END, ttn = ?, carrier = ? WHERE code = ?`,
-        [o.id, o.day, o.payment, o.total, o.office, o.channel, o.site, o.delivery, o.phone, o.buyer, o.user, o.comment, o.receipt_ref, o.receipt_ref, o.prepayment, o.ttn, o.ttn, o.ttn, o.ttn, o.ttn, o.carrier, o.code]]));
+        [o.id, o.day, o.payment, o.total, o.office, o.channel, o.site, o.delivery, o.phone, o.buyer, o.user, o.comment, o.receipt_ref, o.receipt_ref, o.prepayment, o.dt, o.goods, o.ttn, o.ttn, o.ttn, o.ttn, o.ttn, o.carrier, o.code]]));
       }
       // Замовлення, яких LP-CRM не віддала (видалені тощо), — щоб не просити їх щоразу.
       const seen = new Set(got.map((o) => o.code));
@@ -281,9 +283,9 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
           break; // ця каса — наступного разу
         }
         rows = rows.filter((r) => kyivDayOf(r.at) === d);
-        stmts.push(...rows.map((r) => [`INSERT INTO chk_receipts (id, fop_id, day, at, type, total, fiscal, pays, refs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET type = excluded.type, total = excluded.total, pays = excluded.pays, refs = excluded.refs`,
-        [r.id, f.dbId, d, r.at, r.type, r.total, r.fiscal, JSON.stringify(r.pays), r.refs]]));
+        stmts.push(...rows.map((r) => [`INSERT INTO chk_receipts (id, fop_id, day, at, type, total, fiscal, pays, refs, goods) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET type = excluded.type, total = excluded.total, pays = excluded.pays, refs = excluded.refs, goods = excluded.goods`,
+        [r.id, f.dbId, d, r.at, r.type, r.total, r.fiscal, JSON.stringify(r.pays), r.refs, r.goods || '']]));
         stmts.push([`INSERT INTO chk_days (fop_id, day, done, at) VALUES (?, ?, ?, ?) ON CONFLICT(fop_id, day) DO UPDATE SET done = excluded.done, at = excluded.at`,
           [f.dbId, d, d < addDays(today, -1) ? 1 : 0, nowIso()]]);
       }
@@ -318,8 +320,8 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       }
       if (more) break;
       if (got) {
-        ups.push([`INSERT INTO chk_receipts (id, fop_id, day, at, type, total, fiscal, pays, refs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
-          [got.id, fopId, kyivDayOf(got.at) || kyivDay(), got.at, got.type, got.total, got.fiscal, JSON.stringify(got.pays), got.refs]]);
+        ups.push([`INSERT INTO chk_receipts (id, fop_id, day, at, type, total, fiscal, pays, refs, goods) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+          [got.id, fopId, kyivDayOf(got.at) || kyivDay(), got.at, got.type, got.total, got.fiscal, JSON.stringify(got.pays), got.refs, got.goods || '']]);
         ups.push([`UPDATE chk_orders SET ref_state = 'ok' WHERE code = ?`, [r.code]]);
       } else ups.push([`UPDATE chk_orders SET ref_state = 'nofop' WHERE code = ?`, [r.code]]);
       delete tried[r.receipt_ref];
@@ -339,12 +341,12 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       [nowIso(), new Date(Date.now() - 5 * 60e3).toISOString()]);
     if (!lock.changes) return { busy: true };
     // Нові поля замовлення (версія даних) — один раз перечитати повні дані всіх замовлень.
-    if (state.data_v !== 4) { await db.run(`UPDATE chk_orders SET fetched_status = 0`); state.data_v = 4; }
+    if (state.data_v !== 5) { await db.run(`UPDATE chk_orders SET fetched_status = 0`); state.data_v = 5; } // + товари й час замовлення
     // З версії 5 чеки прив'язані до кас «Перевірки» (не ФОП накладних) — кеш чеків один раз очищуємо й читаємо заново.
-    if (state.cash_v !== 1) {
+    if (state.cash_v !== 2) { // 2 — у чеках з'явилися товари: кеш чеків читаємо заново
       await db.batch([[`DELETE FROM chk_receipts`, []], [`DELETE FROM chk_days`, []], [`UPDATE chk_orders SET ref_state = ''`, []],
         [`DELETE FROM settings WHERE key IN ('chk_cb_fail', 'chk_ref_tried')`, []]]);
-      state.cash_v = 1;
+      state.cash_v = 2;
       for (const k of ['chk_cb_fail', 'chk_ref_tried']) delete s[k];
     }
     if (state.prom_v !== 2) { await db.run(`UPDATE chk_orders SET mp_at = '' WHERE mp_pay = 'other'`); state.prom_v = 2; }
@@ -432,6 +434,14 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       o.fopOk = ids.length ? (id) => orgs.has(orgOf.get(String(id))) : null; // чек цієї каси підходить відділу?
       o.canRead = ids.some((id) => readable.has(orgOf.get(String(id))));
     }
+    // Коди товарів LP-CRM (довідник «Каталог»: product_id → код у квадратних дужках назви) — для зіставлення з чеком за товарами.
+    const pids = [...new Set(orders.flatMap((o) => String(o.goods || '').split(' ').filter(Boolean)))];
+    const codeOf = new Map();
+    for (let i = 0; i < pids.length; i += 500) {
+      const part = await db.all(`SELECT product_id, code FROM crm_products WHERE product_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(pids.slice(i, i + 500).map(Number))]).catch(() => []);
+      for (const p of part) codeOf.set(String(p.product_id), String(p.code || ''));
+    }
+    for (const o of orders) o.goodsKeys = String(o.goods || '').split(' ').filter(Boolean).map((id) => [id, codeOf.get(id)].filter(Boolean));
     const recs = receipts.map((r) => ({ ...r, pays: (() => { try { return JSON.parse(r.pays); } catch { return []; } })() }));
     const matched = matchReceipts(orders, recs, sameOrg);
     const txRows = txs.map((t) => {

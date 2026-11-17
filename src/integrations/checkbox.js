@@ -170,6 +170,12 @@ export async function listReceipts(fetchFn, fop, fromIso, toIso, offset = 0) {
 function receiptRow(rc) {
   const text = [rc.header, rc.footer, rc.barcode, rc.order_id, rc.external_id, ...(rc.goods || []).map((g) => g.good?.code || '')].filter(Boolean).join(' ');
   const refs = [...new Set(String(text).match(/\d{5,20}/g) || [])].slice(0, 20).join(' ');
+  // Товари чека: код товару в Checkbox і код у квадратних дужках у назві («… (COMFODRY20) [30421]» — код товару LP-CRM).
+  const goods = (rc.goods || []).map((g) => {
+    const name = String(g.good?.name || '');
+    const br = [...name.matchAll(/\[\s*(\d{3,12})\s*\]/g)].pop()?.[1] || '';
+    return [String(g.good?.code || '').trim(), br].filter(Boolean).join('/');
+  }).filter(Boolean).slice(0, 30).join(' ');
   return {
     id: String(rc.id || ''),
     type: String(rc.type || ''),
@@ -178,6 +184,7 @@ function receiptRow(rc) {
     fiscal: String(rc.fiscal_code || ''),
     pays: (rc.payments || []).map((p) => ({ type: String(p.type || ''), label: String(p.label || ''), value: p.value != null ? p.value / 100 : 0 })),
     refs,
+    goods,
   };
 }
 
