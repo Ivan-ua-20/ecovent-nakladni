@@ -124,6 +124,31 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
       || (refIndex.get(String(o.id)) || []).find((r) => !used.has(r.id) && near(r.total, o.total));
     if (hit) take(o, hit);
   }
+  // За товарами: усі товари замовлення є в чеку (код товару LP-CRM або його номер), сума та сама (або є передоплата),
+  // чек — не раніше дня замовлення і не пізніше +20 днів, каса відділу. Однакові замовлення (той самий товар і сума) —
+  // по черзі в часі: найраніше замовлення отримує найраніший підхожий чек.
+  const toksOf = new Map();
+  const byTok = new Map(); // код товару → чеки (за часом)
+  for (const r of [...sells].sort((x, y) => String(x.at).localeCompare(String(y.at)))) {
+    if (!r.goods) continue;
+    const toks = new Set(String(r.goods).split(/[\s/]+/).filter(Boolean));
+    toksOf.set(r.id, toks);
+    for (const t of toks) { if (!byTok.has(t)) byTok.set(t, []); byTok.get(t).push(r); }
+  }
+  const goodsHit = (o, r) => { const toks = toksOf.get(r.id); return Boolean(toks) && o.goodsKeys.every((keys) => keys.some((k) => toks.has(k))); };
+  const rDay = (r) => r.day || kyivDayOf(r.at);
+  const byGoodsOrders = orders.filter((o) => !byOrder.has(o.code) && o.goodsKeys?.length).sort((a, b) => String(a.dt || a.day).localeCompare(String(b.dt || b.day)));
+  for (const o of byGoodsOrders) {
+    const end = addDays(o.day, 20);
+    const sumOk = (r) => near(r.total, o.total) || (o.prepayment > 0 && (near(r.total, o.total - o.prepayment) || near(r.total, o.prepayment)));
+    const orgOk = (r) => o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
+    // кандидати — чеки з першим товаром замовлення (за будь-яким його кодом), уже впорядковані за часом
+    const pool = [...new Set(o.goodsKeys[0].flatMap((k) => byTok.get(k) || []))].sort((x, y) => String(x.at).localeCompare(String(y.at)));
+    const ok = (r) => !used.has(r.id) && rDay(r) >= o.day && rDay(r) <= end && sumOk(r) && goodsHit(o, r);
+    const hit = pool.find((r) => ok(r) && orgOk(r)) || pool.find(ok); // інша каса — теж знайдемо, перевірка ФОП покаже помилку
+    if (hit) take(o, { ...hit, byGoods: true });
+  }
+
   // За сумою: групи «сума → замовлення» і «сума → чеки»; однозначний збіг — лише якщо в групі одне замовлення в цьому вікні.
   const free = sells.filter((r) => !used.has(r.id));
   const key = (n) => Math.round(Number(n) * 100);
@@ -232,7 +257,7 @@ export function evaluate(o, ctx) {
   else if (!r && ctx.canReceipt === false) add('info', `Чек не звіряємо: до каси «${fopName(ctx.expectedFop)}» немає доступу — внесіть пароль касира в «Перевірка → Налаштування → Каси Checkbox».`);
   else if (!r) add('bad', 'Відправлено, а чек у Checkbox не знайдено.');
   else {
-    const how = r.bySum ? ' (знайдено за сумою)' : r.byRef ? '' : ' (знайдено за № замовлення)';
+    const how = r.bySum ? ' (знайдено лише за сумою — можливо, створено вручну)' : r.byRef || r.byGoods ? '' : ' (знайдено за № замовлення)';
     if (!part && !near(r.total, o.total)) add('bad', `Чек на ${fmt(r.total)}, а замовлення на ${fmt(o.total)}${how}.`);
     else add('ok', `Чек ${fmt(r.total)} · ${fopName(r.fop_id)}${how}`);
     const labels = (r.pays || []).map((p) => p.label).filter(Boolean);
