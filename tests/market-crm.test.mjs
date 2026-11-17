@@ -89,14 +89,12 @@ assert.deepEqual(list.rows.map((x) => x.id).sort(), ['9002', '9003', '9004', '90
 assert.equal((await req('GET', '/api/mp/orders?mp=rozetka&crm=yes')).j.rows[0].crm_id, '90001');
 
 // ---------- «Створити в LP-CRM» ----------
-// без налаштувань магазину — ні
+// відділ — завжди 5 «Маркетплейси»; вид оплати — у формі
 r = await req('GET', '/api/mp/crm/prefill/1/9004');
 assert.equal(r.status, 200);
+assert.deepEqual(r.j.pay, { id: '14', name: 'RozetkaPay' });
 assert.deepEqual(r.j.items.map((x) => [x.item_id, x.product_id, x.from, x.qty, x.price]), [['564329178', 701, 'saved', 2, 7600], ['111', null, '', 1, 500]]);
 const items = [{ item_id: '564329178', product_id: 701, price: 7600, qty: 2, product_name: 'Осушувач' }, { item_id: '111', product_id: 703, price: 500, qty: 1, product_name: 'Очищувач Levoit Core 300' }];
-r = await req('POST', '/api/mp/crm/create', { account: 1, id: '9004', items });
-assert.equal(r.status, 400);
-assert.match(r.j.error, /ID відділу/);
 assert.equal((await req('PUT', '/api/mp/crm/settings/1', { office: 'abc' })).status, 400);
 r = await req('PUT', '/api/mp/crm/settings/1', { office: '7', site: 'rozetka.com.ua', delivery: '1', field1: 'Rozetka(Ecovent)' });
 assert.equal(r.status, 200);
@@ -112,13 +110,15 @@ r = await req('POST', '/api/mp/crm/create', { account: 1, id: '9004', items, sho
 assert.equal(r.status, 200);
 assert.equal(r.j.crm_id, '95555');
 const add = calls.find((x) => x.method === 'addNewOrder').p;
-assert.equal(add.office, '7');
+assert.equal(add.office, '5', 'відділ «Маркетплейси» для всіх замовлень');
+assert.equal(add.payment, '14', 'оплачено на Розетці — RozetkaPay');
 assert.equal(add.site, 'rozetka.com.ua');
 assert.equal(add.additional_1, 'Rozetka(Ecovent)');
 assert.equal(add.phone, '380509990000');
 assert.equal(add.bayer_name, 'Ткач Наталія');
 assert.match(add.comment, /^Rozetka 9004 · Ековент/);
-assert.match(add.comment, /Оплата: Google Pay \(оплачено\)/);
+assert.match(add.comment, /\nЗамовлення від \d{2}\.\d{2}\.\d{4} 10:00:00\n/);
+assert.match(add.comment, /Оплата: Оплачено одразу на Розетці \(RozetkaPay\): Google Pay, 7.600 грн/);
 assert.match(add.comment, /Коментар покупця: Після 18:00/);
 assert.equal(add.delivery_adress, 'Київ, № 12');
 assert.match(decodeURIComponent(add.products.replace(/\+/g, ' ')), /"701".*"7600".*"2".*"703".*"500".*"1"/s);
@@ -205,3 +205,16 @@ await db.run(`UPDATE users SET access = ? WHERE login = 'man'`, [JSON.stringify(
 assert.equal((await req('POST', '/api/mp/crm/create', { account: 1, id: '9002', items }, M)).status, 403, 'лише перегляд');
 
 console.log('OK — маркетплейси ↔ LP-CRM: пошук, прив\'язка, створення з «Обробляється менеджером», товари, статус');
+
+// ---------- вид оплати LP-CRM ----------
+{
+  const { crmPayment } = await import('../src/modules/market/crm.js');
+  const t = (o) => crmPayment({ total: 3499, ...o }).payment;
+  assert.equal(t({ paid: 1, pay_type: 'Google Pay', delivery: 'Нова Пошта' }), '14', 'оплачено на Розетці');
+  assert.equal(t({ paid: 0, pay_type: 'Оплата частинами', delivery: 'Нова Пошта' }), '14', 'онлайн на Розетці, ще не оплачено');
+  assert.equal(t({ paid: 0, pay_type: 'Оплата під час отримання товару', delivery: 'ROZETKA Delivery' }), '15', 'післяплата RozetkaPay');
+  assert.equal(t({ paid: 0, pay_type: 'Готівкова', delivery: 'Нова Пошта (поштомати)' }), '16', 'післяплата NovaPay');
+  assert.equal(t({ paid: 0, pay_type: 'Оплата під час отримання товару', delivery: 'Meest ПОШТА' }), '18', 'післяплата Meest');
+  assert.match(crmPayment({ total: 3499, paid: 0, pay_type: 'Готівкова', delivery: 'Нова Пошта' }).text, /^Післяплата \(наложка\) 3.499 грн — оплата при отриманні, NovaPay/);
+  console.log('OK — вид оплати LP-CRM: RozetkaPay, післяплата RozetkaPay / NovaPay / Meest');
+}

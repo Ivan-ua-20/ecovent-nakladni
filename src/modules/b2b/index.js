@@ -46,6 +46,13 @@ function findImage(node, depth = 0) {
   }
   return '';
 }
+// Початок поточної доби за Києвом як момент ISO (UTC): checked_at пишеться через nowIso(), тож порівнювати його
+// з датою «2026-11-17» не можна — між 00:00 і 02:00/03:00 за Києвом каталог вважався б неперевіреним і проходив би знову.
+export const kyivDayStartIso = (now = Date.now()) => {
+  const d = kyivDay(new Date(now));
+  const wall = Date.parse(`${new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(new Date(now)).replace(' ', 'T')}Z`);
+  return new Date(Date.parse(`${d}T00:00:00Z`) - (wall - now)).toISOString();
+};
 const num = (v) => {
   const n = parseFloat(String(v ?? '').replace(/\s/g, '').replace(',', '.'));
   return Number.isFinite(n) ? n : 0;
@@ -469,7 +476,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     return c.json({ rows: rows.map((r) => ({ ...r, brand: names.get(r.brand_id) || 'Інші' })), state });
   });
 
-  async function catalogState(today = kyivDay()) {
+  async function catalogState(today = kyivDayStartIso()) {
     const [last, left] = await Promise.all([
       db.get(`SELECT value FROM settings WHERE key = 'b2b_catalog_sync'`),
       db.get(`SELECT COUNT(*) AS n FROM b2b_catalog WHERE hidden = 0 AND checked_at < ? AND (manual = 1 OR brand_id IN (SELECT brand_id FROM b2b_margins))`, [today]),
@@ -506,7 +513,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     const b = await c.req.json().catch(() => ({}));
     const run = String(b.run || '');
     const fresh = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(run) && Math.abs(Date.now() - Date.parse(run)) < 3 * 3600 * 1000;
-    const today = fresh ? run : kyivDay();
+    const today = fresh ? run : kyivDayStartIso();
     const stamp = nowIso();
     // Нові товари LP-CRM, яких ще ніхто не купував: в аналітику товар потрапляє лише з продажу, тож перевіряємо
     // ID після найбільшого відомого (LP-CRM видає їх по порядку) — до DISCOVER партій по BATCH, до першої порожньої.

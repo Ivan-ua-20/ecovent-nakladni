@@ -34,7 +34,7 @@ const req = async (method, path, body, headers = H) => {
   return j;
 };
 const errOf = async (fn) => { try { await fn(); return ''; } catch (e) { return e.message; } };
-const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+const day = (n) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv' }).format(new Date(Date.now() + n * 86400000)); // дата за Києвом, як у сервісі
 
 const pa = await req('POST', '/api/b2b/partners', { name: 'Партнер А' });
 await req('POST', `/api/b2b/partners/${pa.id}/users`, { login: 'pa', password: 'pass1234' });
