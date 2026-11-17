@@ -76,8 +76,10 @@ assert.equal((await req('PUT', '/api/mp/remind/settings', { on: true, hour: 9, d
 const kyivHour = Number(kyiv(T).slice(11, 13));
 const { key } = (await req('POST', '/api/jobs/key')).j;
 const cron = async () => (await req('POST', '/api/cron/run/market-remind', null, { 'X-Cron-Key': key })).j;
-if (kyivHour < 20) {
-  await req('PUT', '/api/mp/remind/settings', { on: true, hour: kyivHour + 1, days: [1, 2, 3, 4, 5, 6, 7], client: true, unpaid: true, admins: true });
+// година — саме перед перевіркою (тест може стартувати о 15:59 і дійти сюди о 16:00); +2 — запас на межу години
+const hourNow = Number(kyiv(Date.now()).slice(11, 13));
+if (hourNow < 19) {
+  await req('PUT', '/api/mp/remind/settings', { on: true, hour: hourNow + 2, days: [1, 2, 3, 4, 5, 6, 7], client: true, unpaid: true, admins: true });
   r = await cron();
   assert.match(r.result.skipped, /ще рано/);
 }
