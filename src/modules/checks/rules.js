@@ -136,7 +136,7 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
     const rcs = rcBySum.get(k) || [];
     for (const o of list) {
       const inWin = (r) => { const d = kyivDayOf(r.at); return d >= o.day && d <= addDays(o.day, 20); };
-      const cands = rcs.filter((r) => !used.has(r.id) && inWin(r) && (o.fopId == null || sameOrg(r.fop_id, o.fopId) || list.length === 1));
+      const cands = rcs.filter((r) => !used.has(r.id) && inWin(r) && (o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId)) || list.length === 1));
       const rivals = list.filter((x) => x !== o && cands.some((r) => { const d = kyivDayOf(r.at); return d >= x.day && d <= addDays(x.day, 20); }));
       if (cands.length === 1 && !rivals.length) take(o, { ...cands[0], bySum: true });
     }
@@ -229,7 +229,7 @@ export function evaluate(o, ctx) {
       add('bad', `У чеку спосіб оплати «${labels.join(', ')}», а для «${rule.name}» має бути «${rule.cb}».`);
     }
     const same = ctx.sameOrg || ((a, b) => String(a) === String(b));
-    if (ctx.expectedFop != null && !same(ctx.expectedFop, r.fop_id)) {
+    if (ctx.expectedFop != null && !(ctx.fopOk ? ctx.fopOk(r.fop_id) : same(ctx.expectedFop, r.fop_id))) {
       add('bad', `Чек пробито на «${fopName(r.fop_id)}», а для цього відділу каса — «${fopName(ctx.expectedFop)}» (як у LP-CRM)`);
     }
   }

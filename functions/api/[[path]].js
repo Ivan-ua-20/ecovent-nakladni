@@ -19914,7 +19914,7 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
         const d = kyivDayOf2(r.at);
         return d >= o.day && d <= addDays6(o.day, 20);
       };
-      const cands = rcs.filter((r) => !used.has(r.id) && inWin(r) && (o.fopId == null || sameOrg(r.fop_id, o.fopId) || list.length === 1));
+      const cands = rcs.filter((r) => !used.has(r.id) && inWin(r) && (o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId)) || list.length === 1));
       const rivals = list.filter((x) => x !== o && cands.some((r) => {
         const d = kyivDayOf2(r.at);
         return d >= x.day && d <= addDays6(x.day, 20);
@@ -19998,7 +19998,7 @@ function evaluate(o, ctx) {
       add("bad", `\u0423 \u0447\u0435\u043A\u0443 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u043F\u043B\u0430\u0442\u0438 \xAB${labels.join(", ")}\xBB, \u0430 \u0434\u043B\u044F \xAB${rule.name}\xBB \u043C\u0430\u0454 \u0431\u0443\u0442\u0438 \xAB${rule.cb}\xBB.`);
     }
     const same = ctx.sameOrg || ((a, b) => String(a) === String(b));
-    if (ctx.expectedFop != null && !same(ctx.expectedFop, r.fop_id)) {
+    if (ctx.expectedFop != null && !(ctx.fopOk ? ctx.fopOk(r.fop_id) : same(ctx.expectedFop, r.fop_id))) {
       add("bad", `\u0427\u0435\u043A \u043F\u0440\u043E\u0431\u0438\u0442\u043E \u043D\u0430 \xAB${fopName(r.fop_id)}\xBB, \u0430 \u0434\u043B\u044F \u0446\u044C\u043E\u0433\u043E \u0432\u0456\u0434\u0434\u0456\u043B\u0443 \u043A\u0430\u0441\u0430 \u2014 \xAB${fopName(ctx.expectedFop)}\xBB (\u044F\u043A \u0443 LP-CRM)`);
     }
   }
@@ -20501,13 +20501,16 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const failed = cbFails(Object.fromEntries([["chk_cb_fail", cbFailRaw]]));
     const readable = new Set(readers(cashList, failed).map((f) => orgOf.get(String(f.dbId))));
     const cashByOffice = /* @__PURE__ */ new Map();
-    for (const k of cashList.filter((x) => x.lp_active)) {
+    for (const k of cashList) {
       let offs = [];
       try {
         offs = JSON.parse(k.offices || "[]");
       } catch {
       }
-      for (const off of offs) if (!cashByOffice.has(String(off))) cashByOffice.set(String(off), k.id);
+      for (const off of offs) {
+        if (!cashByOffice.has(String(off))) cashByOffice.set(String(off), []);
+        cashByOffice.get(String(off)).push(k.id);
+      }
     }
     const cashByCode = new Map(cashList.filter((k) => k.org_code).map((k) => [String(k.org_code).trim(), k.id]));
     const fopByIpn = new Map(fopsAll.filter((f) => f.ipn).map((f) => [String(f.ipn).trim(), f.id]));
@@ -20518,7 +20521,11 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const names = stNames.names || {};
     for (const o of orders) {
       o.status_name = names[o.status] || "";
-      o.fopId = cashByOffice.get(String(o.office)) ?? null;
+      const ids = cashByOffice.get(String(o.office)) || [];
+      const orgs = new Set(ids.map((id) => orgOf.get(String(id))));
+      o.fopId = ids[0] ?? null;
+      o.fopOk = ids.length ? (id) => orgs.has(orgOf.get(String(id))) : null;
+      o.canRead = ids.some((id) => readable.has(orgOf.get(String(id))));
     }
     const recs = receipts.map((r) => ({ ...r, pays: (() => {
       try {
@@ -20556,8 +20563,8 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       const receipt = matched.get(o.code) || null;
       const payment = rule?.cls === "bank" ? findPayment(o, txRows, o.total) : null;
       const dupTtn = (byTtn.get(String(o.ttn || "").replace(/\s/g, "").toUpperCase()) || []).filter((x) => x !== o).map((x) => x.id || x.code);
-      const canReceipt = o.fopId != null && readable.has(orgOf.get(String(o.fopId)));
-      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today: today3, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn, canReceipt, sameOrg, noCashier: o.fopId == null });
+      const canReceipt = o.fopId != null && o.canRead;
+      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today: today3, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn, canReceipt, sameOrg, fopOk: o.fopOk, noCashier: o.fopId == null });
       return {
         code: o.code,
         id: o.id,
