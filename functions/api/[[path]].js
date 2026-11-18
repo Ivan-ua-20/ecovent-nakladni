@@ -20222,7 +20222,22 @@ ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc3(it.ch.user_fio
 
 // src/integrations/lpcrm-web.js
 var base = (sub) => `https://${sub}.lp-crm.biz`;
-var UA = "Mozilla/5.0 (compatible; EcoventChecks/1.0)";
+var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+var browser = (sub, extra = {}) => ({
+  "User-Agent": UA,
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "uk-UA,uk;q=0.9,en;q=0.8",
+  Origin: base(sub),
+  ...extra
+});
+var ajax = (sub, referer, cookie) => browser(sub, {
+  Accept: "application/json, text/javascript, */*; q=0.01",
+  "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+  "X-Requested-With": "XMLHttpRequest",
+  Referer: referer,
+  ...cookie ? { Cookie: cookie } : {}
+});
+var blocked = (res, text, step) => (res.status === 403 || res.status === 429 || res.status === 503) && !/^\d:/.test(text) ? Object.assign(new Error(`\u0437\u0430\u0445\u0438\u0441\u0442 \u0441\u0430\u0439\u0442\u0443 LP-CRM \u043D\u0435 \u043F\u0440\u043E\u043F\u0443\u0441\u0442\u0438\u0432 \u0437\u0430\u043F\u0438\u0442 (${step}, \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u044C ${res.status}${/administrative rules/i.test(text) ? ": administrative rules" : ""})`), { blocked: true }) : null;
 function mergeCookies(prev, res) {
   const jar = new Map(String(prev || "").split(/;\s*/).filter(Boolean).map((p) => [p.split("=")[0], p]));
   const list = typeof res?.headers?.getSetCookie === "function" ? res.headers.getSetCookie() : String(res?.headers?.get?.("set-cookie") || "").split(/,(?=\s*[A-Za-z0-9_-]+=)/).filter(Boolean);
@@ -20237,18 +20252,23 @@ function mergeCookies(prev, res) {
 }
 async function lpWebLogin(fetchFn, sub, login, pass) {
   if (!sub || !login || !pass) throw Object.assign(new Error("\u041D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E \u043B\u043E\u0433\u0456\u043D \u0430\u0431\u043E \u043F\u0430\u0440\u043E\u043B\u044C LP-CRM."), { auth: true });
-  const first = await fetchFn(`${base(sub)}/`, { headers: { "User-Agent": UA }, redirect: "manual" });
+  const { Origin: _o, ...page } = browser(sub);
+  const first = await fetchFn(`${base(sub)}/`, { headers: page, redirect: "manual" });
   let cookie = mergeCookies("", first);
-  await first.text().catch(() => "");
+  const firstText = await first.text().catch(() => "");
+  const b0 = blocked(first, firstText, "\u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0430 \u0432\u0445\u043E\u0434\u0443");
+  if (b0) throw b0;
   const body = new URLSearchParams({ login, pass, REQUEST_URI: `${base(sub)}/`, HTTP_REFERER: `${base(sub)}/`, op: "login" });
   const res = await fetchFn(`${base(sub)}/login`, {
     method: "POST",
     redirect: "manual",
     body: body.toString(),
-    headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-Requested-With": "XMLHttpRequest", "User-Agent": UA, Referer: `${base(sub)}/`, ...cookie ? { Cookie: cookie } : {} }
+    headers: ajax(sub, `${base(sub)}/`, cookie)
   });
   cookie = mergeCookies(cookie, res);
   const text = (await res.text().catch(() => "")).trim();
+  const b1 = blocked(res, text, "\u0432\u0445\u0456\u0434");
+  if (b1) throw b1;
   if (text !== "true") {
     const msg = text.includes(":") ? text.slice(text.indexOf(":") + 1) : text;
     const clean = msg.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
@@ -20263,9 +20283,11 @@ async function lpWebReceipts(fetchFn, sub, cookie, ids) {
     method: "POST",
     redirect: "manual",
     body,
-    headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-Requested-With": "XMLHttpRequest", "User-Agent": UA, Referer: `${base(sub)}/orders`, Cookie: cookie }
+    headers: ajax(sub, `${base(sub)}/orders`, cookie)
   });
   const text = await res.text().catch(() => "");
+  const b2 = blocked(res, text, "\u0441\u043F\u0438\u0441\u043E\u043A \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C");
+  if (b2) throw b2;
   let j = null;
   try {
     j = JSON.parse(text);
@@ -20987,6 +21009,10 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
           web.error_at = nowIso();
           cookie = "";
         }
+        if (e.blocked) {
+          web.error_at = new Date(Date.now() - WEB_FAIL_MS + 36e5).toISOString();
+          cookie = "";
+        }
       }
     }
     web.cookie = cookie;
@@ -21551,7 +21577,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const s3 = await loadSettings(db);
     if (!s3.chk_lp_login || !s3.chk_lp_pass) throw fail(400, "\u0421\u043F\u0435\u0440\u0448\u0443 \u0437\u0431\u0435\u0440\u0435\u0436\u0456\u0442\u044C \u043B\u043E\u0433\u0456\u043D \u0456 \u043F\u0430\u0440\u043E\u043B\u044C.");
     const web = fromS(s3, "chk_lp_web");
-    if (web.error_at && Date.now() - Date.parse(web.error_at) < 15 * 6e4) throw fail(400, `\u041E\u0441\u0442\u0430\u043D\u043D\u044F \u0441\u043F\u0440\u043E\u0431\u0430 \u0432\u0445\u043E\u0434\u0443 \u043D\u0435 \u0432\u0434\u0430\u043B\u0430\u0441\u044F (${web.error}). \u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u043B\u043E\u0433\u0456\u043D \u0456 \u043F\u0430\u0440\u043E\u043B\u044C \u0456 \u0437\u0431\u0435\u0440\u0435\u0436\u0456\u0442\u044C \u0457\u0445 \u0449\u0435 \u0440\u0430\u0437 \u2014 \u043F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0438 \u043C\u043E\u0436\u043D\u0430 \u0447\u0435\u0440\u0435\u0437 15 \u0445\u0432 (\u0456\u043D\u0430\u043A\u0448\u0435 LP-CRM \u043F\u043E\u043F\u0440\u043E\u0441\u0438\u0442\u044C \u043A\u0430\u043F\u0447\u0443).`);
+    if (web.error_at && Date.now() - Date.parse(web.error_at) < 15 * 6e4 && !/захист сайту/.test(web.error || "")) throw fail(400, `\u041E\u0441\u0442\u0430\u043D\u043D\u044F \u0441\u043F\u0440\u043E\u0431\u0430 \u0432\u0445\u043E\u0434\u0443 \u043D\u0435 \u0432\u0434\u0430\u043B\u0430\u0441\u044F (${web.error}). \u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u043B\u043E\u0433\u0456\u043D \u0456 \u043F\u0430\u0440\u043E\u043B\u044C \u0456 \u0437\u0431\u0435\u0440\u0435\u0436\u0456\u0442\u044C \u0457\u0445 \u0449\u0435 \u0440\u0430\u0437 \u2014 \u043F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0438 \u043C\u043E\u0436\u043D\u0430 \u0447\u0435\u0440\u0435\u0437 15 \u0445\u0432 (\u0456\u043D\u0430\u043A\u0448\u0435 LP-CRM \u043F\u043E\u043F\u0440\u043E\u0441\u0438\u0442\u044C \u043A\u0430\u043F\u0447\u0443).`);
     const ids = (await db.all(`SELECT id FROM chk_orders WHERE id != '' AND listed_at != '' ORDER BY day DESC, id DESC LIMIT 20`)).map((r) => r.id);
     try {
       const cookie = await lpWebLogin(fetchFn, s3.lpcrm_subdomain, s3.chk_lp_login, s3.chk_lp_pass);
@@ -21561,7 +21587,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       return c.json({ ok: true, orders: ids.length, seen: got.seen.length, with_receipt: Object.keys(got.byCode).length });
     } catch (e) {
       if (e.pending) throw e;
-      Object.assign(web, { cookie: "", error: e.message.slice(0, 200), error_at: e.auth ? nowIso() : web.error_at || "" });
+      Object.assign(web, { cookie: "", error: e.message.slice(0, 200), error_at: e.auth ? nowIso() : e.blocked ? new Date(Date.now() - WEB_FAIL_MS + 36e5).toISOString() : web.error_at || "" });
       await setJson("chk_lp_web", web);
       throw fail(400, e.message);
     }

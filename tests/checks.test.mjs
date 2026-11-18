@@ -120,6 +120,8 @@ const calls = { lp: 0, np: 0, rz: 0, cb: 0 };
 const WEB = { logins: 0, pages: 0, session: '', hidden: ['10019'], receipts: {} };
 const lpWeb = async (u, opts) => {
   const withCookie = (body, cookie) => { const r = new Response(body); if (cookie) r.headers.append('Set-Cookie', `${cookie}; path=/; HttpOnly`); return r; };
+  assert.match(opts.headers['User-Agent'], /Chrome\//, 'заголовки як у браузера');
+  if (WEB.block) return new Response('<html><h1>403 Forbidden</h1>Request forbidden by administrative rules.</html>', { status: 403 });
   if (u.pathname === '/') return withCookie('<html>вхід</html>', 'PHPSESSID=s0');
   if (u.pathname === '/login') {
     WEB.logins++;
@@ -371,7 +373,15 @@ WEB.receipts = {
 assert.equal((await call('PUT', '/api/checks/lpweb', { login: 'perevirka', password: '' }, H)).r.status, 400, 'без пароля не зберігаємо');
 // Невірний пароль: помилка, і повторна перевірка одразу не стукає в LP-CRM (після кількох спроб там капча)
 await call('PUT', '/api/checks/lpweb', { login: 'perevirka', password: 'wrong' }, H);
+// Захист сайту LP-CRM (Cloudflare) не пропустив — це не невдалий вхід: перевірити можна одразу ще раз
+WEB.block = true;
 let t = await call('POST', '/api/checks/lpweb/test', {}, H);
+assert.equal(t.r.status, 400); assert.match(t.j.error || t.j.message || '', /захист сайту LP-CRM не пропустив запит \(сторінка входу, відповідь 403: administrative rules\)/);
+t = await call('POST', '/api/checks/lpweb/test', {}, H);
+assert.match(t.j.error || t.j.message || '', /захист сайту/, 'без 15-хвилинної паузи');
+assert.equal(WEB.logins, 0);
+WEB.block = false;
+t = await call('POST', '/api/checks/lpweb/test', {}, H);
 assert.equal(t.r.status, 400); assert.match(t.j.error || t.j.message || '', /Невірний логін або пароль/);
 t = await call('POST', '/api/checks/lpweb/test', {}, H);
 assert.equal(t.r.status, 400); assert.match(t.j.error || t.j.message || '', /через 15 хв/);
