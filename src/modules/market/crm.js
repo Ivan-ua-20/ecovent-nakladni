@@ -82,7 +82,7 @@ export function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () =>
     if (!cr) throw fail(400, 'LP-CRM не налаштовано.');
     const code = newCode();
     const res = await addNewOrder(fetchFn, { subdomain: cr.subdomain, key: cr.inKey }, {
-      code, office: MP_OFFICE, status, bayer_name: 'ТЕСТ API статусу — не обробляти', phone: '380000000000',
+      code, office: MP_OFFICE, status, site: new URL(c.req.url).host, bayer_name: 'ТЕСТ API статусу — не обробляти', phone: '380000000000',
       comment: `Тест: чи приймає API статус ${status}. Створено сервісом накладних, можна видалити.`,
       products: [{ product_id: pid, price: 1, count: 1 }],
     });
