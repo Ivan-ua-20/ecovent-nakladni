@@ -188,8 +188,8 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
       const cb = String(cbOf(o) || '').toLowerCase();
       const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || '').toLowerCase().includes(cb));
       const ok = (r) => !used.has(r.id) && sumOk(r) && (!pass.org || orgOk(r)) && (!pass.cb || cbOk(r));
-      // На тому самому рівні — спершу чек автофіскалізації LP-CRM, потім пробитий вручну.
-      const hit = list.find((r) => ok(r) && !isManualReceipt(r.id)) || list.find(ok);
+      // Найближчий за часом підхожий чек. Ручні чеки — звичайна практика (наприклад, післяплата Meest), тож переваги чекам LP-CRM не даємо.
+      const hit = list.find(ok);
       if (hit && pass.hint) { if (!similar.has(o.code)) similar.set(o.code, hit); } else if (hit) take(o, { ...hit, byGoods: true });
     }
   }
