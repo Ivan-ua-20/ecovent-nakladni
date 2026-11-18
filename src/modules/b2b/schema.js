@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 44,
+  version: 45,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -313,6 +313,25 @@ export const schema = {
     granted_by TEXT DEFAULT '',
     granted_at TEXT NOT NULL
   )`,
+  // Правила маржі й акції: знижка від РРЦ на бренд / категорію / товар (дропшипінг — margin, B2B на склад — margin_wh),
+  // на період date_from–date_to (обидва порожні — постійне правило), для всіх партнерів (partners = '') або перелічених (JSON id).
+  `CREATE TABLE IF NOT EXISTS b2b_margin_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT DEFAULT '',
+    level TEXT NOT NULL,
+    ref_id INTEGER NOT NULL,
+    margin REAL NOT NULL,
+    margin_wh REAL,
+    date_from TEXT DEFAULT '',
+    date_to TEXT DEFAULT '',
+    partners TEXT DEFAULT '',
+    created_by TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_by TEXT DEFAULT '',
+    updated_at TEXT DEFAULT '',
+    deleted_at TEXT DEFAULT ''
+  )`,
+  `CREATE INDEX IF NOT EXISTS b2b_margin_rules_ref ON b2b_margin_rules (level, ref_id)`,
   // ---------- Новини для партнерів (news.js) ----------
   // body — JSON блоків статті (текст, фото, відео, файл, товар); audience — JSON id партнерів ('' — усім);
   // status — draft | published; publish_at — з якого часу видно (у майбутньому — заплановано);
