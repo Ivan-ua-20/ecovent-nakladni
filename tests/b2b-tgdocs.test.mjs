@@ -16,6 +16,23 @@ assert.deepEqual([wb.kind, wb.number, wb.date], ['waybill', '2443', '2026-11-03'
 const np = parseNpLabel(await pdfText(miniPdf(npLabel({ ttn: '20400556982593', phone: '050 111 22 33' }))));
 assert.deepEqual([np.ttn, np.phone, np.rozetka], ['20400556982593', '380501112233', '629905423']);
 assert.equal(await pdfText(new Uint8Array([1, 2, 3])), '', 'не PDF — порожньо, без помилки');
+// BAS: «/Length 32 0 R», а стиснені дані закінчуються байтом \n. Cloudflare (на відміну від Node) при обрізаному потоці
+// не віддає нічого — імітуємо суворе розпакування: вміст сторінки має братися точно за довжиною з посилання.
+{
+  const Orig = globalThis.DecompressionStream;
+  const { inflateSync } = await import('node:zlib');
+  globalThis.DecompressionStream = class {
+    constructor() {
+      const parts = [];
+      this.writable = new WritableStream({ write: (c) => { parts.push(c); } });
+      this.readable = new ReadableStream({ pull: async (ctl) => { await new Promise((r) => setTimeout(r, 0)); ctl.enqueue(new Uint8Array(inflateSync(Buffer.concat(parts)))); ctl.close(); } });
+    }
+  };
+  try {
+    const strict = parseBasDoc(await pdfText(miniPdf(basDoc({ kind: 'waybill', number: '5846', date: '18 листопада 2026', buyer: 'БТ-СЕРВІС УКРАЇНА ТОВ', items: [{ name: 'Осушувач FlexyDry 22', qty: 1, price: 11600 }] }), { indirect: true })));
+    assert.deepEqual([strict?.kind, strict?.number, strict?.total, strict?.items?.length], ['waybill', '5846', 11600, 1], 'накладна BAS з довжиною-посиланням читається');
+  } finally { globalThis.DecompressionStream = Orig; }
+}
 assert.ok(sameName('ФОП Рубан Ольга Олександрівна', 'Рубан Ольга Олександрівна ФОП'));
 assert.ok(sameName('ТОВ «Розетка. УА»', 'ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ "РОЗЕТКА. УА"'));
 assert.ok(!sameName('ФОП Рубан Ольга', 'ФОП Петренко Іван'));
