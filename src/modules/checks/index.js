@@ -357,6 +357,8 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         web.error = e.message.slice(0, 200);
         // Невірний логін / пароль — пауза, щоб LP-CRM не заблокувала вхід капчею; збій мережі — спробуємо наступного разу.
         if (e.auth) { web.error_at = nowIso(); cookie = ''; }
+        // Захист сайту не пропустив — пароль не перевірявся; спробуємо через годину, а не через 6.
+        if (e.blocked) { web.error_at = new Date(Date.now() - WEB_FAIL_MS + 3600e3).toISOString(); cookie = ''; }
       }
     }
     web.cookie = cookie;
@@ -811,7 +813,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     const s = await loadSettings(db);
     if (!s.chk_lp_login || !s.chk_lp_pass) throw fail(400, 'Спершу збережіть логін і пароль.');
     const web = fromS(s, 'chk_lp_web');
-    if (web.error_at && Date.now() - Date.parse(web.error_at) < 15 * 60e3) throw fail(400, `Остання спроба входу не вдалася (${web.error}). Перевірте логін і пароль і збережіть їх ще раз — повторити можна через 15 хв (інакше LP-CRM попросить капчу).`);
+    if (web.error_at && Date.now() - Date.parse(web.error_at) < 15 * 60e3 && !/захист сайту/.test(web.error || '')) throw fail(400, `Остання спроба входу не вдалася (${web.error}). Перевірте логін і пароль і збережіть їх ще раз — повторити можна через 15 хв (інакше LP-CRM попросить капчу).`);
     const ids = (await db.all(`SELECT id FROM chk_orders WHERE id != '' AND listed_at != '' ORDER BY day DESC, id DESC LIMIT 20`)).map((r) => r.id);
     try {
       const cookie = await lpWebLogin(fetchFn, s.lpcrm_subdomain, s.chk_lp_login, s.chk_lp_pass);
@@ -821,7 +823,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       return c.json({ ok: true, orders: ids.length, seen: got.seen.length, with_receipt: Object.keys(got.byCode).length });
     } catch (e) {
       if (e.pending) throw e;
-      Object.assign(web, { cookie: '', error: e.message.slice(0, 200), error_at: e.auth ? nowIso() : web.error_at || '' });
+      Object.assign(web, { cookie: '', error: e.message.slice(0, 200), error_at: e.auth ? nowIso() : e.blocked ? new Date(Date.now() - WEB_FAIL_MS + 3600e3).toISOString() : web.error_at || '' });
       await setJson('chk_lp_web', web);
       throw fail(400, e.message);
     }
