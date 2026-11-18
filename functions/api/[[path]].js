@@ -20944,6 +20944,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     if (!login || !pass) return { skipped: "\u043D\u0435\u043C\u0430\u0454 \u0432\u0445\u043E\u0434\u0443 \u0432 LP-CRM" };
     const web = fromS(s3, "chk_lp_web");
     if (web.error_at && Date.now() - Date.parse(web.error_at) < WEB_FAIL_MS) return { skipped: web.error };
+    if (web.blocked) return { skipped: web.error };
     const rows = await db.all(
       `SELECT code, id FROM chk_orders WHERE listed_at != '' AND id != '' AND day != ''
       AND (web_at = '' OR (web_refs IN ('', '[]', '?') AND web_at < ?) OR web_at < ?)
@@ -21010,7 +21011,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
           cookie = "";
         }
         if (e.blocked) {
-          web.error_at = new Date(Date.now() - WEB_FAIL_MS + 36e5).toISOString();
+          web.blocked = true;
           cookie = "";
         }
       }
@@ -21582,12 +21583,12 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     try {
       const cookie = await lpWebLogin(fetchFn, s3.lpcrm_subdomain, s3.chk_lp_login, s3.chk_lp_pass);
       const got = ids.length ? await lpWebReceipts(fetchFn, s3.lpcrm_subdomain, cookie, ids) : { byCode: {}, seen: [], mergeCookie: (x) => x };
-      Object.assign(web, { cookie: got.mergeCookie(cookie), ok_at: nowIso(), login_at: nowIso(), error: "", error_at: "" });
+      Object.assign(web, { cookie: got.mergeCookie(cookie), ok_at: nowIso(), login_at: nowIso(), error: "", error_at: "", blocked: false });
       await setJson("chk_lp_web", web);
       return c.json({ ok: true, orders: ids.length, seen: got.seen.length, with_receipt: Object.keys(got.byCode).length });
     } catch (e) {
       if (e.pending) throw e;
-      Object.assign(web, { cookie: "", error: e.message.slice(0, 200), error_at: e.auth ? nowIso() : e.blocked ? new Date(Date.now() - WEB_FAIL_MS + 36e5).toISOString() : web.error_at || "" });
+      Object.assign(web, { cookie: "", error: e.message.slice(0, 200), error_at: e.auth ? nowIso() : web.error_at || "", blocked: Boolean(e.blocked) });
       await setJson("chk_lp_web", web);
       throw fail(400, e.message);
     }
