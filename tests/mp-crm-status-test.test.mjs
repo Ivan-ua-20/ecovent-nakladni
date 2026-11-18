@@ -26,6 +26,7 @@ assert.equal(r.status, 200, JSON.stringify(j));
 assert.equal(sent.length, 1);
 assert.equal(sent[0].status, '11', 'status передано в addNewOrder');
 assert.equal(sent[0].office, '5');
+assert.ok(sent[0].site, 'сайт обовʼязковий для LP-CRM');
 assert.deepEqual([j.ok, j.crm_id, j.got_status], [true, '777', '11']);
 assert.equal((await mk().request('/api/mp/crm/status-test', { method: 'POST', headers: H, body: '{}' })).status, 400);
 console.log('OK — LP-CRM: перевірка параметра status');
