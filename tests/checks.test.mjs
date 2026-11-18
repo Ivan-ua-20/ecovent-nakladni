@@ -120,6 +120,7 @@ const calls = { lp: 0, np: 0, rz: 0, cb: 0 };
 const WEB = { logins: 0, pages: 0, session: '', hidden: ['10019'], receipts: {} };
 const lpWeb = async (u, opts) => {
   const withCookie = (body, cookie) => { const r = new Response(body); if (cookie) r.headers.append('Set-Cookie', `${cookie}; path=/; HttpOnly`); return r; };
+  WEB.hits = (WEB.hits || 0) + 1;
   assert.match(opts.headers['User-Agent'], /Chrome\//, 'заголовки як у браузера');
   if (WEB.block) return new Response('<html><h1>403 Forbidden</h1>Request forbidden by administrative rules.</html>', { status: 403 });
   if (u.pathname === '/') return withCookie('<html>вхід</html>', 'PHPSESSID=s0');
@@ -380,6 +381,11 @@ assert.equal(t.r.status, 400); assert.match(t.j.error || t.j.message || '', /з�
 t = await call('POST', '/api/checks/lpweb/test', {}, H);
 assert.match(t.j.error || t.j.message || '', /захист сайту/, 'без 15-хвилинної паузи');
 assert.equal(WEB.logins, 0);
+// і фонова задача, поки адресу заблоковано, сама в LP-CRM не стукає
+const hits0 = WEB.hits;
+await db.run(`UPDATE settings SET value = '{}' WHERE key = 'chk_state'`);
+await call('POST', '/api/checks/refresh', {}, H);
+assert.equal(WEB.hits, hits0, 'після блокування — жодного запиту до сайту LP-CRM');
 WEB.block = false;
 t = await call('POST', '/api/checks/lpweb/test', {}, H);
 assert.equal(t.r.status, 400); assert.match(t.j.error || t.j.message || '', /Невірний логін або пароль/);
