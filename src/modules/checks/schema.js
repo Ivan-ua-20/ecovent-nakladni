@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'checks',
-  version: 7,
+  version: 8,
   tables: [
   // Замовлення LP-CRM у статусах «відправлено / очікує викупу / завершено» за останні CHECK_DAYS днів.
   // listed_at — коли востаннє бачили в цих статусах (зникло зі списку — більше не показуємо);
@@ -106,5 +106,9 @@ export const schema = {
     ['chk_orders', 'dt', "TEXT DEFAULT ''"],
     ['chk_orders', 'goods', "TEXT DEFAULT ''"],
     ['chk_receipts', 'goods', "TEXT DEFAULT ''"],
+    // Чеки з вебінтерфейсу LP-CRM (API їх не віддає): web_at — коли перевірено; web_refs — JSON [{uuid, type, action, at}],
+    // '?' — користувач LP-CRM для перевірки цього замовлення не бачить (немає доступу до відділу / статусу).
+    ['chk_orders', 'web_at', "TEXT DEFAULT ''"],
+    ['chk_orders', 'web_refs', "TEXT DEFAULT ''"],
   ],
 };

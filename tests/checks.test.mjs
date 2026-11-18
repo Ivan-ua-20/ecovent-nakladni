@@ -116,9 +116,37 @@ const RC = {
   ],
 };
 const calls = { lp: 0, np: 0, rz: 0, cb: 0 };
+// Вебінтерфейс LP-CRM: вхід (сесія в cookie) і список замовлень з прив'язаними чеками (cash_register_data).
+const WEB = { logins: 0, pages: 0, session: '', hidden: ['10019'], receipts: {} };
+const lpWeb = async (u, opts) => {
+  const withCookie = (body, cookie) => { const r = new Response(body); if (cookie) r.headers.append('Set-Cookie', `${cookie}; path=/; HttpOnly`); return r; };
+  if (u.pathname === '/') return withCookie('<html>вхід</html>', 'PHPSESSID=s0');
+  if (u.pathname === '/login') {
+    WEB.logins++;
+    const p = new URLSearchParams(opts.body);
+    assert.equal(p.get('op'), 'login');
+    assert.match(opts.headers.Cookie, /PHPSESSID=s0/);
+    if (p.get('login') !== 'perevirka' || p.get('pass') !== 'Pw-7ZqX') return new Response('1:Невірний логін або пароль');
+    WEB.session = `sess${WEB.logins}`;
+    return withCookie('true', `PHPSESSID=${WEB.session}`);
+  }
+  if (u.pathname === '/getOrdersPage') {
+    WEB.pages++;
+    if (!WEB.session || !String(opts.headers.Cookie).includes(`PHPSESSID=${WEB.session}`)) return new Response('<html>Вхід LP-CRM</html>');
+    const p = new URLSearchParams(opts.body);
+    assert.equal(p.get('status'), '0');
+    const ids = p.getAll('ids[]').filter((id) => !WEB.hidden.includes(id));
+    const list = ORDERS.filter((o) => ids.includes(o.id));
+    const cr = {};
+    for (const o of list) if (WEB.receipts[o.id]) cr[o.order_id] = WEB.receipts[o.id].map((x) => ({ id_order: o.id, order_id: o.order_id, is_test: '0', ...x }));
+    return new Response(JSON.stringify({ array: list.map((o) => ({ id: o.id, order_id: o.order_id })), cash_register_data: cr }));
+  }
+  return new Response('not found', { status: 404 });
+};
 const fetchFn = async (url, opts = {}) => {
   const u = new URL(url);
   const j = (o) => new Response(JSON.stringify(o));
+  if (u.hostname === 'ihunt.lp-crm.biz' && !u.pathname.startsWith('/api/')) return lpWeb(u, opts);
   if (u.hostname === 'ihunt.lp-crm.biz') {
     calls.lp++;
     const m = u.pathname.match(/api\/(\w+)\.html/)[1];
@@ -230,7 +258,7 @@ assert.ok(row(10001).receipt && !row(10001).receipt.bySum);
 assert.equal(row(10002).level, 'bad'); assert.match(texts(10002), /RozetkaPay.*контроль оплати/);
 assert.equal(row(10003).level, 'bad'); assert.match(texts(10003), /наложки немає/); assert.match(texts(10003), /warn: У LP-CRM чек прив’язано, але жодна каса з доступом його не бачить/);
 assert.equal(row(10003).receipt.crmOnly, true);
-assert.equal(row(10015).level, 'ok', texts(10015)); assert.match(texts(10015), /ok: Чек 1500 грн · ФОП Лупу В\.Ф\.$|ok: Чек 1500 грн · ФОП Лупу В\.Ф\. \|/);
+assert.equal(row(10015).level, 'ok', texts(10015)); assert.match(texts(10015), /ok: Чек 1500 грн · ФОП Лупу В\.Ф\. \(прив’язаний у LP-CRM\)/);
 assert.equal(row(10004).level, 'bad'); assert.match(texts(10004), /Оплата прийшла на «ФОП Лупу В\.Ф\.», а чек пробито на «ФОП Агафіца Д\.М\.»/);
 assert.ok(row(10004).receipt.bySum, 'чек знайдено за сумою');
 assert.match(texts(10005), /ok: Наложка 700 грн \(часткова оплата\)/);
@@ -331,6 +359,60 @@ assert.equal((await call('GET', '/api/checks', null, H)).j.rows.find((r) => r.id
 // Фонова задача зареєстрована
 const jobs = (await call('GET', '/api/jobs', null, H)).j;
 assert.ok(jobs.tasks.some((t) => t.name === 'checks'));
+
+// Номер чека з вебінтерфейсу LP-CRM (API його не віддає): окремий користувач LP-CRM, лише читання.
+// У LP-CRM 10024 ↔ g2, 10025 ↔ g1 (не так, як підібрав би час); у 10007 — ще й чек повернення; 10019 користувачу не видно.
+WEB.receipts = {
+  10024: [{ uuid: 'G2', type: 'sell', action_type: '1', date_add: `${D} 12:00:00` }],
+  10025: [{ uuid: 'g1', type: 'sell', action_type: '1', date_add: `${D} 10:00:00` }],
+  10007: [{ uuid: 'r7', type: 'sell', action_type: '1', date_add: `${D} 12:10:00` }, { uuid: 'r7-back', type: 'sell', action_type: '2', date_add: `${D} 15:00:00` }],
+  10022: [{ uuid: 'test-1', type: 'sell', action_type: '1', date_add: `${D} 14:00:00`, is_test: '1' }],
+};
+assert.equal((await call('PUT', '/api/checks/lpweb', { login: 'perevirka', password: '' }, H)).r.status, 400, 'без пароля не зберігаємо');
+// Невірний пароль: помилка, і повторна перевірка одразу не стукає в LP-CRM (після кількох спроб там капча)
+await call('PUT', '/api/checks/lpweb', { login: 'perevirka', password: 'wrong' }, H);
+let t = await call('POST', '/api/checks/lpweb/test', {}, H);
+assert.equal(t.r.status, 400); assert.match(t.j.error || t.j.message || '', /Невірний логін або пароль/);
+t = await call('POST', '/api/checks/lpweb/test', {}, H);
+assert.equal(t.r.status, 400); assert.match(t.j.error || t.j.message || '', /через 15 хв/);
+assert.equal(WEB.logins, 1);
+await db.run(`UPDATE settings SET value = '{}' WHERE key = 'chk_state'`);
+await call('POST', '/api/checks/refresh', {}, H);
+assert.equal(WEB.logins, 1, 'фонова задача після невдалого входу теж не пробує кілька годин');
+// Правильний пароль (логін той самий, пароль новий) — вхід працює
+await call('PUT', '/api/checks/lpweb', { login: 'perevirka', password: 'Pw-7ZqX' }, H);
+t = await call('POST', '/api/checks/lpweb/test', {}, H);
+assert.equal(t.r.status, 200, JSON.stringify(t.j)); assert.equal(t.j.ok, true); assert.ok(t.j.seen > 0 && t.j.with_receipt >= 1, JSON.stringify(t.j));
+let lw = (await call('GET', '/api/checks/lpweb', null, H)).j;
+assert.equal(lw.login, 'perevirka'); assert.equal(lw.has_pass, true); assert.equal(lw.password, undefined); assert.ok(lw.ok_at);
+// Пароль і сесія LP-CRM не потрапляють у браузер
+const boot = JSON.stringify((await call('GET', '/api/bootstrap', null, H)).j);
+assert.ok(!boot.includes('Pw-7ZqX') && !boot.includes('chk_lp') && !boot.includes('PHPSESSID'), 'секрети не в bootstrap: ' + (boot.match(/.{60}(secret|chk_lp|PHPSESSID).{60}/) || [''])[0]);
+await db.run(`UPDATE settings SET value = '{}' WHERE key = 'chk_state'`);
+for (let more = true, n = 0; more && n < 10; n++) { dbn = 0; more = (await call('POST', '/api/checks/refresh', {}, H)).j.more; assert.ok(dbn <= 50, `звернень до бази за крок: ${dbn}`); }
+const logins1 = WEB.logins;
+const j2 = (await call('GET', '/api/checks', null, H)).j;
+const row2 = (id) => j2.rows.find((r) => r.id === String(id));
+const texts2 = (id) => row2(id).items.map((i) => `${i.level}: ${i.text}`).join(' | ');
+assert.equal(row2(10024).receipt?.id, 'g2', 'чек, прив’язаний у LP-CRM, а не підібраний за часом'); assert.equal(row2(10025).receipt?.id, 'g1');
+assert.match(texts2(10024), /прив’язаний у LP-CRM/); assert.doesNotMatch(texts2(10024), /не прив’язаний/);
+assert.match(texts2(10005), /bad: Відправлено, а чека немає: у LP-CRM до замовлення чек не прив’язаний/);
+assert.match(texts2(10007), /info: У LP-CRM до замовлення є чек повернення/);
+assert.match(texts2(10029), /warn: У LP-CRM чек до замовлення не прив’язаний — цей чек знайдено/, 'чек є в Checkbox, а в LP-CRM не прив’язаний — можливо, вручну');
+assert.doesNotMatch(texts2(10022), /прив’язаний у LP-CRM/, 'тестові чеки LP-CRM не враховуємо');
+assert.doesNotMatch(texts2(10019), /LP-CRM до замовлення/, 'замовлення, яке користувачу LP-CRM не видно, — як раніше');
+lw = (await call('GET', '/api/checks/lpweb', null, H)).j;
+assert.ok(lw.hidden >= 1 && lw.linked >= 3, JSON.stringify(lw));
+// Сесія LP-CRM скінчилась — модуль сам входить знову
+WEB.session = 'expired-elsewhere';
+await db.run(`UPDATE chk_orders SET web_at = ''`);
+await db.run(`UPDATE settings SET value = '{}' WHERE key = 'chk_state'`);
+for (let more = true, n = 0; more && n < 10; n++) more = (await call('POST', '/api/checks/refresh', {}, H)).j.more;
+assert.equal(WEB.logins, logins1 + 1, 'повторний вхід після завершення сесії');
+assert.equal((await call('GET', '/api/checks', null, H)).j.rows.find((r) => r.id === '10024').receipt?.id, 'g2');
+// Видалити вхід — знову підбір за товаром і часом
+await call('DELETE', '/api/checks/lpweb', null, H);
+assert.equal((await call('GET', '/api/checks', null, H)).j.rows.find((r) => r.id === '10024').receipt?.id, 'g2', 'номер чека з LP-CRM лишається до наступного читання');
 
 // Доступ: менеджер не бачить
 await call('POST', '/api/users', { login: 'm1', password: 'pass1234', role: 'manager' }, H);
