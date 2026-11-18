@@ -69,29 +69,6 @@ export function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () =>
   };
   const key = (o) => `${o.account_id}:${o.id}`;
 
-  // Перевірка (лише власник): чи приймає addNewOrder недокументований параметр status. Створює ОДНЕ тестове
-  // замовлення «ТЕСТ API» і читає, у якому статусі воно опинилось. Тимчасово — для рішення про вибір статусу.
-  app.post('/api/mp/crm/status-test', async (c) => {
-    need(c, 'users');
-    if (c.get('user')?.role !== 'owner') throw fail(403, 'Лише для власника.');
-    const b = await c.req.json().catch(() => ({}));
-    const status = String(parseInt(b.status, 10) || '');
-    const pid = String(parseInt(b.product_id, 10) || '');
-    if (!status || !pid) throw fail(400, 'Вкажіть status і product_id.');
-    const cr = await creds();
-    if (!cr) throw fail(400, 'LP-CRM не налаштовано.');
-    const code = newCode();
-    const res = await addNewOrder(fetchFn, { subdomain: cr.subdomain, key: cr.inKey }, {
-      code, office: MP_OFFICE, status, site: new URL(c.req.url).host, bayer_name: 'ТЕСТ API статусу — не обробляти', phone: '380000000000',
-      comment: `Тест: чи приймає API статус ${status}. Створено сервісом накладних, можна видалити.`,
-      products: [{ product_id: pid, price: 1, count: 1 }],
-    });
-    if (!res.ok) return c.json({ ok: false, error: res.error });
-    const found = await getOrdersBatch(fetchFn, cr, [code]).catch(() => []);
-    const o = found.find((x) => String(x.order_id) === code) || {};
-    return c.json({ ok: true, code, crm_id: res.crmId || String(o.id || ''), sent_status: status, got_status: String(o.status ?? ''), status_name: String(o.status_name ?? o.status_orders_name ?? '') });
-  });
-
   app.get('/api/mp/crm/settings', async (c) => {
     need(c, 'market.view');
     return c.json({ configured: Boolean(await creds()), shops: await shopCfgAll() });
