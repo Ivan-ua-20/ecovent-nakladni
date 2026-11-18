@@ -24,6 +24,7 @@ import { createPriceLogPages } from './pages/b2b-pricelog.js';
 import { createClaimPages } from './pages/b2b-claims.js';
 import { createB2bNewsPages } from './pages/b2b-news.js';
 import { renderPublicNews } from './pages/news-public.js';
+import { viewMarginRules } from './pages/b2b-margins.js';
 import { createRetailPages } from './pages/retail.js';
 import { createReturnsPages } from './pages/returns.js';
 import { createChecksPages } from './pages/checks.js';
@@ -59,6 +60,7 @@ const SECTIONS = [
     { id: 'b2bclaims', label: 'Обміни' },
     { id: 'b2bpartners', label: 'Партнери' },
     { id: 'b2bcatalog', label: 'Каталог і ціни' },
+    { id: 'b2bmargins', label: 'Акції й маржа', perm: 'b2b.admin' },
     { id: 'b2bnews', label: 'Новини' },
     { id: 'b2bprices', label: 'Журнал цін' },
     { id: 'b2bstats', label: 'Аналітика' },
@@ -366,6 +368,7 @@ const routes = {
   b2bprices: () => PRICELOG.viewAdmin(),
   b2bclaims: CLAIMS.viewAdminClaims,
   b2bnews: (id) => NEWS.viewNewsAdmin(id),
+  b2bmargins: () => viewMarginRules(),
   pnews: (id) => NEWS.viewPartnerNews(id),
   pclaims: CLAIMS.viewPartnerClaims,
   pprices: () => PRICELOG.viewPartner(),

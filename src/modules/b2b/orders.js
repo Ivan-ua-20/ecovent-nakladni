@@ -45,13 +45,28 @@ export const limitsOf = (p) => ({
 const UNPAID = `('open', 'invoice_wait', 'pay_wait', 'partial')`;
 // Борг партнера: рахунок виставлено, а оплати (повної) ще немає.
 export const DEBT = `('pay_wait', 'partial')`;
-// Особлива маржа на товар для партнера (b2b_product_margins) — замість маржі бренду, доки не минула дата until.
-// Підставляється після JOIN b2b_margins m і b2b_catalog c; перший параметр — сьогоднішня дата (kyivDay()).
-export const PM_JOIN = `LEFT JOIN b2b_product_margins pm ON pm.partner_id = m.partner_id AND pm.product_id = c.product_id AND (pm.until = '' OR pm.until >= ?)`;
-// margin — для відправки клієнтам (і самовивозу), margin_wh — для закупівлі на склад партнера:
-// окрема маржа товару «на склад» → окрема маржа товару (та сама на обидва способи) → маржа бренду «на склад» → маржа бренду.
-export const PM_COLS = `COALESCE(pm.margin, m.margin) AS margin, COALESCE(pm.margin_wh, pm.margin, m.margin_wh, m.margin) AS margin_wh,
-  pm.margin IS NOT NULL AS special, COALESCE(pm.until, '') AS special_until`;
+// Маржа партнера на товар (знижка від РРЦ). Порядок — перше, що знайшлося:
+//  1) акція (правило з датами, b2b_margin_rules) на товар → на категорію → на бренд — акція завжди важливіша;
+//  2) особлива маржа на товар (b2b_product_margins, до дати until);
+//  3) постійне правило на товар → на категорію;
+//  4) маржа бренду (b2b_margins).
+// Правило — для всіх партнерів (partners = '') або для перелічених. margin_wh порожня — та сама, що «клієнтам».
+// PM_JOIN підставляється після JOIN b2b_margins m і b2b_catalog c; його єдиний параметр — дата розрахунку (kyivDay()).
+export const PM_JOIN = `CROSS JOIN (SELECT ? AS d) td
+  LEFT JOIN b2b_product_margins pm ON pm.partner_id = m.partner_id AND pm.product_id = c.product_id AND (pm.until = '' OR pm.until >= td.d)`;
+const RULE_CAT = `(SELECT COALESCE(ap.cat_manual, ap.category_id) FROM an_products ap WHERE ap.product_id = c.product_id)`;
+export const ruleSub = (col, promo) => `(SELECT ${col} FROM b2b_margin_rules r WHERE r.deleted_at = ''
+    AND ${promo ? `(r.date_from != '' OR r.date_to != '') AND (r.date_from = '' OR r.date_from <= td.d) AND (r.date_to = '' OR r.date_to >= td.d)` : `r.date_from = '' AND r.date_to = ''`}
+    AND (r.partners = '' OR EXISTS (SELECT 1 FROM json_each(r.partners) WHERE CAST(value AS INTEGER) = m.partner_id))
+    AND ((r.level = 'product' AND r.ref_id = c.product_id) OR (r.level = 'category' AND r.ref_id = ${RULE_CAT}) OR (r.level = 'brand' AND r.ref_id = c.brand_id))
+    ORDER BY CASE r.level WHEN 'product' THEN 0 WHEN 'category' THEN 1 ELSE 2 END, r.id DESC LIMIT 1)`;
+// margin — для відправки клієнтам (і самовивозу), margin_wh — для закупівлі на склад партнера.
+// special / special_until — акція чи особлива ціна (партнер бачить «акція до …»); promo_name — назва акції.
+export const PM_COLS = `COALESCE(${ruleSub('r.margin', true)}, pm.margin, ${ruleSub('r.margin', false)}, m.margin) AS margin,
+  COALESCE(${ruleSub('COALESCE(r.margin_wh, r.margin)', true)}, pm.margin_wh, pm.margin, ${ruleSub('COALESCE(r.margin_wh, r.margin)', false)}, m.margin_wh, m.margin) AS margin_wh,
+  (${ruleSub('r.id', true)} IS NOT NULL OR pm.margin IS NOT NULL) AS special,
+  COALESCE(${ruleSub('r.date_to', true)}, pm.until, '') AS special_until,
+  COALESCE(${ruleSub('r.name', true)}, '') AS promo_name`;
 // Які способи отримання беруть ціну «на склад партнера» (решта — «відправка клієнтам»).
 // Щоб самовивіз рахувався як «на склад партнера», додайте сюди 'pickup' — більше нічого міняти не треба.
 export const WH_PRICE = new Set(['warehouse']);

@@ -6,6 +6,7 @@ import { downloadXlsx } from '../core/xlsx.js';
 import { catalogPriceModal, partnerPriceModal } from './b2b-price.js';
 import { npTtnModal } from './b2b-npttn.js';
 import { npAddressText } from './np-picker.js';
+import { marginRulesBlock } from './b2b-margins.js';
 import { viewAdminSupplyForm } from './b2b-supply.js';
 import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, wireTeamForm, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard, urgentBadge, urgentRow, askCancel, cancelNote, deliveryReqText, deliveryReqMoney } from './b2b-shared.js';
 
@@ -385,6 +386,7 @@ export function createB2bPages(ctx = {}) {
             <div class="small">${esc([p.phone, p.email].filter(Boolean).join(' · ') || 'Не вказано')}</div>
             ${p.note ? `<div class="small muted">${esc(p.note)}</div>` : ''}
           </div>
+          ${people() || !ro() ? '<div class="card form-stack" id="mrPartner"><span class="small muted">Завантаження…</span></div>' : ''}
           <div class="card form-stack">
             <h3>Особливі ціни на товари</h3>
             <div class="small muted">Знижка від РРЦ на окремий товар замість маржі бренду. З датою «до» — акція, після неї діє маржа бренду. «На склад партнера» порожньо — та сама знижка на обидва способи отримання.</div>
@@ -472,6 +474,8 @@ export function createB2bPages(ctx = {}) {
       for (const b of box.querySelectorAll('[data-ndel]')) b.onclick = async () => { await api('DELETE', `/api/b2b/notes/${b.dataset.ndel}`); drawNotes(); };
     };
     drawNotes().catch((e) => toast(e.message, true));
+    // Акції й правила маржі партнера (бренд, категорія, товар, періоди)
+    if ($('#mrPartner')) marginRulesBlock($('#mrPartner'), { partner: p, ro: ro() }).catch((e) => { $('#mrPartner').innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; });
     // Особливі ціни на товари
     const drawPm = async () => {
       const box = $('#pmList');

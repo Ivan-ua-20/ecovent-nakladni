@@ -4536,16 +4536,16 @@ ${[
 }
 
 // src/modules/analytics/index.js
-var toUtc = (day) => Date.UTC(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10));
+var toUtc = (day2) => Date.UTC(+day2.slice(0, 4), +day2.slice(5, 7) - 1, +day2.slice(8, 10));
 var fromUtc = (ms) => new Date(ms).toISOString().slice(0, 10);
-var addDays = (day, n) => fromUtc(toUtc(day) + n * 864e5);
+var addDays = (day2, n) => fromUtc(toUtc(day2) + n * 864e5);
 var daysBetween = (a, b) => Math.round((toUtc(b) - toUtc(a)) / 864e5) + 1;
-var monthStart = (day) => `${day.slice(0, 7)}-01`;
-var daysInMonth = (day) => new Date(Date.UTC(+day.slice(0, 4), +day.slice(5, 7), 0)).getUTCDate();
-var monthEnd = (day) => `${day.slice(0, 7)}-${String(daysInMonth(day)).padStart(2, "0")}`;
-function addMonths(day, n) {
-  const y = +day.slice(0, 4);
-  const m = +day.slice(5, 7) - 1 + n;
+var monthStart = (day2) => `${day2.slice(0, 7)}-01`;
+var daysInMonth = (day2) => new Date(Date.UTC(+day2.slice(0, 4), +day2.slice(5, 7), 0)).getUTCDate();
+var monthEnd = (day2) => `${day2.slice(0, 7)}-${String(daysInMonth(day2)).padStart(2, "0")}`;
+function addMonths(day2, n) {
+  const y = +day2.slice(0, 4);
+  const m = +day2.slice(5, 7) - 1 + n;
   const d = new Date(Date.UTC(y, m, 1));
   return fromUtc(d.getTime());
 }
@@ -4632,8 +4632,8 @@ async function rebrand(db) {
 }
 function normalizeAnOrder(raw2) {
   const id = parseInt(raw2.id, 10);
-  const day = String(raw2.datetime || "").slice(0, 10);
-  if (!id || !isDay(day)) return null;
+  const day2 = String(raw2.datetime || "").slice(0, 10);
+  if (!id || !isDay(day2)) return null;
   const lines = asList(raw2.products).slice(0, 99).map((p) => ({
     product_id: parseInt(p.product_id, 10) || 0,
     name: String(p.name || p.product_name || "").trim(),
@@ -4648,7 +4648,7 @@ function normalizeAnOrder(raw2) {
   return {
     id,
     code: String(raw2.order_id || ""),
-    day,
+    day: day2,
     status: parseInt(raw2.status, 10) || 0,
     office: String(raw2.office ?? ""),
     user: low2(raw2.user),
@@ -4713,12 +4713,12 @@ async function saveOrders(db, orders, maps) {
     const b = bounds.get(o.day) || [o.id, o.id];
     bounds.set(o.day, [Math.min(b[0], o.id), Math.max(b[1], o.id)]);
   }
-  for (const [day, [lo, hi]] of bounds) {
+  for (const [day2, [lo, hi]] of bounds) {
     st.push([
       `INSERT INTO an_day_bounds (day, min_id, max_id) VALUES (?, ?, ?)
        ON CONFLICT(day) DO UPDATE SET min_id = MIN(min_id, excluded.min_id), max_id = MAX(max_id, excluded.max_id)
        WHERE excluded.min_id < an_day_bounds.min_id OR excluded.max_id > an_day_bounds.max_id`,
-      [day, lo, hi]
+      [day2, lo, hi]
     ]);
   }
   await db.batch(st);
@@ -4805,12 +4805,12 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
     await putSetting2("an_values", JSON.stringify(data));
     return data;
   }
-  async function mergeTodayValues(day) {
+  async function mergeTodayValues(day2) {
     const cur = await getJson2("an_values");
     if (!cur) return computeValues();
-    const r = await idRange(db, day, day);
+    const r = await idRange(db, day2, day2);
     if (!r) return cur;
-    const rows = await db.all(`SELECT ch, site, utm, user, office FROM an_orders WHERE id BETWEEN ? AND ? AND day = ?`, [r[0], r[1], day]);
+    const rows = await db.all(`SELECT ch, site, utm, user, office FROM an_orders WHERE id BETWEEN ? AND ? AND day = ?`, [r[0], r[1], day2]);
     const has = (list, v, key = "v") => list.some((x) => x[key] === v);
     for (const o of rows) {
       for (const [field, v] of [["\u041F\u043E\u043B\u0435 1", o.ch], ["\u0421\u0430\u0439\u0442", o.site], ["utm_source", o.utm]]) {
@@ -5274,8 +5274,8 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
   function summary(s3) {
     const left = s3.units?.length || 0;
     const total = s3.unitsTotal || 1;
-    let pct2 = s3.phase === "units" ? Math.round((total - left) / total * 90) : s3.phase === "done" ? 100 : 95;
-    if (pct2 < 1) pct2 = 1;
+    let pct3 = s3.phase === "units" ? Math.round((total - left) / total * 90) : s3.phase === "done" ? 100 : 95;
+    if (pct3 < 1) pct3 = 1;
     const u = s3.units?.[0];
     const status = u ? s3.statusNames?.[u.s] || `\u0441\u0442\u0430\u0442\u0443\u0441 ${u.s}` : "";
     const text = s3.phase === "units" && u ? `${u.from.slice(0, 7)} \xB7 ${status}` : s3.phase === "units" && s3.pending?.length ? `\u0414\u043E\u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043D\u044F ${s3.pending.length} \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C` : s3.phase === "deliv" ? "\u0421\u043B\u0443\u0436\u0431\u0438 \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0438 (\u0434\u043E\u0437\u0430\u043F\u043E\u0432\u043D\u0435\u043D\u043D\u044F \u0456\u0441\u0442\u043E\u0440\u0456\u0457)" : s3.phase === "products" ? "\u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457 \u0442\u043E\u0432\u0430\u0440\u0456\u0432" : s3.phase === "categories" ? "\u0414\u043E\u0432\u0456\u0434\u043D\u0438\u043A \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0439" : s3.phase === "cleanup" ? "\u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u043D\u044F" : "\u0413\u043E\u0442\u043E\u0432\u043E";
@@ -5283,7 +5283,7 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
       mode: s3.mode,
       phase: s3.phase,
       done: s3.phase === "done",
-      pct: pct2,
+      pct: pct3,
       text,
       stats: s3.stats,
       warnings: s3.warnings || [],
@@ -6563,19 +6563,19 @@ function mountCatalog(app, { db, fetchFn, onCron = () => {
     return { saved, batches, done: !st.cursor, cursor: st.cursor || 0, total: st.total };
   }
   onCron("catalog", "\u0422\u043E\u0432\u0430\u0440\u0438 LP-CRM: \u0441\u043B\u043E\u0432\u043D\u0438\u043A \u0434\u043B\u044F \u043F\u0440\u0438\u0432'\u044F\u0437\u043A\u0438 \u0442\u043E\u0432\u0430\u0440\u0456\u0432 \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441\u0456\u0432 (\u043F\u043E 50 \u0437\u0430 \u0437\u0430\u043F\u0438\u0442, \u043A\u0456\u043B\u044C\u043A\u0430 \u043F\u0430\u0440\u0442\u0456\u0439 \u0437\u0430 \u0437\u0430\u043F\u0443\u0441\u043A, \u043F\u043E\u0432\u043D\u0438\u0439 \u043F\u0440\u043E\u0445\u0456\u0434 \u0440\u0430\u0437 \u043D\u0430 \u0434\u043E\u0431\u0443)", () => scan());
-  const J4 = (a) => JSON.stringify(a);
+  const J5 = (a) => JSON.stringify(a);
   const pick2 = (r) => ({ id: r.product_id, name: r.name, code: r.code, sku: r.sku, price: Number(r.price) || 0, active: Boolean(r.active) });
   const byIds = async (ids) => {
     const list = [...new Set(ids.map((x) => Number(x)).filter(Boolean))];
-    return list.length ? (await db.all(`SELECT * FROM crm_products WHERE product_id IN (SELECT value FROM json_each(?))`, [J4(list)])).map(pick2) : [];
+    return list.length ? (await db.all(`SELECT * FROM crm_products WHERE product_id IN (SELECT value FROM json_each(?))`, [J5(list)])).map(pick2) : [];
   };
   const byCode = async (codes) => {
     const list = [...new Set(codes.map(String).filter(Boolean))];
-    return list.length ? (await db.all(`SELECT * FROM crm_products WHERE code IN (SELECT value FROM json_each(?)) ORDER BY active DESC, product_id`, [J4(list)])).map(pick2) : [];
+    return list.length ? (await db.all(`SELECT * FROM crm_products WHERE code IN (SELECT value FROM json_each(?)) ORDER BY active DESC, product_id`, [J5(list)])).map(pick2) : [];
   };
   const bySkun = async (skuns) => {
     const list = [...new Set(skuns.map(String).filter(Boolean))];
-    return list.length ? (await db.all(`SELECT * FROM crm_products WHERE skun != '' AND skun IN (SELECT value FROM json_each(?)) ORDER BY active DESC, product_id`, [J4(list)])).map((r) => ({ ...pick2(r), skun: r.skun })) : [];
+    return list.length ? (await db.all(`SELECT * FROM crm_products WHERE skun != '' AND skun IN (SELECT value FROM json_each(?)) ORDER BY active DESC, product_id`, [J5(list)])).map((r) => ({ ...pick2(r), skun: r.skun })) : [];
   };
   async function search(q, limit = 20) {
     const text = String(q || "").trim();
@@ -6629,12 +6629,12 @@ function kyivOffsetMin(ms) {
   const s3 = new Date(ms).toLocaleString("sv-SE", { timeZone: "Europe/Kyiv" }).replace(" ", "T");
   return Math.round((Date.parse(`${s3}Z`) - ms) / 6e4);
 }
-function kyivDayStartIso(day) {
-  const utc0 = Date.parse(`${day}T00:00:00Z`);
+function kyivDayStartIso(day2) {
+  const utc0 = Date.parse(`${day2}T00:00:00Z`);
   const guess = utc0 - kyivOffsetMin(utc0) * 6e4;
   return new Date(utc0 - kyivOffsetMin(guess) * 6e4).toISOString();
 }
-var nextDay = (day) => new Date(Date.parse(`${day}T12:00:00Z`) + 864e5).toISOString().slice(0, 10);
+var nextDay = (day2) => new Date(Date.parse(`${day2}T12:00:00Z`) + 864e5).toISOString().slice(0, 10);
 var kyivDayOf = (iso) => new Date(iso).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
 var isDay2 = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ""));
 var PAID_SQL = `((o.supply_id IS NULL AND COALESCE(o.paid_at, '') != '') OR s.status IN ('paid', 'done'))`;
@@ -6994,9 +6994,19 @@ var limitsOf = (p) => ({
 });
 var UNPAID = `('open', 'invoice_wait', 'pay_wait', 'partial')`;
 var DEBT = `('pay_wait', 'partial')`;
-var PM_JOIN = `LEFT JOIN b2b_product_margins pm ON pm.partner_id = m.partner_id AND pm.product_id = c.product_id AND (pm.until = '' OR pm.until >= ?)`;
-var PM_COLS = `COALESCE(pm.margin, m.margin) AS margin, COALESCE(pm.margin_wh, pm.margin, m.margin_wh, m.margin) AS margin_wh,
-  pm.margin IS NOT NULL AS special, COALESCE(pm.until, '') AS special_until`;
+var PM_JOIN = `CROSS JOIN (SELECT ? AS d) td
+  LEFT JOIN b2b_product_margins pm ON pm.partner_id = m.partner_id AND pm.product_id = c.product_id AND (pm.until = '' OR pm.until >= td.d)`;
+var RULE_CAT = `(SELECT COALESCE(ap.cat_manual, ap.category_id) FROM an_products ap WHERE ap.product_id = c.product_id)`;
+var ruleSub = (col, promo) => `(SELECT ${col} FROM b2b_margin_rules r WHERE r.deleted_at = ''
+    AND ${promo ? `(r.date_from != '' OR r.date_to != '') AND (r.date_from = '' OR r.date_from <= td.d) AND (r.date_to = '' OR r.date_to >= td.d)` : `r.date_from = '' AND r.date_to = ''`}
+    AND (r.partners = '' OR EXISTS (SELECT 1 FROM json_each(r.partners) WHERE CAST(value AS INTEGER) = m.partner_id))
+    AND ((r.level = 'product' AND r.ref_id = c.product_id) OR (r.level = 'category' AND r.ref_id = ${RULE_CAT}) OR (r.level = 'brand' AND r.ref_id = c.brand_id))
+    ORDER BY CASE r.level WHEN 'product' THEN 0 WHEN 'category' THEN 1 ELSE 2 END, r.id DESC LIMIT 1)`;
+var PM_COLS = `COALESCE(${ruleSub("r.margin", true)}, pm.margin, ${ruleSub("r.margin", false)}, m.margin) AS margin,
+  COALESCE(${ruleSub("COALESCE(r.margin_wh, r.margin)", true)}, pm.margin_wh, pm.margin, ${ruleSub("COALESCE(r.margin_wh, r.margin)", false)}, m.margin_wh, m.margin) AS margin_wh,
+  (${ruleSub("r.id", true)} IS NOT NULL OR pm.margin IS NOT NULL) AS special,
+  COALESCE(${ruleSub("r.date_to", true)}, pm.until, '') AS special_until,
+  COALESCE(${ruleSub("r.name", true)}, '') AS promo_name`;
 var WH_PRICE = /* @__PURE__ */ new Set(["warehouse"]);
 var priceKind = (delivery) => WH_PRICE.has(delivery) ? "wh" : "np";
 var marginFor = (r, delivery) => priceKind(delivery) === "wh" ? r.margin_wh ?? r.margin : r.margin;
@@ -7023,7 +7033,7 @@ async function withGrace(db, p, rows) {
 }
 var SHIP_NOINV = `('open', 'invoice_wait')`;
 var today = () => kyivDayOf((/* @__PURE__ */ new Date()).toISOString());
-var addDaysTo = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+var addDaysTo = (day2, n) => new Date(Date.parse(`${day2}T12:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 var overdueDays = (o) => o.due_date && ["pay_wait", "partial"].includes(o.status) && o.due_date < today() ? Math.round((Date.parse(`${today()}T12:00:00Z`) - Date.parse(`${o.due_date}T12:00:00Z`)) / 864e5) : 0;
 var CLOSED_SQL = `(o.kind = 'supply' AND o.status NOT IN ('open', 'cancelled', 'draft', 'confirm')
   AND EXISTS (SELECT 1 FROM b2b_order_items i WHERE i.order_id = o.id)
@@ -9714,7 +9724,7 @@ ${link(c, `pclients/${o.id}`)}`);
 
 // src/modules/b2b/stats.js
 var DAY = 864e5;
-var addDays2 = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * DAY).toISOString().slice(0, 10);
+var addDays2 = (day2, n) => new Date(Date.parse(`${day2}T12:00:00Z`) + n * DAY).toISOString().slice(0, 10);
 var idSet = (v) => new Set(String(v || "").split(",").filter((x) => /^\d+$/.test(x)).map(Number));
 var daysBetween2 = (a, b) => Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / DAY) + 1;
 function mountB2bStats(app, { db, myPartner }) {
@@ -10107,7 +10117,7 @@ ${l}`;
     return c.json({ results });
   });
   const isDay3 = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ""));
-  const dayStartIso = (day) => (/* @__PURE__ */ new Date(`${day}T00:00:00+02:00`)).toISOString();
+  const dayStartIso = (day2) => (/* @__PURE__ */ new Date(`${day2}T00:00:00+02:00`)).toISOString();
   async function priceLog(q, partner = null) {
     const to = isDay3(q.to) ? q.to : (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
     const from = isDay3(q.from) ? q.from : new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);
@@ -11351,14 +11361,14 @@ ${link(c, `porders/${o.id}`)}`);
     if (!changed.length) return;
     const ids = (await db.all(`SELECT id FROM b2b_orders WHERE supply_id = ? AND kind = 'client' AND status != 'cancelled'`, [o.id])).map((r) => r.id);
     if (!ids.length) return;
-    const J4 = JSON.stringify(ids);
+    const J5 = JSON.stringify(ids);
     const hit = await db.all(
       `SELECT DISTINCT order_id FROM b2b_order_items WHERE order_id IN (SELECT value FROM json_each(?)) AND product_id IN (SELECT value FROM json_each(?))`,
-      [J4, JSON.stringify(changed.map((i) => i.product_id))]
+      [J5, JSON.stringify(changed.map((i) => i.product_id))]
     );
     if (!hit.length) return;
     await db.batch([
-      ...changed.map((i) => [`UPDATE b2b_order_items SET price = ?, rrp = ? WHERE product_id = ? AND order_id IN (SELECT value FROM json_each(?))`, [i.price, i.rrp, i.product_id, J4]]),
+      ...changed.map((i) => [`UPDATE b2b_order_items SET price = ?, rrp = ? WHERE product_id = ? AND order_id IN (SELECT value FROM json_each(?))`, [i.price, i.rrp, i.product_id, J5]]),
       [`UPDATE b2b_orders SET total = (SELECT ROUND(COALESCE(SUM(ROUND(qty * price, 2)), 0), 2) FROM b2b_order_items WHERE order_id = b2b_orders.id), updated_at = ?
         WHERE id IN (SELECT value FROM json_each(?))`, [nowIso(), JSON.stringify(hit.map((r) => r.order_id))]]
     ]);
@@ -11640,7 +11650,7 @@ function mountB2bHome(app, { db, myPartner, orders }) {
 }
 
 // src/modules/b2b/crm.js
-var addDays3 = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+var addDays3 = (day2, n) => new Date(Date.parse(`${day2}T12:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 var daysBetween3 = (a, b) => Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / 864e5);
 var OVERRIDE_DAYS = 7;
 function mountB2bCrm(app, { db, services, onCleanup }) {
@@ -11898,7 +11908,7 @@ var OPEN = ["new", "review", "approved"];
 function mountB2bClaims(app, { db, services = {}, myPartner, orders }) {
   const { orderOf, itemRows, storeFile, sendFile, groupOf, log, tgAdmins, tgPartner, tgGroup, link, uah: uah5, h: h10, entityText } = orders;
   const userName8 = (u) => u?.name || u?.login || "";
-  const J4 = (v, d) => {
+  const J5 = (v, d) => {
     try {
       return JSON.parse(v || "") ?? d;
     } catch {
@@ -11918,8 +11928,8 @@ function mountB2bClaims(app, { db, services = {}, myPartner, orders }) {
     want_name: CLAIM_WANT[r.want] || r.want,
     return_name: RETURN_MODE[r.return_mode] || "",
     defect_name: DEFECT_STATE[r.defect] || "",
-    items: J4(r.items, []),
-    want_items: J4(r.want_items, []),
+    items: J5(r.items, []),
+    want_items: J5(r.want_items, []),
     order_number: r.order_id ? orderNo(r.order_id) : "",
     exch_number: r.exch_supply_id ? orderNo(r.exch_supply_id) : ""
   });
@@ -12180,7 +12190,7 @@ ${link(c, `b2bclaims/${r.id}`)}`);
         entity = entityText(e);
       }
     }
-    const base2 = cl.want === "other" ? J4(cl.want_items, []) : J4(cl.items, []);
+    const base2 = cl.want === "other" ? J5(cl.want_items, []) : J5(cl.items, []);
     const rrp = new Map((await db.all(
       `SELECT product_id, rrp FROM b2b_catalog WHERE product_id IN (SELECT value FROM json_each(?))`,
       [JSON.stringify(base2.map((i) => i.product_id))]
@@ -13352,12 +13362,12 @@ async function npSender(fetchFn, apiKey) {
   const s3 = list[0] || {};
   return { name: String(s3.Description || s3.CounterpartyFullName || "").trim(), code: String(s3.EDRPOU || "").trim() };
 }
-var npDate = (day) => day.split("-").reverse().join(".");
+var npDate = (day2) => day2.split("-").reverse().join(".");
 var phone9 = (p) => String(p || "").replace(/\D/g, "").slice(-9);
-async function npDocumentsPage(fetchFn, apiKey, day, page) {
+async function npDocumentsPage(fetchFn, apiKey, day2, page) {
   const list = await npCall(fetchFn, apiKey, "InternetDocument", "getDocumentList", {
-    DateTimeFrom: npDate(day),
-    DateTimeTo: npDate(day),
+    DateTimeFrom: npDate(day2),
+    DateTimeTo: npDate(day2),
     Page: String(page),
     GetFullList: "0"
   });
@@ -13741,6 +13751,184 @@ ${link(c, `pclients/${o.id}`)}`).catch(() => 0);
     await db.run(`UPDATE b2b_orders SET ttn = '', np_doc_ref = '', np_meta = '', updated_at = ? WHERE id = ?`, [nowIso(), o.id]);
     await log(o.id, c.get("user"), force ? `\u0422\u0422\u041D ${o.ttn} \u043F\u0440\u0438\u0431\u0440\u0430\u043D\u043E \u0456\u0437 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F (\u0443 \u041D\u043E\u0432\u0456\u0439 \u043F\u043E\u0448\u0442\u0456 \u0457\u0457 \u0432\u0436\u0435 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E)` : `\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u0422\u0422\u041D ${o.ttn}`);
     return c.json({ ok: true });
+  });
+}
+
+// src/modules/b2b/margins.js
+var LEVELS = { brand: "\u0411\u0440\u0435\u043D\u0434", category: "\u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044F", product: "\u0422\u043E\u0432\u0430\u0440" };
+var J2 = (a) => JSON.stringify(a);
+var day = (v) => {
+  const s3 = String(v ?? "").trim();
+  if (!s3) return "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s3)) throw fail(400, "\u0414\u0430\u0442\u0430 \u2014 \u0443 \u0444\u043E\u0440\u043C\u0430\u0442\u0456 \u0420\u0420\u0420\u0420-\u041C\u041C-\u0414\u0414.");
+  return s3;
+};
+var pct2 = (v, label, allowEmpty = false) => {
+  const s3 = String(v ?? "").trim().replace(",", ".");
+  if (s3 === "" && allowEmpty) return null;
+  const n = Number(s3);
+  if (s3 === "" || !Number.isFinite(n) || n < 0 || n > 90) throw fail(400, `${label}: \u0437\u043D\u0438\u0436\u043A\u0430 \u0432\u0456\u0434 \u0420\u0420\u0426 \u2014 \u0432\u0456\u0434 0 \u0434\u043E 90 %${allowEmpty ? " (\u0430\u0431\u043E \u043F\u043E\u0440\u043E\u0436\u043D\u044C\u043E \u2014 \u0442\u0430 \u0441\u0430\u043C\u0430)" : ""}.`);
+  return Math.round(n * 100) / 100;
+};
+var parseIds = (v) => {
+  try {
+    return (JSON.parse(v || "[]") || []).map(Number).filter(Boolean);
+  } catch {
+    return [];
+  }
+};
+function mountB2bMargins(app, { db, brandNames, partnerPrice: partnerPrice2 }) {
+  const userName8 = (c) => {
+    const u = c.get("user");
+    return String(u?.name || u?.login || "").slice(0, 80);
+  };
+  const catNames = async () => new Map((await db.all(`SELECT id, name FROM an_categories`).catch(() => [])).map((r) => [r.id, r.name]));
+  const status = (r, t) => !r.date_from && !r.date_to ? "permanent" : r.date_to && r.date_to < t ? "past" : r.date_from && r.date_from > t ? "planned" : "active";
+  async function describe(rows) {
+    const [brands, cats, partners] = await Promise.all([brandNames(), catNames(), db.all(`SELECT id, name FROM b2b_partners WHERE COALESCE(deleted_at, '') = ''`)]);
+    const pIds = [...new Set(rows.filter((r) => r.level === "product").map((r) => r.ref_id))];
+    const prods = new Map(pIds.length ? (await db.all(`SELECT product_id, name, rrp FROM b2b_catalog WHERE product_id IN (SELECT value FROM json_each(?))`, [J2(pIds)])).map((p) => [p.product_id, p]) : []);
+    const pn = new Map(partners.map((p) => [p.id, p.name]));
+    const t = kyivDay();
+    return rows.map((r) => {
+      const ids = parseIds(r.partners);
+      return {
+        id: r.id,
+        name: r.name,
+        level: r.level,
+        level_name: LEVELS[r.level],
+        ref_id: r.ref_id,
+        ref_name: r.level === "brand" ? brands.get(r.ref_id) || `\u0411\u0440\u0435\u043D\u0434 ${r.ref_id}` : r.level === "category" ? cats.get(r.ref_id) || `\u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044F ${r.ref_id}` : prods.get(r.ref_id)?.name || `\u0422\u043E\u0432\u0430\u0440 ${r.ref_id}`,
+        rrp: r.level === "product" ? prods.get(r.ref_id)?.rrp || null : null,
+        margin: r.margin,
+        margin_wh: r.margin_wh,
+        date_from: r.date_from,
+        date_to: r.date_to,
+        promo: Boolean(r.date_from || r.date_to),
+        partners: ids,
+        partner_names: ids.map((id) => pn.get(id) || `#${id}`),
+        all: !ids.length,
+        status: status(r, t),
+        created_by: r.created_by,
+        created_at: r.created_at,
+        updated_by: r.updated_by,
+        updated_at: r.updated_at
+      };
+    });
+  }
+  app.get("/api/b2b/margin-rules", async (c) => {
+    need(c, "b2b.admin");
+    const pid = Number(c.req.query("partner")) || 0;
+    const rows = await db.all(`SELECT * FROM b2b_margin_rules r WHERE r.deleted_at = ''
+      ${pid ? `AND (r.partners = '' OR EXISTS (SELECT 1 FROM json_each(r.partners) WHERE CAST(value AS INTEGER) = ?))` : ""}
+      ORDER BY (r.date_from = '' AND r.date_to = ''), CASE WHEN r.date_to != '' AND r.date_to < ? THEN 1 ELSE 0 END, r.date_from DESC, r.id DESC LIMIT 500`, pid ? [pid, kyivDay()] : [kyivDay()]);
+    return c.json({ rules: await describe(rows) });
+  });
+  app.get("/api/b2b/margin-rules/meta", async (c) => {
+    need(c, "b2b.admin");
+    const [brands, cats, bc, cc, partners] = await Promise.all([
+      brandNames(),
+      catNames(),
+      db.all(`SELECT brand_id, COUNT(*) AS n FROM b2b_catalog WHERE hidden = 0 AND rrp > 0 GROUP BY brand_id`),
+      db.all(`SELECT COALESCE(a.cat_manual, a.category_id) AS cat, COUNT(*) AS n FROM b2b_catalog c JOIN an_products a ON a.product_id = c.product_id
+        WHERE c.hidden = 0 AND c.rrp > 0 GROUP BY COALESCE(a.cat_manual, a.category_id)`).catch(() => []),
+      db.all(`SELECT id, name FROM b2b_partners WHERE active = 1 AND COALESCE(deleted_at, '') = '' ORDER BY name`)
+    ]);
+    return c.json({
+      levels: LEVELS,
+      brands: bc.map((r) => ({ id: r.brand_id, name: brands.get(r.brand_id) || "\u0406\u043D\u0448\u0456", n: r.n })).sort((a, b) => a.name.localeCompare(b.name, "uk")),
+      categories: cc.filter((r) => r.cat).map((r) => ({ id: r.cat, name: cats.get(r.cat) || `\u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044F ${r.cat}`, n: r.n })).sort((a, b) => a.name.localeCompare(b.name, "uk")),
+      partners,
+      today: kyivDay()
+    });
+  });
+  async function fields(b) {
+    const level = LEVELS[b.level] ? b.level : "";
+    if (!level) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C, \u0434\u043B\u044F \u0447\u043E\u0433\u043E \u043F\u0440\u0430\u0432\u0438\u043B\u043E: \u0431\u0440\u0435\u043D\u0434, \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044F \u0447\u0438 \u0442\u043E\u0432\u0430\u0440.");
+    const ref = Number(b.ref_id) || 0;
+    if (!ref) throw fail(400, `\u041E\u0431\u0435\u0440\u0456\u0442\u044C ${level === "brand" ? "\u0431\u0440\u0435\u043D\u0434" : level === "category" ? "\u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044E" : "\u0442\u043E\u0432\u0430\u0440"}.`);
+    if (level === "brand" && !(await brandNames()).has(ref)) throw fail(400, "\u0411\u0440\u0435\u043D\u0434 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    if (level === "category" && !await db.get(`SELECT id FROM an_categories WHERE id = ?`, [ref]).catch(() => null)) throw fail(400, "\u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044E \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    if (level === "product" && !await db.get(`SELECT product_id FROM b2b_catalog WHERE product_id = ?`, [ref])) throw fail(400, "\u0422\u043E\u0432\u0430\u0440 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 \u043A\u0430\u0442\u0430\u043B\u043E\u0437\u0456.");
+    const margin = pct2(b.margin, "\u0414\u0440\u043E\u043F\u0448\u0438\u043F\u0456\u043D\u0433");
+    const marginWh = pct2(b.margin_wh, "B2B (\u043D\u0430 \u0441\u043A\u043B\u0430\u0434)", true);
+    const promo = b.promo !== false;
+    const from = promo ? day(b.date_from) : "";
+    const to = promo ? day(b.date_to) : "";
+    if (promo && (!from || !to)) throw fail(400, "\u0410\u043A\u0446\u0456\u044F: \u0432\u043A\u0430\u0436\u0456\u0442\u044C \u0434\u0430\u0442\u0438 \xAB\u0437\xBB \u0456 \xAB\u043F\u043E\xBB.");
+    if (from && to && from > to) throw fail(400, "\u0414\u0430\u0442\u0430 \xAB\u0437\xBB \u043F\u0456\u0437\u043D\u0456\u0448\u0430 \u0437\u0430 \xAB\u043F\u043E\xBB.");
+    let partners = "";
+    if (Array.isArray(b.partners) && b.partners.length) {
+      const ids = [...new Set(b.partners.map(Number).filter(Boolean))];
+      const ok = await db.all(`SELECT id FROM b2b_partners WHERE id IN (SELECT value FROM json_each(?)) AND COALESCE(deleted_at, '') = ''`, [J2(ids)]);
+      if (ok.length !== ids.length) throw fail(400, "\u041D\u0435 \u0432\u0441\u0456\u0445 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443.");
+      partners = J2(ids.sort((x, y) => x - y));
+    }
+    return { name: String(b.name ?? "").trim().slice(0, 80), level, ref_id: ref, margin, margin_wh: marginWh, date_from: from, date_to: to, partners };
+  }
+  async function overlap(f, exceptId = 0) {
+    const rows = await db.all(`SELECT * FROM b2b_margin_rules WHERE deleted_at = '' AND level = ? AND ref_id = ? AND id != ?`, [f.level, f.ref_id, exceptId]);
+    const mine = parseIds(f.partners);
+    const promo = Boolean(f.date_from || f.date_to);
+    for (const r of rows) {
+      const theirs = parseIds(r.partners);
+      const samePartners = !mine.length || !theirs.length || mine.some((x) => theirs.includes(x));
+      if (!samePartners) continue;
+      const rPromo = Boolean(r.date_from || r.date_to);
+      if (promo !== rPromo) continue;
+      const cross = !promo || (f.date_from || "0000") <= (r.date_to || "9999") && (r.date_from || "0000") <= (f.date_to || "9999");
+      if (cross) {
+        const what = promo ? `\u0430\u043A\u0446\u0456\u0454\u044E${r.name ? ` \xAB${r.name}\xBB` : ""} ${r.date_from.split("-").reverse().join(".")}\u2013${r.date_to.split("-").reverse().join(".")}` : "\u043F\u043E\u0441\u0442\u0456\u0439\u043D\u0438\u043C \u043F\u0440\u0430\u0432\u0438\u043B\u043E\u043C";
+        throw fail(400, `\u041F\u0435\u0440\u0435\u0442\u0438\u043D\u0430\u0454\u0442\u044C\u0441\u044F \u0437 ${what} \u043D\u0430 \u0442\u043E\u0439 \u0441\u0430\u043C\u0438\u0439 ${LEVELS[f.level].toLowerCase()} \u2014 \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u0434\u0430\u0442\u0438 \u0430\u0431\u043E \u0432\u0456\u0434\u0440\u0435\u0434\u0430\u0433\u0443\u0439\u0442\u0435 \u043D\u0430\u044F\u0432\u043D\u0435 \u043F\u0440\u0430\u0432\u0438\u043B\u043E.`);
+      }
+    }
+  }
+  app.post("/api/b2b/margin-rules", async (c) => {
+    need(c, "b2b.admin");
+    const f = await fields(await c.req.json().catch(() => ({})));
+    await overlap(f);
+    const r = await db.run(
+      `INSERT INTO b2b_margin_rules (name, level, ref_id, margin, margin_wh, date_from, date_to, partners, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [f.name, f.level, f.ref_id, f.margin, f.margin_wh, f.date_from, f.date_to, f.partners, userName8(c), nowIso()]
+    );
+    return c.json({ id: r.lastId });
+  });
+  app.put("/api/b2b/margin-rules/:id{[0-9]+}", async (c) => {
+    need(c, "b2b.admin");
+    const id = Number(c.req.param("id"));
+    if (!await db.get(`SELECT id FROM b2b_margin_rules WHERE id = ? AND deleted_at = ''`, [id])) throw fail(404, "\u041F\u0440\u0430\u0432\u0438\u043B\u043E \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const f = await fields(await c.req.json().catch(() => ({})));
+    await overlap(f, id);
+    await db.run(
+      `UPDATE b2b_margin_rules SET name = ?, level = ?, ref_id = ?, margin = ?, margin_wh = ?, date_from = ?, date_to = ?, partners = ?, updated_by = ?, updated_at = ? WHERE id = ?`,
+      [f.name, f.level, f.ref_id, f.margin, f.margin_wh, f.date_from, f.date_to, f.partners, userName8(c), nowIso(), id]
+    );
+    return c.json({ ok: true });
+  });
+  app.delete("/api/b2b/margin-rules/:id{[0-9]+}", async (c) => {
+    need(c, "b2b.admin");
+    await db.run(`UPDATE b2b_margin_rules SET deleted_at = ?, updated_by = ? WHERE id = ?`, [nowIso(), userName8(c), Number(c.req.param("id"))]);
+    return c.json({ ok: true });
+  });
+  app.get("/api/b2b/margin-rules/check", async (c) => {
+    need(c, "b2b.admin");
+    const pid = Number(c.req.query("partner")) || 0;
+    const prod = Number(c.req.query("product")) || 0;
+    const at = day(c.req.query("date")) || kyivDay();
+    const row = await db.get(`SELECT c.product_id, c.name, c.rrp, c.brand_id, ${PM_COLS} FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN}
+      WHERE m.partner_id = ? AND c.product_id = ?`, [at, pid, prod]);
+    if (!row) throw fail(404, "\u0411\u0440\u0435\u043D\u0434 \u0446\u044C\u043E\u0433\u043E \u0442\u043E\u0432\u0430\u0440\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0443 \u043D\u0435 \u0432\u0456\u0434\u043A\u0440\u0438\u0442\u043E \u2014 \u0446\u0456\u043D\u0438 \u043D\u0435\u043C\u0430\u0454.");
+    return c.json({
+      date: at,
+      product: { id: row.product_id, name: row.name, rrp: row.rrp },
+      margin: row.margin,
+      margin_wh: row.margin_wh,
+      price: partnerPrice2(row.rrp, row.margin),
+      price_wh: partnerPrice2(row.rrp, row.margin_wh),
+      promo: Boolean(row.special),
+      promo_until: row.special_until,
+      promo_name: row.promo_name
+    });
   });
 }
 
@@ -14480,6 +14668,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   const attention = async (user) => [...await home.attention(), ...await crm.attention(user), ...await newProducts.attention()];
   mountB2bPrices(app, { db, services, partnerPrice, myPartner });
   mountB2bNews(app, { db, fetchFn, services, myPartner, partnerPrice, brandNames, onCron });
+  mountB2bMargins(app, { db, brandNames, partnerPrice });
   app.post("/api/b2b/partners/:id/tg-group", async (c) => {
     need(c, "b2b.admin");
     const p = await getPartner(c.req.param("id"));
@@ -14820,7 +15009,7 @@ async function meestGet(fetchFn, token, path) {
   return j.result ?? null;
 }
 var dmy = (iso) => iso.split("-").reverse().join(".");
-var meestParcelsList = (fetchFn, token, day) => meestGet(fetchFn, token, `/parcelsList/${dmy(day)}`).then((r) => Array.isArray(r) ? r : []);
+var meestParcelsList = (fetchFn, token, day2) => meestGet(fetchFn, token, `/parcelsList/${dmy(day2)}`).then((r) => Array.isArray(r) ? r : []);
 var meestContract = (fetchFn, token, contractId) => meestGet(fetchFn, token, `/contractClientInfo/${encodeURIComponent(contractId)}`);
 var MEEST_PROBES = {
   parcelsList: (v) => /^\d{4}-\d{2}-\d{2}$/.test(v) && `/parcelsList/${dmy(v)}`,
@@ -14841,7 +15030,7 @@ var PAGES_PER_CALL = 12;
 var TODAY_REFRESH_MS = 5 * 60 * 1e3;
 var SEARCH_DAYS = 3;
 var KEEP_DAYS2 = 60;
-var addDays4 = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+var addDays4 = (day2, n) => new Date(Date.parse(`${day2}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 var keyHint = (k) => k ? `${MASK}${String(k).slice(-4)}` : "";
 var pending = () => Object.assign(new Error("\u0428\u0443\u043A\u0430\u044E \u0422\u0422\u041D \u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0430\u0445 \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438\u2026"), { pending: true });
 function mountMarking(app, { db, fetchFn, onCleanup }) {
@@ -14961,27 +15150,27 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
     )).map((r) => [`${r.account_id}|${r.day}`, r]));
     let pages = 0;
     for (const a of accounts) {
-      for (const day of days2) {
-        const st = state.get(`${a.id}|${day}`);
+      for (const day2 of days2) {
+        const st = state.get(`${a.id}|${day2}`);
         const fresh = st?.at && Date.now() - Date.parse(st.at) < TODAY_REFRESH_MS;
-        if (st?.done && (day < today3 || fresh)) continue;
+        if (st?.done && (day2 < today3 || fresh)) continue;
         let page = st?.done || !st ? 1 : st.next_page;
         for (; ; ) {
           if (pages >= PAGES_PER_CALL) throw pending();
           pages++;
-          const docs = await npDocumentsPage(fetchFn, a.api_key, day, page);
+          const docs = await npDocumentsPage(fetchFn, a.api_key, day2, page);
           const done = docs.length < 100;
           await db.batch([
             ...docs.map((d) => [
               `INSERT INTO np_docs (ttn, account_id, day, phone, order_ref, recipient, service) VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(ttn) DO UPDATE SET account_id = excluded.account_id, day = excluded.day, phone = excluded.phone, order_ref = excluded.order_ref,
                service = CASE WHEN excluded.service != '' THEN excluded.service ELSE np_docs.service END`,
-              [d.ttn, a.id, day, d.phone, d.orderRef, d.recipient, d.service || ""]
+              [d.ttn, a.id, day2, d.phone, d.orderRef, d.recipient, d.service || ""]
             ]),
             [
               `INSERT INTO np_days (account_id, day, next_page, done, at) VALUES (?, ?, ?, ?, ?)
               ON CONFLICT(account_id, day) DO UPDATE SET next_page = excluded.next_page, done = excluded.done, at = excluded.at`,
-              [a.id, day, done ? page : page + 1, done ? 1 : 0, (/* @__PURE__ */ new Date()).toISOString()]
+              [a.id, day2, done ? page : page + 1, done ? 1 : 0, (/* @__PURE__ */ new Date()).toISOString()]
             ]
           ]);
           const m = match2(docs);
@@ -15248,10 +15437,10 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
     const orders = [];
     let ok = !!contract;
     for (let i = 0; i < 7 && orders.length < 10; i++) {
-      const day = addDays4(kyivDay(), -i);
+      const day2 = addDays4(kyivDay(), -i);
       let list;
       try {
-        list = await meestParcelsList(fetchFn, token, day);
+        list = await meestParcelsList(fetchFn, token, day2);
       } catch (e) {
         if (contract && !e.pending) break;
         throw e;
@@ -15259,7 +15448,7 @@ function mountMarking(app, { db, fetchFn, onCleanup }) {
       ok = true;
       for (const p of list.slice(0, 10 - orders.length)) {
         const bar = String(p.barCode || p["\u0432arCode"] || "");
-        orders.push({ id: String(p.parcelNumber || bar), date: day, status: p.registerType || "", provider: "Meest", ttn: bar });
+        orders.push({ id: String(p.parcelNumber || bar), date: day2, status: p.registerType || "", provider: "Meest", ttn: bar });
       }
     }
     if (!ok) throw fail(400, "\u041C\u0456\u0441\u0442 \u043D\u0435 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0432 \u0442\u043E\u043A\u0435\u043D.");
@@ -16269,14 +16458,14 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     if (rows.some((r) => r.ttn)) await services.analytics?.ttnQuick?.().catch(() => 0);
     const ttns = [...new Set(rows.map((r) => normTtn2(r.ttn)).filter(Boolean))];
     const phones = suggest ? [...new Set(rows.map((r) => phone94(r.phone)).filter((p) => p.length === 9))] : [];
-    const J4 = (a2) => JSON.stringify(a2);
+    const J5 = (a2) => JSON.stringify(a2);
     const [a, b, k] = await Promise.all([
-      ttns.length ? db.all(`SELECT code FROM an_ttn_recent WHERE ttn IN (SELECT value FROM json_each(?))`, [J4(ttns)]).catch(() => []) : [],
-      ttns.length ? db.all(`SELECT code FROM an_orders WHERE ttn IN (SELECT value FROM json_each(?))`, [J4(ttns)]).catch(() => []) : [],
-      db.all(`SELECT code FROM order_keys WHERE k IN (SELECT value FROM json_each(?))`, [J4([...ttns, ...phones.map((p) => `p:${p}`)])]).catch(() => [])
+      ttns.length ? db.all(`SELECT code FROM an_ttn_recent WHERE ttn IN (SELECT value FROM json_each(?))`, [J5(ttns)]).catch(() => []) : [],
+      ttns.length ? db.all(`SELECT code FROM an_orders WHERE ttn IN (SELECT value FROM json_each(?))`, [J5(ttns)]).catch(() => []) : [],
+      db.all(`SELECT code FROM order_keys WHERE k IN (SELECT value FROM json_each(?))`, [J5([...ttns, ...phones.map((p) => `p:${p}`)])]).catch(() => [])
     ]);
     let codes = [...new Set([...a, ...b, ...k].map((r) => String(r.code)))];
-    const used = new Set(codes.length ? (await db.all(`SELECT crm_code FROM rzs_orders WHERE crm_code IN (SELECT value FROM json_each(?))`, [J4(codes)])).map((r) => r.crm_code) : []);
+    const used = new Set(codes.length ? (await db.all(`SELECT crm_code FROM rzs_orders WHERE crm_code IN (SELECT value FROM json_each(?))`, [J5(codes)])).map((r) => r.crm_code) : []);
     codes = codes.filter((c) => !used.has(c)).slice(0, 300);
     const crm = codes.length ? await getOrdersBatch(fetchFn, { subdomain: s3.lpcrm_subdomain, key: s3.lpcrm_key }, codes).catch((e) => {
       throw fail(502, `LP-CRM: ${e.message}`);
@@ -16596,7 +16785,7 @@ var isReturnType = (t) => /return/i.test(t) && !/backward/i.test(t);
 var nameKey2 = (n) => String(n || "").toLowerCase().replace(/[^a-zа-яіїєґё'’\s-]/gi, " ").split(/[\s-]+/).filter((w) => w.length > 1).slice(0, 2).sort().join(" ");
 var mpIso = (v) => String(v || "").replace(" ", "T").slice(0, 19);
 var NP_TTN = (col) => `(length(${col}) BETWEEN 11 AND 20 AND ${col} NOT GLOB '*[^0-9]*')`;
-var addDays5 = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+var addDays5 = (day2, n) => new Date(Date.parse(`${day2}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 var kday = (v) => typeof v === "number" ? kyivDay(new Date(v)) : /(Z|[+-]\d\d:\d\d)$/.test(String(v)) ? kyivDay(new Date(v)) : String(v).slice(0, 10);
 var days = (from, to = Date.now()) => {
   if (!from) return null;
@@ -17829,11 +18018,11 @@ function mountOdb(app, { db, fetchFn, services = {}, base: base2 = ODB_BASE, not
   const payerKey = `CASE WHEN length(t.payer_code) = 10 THEN '${PERSON}' WHEN t.payer_code != '' THEN t.payer_code ELSE 'name:' || t.payer_name END`;
   app.get("/api/odb/stats", async (c) => {
     need(c, "analytics");
-    const day = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || "") ? v : "";
-    const from = day(c.req.query("from")) || "2000-01-01";
-    const to = day(c.req.query("to")) || "2999-12-31";
-    const cmpFrom = day(c.req.query("cmpFrom"));
-    const cmpTo = day(c.req.query("cmpTo"));
+    const day2 = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || "") ? v : "";
+    const from = day2(c.req.query("from")) || "2000-01-01";
+    const to = day2(c.req.query("to")) || "2999-12-31";
+    const cmpFrom = day2(c.req.query("cmpFrom"));
+    const cmpTo = day2(c.req.query("cmpTo"));
     const group = ["day", "week", "month"].includes(c.req.query("group")) ? c.req.query("group") : "day";
     const accs = String(c.req.query("accounts") || "").split(",").filter(Boolean).slice(0, 40);
     const payer = String(c.req.query("payer") || "");
@@ -18028,7 +18217,7 @@ function mountCron(app, { db, cronTasks, services = {}, shared: shared2 = {} }) 
 var newCode3 = () => `${Math.round(Date.now() / 100)}${String(Math.floor(1e4 + Math.random() * 9e4))}`;
 var normTtn = (v) => String(v ?? "").replace(/\s/g, "").toUpperCase();
 var phone92 = (v) => String(v ?? "").replace(/\D/g, "").slice(-9);
-var J2 = (a) => JSON.stringify(a);
+var J3 = (a) => JSON.stringify(a);
 var CHECK_MS = 10 * 6e4;
 var CRM_FROM_STATUS = "26";
 var MP_OFFICE = "5";
@@ -18108,7 +18297,7 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
     const b = await c.req.json().catch(() => ({}));
     const cur = await flowOf();
     const next = { check: b.check === void 0 ? cur.check : Boolean(b.check), newItem: b.newItem === void 0 ? cur.newItem : Boolean(b.newItem) };
-    await db.run(`INSERT INTO settings (key, value) VALUES ('mp_crm_flow', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [J2(next)]);
+    await db.run(`INSERT INTO settings (key, value) VALUES ('mp_crm_flow', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [J3(next)]);
     return c.json(next);
   });
   app.put("/api/mp/crm/settings/:account", async (c) => {
@@ -18120,7 +18309,7 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
     if (office && !/^\d{1,10}$/.test(office)) throw fail(400, "ID \u0432\u0456\u0434\u0434\u0456\u043B\u0443 LP-CRM \u2014 \u043B\u0438\u0448\u0435 \u0446\u0438\u0444\u0440\u0438.");
     const all = await shopCfgAll();
     all[acc] = { office, site: String(b.site ?? "").trim().slice(0, 120), delivery: String(b.delivery ?? "").trim().slice(0, 20), field1: String(b.field1 ?? "").trim().slice(0, 120) };
-    await db.run(`INSERT INTO settings (key, value) VALUES ('mp_crm_shops', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [J2(all)]);
+    await db.run(`INSERT INTO settings (key, value) VALUES ('mp_crm_shops', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [J3(all)]);
     return c.json({ ok: true, shops: all });
   });
   const learn = async (mp, o, crmOrder) => {
@@ -18312,12 +18501,12 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
     const ttns = [...new Set(rows.map((r) => normTtn(r.ttn)).filter(Boolean))];
     const phones = [...new Set(rows.flatMap((r) => [phone92(r.phone), phone92(r.recipient_phone)]).filter((p) => p.length === 9))];
     const [a, b, k] = await Promise.all([
-      ttns.length ? db.all(`SELECT code FROM an_ttn_recent WHERE ttn IN (SELECT value FROM json_each(?))`, [J2(ttns)]).catch(() => []) : [],
-      ttns.length ? db.all(`SELECT code FROM an_orders WHERE ttn IN (SELECT value FROM json_each(?))`, [J2(ttns)]).catch(() => []) : [],
-      db.all(`SELECT code FROM order_keys WHERE k IN (SELECT value FROM json_each(?))`, [J2([...ttns, ...phones.map((p) => `p:${p}`)])]).catch(() => [])
+      ttns.length ? db.all(`SELECT code FROM an_ttn_recent WHERE ttn IN (SELECT value FROM json_each(?))`, [J3(ttns)]).catch(() => []) : [],
+      ttns.length ? db.all(`SELECT code FROM an_orders WHERE ttn IN (SELECT value FROM json_each(?))`, [J3(ttns)]).catch(() => []) : [],
+      db.all(`SELECT code FROM order_keys WHERE k IN (SELECT value FROM json_each(?))`, [J3([...ttns, ...phones.map((p) => `p:${p}`)])]).catch(() => [])
     ]);
     let codes = [...new Set([...a, ...b, ...k].map((r) => String(r.code)))];
-    const used = new Set(codes.length ? (await db.all(`SELECT crm_code FROM mp_orders WHERE crm_code IN (SELECT value FROM json_each(?))`, [J2(codes)])).map((r) => r.crm_code) : []);
+    const used = new Set(codes.length ? (await db.all(`SELECT crm_code FROM mp_orders WHERE crm_code IN (SELECT value FROM json_each(?))`, [J3(codes)])).map((r) => r.crm_code) : []);
     codes = codes.filter((x) => !used.has(x)).slice(0, 300);
     const crm = codes.length ? await getOrdersBatch(fetchFn, cr, codes).catch((e) => {
       throw fail(502, `LP-CRM: ${e.message}`);
@@ -18410,7 +18599,7 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
     }
     if (cache?.map && cache.sub === cr.subdomain && Date.now() - cache.at < 864e5) return cache.map;
     const map = await getStatuses(fetchFn, cr);
-    await db.run(`INSERT INTO settings (key, value) VALUES ('statuses_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [J2({ at: Date.now(), sub: cr.subdomain, map })]);
+    await db.run(`INSERT INTO settings (key, value) VALUES ('statuses_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [J3({ at: Date.now(), sub: cr.subdomain, map })]);
     return map;
   }
   async function refreshStatus({ force = false, only = null } = {}) {
@@ -18449,7 +18638,7 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
 var leadCode = (article) => (String(article || "").trim().match(/^(\d{3,12})\b/) || [])[1] || "";
 var latinPart = (article) => String(article || "").trim().replace(/^\d{3,12}\b[\s_-]*/, "");
 var AUTO_LIMIT = 40;
-var J3 = (a) => JSON.stringify(a);
+var J4 = (a) => JSON.stringify(a);
 var uniq = (ids) => {
   const s3 = [...new Set(ids.map(Number).filter(Boolean))];
   return s3.length === 1 ? s3[0] : 0;
@@ -18464,7 +18653,7 @@ function mountMarketItems({ db, services = {}, onCron = () => {
     for (const p of await (cat()?.byIds(list2) ?? [])) out.set(p.id, p.name);
     const missing = list2.filter((id) => !out.has(id));
     if (missing.length) {
-      for (const r of await db.all(`SELECT product_id, name FROM an_products WHERE product_id IN (SELECT value FROM json_each(?))`, [J3(missing)]).catch(() => [])) out.set(r.product_id, r.name || "");
+      for (const r of await db.all(`SELECT product_id, name FROM an_products WHERE product_id IN (SELECT value FROM json_each(?))`, [J4(missing)]).catch(() => [])) out.set(r.product_id, r.name || "");
     }
     return out;
   }
@@ -18473,12 +18662,12 @@ function mountMarketItems({ db, services = {}, onCron = () => {
     if (!list2.length) return [];
     const ids = list2.map((it) => it.id);
     const result = /* @__PURE__ */ new Map();
-    for (const r of await db.all(`SELECT item_id, product_id, link_source FROM mp_items WHERE mp = ? AND account_id = ? AND product_id IS NOT NULL AND item_id IN (SELECT value FROM json_each(?))`, [mp, account, J3(ids)])) {
+    for (const r of await db.all(`SELECT item_id, product_id, link_source FROM mp_items WHERE mp = ? AND account_id = ? AND product_id IS NOT NULL AND item_id IN (SELECT value FROM json_each(?))`, [mp, account, J4(ids)])) {
       result.set(r.item_id, { product_id: r.product_id, from: "saved" });
     }
     let rest = list2.filter((it) => !result.has(it.id));
     if (rest.length) {
-      for (const r of await db.all(`SELECT item_id, product_id FROM mp_crm_items WHERE mp = ? AND item_id IN (SELECT value FROM json_each(?))`, [mp, J3(rest.map((it) => it.id))]).catch(() => [])) {
+      for (const r of await db.all(`SELECT item_id, product_id FROM mp_crm_items WHERE mp = ? AND item_id IN (SELECT value FROM json_each(?))`, [mp, J4(rest.map((it) => it.id))]).catch(() => [])) {
         if (!result.has(r.item_id)) result.set(r.item_id, { product_id: r.product_id, from: "saved", write: "manual" });
       }
       rest = rest.filter((it) => !result.has(it.id));
@@ -18489,7 +18678,7 @@ function mountMarketItems({ db, services = {}, onCron = () => {
       const rows = arts.length || offers.length ? await db.all(
         `SELECT item_id, article, offer_id, product_id FROM mp_items WHERE mp = ? AND account_id = ? AND product_id IS NOT NULL
         AND ((article != '' AND article IN (SELECT value FROM json_each(?))) OR (offer_id != '' AND offer_id IN (SELECT value FROM json_each(?))))`,
-        [mp, account, J3(arts), J3(offers)]
+        [mp, account, J4(arts), J4(offers)]
       ) : [];
       for (const it of rest) {
         const hits = rows.filter((r) => r.item_id !== it.id && (it.article && r.article === it.article || it.offer && r.offer_id === it.offer));
@@ -18537,7 +18726,7 @@ function mountMarketItems({ db, services = {}, onCron = () => {
     if (!items.length) return 0;
     const cur = new Map((await db.all(
       `SELECT item_id, product_id FROM mp_items WHERE mp = ? AND account_id = ? AND item_id IN (SELECT value FROM json_each(?))`,
-      [mp, account, J3(items.map((x) => String(x.item_id || x.id)))]
+      [mp, account, J4(items.map((x) => String(x.item_id || x.id)))]
     )).map((r) => [r.item_id, r.product_id]));
     const at = nowIso();
     const st = [];
@@ -18572,8 +18761,8 @@ function mountMarketItems({ db, services = {}, onCron = () => {
     const list2 = [...new Set(ids.map(String).filter(Boolean))];
     if (!list2.length) return out;
     const [main, parts] = await Promise.all([
-      db.all(`SELECT item_id, product_id, qty, confirmed_at, confirmed_by FROM mp_items WHERE mp = ? AND account_id = ? AND item_id IN (SELECT value FROM json_each(?))`, [mp, account, J3(list2)]),
-      db.all(`SELECT item_id, pos, product_id, qty, price FROM mp_item_parts WHERE mp = ? AND account_id = ? AND item_id IN (SELECT value FROM json_each(?)) ORDER BY item_id, pos`, [mp, account, J3(list2)])
+      db.all(`SELECT item_id, product_id, qty, confirmed_at, confirmed_by FROM mp_items WHERE mp = ? AND account_id = ? AND item_id IN (SELECT value FROM json_each(?))`, [mp, account, J4(list2)]),
+      db.all(`SELECT item_id, pos, product_id, qty, price FROM mp_item_parts WHERE mp = ? AND account_id = ? AND item_id IN (SELECT value FROM json_each(?)) ORDER BY item_id, pos`, [mp, account, J4(list2)])
     ]);
     for (const r of main) {
       if (!r.product_id) {
@@ -18596,7 +18785,7 @@ function mountMarketItems({ db, services = {}, onCron = () => {
     if (!items.length) return 0;
     const cur = new Map((await db.all(
       `SELECT item_id, product_id FROM mp_items WHERE mp = ? AND account_id = ? AND item_id IN (SELECT value FROM json_each(?))`,
-      [mp, account, J3(items.map((x) => String(x.item_id)))]
+      [mp, account, J4(items.map((x) => String(x.item_id)))]
     )).map((r) => [r.item_id, r.product_id]));
     const who = String(by).slice(0, 80);
     const st = [];
@@ -18653,7 +18842,7 @@ function mountMarketItems({ db, services = {}, onCron = () => {
     const args = [mp];
     if (accounts) {
       where.push("account_id IN (SELECT value FROM json_each(?))");
-      args.push(J3(accounts.map(Number)));
+      args.push(J4(accounts.map(Number)));
     }
     const base2 = where.join(" AND ");
     const baseArgs = [...args];
@@ -18856,10 +19045,10 @@ function mountMarketRemind(app, { db, services = {}, onCron = () => {
     const kp = kyivParts2(now());
     if (!st.days.includes(WD[kp.weekday])) return { skipped: "\u0441\u044C\u043E\u0433\u043E\u0434\u043D\u0456 \u043D\u0435 \u043D\u0430\u0434\u0441\u0438\u043B\u0430\u0454\u043C\u043E" };
     if (Number(kp.hour) < Number(st.hour)) return { skipped: `\u0449\u0435 \u0440\u0430\u043D\u043E (\u043E ${st.hour}:00)` };
-    const day = `${kp.year}-${kp.month}-${kp.day}`;
+    const day2 = `${kp.year}-${kp.month}-${kp.day}`;
     const last = await getJson2("mp_remind_last", {});
-    if (last.day === day) return { skipped: "\u0441\u044C\u043E\u0433\u043E\u0434\u043D\u0456 \u0432\u0436\u0435 \u043D\u0430\u0434\u0456\u0441\u043B\u0430\u043D\u043E" };
-    const claim = await db.run(`INSERT INTO settings (key, value) VALUES ('mp_remind_claim', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value != excluded.value`, [day]);
+    if (last.day === day2) return { skipped: "\u0441\u044C\u043E\u0433\u043E\u0434\u043D\u0456 \u0432\u0436\u0435 \u043D\u0430\u0434\u0456\u0441\u043B\u0430\u043D\u043E" };
+    const claim = await db.run(`INSERT INTO settings (key, value) VALUES ('mp_remind_claim', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value != excluded.value`, [day2]);
     if (!claim.changes) return { skipped: "\u043D\u0430\u0434\u0441\u0438\u043B\u0430\u0454\u0442\u044C\u0441\u044F" };
     return send4();
   }
@@ -19189,16 +19378,16 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
   async function saveGoods(mp, accountId, rows) {
     const goods = /* @__PURE__ */ new Map();
     for (const r of rows) {
-      const day = String(r.created_at || "").slice(0, 10);
+      const day2 = String(r.created_at || "").slice(0, 10);
       for (const g of r.goods || []) {
         if (!g.id) continue;
         const cur = goods.get(g.id);
         if (!cur) {
-          goods.set(g.id, { ...g, first: day, last: day });
+          goods.set(g.id, { ...g, first: day2, last: day2 });
           continue;
         }
-        if (day && (!cur.first || day < cur.first)) cur.first = day;
-        if (day > cur.last) cur.last = day;
+        if (day2 && (!cur.first || day2 < cur.first)) cur.first = day2;
+        if (day2 > cur.last) cur.last = day2;
         for (const k of ["name", "article", "offer", "photo", "url", "category"]) if (!cur[k] && g[k]) cur[k] = g[k];
       }
     }
@@ -19231,15 +19420,15 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
     ]);
   }
   async function histBudget() {
-    const day = kyivDT(/* @__PURE__ */ new Date()).slice(0, 10);
+    const day2 = kyivDT(/* @__PURE__ */ new Date()).slice(0, 10);
     let v = {};
     try {
       v = JSON.parse((await db.get(`SELECT value FROM settings WHERE key = 'mp_hist_day'`))?.value || "{}");
     } catch {
     }
-    return { day, used: v.day === day ? Number(v.n) || 0 : 0 };
+    return { day: day2, used: v.day === day2 ? Number(v.n) || 0 : 0 };
   }
-  const histSpend = (day, n) => db.run(`INSERT INTO settings (key, value) VALUES ('mp_hist_day', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify({ day, n })]);
+  const histSpend = (day2, n) => db.run(`INSERT INTO settings (key, value) VALUES ('mp_hist_day', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify({ day: day2, n })]);
   async function fetchPage(mp, acc, from, cursor) {
     if (mp === "prom") {
       const list = await promOrders(fetchFn, acc.token, { limit: 100, lastModifiedFrom: new Date(from).toISOString().slice(0, 19), lastId: Number(cursor) || 0 });
@@ -19264,7 +19453,7 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
   }
   const rzSearch = (acc, opts) => rzCall(acc, (t) => rzOrdersSearch(fetchFn, t, opts));
   const kyivDay2 = (d = /* @__PURE__ */ new Date()) => kyivDT(d).slice(0, 10);
-  const addDaysStr = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+  const addDaysStr = (day2, n) => new Date(Date.parse(`${day2}T12:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
   const histState = (st) => {
     if (!st?.hist_from) return { started: false };
     const end = st.hist_end || kyivDay2();
@@ -19825,10 +20014,10 @@ ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc3(it.ch.user_fio
         const others = await db.all(`SELECT account_id, id, number, created_at, status, status_name, status_group, total, pay_type, pay_status, paid, substr(phone, -9) AS p9
           FROM mp_orders WHERE mp = 'rozetka' AND substr(phone, -9) IN (SELECT value FROM json_each(?)) AND status_group != 3
           ${accs ? "AND account_id IN (SELECT value FROM json_each(?))" : ""} ORDER BY created_at DESC LIMIT 2000`, accs ? [JSON.stringify(p9s), JSON.stringify(accs)] : [JSON.stringify(p9s)]);
-        const day = (x) => Date.parse(`${String(x).slice(0, 10)}T00:00:00Z`);
+        const day2 = (x) => Date.parse(`${String(x).slice(0, 10)}T00:00:00Z`);
         for (const r of want) {
           const p92 = String(r.phone).slice(-9);
-          const list = others.filter((x) => x.p9 === p92 && !(x.account_id === r.account_id && x.id === r.id) && Math.abs(day(x.created_at) - day(r.created_at)) <= DUP_DAYS * 864e5).map(({ p9: _p, ...x }) => ({ ...x, grp: rzGroupOf(x.status, x.status_group, okSet) }));
+          const list = others.filter((x) => x.p9 === p92 && !(x.account_id === r.account_id && x.id === r.id) && Math.abs(day2(x.created_at) - day2(r.created_at)) <= DUP_DAYS * 864e5).map(({ p9: _p, ...x }) => ({ ...x, grp: rzGroupOf(x.status, x.status_group, okSet) }));
           if (list.length) dupsOf.set(`${r.account_id}:${r.id}`, list);
         }
       }
@@ -20177,7 +20366,7 @@ function partialOf(comment) {
 var near = (a, b) => Math.abs(Number(a || 0) - Number(b || 0)) < 1.005;
 var fmt = (n) => `${Math.round(Number(n) * 100) / 100} \u0433\u0440\u043D`;
 var kyivDayOf2 = (iso) => /(Z|[+-]\d\d:\d\d)$/.test(String(iso)) ? new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv" }).format(new Date(iso)) : String(iso || "").slice(0, 10);
-var addDays6 = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+var addDays6 = (day2, n) => new Date(Date.parse(`${day2}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === String(b), cbOf = () => "") {
   const sells = receipts.filter((r) => !/RETURN/i.test(r.type));
   const byOrder = /* @__PURE__ */ new Map();
@@ -20424,7 +20613,7 @@ var PROM_RECHECK_MS = 36e5;
 var NP_RECHECK_MS = 12 * 36e5;
 var STATUS_RE = /^(отправлен|відправлен|ожидает выкупа|очікує викупу|завершено|виконано)/i;
 var STATUS_FALLBACK = [14, 53, 18];
-var addDays7 = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+var addDays7 = (day2, n) => new Date(Date.parse(`${day2}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 var kyivDayOf3 = (iso) => /(Z|[+-]\d\d:\d\d)$/.test(String(iso)) ? kyivDay(new Date(iso)) : String(iso || "").slice(0, 10);
 var nameOf = (v) => String(v && typeof v === "object" ? v.name ?? "" : v ?? "").trim();
 var p9 = (v) => String(v || "").replace(/\D/g, "").slice(-9);
@@ -20445,14 +20634,14 @@ function receiptRefOf(raw2, depth = 0) {
 }
 function normalizeCheckOrder(raw2) {
   const code = String(raw2.order_id || "").trim();
-  const day = String(raw2.datetime || "").slice(0, 10);
-  if (!code || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const day2 = String(raw2.datetime || "").slice(0, 10);
+  if (!code || !/^\d{4}-\d{2}-\d{2}$/.test(day2)) return null;
   const ttn = ttnOf(raw2);
   const delivery = String(raw2.delivery_name || raw2.delivery || "").trim().slice(0, 60);
   return {
     code,
     id: String(raw2.id || ""),
-    day,
+    day: day2,
     status: parseInt(raw2.status, 10) || 0,
     payment: String(raw2.payment ?? raw2.payment_id ?? "").trim(),
     total: round2(num(raw2.total)),
@@ -21110,10 +21299,10 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
   });
   app.get("/api/checks/receipts", async (c) => {
     need(c, "users");
-    const day = /^\d{4}-\d{2}-\d{2}$/.test(c.req.query("day") || "") ? c.req.query("day") : kyivDay();
-    const { recs, matched, orders, fops } = await build(addDays7(day, -20), day);
+    const day2 = /^\d{4}-\d{2}-\d{2}$/.test(c.req.query("day") || "") ? c.req.query("day") : kyivDay();
+    const { recs, matched, orders, fops } = await build(addDays7(day2, -20), day2);
     const byReceipt = new Map([...matched].map(([code, r]) => [r.id, orders.find((o) => o.code === code)]));
-    const list = recs.filter((r) => r.day === day).sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    const list = recs.filter((r) => r.day === day2).sort((a, b) => String(a.at).localeCompare(String(b.at)));
     const groups = /* @__PURE__ */ new Map();
     for (const r of list) {
       const k = String(r.fop_id);
@@ -21126,8 +21315,8 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       else g.sum = round2(g.sum + r.total);
       if (!o && !isRet) g.free++;
     }
-    const done = await db.all(`SELECT fop_id, done, at FROM chk_days WHERE day = ?`, [day]);
-    return c.json({ day, groups: [...groups.values()], loaded: done.length });
+    const done = await db.all(`SELECT fop_id, done, at FROM chk_days WHERE day = ?`, [day2]);
+    return c.json({ day: day2, groups: [...groups.values()], loaded: done.length });
   });
   app.get("/api/checks/pay", async (c) => {
     need(c, "users");
@@ -22505,7 +22694,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 44,
+  version: 45,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22815,6 +23004,25 @@ var schema11 = {
     granted_by TEXT DEFAULT '',
     granted_at TEXT NOT NULL
   )`,
+    // Правила маржі й акції: знижка від РРЦ на бренд / категорію / товар (дропшипінг — margin, B2B на склад — margin_wh),
+    // на період date_from–date_to (обидва порожні — постійне правило), для всіх партнерів (partners = '') або перелічених (JSON id).
+    `CREATE TABLE IF NOT EXISTS b2b_margin_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT DEFAULT '',
+    level TEXT NOT NULL,
+    ref_id INTEGER NOT NULL,
+    margin REAL NOT NULL,
+    margin_wh REAL,
+    date_from TEXT DEFAULT '',
+    date_to TEXT DEFAULT '',
+    partners TEXT DEFAULT '',
+    created_by TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_by TEXT DEFAULT '',
+    updated_at TEXT DEFAULT '',
+    deleted_at TEXT DEFAULT ''
+  )`,
+    `CREATE INDEX IF NOT EXISTS b2b_margin_rules_ref ON b2b_margin_rules (level, ref_id)`,
     // ---------- Новини для партнерів (news.js) ----------
     // body — JSON блоків статті (текст, фото, відео, файл, товар); audience — JSON id партнерів ('' — усім);
     // status — draft | published; publish_at — з якого часу видно (у майбутньому — заплановано);
