@@ -18291,31 +18291,6 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
     }
   };
   const key = (o) => `${o.account_id}:${o.id}`;
-  app.post("/api/mp/crm/status-test", async (c) => {
-    need(c, "users");
-    if (c.get("user")?.role !== "owner") throw fail(403, "\u041B\u0438\u0448\u0435 \u0434\u043B\u044F \u0432\u043B\u0430\u0441\u043D\u0438\u043A\u0430.");
-    const b = await c.req.json().catch(() => ({}));
-    const status = String(parseInt(b.status, 10) || "");
-    const pid = String(parseInt(b.product_id, 10) || "");
-    if (!status || !pid) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C status \u0456 product_id.");
-    const cr = await creds();
-    if (!cr) throw fail(400, "LP-CRM \u043D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E.");
-    const code = newCode3();
-    const res = await addNewOrder(fetchFn, { subdomain: cr.subdomain, key: cr.inKey }, {
-      code,
-      office: MP_OFFICE,
-      status,
-      site: new URL(c.req.url).host,
-      bayer_name: "\u0422\u0415\u0421\u0422 API \u0441\u0442\u0430\u0442\u0443\u0441\u0443 \u2014 \u043D\u0435 \u043E\u0431\u0440\u043E\u0431\u043B\u044F\u0442\u0438",
-      phone: "380000000000",
-      comment: `\u0422\u0435\u0441\u0442: \u0447\u0438 \u043F\u0440\u0438\u0439\u043C\u0430\u0454 API \u0441\u0442\u0430\u0442\u0443\u0441 ${status}. \u0421\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0441\u0435\u0440\u0432\u0456\u0441\u043E\u043C \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0438\u0445, \u043C\u043E\u0436\u043D\u0430 \u0432\u0438\u0434\u0430\u043B\u0438\u0442\u0438.`,
-      products: [{ product_id: pid, price: 1, count: 1 }]
-    });
-    if (!res.ok) return c.json({ ok: false, error: res.error });
-    const found = await getOrdersBatch(fetchFn, cr, [code]).catch(() => []);
-    const o = found.find((x) => String(x.order_id) === code) || {};
-    return c.json({ ok: true, code, crm_id: res.crmId || String(o.id || ""), sent_status: status, got_status: String(o.status ?? ""), status_name: String(o.status_name ?? o.status_orders_name ?? "") });
-  });
   app.get("/api/mp/crm/settings", async (c) => {
     need(c, "market.view");
     return c.json({ configured: Boolean(await creds()), shops: await shopCfgAll() });
