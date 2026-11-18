@@ -9,6 +9,20 @@ let ready = null;
 const shared = {};
 
 export async function onRequest(ctx) {
+  try {
+    return await handle(ctx);
+  } catch (e) {
+    // Помилка до обробки запиту (база, міграції): замість «error code: 1101» — зрозуміла відповідь, браузер повторить.
+    ready = null;
+    const detail = String(e?.message || e).replace(/\s+/g, ' ').slice(0, 200);
+    console.error('pages-entry', detail);
+    return new Response(JSON.stringify({ error: 'Сервер тимчасово не відповідає. Спробуйте ще раз за хвилину.', detail }), {
+      status: 503, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Retry-After': '5' },
+    });
+  }
+}
+
+async function handle(ctx) {
   const { env, request } = ctx;
   if (!env.DB) {
     return new Response(JSON.stringify({ error: 'Не підключено базу D1: у налаштуваннях проєкту Pages додайте D1 binding з іменем DB.' }), {
