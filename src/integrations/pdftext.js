@@ -53,9 +53,18 @@ function objects(bytes) {
       if (s[a] === '\r') a++;
       if (s[a] === '\n') a++;
       const lm = /\/Length\s+(\d+)(\s+\d+\s+R)?/.exec(dict);
-      const direct = lm && !lm[2];
-      let b = direct ? a + Number(lm[1]) : s.indexOf('endstream', a);
-      if (!direct) while (b > a && (s[b - 1] === '\n' || s[b - 1] === '\r')) b--;
+      // Довжина: пряма або з об'єкта-посилання («/Length 32 0 R» → «32 0 obj 2869 endobj»).
+      let len = lm && !lm[2] ? Number(lm[1]) : NaN;
+      if (lm?.[2]) len = Number(new RegExp(`(?:^|[^\\d])${lm[1]}\\s+0\\s+obj\\s*(\\d+)\\s*endobj`).exec(s)?.[1] ?? NaN);
+      const es = s.indexOf('endstream', a);
+      let b;
+      if (Number.isFinite(len) && a + len <= (es < 0 ? s.length : es)) b = a + len;
+      else {
+        // Довжини немає — відкидаємо лише ОДИН кінець рядка перед endstream: стиснені дані можуть закінчуватися байтом \n чи \r.
+        b = es < 0 ? s.length : es;
+        if (s[b - 1] === '\n') b--;
+        if (s[b - 1] === '\r') b--;
+      }
       stream = bytes.subarray(a, b);
     }
     out.set(Number(m[1]), { dict, stream });
