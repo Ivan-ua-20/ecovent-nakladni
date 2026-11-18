@@ -552,7 +552,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       const dupTtn = (byTtn.get(String(o.ttn || '').replace(/\s/g, '').toUpperCase()) || []).filter((x) => x !== o).map((x) => x.id || x.code);
       // Чек можна вимагати, лише якщо касу відділу внесено й до неї є доступ.
       const canReceipt = o.fopId != null && o.canRead;
-      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn, canReceipt, sameOrg, fopOk: o.fopOk, noCashier: o.fopId == null });
+      const ev = evaluate(o, { rules: rs, receipt, similar: receipt ? null : matched.similar?.get(o.code) || null, fops, expectedFop: o.fopId, payment, today, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn, canReceipt, sameOrg, fopOk: o.fopOk, noCashier: o.fopId == null });
       return {
         code: o.code, id: o.id, day: o.day, status: o.status_name || String(o.status), total: o.total,
         payment: rule?.name || (o.payment ? `Оплата ${o.payment}` : '—'), cls: rule?.cls || '', partial: Boolean(part),

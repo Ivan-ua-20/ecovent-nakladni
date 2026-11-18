@@ -38,7 +38,7 @@ await db.run(`DELETE FROM offices`);
 await db.run(`INSERT INTO offices (office_id, name, fop_id) VALUES ('22', 'Ecovent-Expert / ФОП Агафіца Д.М.', 1), ('12', 'Маркетплейси / ФОП ЛУПУ В.Ф.', 2), ('28', 'ТОВ «ЕКОВЕНТ-ДИСТРИБ’ЮШН»', 3), ('30', 'ФОП Ватрич', 4)`);
 await db.run(`INSERT INTO np_accounts (id, name, api_key, active, created_at) VALUES (1, 'НП', 'npk', 1, '')`);
 await db.run(`INSERT INTO rz_accounts (id, name, username, password) VALUES (1, 'Ековент', 'u', 'p')`);
-await raw.run(`INSERT INTO crm_products (product_id, name, code) VALUES (697, 'Тепловентилятор DREO [80173]', '80173'), (698, 'Осушувач [30499]', '30499'), (699, 'Осушувач HUMIX DUO [31599]', '31599')`);
+await raw.run(`INSERT INTO crm_products (product_id, name, code) VALUES (697, 'Тепловентилятор DREO [80173]', '80173'), (698, 'Осушувач [30499]', '30499'), (699, 'Осушувач HUMIX DUO [31599]', '31599'), (700, 'ComfoDry 12 [30414]', '30414'), (701, 'ComfoDry 20 [30421]', '30421')`);
 await db.run(`INSERT INTO prom_accounts (id, name, token, active) VALUES (1, 'Prom Amsterdam', 'ptok', 1)`);
 for (const [id, ttn] of [['p11', '2045 0000 0000 11'], ['p12', 'PRM-0000012'], ['p13', 'PRM-0000013'], ['p14', '20450000000014'], ['p21', '20450000000021']]) {
   await db.run(`INSERT INTO mp_orders (mp, account_id, id, number, created_at, total, ttn) VALUES ('prom', 1, ?, ?, ?, 0, ?)`, [id, id, `${D} 09:00:00`, ttn]);
@@ -77,6 +77,12 @@ const ORDERS = [
   // Сума 3799 ≈ 3800 (допуск 1 грн) не повинна «забрати» чек, що точно належить іншому замовленню
   O(10028, 15, 3799, 'RMP-100000028', { office: '12', datetime: `${D} 08:00:00`, products: [{ product_id: '699', name: 'Осушувач HUMIX', price: '3799', quantity: '1' }] }),
   O(10029, 11, 3800, '20450000000029', { office: '22', datetime: `${D} 09:00:00`, products: [{ product_id: '699', name: 'Осушувач HUMIX', price: '3800', quantity: '1' }] }),
+  // Єдиний схожий чек — на іншій касі й з іншим способом оплати: не видаємо його за чек замовлення, а показуємо як «схожий»
+  O(10030, 14, 7600, '20450000000030', { office: '12', datetime: `${D} 09:00:00`, products: [{ product_id: '700', name: 'ComfoDry 12', price: '7600', quantity: '1' }] }),
+  // Два підхожі чеки: автофіскалізації LP-CRM (нестандартний UUID) і пробитий вручну (UUID v4) — береться чек LP-CRM
+  O(10031, 11, 5200, '20450000000031', { office: '22', datetime: `${D} 09:00:00`, products: [{ product_id: '701', name: 'ComfoDry 20', price: '5200', quantity: '1' }] }),
+  // Є лише чек, пробитий вручну в Checkbox, — «Увага»
+  O(10032, 11, 6100, '20450000000032', { office: '22', datetime: `${D} 09:00:00`, products: [{ product_id: '701', name: 'ComfoDry 20', price: '6100', quantity: '1' }] }),
   O(10011, 10, 610, '20450000000011', { office: '12' }), // Пром-оплата, у Prom оплачено — гаразд
   O(10012, 10, 620, 'PRM-0000012', { office: '12' }), // Пром-оплата, а в Prom «Оплата при отриманні» (Розетка Делівері з Prom)
   O(10013, 4, 630, 'PRM-0000013', { office: '12' }), // післяплата, у Prom оплата при отриманні — наложка є
@@ -100,6 +106,10 @@ const RC = {
   ],
   c1: [
     { id: 'h29', type: 'SELL', fiscal_date: `${D}T10:00:00+02:00`, total_sum: 380000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора mono', value: 380000 }], goods: [{ good: { name: 'Осушувач повітря evoair HUMIX DUO (HUMIXDUO) [31599]' } }] },
+    { id: 'c30', type: 'SELL', fiscal_date: `${D}T10:00:00+02:00`, total_sum: 760000, payments: [{ type: 'CASHLESS', label: 'Картка', value: 760000 }], goods: [{ good: { name: 'Осушувач ComfoDry 12 (COMFODRY12) [30414]' } }] },
+    { id: '0f77f5f4-d16e-42cc-9a09-0d1a1c345590', type: 'SELL', fiscal_date: `${D}T10:00:00+02:00`, total_sum: 520000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора mono', value: 520000 }], goods: [{ good: { name: 'ComfoDry 20 [30421]' } }] },
+    { id: 'a1b2c3d4-1111-2b2d-96c9-2b0571f31323', type: 'SELL', fiscal_date: `${D}T10:30:00+02:00`, total_sum: 520000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора mono', value: 520000 }], goods: [{ good: { name: 'ComfoDry 20 [30421]' } }] },
+    { id: '5e0a7b1c-2d3e-4f50-8a6b-7c8d9e0f1a2b', type: 'SELL', fiscal_date: `${D}T10:40:00+02:00`, total_sum: 610000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора mono', value: 610000 }], goods: [{ good: { name: 'ComfoDry 20 [30421]' } }] },
     { id: 'r1', type: 'SELL', fiscal_date: `${D}T12:00:00+02:00`, total_sum: 100000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора NovaPay', value: 100000 }], header: 'Замовлення 1790000000010001' },
     { id: 'r4', type: 'SELL', fiscal_date: `${D}T12:05:00+02:00`, total_sum: 70000, payments: [{ type: 'CASHLESS', label: 'Картка', value: 70000 }] },
     { id: 'r7', type: 'SELL', fiscal_date: `${D}T12:10:00+02:00`, total_sum: 45000, payments: [{ type: 'CASH', label: 'Готівка', value: 45000 }], footer: '10007' },
@@ -288,6 +298,12 @@ assert.equal(row(10026).receipt?.id, 'p26', 'NovaPay-замовлення — ч
 assert.doesNotMatch(texts(10026) + texts(10027), /спосіб оплати/);
 assert.equal(row(10029).receipt?.id, 'h29', 'чек на 3800 — замовленню на 3800, а не раніше створеному на 3799');
 assert.ok(!row(10028).receipt || row(10028).receipt.id !== 'h29');
+assert.equal(row(10030).receipt, null, 'чек іншої каси з іншим способом оплати — не чек цього замовлення');
+assert.match(texts(10030), /bad: Чек на касі відділу не знайдено\. Схожий чек: ФОП Агафіца Д\.М\., 7600 грн, «Картка», .* — якщо це чек цього замовлення, його пробито не на тій касі/);
+assert.equal(row(10031).receipt?.id, 'a1b2c3d4-1111-2b2d-96c9-2b0571f31323', 'спершу чек автофіскалізації LP-CRM, а не пробитий вручну');
+assert.doesNotMatch(texts(10031), /вручну/);
+assert.equal(row(10032).receipt?.id, '5e0a7b1c-2d3e-4f50-8a6b-7c8d9e0f1a2b');
+assert.match(texts(10032), /warn: Чек пробито вручну в Checkbox/);
 // Результат не залежить від обраного періоду
 const one = (await call('GET', `/api/checks?from=${D}&to=${D}`, null, H)).j.rows.find((r) => r.id === '10029');
 assert.equal(one.receipt?.id, 'h29');
@@ -308,8 +324,8 @@ assert.equal(row(10011).mp_pay, 'Пром-оплата');
 // Чеки за день по ФОП: чек без замовлення видно окремо.
 const rc = (await call('GET', `/api/checks/receipts?day=${D}`, null, H)).j;
 const g1 = rc.groups.find((g) => g.fop === 'ФОП Агафіца Д.М.');
-assert.equal(g1.rows.length, 5); // r1, r4, r7, rx + h29
-assert.equal(g1.free, 1);
+assert.equal(g1.rows.length, 9); // r1, r4, r7, rx, h29 + c30, два чеки ComfoDry 20 на 5200 і чек на 6100
+assert.equal(g1.free, 3); // rx, c30 (лише «схожий» для 10030) і ручний чек на 5200 (замовлення взяло чек LP-CRM)
 assert.equal(g1.rows.find((r) => r.id === 'rx').order, null);
 assert.equal(g1.rows.find((r) => r.id === 'r1').order.id, '10001');
 
