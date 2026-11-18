@@ -84,3 +84,11 @@ assert.equal(await status(() => buy(VW)), 403, 'перегляд нічого н
 assert.equal(vw.id > 0, true);
 
 console.log('OK — B2B: дозвіл менеджеру партнера відправляти закупівлі');
+
+// Сторінка закупівлі бере can_send з кореня відповіді /api/b2b/p/orders/:id (не з order) — інакше менеджер з дозволом не бачить кнопки «Відправити закупівлю».
+{
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../public/pages/partner.js', import.meta.url), 'utf8');
+  assert.match(src, /can_send: canSendOrder \} = await api\('GET', `\/api\/b2b\/p\/orders\/\$\{id\}`\)/, 'кнопка «Відправити закупівлю» — за can_send з відповіді');
+  assert.doesNotMatch(src, /\bo\.can_send\b/);
+}

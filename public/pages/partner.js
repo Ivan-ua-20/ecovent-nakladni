@@ -339,13 +339,13 @@ export function createPartnerPages(ctx = {}) {
   }
 
   async function viewOrder(id) {
-    const { order: o, items, files, history, clients = [], left = [] } = await api('GET', `/api/b2b/p/orders/${id}`);
+    const { order: o, items, files, history, clients = [], left = [], can_send: canSendOrder } = await api('GET', `/api/b2b/p/orders/${id}`);
     const isDraft = o.status === 'draft';
     const editable = ['invoice_wait', 'draft'].includes(o.status) && canEdit();
     const head = ctx.can ? ctx.can('b2b.team') : true;
     const pickup = o.delivery === 'pickup' || o.delivery === 'warehouse';
     const toConfirm = o.status === 'confirm';
-    const send = o.can_send ?? head; // керівник або менеджер, якому керівник дозволив відправляти закупівлі
+    const send = canSendOrder ?? head; // керівник або менеджер, якому керівник дозволив відправляти закупівлі
     const ents = toConfirm && send ? await api('GET', '/api/b2b/p/entities').catch(() => []) : [];
     const hasLeft = !pickup && !['cancelled', 'open', 'confirm'].includes(o.status) && left.some((r) => r.left > 0);
     const ob = o.status === 'open' ? await openBanner() : { html: '', wire: () => {} };
