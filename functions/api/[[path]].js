@@ -6746,9 +6746,16 @@ function objects(bytes) {
       if (s3[a] === "\r") a++;
       if (s3[a] === "\n") a++;
       const lm = /\/Length\s+(\d+)(\s+\d+\s+R)?/.exec(dict);
-      const direct = lm && !lm[2];
-      let b = direct ? a + Number(lm[1]) : s3.indexOf("endstream", a);
-      if (!direct) while (b > a && (s3[b - 1] === "\n" || s3[b - 1] === "\r")) b--;
+      let len = lm && !lm[2] ? Number(lm[1]) : NaN;
+      if (lm?.[2]) len = Number(new RegExp(`(?:^|[^\\d])${lm[1]}\\s+0\\s+obj\\s*(\\d+)\\s*endobj`).exec(s3)?.[1] ?? NaN);
+      const es = s3.indexOf("endstream", a);
+      let b;
+      if (Number.isFinite(len) && a + len <= (es < 0 ? s3.length : es)) b = a + len;
+      else {
+        b = es < 0 ? s3.length : es;
+        if (s3[b - 1] === "\n") b--;
+        if (s3[b - 1] === "\r") b--;
+      }
       stream = bytes.subarray(a, b);
     }
     out.set(Number(m[1]), { dict, stream });
