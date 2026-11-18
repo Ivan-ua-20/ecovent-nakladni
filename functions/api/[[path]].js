@@ -20385,6 +20385,7 @@ function partialOf(comment) {
   const sum = m ? Number(m[1].replace(/\s/g, "").replace(",", ".")) : 0;
   return { sum: sum > 0 ? sum : 0 };
 }
+var isManualReceipt = (id) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(id || ""));
 var near = (a, b) => Math.abs(Number(a || 0) - Number(b || 0)) < 1.005;
 var fmt = (n) => `${Math.round(Number(n) * 100) / 100} \u0433\u0440\u043D`;
 var kyivDayOf2 = (iso) => /(Z|[+-]\d\d:\d\d)$/.test(String(iso)) ? new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kyiv" }).format(new Date(iso)) : String(iso || "").slice(0, 10);
@@ -20454,10 +20455,11 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
     { sum: "exact", org: true, cb: true },
     { sum: "exact", org: true, cb: false },
     { sum: "exact", org: false, cb: true },
-    { sum: "exact", org: false, cb: false },
     { sum: "near", org: true, cb: false },
-    { sum: "near", org: false, cb: false }
+    { sum: "exact", org: false, cb: false, hint: true },
+    { sum: "near", org: false, cb: false, hint: true }
   ];
+  const similar = /* @__PURE__ */ new Map();
   for (const pass of PASSES) {
     for (const o of goodsOrders) {
       if (byOrder.has(o.code) || pinned.has(o.code)) continue;
@@ -20467,8 +20469,11 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
       const orgOk = (r) => o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
       const cb = String(cbOf(o) || "").toLowerCase();
       const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || "").toLowerCase().includes(cb));
-      const hit = list.find((r) => !used.has(r.id) && sumOk(r) && (!pass.org || orgOk(r)) && (!pass.cb || cbOk(r)));
-      if (hit) take(o, { ...hit, byGoods: true });
+      const ok = (r) => !used.has(r.id) && sumOk(r) && (!pass.org || orgOk(r)) && (!pass.cb || cbOk(r));
+      const hit = list.find((r) => ok(r) && !isManualReceipt(r.id)) || list.find(ok);
+      if (hit && pass.hint) {
+        if (!similar.has(o.code)) similar.set(o.code, hit);
+      } else if (hit) take(o, { ...hit, byGoods: true });
     }
   }
   const free = sells.filter((r) => !used.has(r.id));
@@ -20497,9 +20502,15 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
     if (!rcs) continue;
     for (const o of list) {
       const cands2 = [];
+      const cb = String(cbOf(o) || "").toLowerCase();
+      const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || "").toLowerCase().includes(cb));
       for (const r of rcs) {
         if (used.has(r.id) || !inWin(o, r)) continue;
-        if (!(o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId)) || list.length === 1)) continue;
+        const orgOk = o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
+        if (!orgOk && !(list.length === 1 && cbOk(r))) {
+          if (list.length === 1 && !similar.has(o.code)) similar.set(o.code, r);
+          continue;
+        }
         cands2.push(r);
         if (cands2.length > 1) break;
       }
@@ -20508,6 +20519,8 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
       if (!rival) take(o, { ...cands2[0], bySum: true });
     }
   }
+  for (const [code, r] of similar) if (byOrder.has(code) || used.has(r.id)) similar.delete(code);
+  byOrder.similar = similar;
   return byOrder;
 }
 function findPayment(o, txs, expected) {
@@ -20575,9 +20588,20 @@ function evaluate(o, ctx) {
   else if (!r && ctx.noCashier) add("info", `\u0427\u0435\u043A \u043D\u0435 \u0437\u0432\u0456\u0440\u044F\u0454\u043C\u043E: \u0434\u043B\u044F \u0432\u0456\u0434\u0434\u0456\u043B\u0443 ${o.office || "\u2014"} \u043D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E \u043A\u0430\u0441\u0443 (\xAB\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430 \u2192 \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u041A\u0430\u0441\u0438 Checkbox\xBB).${o.webSeen ? " \u0423 LP-CRM \u0447\u0435\u043A \u0434\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u0438\u0439." : ""}`);
   else if (!r && o.webSeen) add("bad", "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E, \u0430 \u0447\u0435\u043A\u0430 \u043D\u0435\u043C\u0430\u0454: \u0443 LP-CRM \u0434\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0447\u0435\u043A \u043D\u0435 \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u0438\u0439, \u0456 \u0432 Checkbox \u0441\u0445\u043E\u0436\u043E\u0433\u043E \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
   else if (!r && ctx.canReceipt === false) add("info", `\u0427\u0435\u043A \u043D\u0435 \u0437\u0432\u0456\u0440\u044F\u0454\u043C\u043E: \u0434\u043E \u043A\u0430\u0441\u0438 \xAB${fopName(ctx.expectedFop)}\xBB \u043D\u0435\u043C\u0430\u0454 \u0434\u043E\u0441\u0442\u0443\u043F\u0443 \u2014 \u0432\u043D\u0435\u0441\u0456\u0442\u044C \u043F\u0430\u0440\u043E\u043B\u044C \u043A\u0430\u0441\u0438\u0440\u0430 \u0432 \xAB\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430 \u2192 \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u041A\u0430\u0441\u0438 Checkbox\xBB.`);
-  else if (!r) add("bad", "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E, \u0430 \u0447\u0435\u043A \u0443 Checkbox \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+  else if (!r && ctx.similar) {
+    const h10 = ctx.similar;
+    let when = "";
+    try {
+      when = new Date(h10.at).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    } catch {
+      when = String(h10.at || "").slice(0, 16);
+    }
+    const labels = (h10.pays || []).map((p) => p.label).filter(Boolean).join(", ");
+    add("bad", `\u0427\u0435\u043A \u043D\u0430 \u043A\u0430\u0441\u0456 \u0432\u0456\u0434\u0434\u0456\u043B\u0443 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E. \u0421\u0445\u043E\u0436\u0438\u0439 \u0447\u0435\u043A: ${fopName(h10.fop_id)}, ${fmt(h10.total)}${labels ? `, \xAB${labels}\xBB` : ""}, ${when} \u2014 \u044F\u043A\u0449\u043E \u0446\u0435 \u0447\u0435\u043A \u0446\u044C\u043E\u0433\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F, \u0439\u043E\u0433\u043E \u043F\u0440\u043E\u0431\u0438\u0442\u043E \u043D\u0435 \u043D\u0430 \u0442\u0456\u0439 \u043A\u0430\u0441\u0456 \u0439 \u043D\u0435 \u0442\u0438\u043C \u0441\u043F\u043E\u0441\u043E\u0431\u043E\u043C \u043E\u043F\u043B\u0430\u0442\u0438.`);
+  } else if (!r) add("bad", "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E, \u0430 \u0447\u0435\u043A \u0443 Checkbox \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
   else {
     const how = r.byRef ? " (\u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u0438\u0439 \u0443 LP-CRM)" : r.bySum ? " (\u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u043B\u0438\u0448\u0435 \u0437\u0430 \u0441\u0443\u043C\u043E\u044E \u2014 \u043C\u043E\u0436\u043B\u0438\u0432\u043E, \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0432\u0440\u0443\u0447\u043D\u0443)" : r.byGoods ? "" : " (\u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0437\u0430 \u2116 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F)";
+    if (isManualReceipt(r.id) && !r.byRef) add("warn", "\u0427\u0435\u043A \u043F\u0440\u043E\u0431\u0438\u0442\u043E \u0432\u0440\u0443\u0447\u043D\u0443 \u0432 Checkbox (\u043D\u0435 \u0430\u0432\u0442\u043E\u043C\u0430\u0442\u0438\u0447\u043D\u043E \u0437 LP-CRM) \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0441\u0443\u043C\u0443, \u0424\u041E\u041F \u0456 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u043F\u043B\u0430\u0442\u0438.");
     if (!r.byRef && o.webSeen) add("warn", "\u0423 LP-CRM \u0447\u0435\u043A \u0434\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u0438\u0439 \u2014 \u0446\u0435\u0439 \u0447\u0435\u043A \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0437\u0430 \u0442\u043E\u0432\u0430\u0440\u043E\u043C \u0456 \u0441\u0443\u043C\u043E\u044E (\u043C\u043E\u0436\u043B\u0438\u0432\u043E, \u043F\u0440\u043E\u0431\u0438\u0442\u043E \u0432\u0440\u0443\u0447\u043D\u0443). \u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0449\u043E \u0432\u0456\u043D \u0441\u0430\u043C\u0435 \u0432\u0456\u0434 \u0446\u044C\u043E\u0433\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
     if (!part && !near(r.total, o.total)) add("bad", `\u0427\u0435\u043A \u043D\u0430 ${fmt(r.total)}, \u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0430 ${fmt(o.total)}${how}.`);
     else add("ok", `\u0427\u0435\u043A ${fmt(r.total)} \xB7 ${fopName(r.fop_id)}${how}`);
@@ -21270,7 +21294,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       const payment = rule?.cls === "bank" ? findPayment(o, txByAmount.get(Math.round(o.total)) || [], o.total) : null;
       const dupTtn = (byTtn.get(String(o.ttn || "").replace(/\s/g, "").toUpperCase()) || []).filter((x) => x !== o).map((x) => x.id || x.code);
       const canReceipt = o.fopId != null && o.canRead;
-      const ev = evaluate(o, { rules: rs, receipt, fops, expectedFop: o.fopId, payment, today: today3, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn, canReceipt, sameOrg, fopOk: o.fopOk, noCashier: o.fopId == null });
+      const ev = evaluate(o, { rules: rs, receipt, similar: receipt ? null : matched.similar?.get(o.code) || null, fops, expectedFop: o.fopId, payment, today: today3, dup: dup.filter((x) => !dupTtn.includes(x)), dupTtn, canReceipt, sameOrg, fopOk: o.fopOk, noCashier: o.fopId == null });
       return {
         code: o.code,
         id: o.id,

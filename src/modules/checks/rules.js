@@ -98,6 +98,10 @@ export function partialOf(comment) {
   return { sum: sum > 0 ? sum : 0 };
 }
 
+// Чек, пробитий вручну в Checkbox: стандартний UUID v4 (його генерує Checkbox). Автофіскалізація LP-CRM генерує свої номери
+// нестандартного формату (напр. 6d8d1213-807b-2b2d-96c9-…). Перевірено на чеках, прив'язаних у LP-CRM.
+export const isManualReceipt = (id) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(id || ''));
+
 const near = (a, b) => Math.abs(Number(a || 0) - Number(b || 0)) < 1.005; // допуск 1 грн (копійки, округлення)
 const fmt = (n) => `${Math.round(Number(n) * 100) / 100} грн`;
 const kyivDayOf = (iso) => (/(Z|[+-]\d\d:\d\d)$/.test(String(iso)) ? new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Kyiv' }).format(new Date(iso)) : String(iso || '').slice(0, 10));
@@ -167,10 +171,13 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
       .sort((x, y) => atMs.get(x.id) - atMs.get(y.id));
     return [o.code, list];
   }));
+  // Чек іншої каси й з іншим способом оплати — найчастіше чек ІНШОГО такого самого замовлення (той самий товар і сума).
+  // Його не видаємо за чек замовлення, а показуємо як «схожий» (hint): замовлення лишається без чека, але видно, що перевірити.
   const PASSES = [
-    { sum: 'exact', org: true, cb: true }, { sum: 'exact', org: true, cb: false }, { sum: 'exact', org: false, cb: true }, { sum: 'exact', org: false, cb: false },
-    { sum: 'near', org: true, cb: false }, { sum: 'near', org: false, cb: false },
+    { sum: 'exact', org: true, cb: true }, { sum: 'exact', org: true, cb: false }, { sum: 'exact', org: false, cb: true },
+    { sum: 'near', org: true, cb: false }, { sum: 'exact', org: false, cb: false, hint: true }, { sum: 'near', org: false, cb: false, hint: true },
   ];
+  const similar = new Map();
   for (const pass of PASSES) {
     for (const o of goodsOrders) {
       if (byOrder.has(o.code) || pinned.has(o.code)) continue;
@@ -180,8 +187,10 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
       const orgOk = (r) => o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
       const cb = String(cbOf(o) || '').toLowerCase();
       const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || '').toLowerCase().includes(cb));
-      const hit = list.find((r) => !used.has(r.id) && sumOk(r) && (!pass.org || orgOk(r)) && (!pass.cb || cbOk(r)));
-      if (hit) take(o, { ...hit, byGoods: true });
+      const ok = (r) => !used.has(r.id) && sumOk(r) && (!pass.org || orgOk(r)) && (!pass.cb || cbOk(r));
+      // На тому самому рівні — спершу чек автофіскалізації LP-CRM, потім пробитий вручну.
+      const hit = list.find((r) => ok(r) && !isManualReceipt(r.id)) || list.find(ok);
+      if (hit && pass.hint) { if (!similar.has(o.code)) similar.set(o.code, hit); } else if (hit) take(o, { ...hit, byGoods: true });
     }
   }
 
@@ -202,9 +211,13 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
     if (!rcs) continue;
     for (const o of list) {
       const cands = [];
+      const cb = String(cbOf(o) || '').toLowerCase();
+      const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || '').toLowerCase().includes(cb));
       for (const r of rcs) {
         if (used.has(r.id) || !inWin(o, r)) continue;
-        if (!(o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId)) || list.length === 1)) continue;
+        const orgOk = o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
+        // чек іншої каси — лише якщо збігається спосіб оплати; інакше це, найімовірніше, чек іншого замовлення
+        if (!orgOk && !(list.length === 1 && cbOk(r))) { if (list.length === 1 && !similar.has(o.code)) similar.set(o.code, r); continue; }
         cands.push(r);
         if (cands.length > 1) break; // неоднозначно — далі не шукаємо
       }
@@ -213,6 +226,8 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
       if (!rival) take(o, { ...cands[0], bySum: true });
     }
   }
+  for (const [code, r] of similar) if (byOrder.has(code) || used.has(r.id)) similar.delete(code);
+  byOrder.similar = similar; // «схожий чек» для замовлень без чека
   return byOrder;
 }
 
@@ -293,9 +308,16 @@ export function evaluate(o, ctx) {
   // LP-CRM (вебінтерфейс) каже, що чека немає, і в Checkbox схожого не знайшли — помилка навіть без доступу до каси.
   else if (!r && o.webSeen) add('bad', 'Відправлено, а чека немає: у LP-CRM до замовлення чек не прив’язаний, і в Checkbox схожого не знайдено.');
   else if (!r && ctx.canReceipt === false) add('info', `Чек не звіряємо: до каси «${fopName(ctx.expectedFop)}» немає доступу — внесіть пароль касира в «Перевірка → Налаштування → Каси Checkbox».`);
-  else if (!r) add('bad', 'Відправлено, а чек у Checkbox не знайдено.');
+  else if (!r && ctx.similar) {
+    const h = ctx.similar;
+    let when = '';
+    try { when = new Date(h.at).toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch { when = String(h.at || '').slice(0, 16); }
+    const labels = (h.pays || []).map((p) => p.label).filter(Boolean).join(', ');
+    add('bad', `Чек на касі відділу не знайдено. Схожий чек: ${fopName(h.fop_id)}, ${fmt(h.total)}${labels ? `, «${labels}»` : ''}, ${when} — якщо це чек цього замовлення, його пробито не на тій касі й не тим способом оплати.`);
+  } else if (!r) add('bad', 'Відправлено, а чек у Checkbox не знайдено.');
   else {
     const how = r.byRef ? ' (прив’язаний у LP-CRM)' : r.bySum ? ' (знайдено лише за сумою — можливо, створено вручну)' : r.byGoods ? '' : ' (знайдено за № замовлення)';
+    if (isManualReceipt(r.id) && !r.byRef) add('warn', 'Чек пробито вручну в Checkbox (не автоматично з LP-CRM) — перевірте суму, ФОП і спосіб оплати.');
     if (!r.byRef && o.webSeen) add('warn', 'У LP-CRM чек до замовлення не прив’язаний — цей чек знайдено за товаром і сумою (можливо, пробито вручну). Перевірте, що він саме від цього замовлення.');
     if (!part && !near(r.total, o.total)) add('bad', `Чек на ${fmt(r.total)}, а замовлення на ${fmt(o.total)}${how}.`);
     else add('ok', `Чек ${fmt(r.total)} · ${fopName(r.fop_id)}${how}`);
