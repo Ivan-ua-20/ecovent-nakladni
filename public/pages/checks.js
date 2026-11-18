@@ -199,13 +199,33 @@ export function createChecksPages() {
     };
   }
 
+  // Вхід у LP-CRM: API LP-CRM номера чека не віддає — беремо його зі списку замовлень LP-CRM окремим користувачем.
+  function lpWebHtml(w) {
+    const when = (iso) => (iso ? fmtDateTime(iso) : '');
+    const state = w.error ? `<span class="badge bad">Помилка</span> ${esc(w.error)}${w.error_at ? ` <span class="muted">(${esc(when(w.error_at))})</span>` : ''}`
+      : w.ok_at ? `<span class="badge ok">Працює</span> <span class="muted">останній раз ${esc(when(w.ok_at))}</span>`
+        : w.login ? '<span class="badge info">Ще не перевірено</span>' : '<span class="badge warn">Не підключено</span>';
+    const stats = w.seen || w.hidden ? `<div class="small" style="margin-top:6px">Перевірено замовлень: <b>${w.seen}</b>, із прив'язаним чеком: <b>${w.linked}</b>.${w.hidden ? ` <span class="chk-warn-text">Не видно користувачу LP-CRM: <b>${w.hidden}</b> — дайте йому доступ до всіх відділів і статусів.</span>` : ''}</div>` : '';
+    return `<div class="card"><div class="head-row"><h3>Вхід у LP-CRM для номерів чеків</h3><div class="btn-row">${w.login ? '<button class="btn sm" id="lwDel">Видалити</button><button class="btn sm" id="lwTest">Перевірити вхід</button>' : ''}</div></div>
+      <div class="small muted">API LP-CRM не віддає, який чек прив'язано до замовлення, — його видно лише на сайті LP-CRM. З цим входом «Перевірка» читає номер чека зі списку замовлень
+        і звіряє саме цей чек, без підбору за товаром і сумою. У LP-CRM нічого не змінюється. Заведіть в LP-CRM <b>окремого користувача</b> (наприклад, «Перевірка»): доступ до всіх відділів і статусів,
+        колонка «Чеки ПРРО»; один раз увійдіть ним у LP-CRM вручну (прийняти угоду), потім введіть логін і пароль тут.</div>
+      <div class="small" style="margin:8px 0">${state}</div>
+      <div class="chk-lw-row">
+        <label>Логін <input id="lwLogin" value="${esc(w.login)}" autocomplete="off"></label>
+        <label>Пароль <input id="lwPass" type="password" autocomplete="new-password" placeholder="${w.has_pass ? 'збережено — залиште порожнім' : ''}"></label>
+        <button class="btn primary" id="lwSave">Зберегти</button>
+      </div>${stats}</div>`;
+  }
+
   async function viewPay() {
-    const [d, cash, tgc] = await Promise.all([api('GET', '/api/checks/pay'), api('GET', '/api/checks/cashiers'), api('GET', '/api/checks/tg')]);
+    const [d, cash, tgc, lw] = await Promise.all([api('GET', '/api/checks/pay'), api('GET', '/api/checks/cashiers'), api('GET', '/api/checks/tg'), api('GET', '/api/checks/lpweb')]);
     main.innerHTML = `
       <div class="head-row"><h2>Налаштування перевірки</h2></div>
       <div class="card"><div class="head-row"><h3>Група в Telegram</h3><div class="btn-row">${tgc.linked ? '<button class="btn sm" id="tgUnlink">Відв\'язати</button>' : ''}<button class="btn sm" id="tgLink">${tgc.linked ? 'Підключити іншу' : 'Підключити групу'}</button></div></div>
         <div class="small">${tgc.linked ? `Підключено: <b>${esc(tgc.title || 'група')}</b>. Кнопка «!» біля замовлення надсилає його сюди.` : 'Кнопка «!» біля замовлення надсилає його в групу «Маркетплейс». Підключіть групу, щоб це працювало.'}</div>
         <div id="tgHow" class="small" style="margin-top:6px"></div></div>
+      ${lpWebHtml(lw)}
       ${cashiersHtml(cash)}
       <div class="head-row" style="margin-top:20px"><h3>Види оплат</h3><div class="btn-row"><button class="btn primary" id="payKeep">Зберегти види оплат</button></div></div>
       <div class="small muted" style="margin-bottom:10px">Що очікувати для кожного виду оплати LP-CRM: <b>післяплата</b> — у ТТН має бути наложка на суму замовлення;
@@ -225,6 +245,22 @@ export function createChecksPages() {
     if ($('#tgUnlink')) $('#tgUnlink').onclick = async () => {
       if (!(await confirmDanger('Відв\'язати групу?', 'Кнопка «!» перестане надсилати замовлення в цю групу.', 'Відв\'язати'))) return;
       try { await api('DELETE', '/api/checks/tg'); viewPay(); } catch (e) { toast(e.message, true); }
+    };
+    $('#lwSave').onclick = async () => {
+      const login = $('#lwLogin').value.trim(); const password = $('#lwPass').value;
+      try { await api('PUT', '/api/checks/lpweb', { login, password }); toast('Збережено'); viewPay(); } catch (e) { toast(e.message, true); }
+    };
+    if ($('#lwTest')) $('#lwTest').onclick = async () => {
+      const b = $('#lwTest'); b.disabled = true; b.innerHTML = '<span class="spinner"></span> Перевіряю…';
+      try {
+        const r = await api('POST', '/api/checks/lpweb/test', {});
+        toast(`Вхід працює: з ${r.orders} останніх замовлень видно ${r.seen}, з чеком — ${r.with_receipt}`, r.seen < r.orders);
+      } catch (e) { toast(e.message, true); }
+      viewPay();
+    };
+    if ($('#lwDel')) $('#lwDel').onclick = async () => {
+      if (!(await confirmDanger('Видалити вхід у LP-CRM?', 'Номери чеків з LP-CRM більше не читатимуться — чеки знову підбиратимуться за товаром і сумою.', 'Видалити'))) return;
+      try { await api('DELETE', '/api/checks/lpweb'); viewPay(); } catch (e) { toast(e.message, true); }
     };
     $('#cashAdd').onclick = () => cashierForm(null, viewPay);
     $$('[data-cedit]').forEach((b) => (b.onclick = () => cashierForm(cash.find((k) => String(k.id) === b.dataset.cedit), viewPay)));

@@ -115,13 +115,18 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
   const refIndex = new Map();
   for (const r of sells) for (const x of String(r.refs || '').split(' ').filter(Boolean)) { if (!refIndex.has(x)) refIndex.set(x, []); refIndex.get(x).push(r); }
   // 1) Чек, прив'язаний до замовлення в LP-CRM (номер чека Checkbox), — найнадійніше.
+  // Таке замовлення далі НЕ підбираємо (навіть якщо чек ще не завантажено), а його чек не віддаємо іншим замовленням.
   const byId = new Map(receipts.map((r) => [String(r.id).toLowerCase(), r]));
+  const pinned = new Set();
   for (const o of orders) {
-    const r = o.receipt_ref && byId.get(String(o.receipt_ref).toLowerCase());
-    if (r && !used.has(r.id)) take(o, { ...r, byRef: true });
+    if (!o.receipt_ref) continue;
+    pinned.add(o.code);
+    const r = byId.get(String(o.receipt_ref).toLowerCase());
+    if (r) take(o, { ...r, byRef: true });
   }
+  for (const o of orders) for (const x of o.webList || []) if (x.uuid) used.add(byId.get(String(x.uuid).toLowerCase())?.id ?? x.uuid);
   for (const o of orders) {
-    if (byOrder.has(o.code)) continue;
+    if (byOrder.has(o.code) || pinned.has(o.code)) continue;
     const hit = (refIndex.get(o.code) || []).find((r) => !used.has(r.id))
       || (refIndex.get(String(o.id)) || []).find((r) => !used.has(r.id) && near(r.total, o.total));
     if (hit) take(o, hit);
@@ -168,7 +173,7 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
   ];
   for (const pass of PASSES) {
     for (const o of goodsOrders) {
-      if (byOrder.has(o.code)) continue;
+      if (byOrder.has(o.code) || pinned.has(o.code)) continue;
       const list = cands.get(o.code);
       if (!list.length) continue;
       const sumOk = pass.sum === 'exact' ? (r) => exact(r.total, o.total) || (o.prepayment > 0 && (exact(r.total, o.total - o.prepayment) || exact(r.total, o.prepayment))) : () => true;
@@ -185,7 +190,7 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
   const key = (n) => Math.round(Number(n) * 100); // лише точна сума (до копійки)
   const rcBySum = new Map();
   for (const r of free) { const k = key(r.total); if (!rcBySum.has(k)) rcBySum.set(k, []); rcBySum.get(k).push(r); }
-  const left = orders.filter((o) => !byOrder.has(o.code) && o.total > 0);
+  const left = orders.filter((o) => !byOrder.has(o.code) && !pinned.has(o.code) && o.total > 0);
   const ordBySum = new Map();
   for (const o of left) { const k = key(o.total); if (!ordBySum.has(k)) ordBySum.set(k, []); ordBySum.get(k).push(o); }
   // День чека й межі вікна рахуємо один раз (чеків і замовлень тисячі — інакше сторінка не встигає).
@@ -284,11 +289,14 @@ export function evaluate(o, ctx) {
   // Чек видають під час відправки (і для післяплати теж): відправлене замовлення без чека — помилка.
   if (!r && o.receipt_ref && o.ref_state === 'nofop') add('warn', 'У LP-CRM чек прив’язано, але жодна каса з доступом його не бачить — внесіть пароль касира в «Перевірка → Налаштування → Каси Checkbox».');
   else if (!r && o.receipt_ref) add('wait', 'У LP-CRM чек прив’язано — завантажуємо його з Checkbox.');
-  else if (!r && ctx.noCashier) add('info', `Чек не звіряємо: для відділу ${o.office || '—'} не вказано касу («Перевірка → Налаштування → Каси Checkbox»).`);
+  else if (!r && ctx.noCashier) add('info', `Чек не звіряємо: для відділу ${o.office || '—'} не вказано касу («Перевірка → Налаштування → Каси Checkbox»).${o.webSeen ? ' У LP-CRM чек до замовлення не прив’язаний.' : ''}`);
+  // LP-CRM (вебінтерфейс) каже, що чека немає, і в Checkbox схожого не знайшли — помилка навіть без доступу до каси.
+  else if (!r && o.webSeen) add('bad', 'Відправлено, а чека немає: у LP-CRM до замовлення чек не прив’язаний, і в Checkbox схожого не знайдено.');
   else if (!r && ctx.canReceipt === false) add('info', `Чек не звіряємо: до каси «${fopName(ctx.expectedFop)}» немає доступу — внесіть пароль касира в «Перевірка → Налаштування → Каси Checkbox».`);
   else if (!r) add('bad', 'Відправлено, а чек у Checkbox не знайдено.');
   else {
-    const how = r.bySum ? ' (знайдено лише за сумою — можливо, створено вручну)' : r.byRef || r.byGoods ? '' : ' (знайдено за № замовлення)';
+    const how = r.byRef ? ' (прив’язаний у LP-CRM)' : r.bySum ? ' (знайдено лише за сумою — можливо, створено вручну)' : r.byGoods ? '' : ' (знайдено за № замовлення)';
+    if (!r.byRef && o.webSeen) add('warn', 'У LP-CRM чек до замовлення не прив’язаний — цей чек знайдено за товаром і сумою (можливо, пробито вручну). Перевірте, що він саме від цього замовлення.');
     if (!part && !near(r.total, o.total)) add('bad', `Чек на ${fmt(r.total)}, а замовлення на ${fmt(o.total)}${how}.`);
     else add('ok', `Чек ${fmt(r.total)} · ${fopName(r.fop_id)}${how}`);
     const labels = (r.pays || []).map((p) => p.label).filter(Boolean);
@@ -300,6 +308,7 @@ export function evaluate(o, ctx) {
       add('bad', `Чек пробито на «${fopName(r.fop_id)}», а для цього відділу каса — «${fopName(ctx.expectedFop)}» (як у LP-CRM)`);
     }
   }
+  if ((o.webList || []).some((x) => x.action === '2')) add('info', 'У LP-CRM до замовлення є чек повернення.');
 
   grp = 'fact';
   if (cls === 'cod' && o.cod > 0) add('info', `Наложка ${fmt(o.cod)}: гроші прийдуть після отримання посилки.`);

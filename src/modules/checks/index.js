@@ -7,7 +7,9 @@
 //     накладеного платежу (по кожному кабінету Розетки, поки не знайдемо ТТН); Prom — замовлення Prom з тією самою ТТН
 //     (з уже завантажених замовлень маркетплейсів) і його оплата через API Prom: Пром-оплата (оплачено чи ні) або при отриманні.
 //     ТТН «PRM-…» (Розетка Делівері, створені в Prom) перевіряємо саме так;
-//  3) Checkbox: усі чеки кожного ФОП за ці дні (день, що минув, читаємо один раз; сьогодні й учора — повторно).
+//  3) Checkbox: усі чеки кожного ФОП за ці дні (день, що минув, читаємо один раз; сьогодні й учора — повторно);
+//  4) номер чека, прив'язаного до замовлення, — з вебінтерфейсу LP-CRM (API його не віддає) окремим користувачем LP-CRM:
+//     тоді чек звіряємо точно, без підбору за товаром і сумою.
 // Надходження на рахунки беремо з модуля платежів (Opendatabot) — він уже збирає їх сам.
 // Сповіщень у Telegram модуль не надсилає (сповіщення про дублі ТТН / телефонів, як і раніше, надсилає аналітика).
 // Висновки (що не так із замовленням) не зберігаємо: рахуємо під час показу сторінки з rules.js — завжди за свіжими даними.
@@ -18,6 +20,7 @@ import { npTrackMany } from '../../integrations/novaposhta.js';
 import { rzDeliveryList } from '../../integrations/rozetka.js';
 import { promOrder, promPayment } from '../../integrations/prom.js';
 import { hasCheckbox, listReceipts, getReceipt, cashierMe } from '../../integrations/checkbox.js';
+import { lpWebLogin, lpWebReceipts, mainReceipt } from '../../integrations/lpcrm-web.js';
 import { ttnOf } from '../analytics/index.js';
 import { payRules, carrierOf, matchReceipts, findPayment, evaluate, partialOf, CLASSES, CARRIERS, PAY_DEFAULTS } from './rules.js';
 
@@ -28,6 +31,11 @@ const LP_MAX = 5; // запитів до LP-CRM за крок (кожен — з
 const CB_MAX = 12; // запитів до Checkbox за крок
 const RD_MAX = 8; // запитів до Розетки за крок
 const PROM_MAX = 8; // запитів до Prom за крок
+const WEB_MAX = 4; // запитів до вебінтерфейсу LP-CRM за крок (вхід — 2 запити)
+const WEB_BATCH = 150; // замовлень за запит до списку LP-CRM
+const WEB_RECHECK_NONE_MS = 30 * 60e3; // замовлення без чека перечитуємо щопівгодини
+const WEB_RECHECK_MS = 12 * 3600e3; // з чеком — раз на 12 год (могли пробити повернення / інший чек)
+const WEB_FAIL_MS = 6 * 3600e3; // LP-CRM не пустила — не пробуємо 6 год (після кількох невдалих входів вона вимагає капчу)
 const PROM_RECHECK_MS = 3600e3; // неоплачену Пром-оплату перевіряємо щогодини
 const NP_RECHECK_MS = 12 * 3600e3; // наложку в ТТН НП перечитуємо раз на 12 год (ТТН могли змінити)
 // Статуси, які перевіряємо (за назвою LP-CRM; запасні номери — як у LP-CRM Ековенту).
@@ -127,10 +135,11 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       if (got.length) {
         await db.batch(got.map((o) => [`UPDATE chk_orders SET id = ?, day = ?, fetched_status = status, payment = ?, total = ?, office = ?, channel = ?, site = ?,
           delivery = ?, phone = ?, buyer = ?, user = ?, comment = ?,
-          ref_state = CASE WHEN receipt_ref = ? THEN ref_state ELSE '' END, receipt_ref = ?, prepayment = ?, dt = ?, goods = ?,
+          ref_state = CASE WHEN ? = '' OR receipt_ref = ? THEN ref_state ELSE '' END, receipt_ref = CASE WHEN ? = '' THEN receipt_ref ELSE ? END,
+          web_at = '', prepayment = ?, dt = ?, goods = ?,
           ttn_at = CASE WHEN ttn = ? THEN ttn_at ELSE '' END, cod = CASE WHEN ttn = ? THEN cod ELSE 0 END, cod_kind = CASE WHEN ttn = ? THEN cod_kind ELSE '' END,
           ttn_err = CASE WHEN ttn = ? THEN ttn_err ELSE '' END, ttn = ?, carrier = ? WHERE code = ?`,
-        [o.id, o.day, o.payment, o.total, o.office, o.channel, o.site, o.delivery, o.phone, o.buyer, o.user, o.comment, o.receipt_ref, o.receipt_ref, o.prepayment, o.dt, o.goods, o.ttn, o.ttn, o.ttn, o.ttn, o.ttn, o.carrier, o.code]]));
+        [o.id, o.day, o.payment, o.total, o.office, o.channel, o.site, o.delivery, o.phone, o.buyer, o.user, o.comment, o.receipt_ref, o.receipt_ref, o.receipt_ref, o.receipt_ref, o.prepayment, o.dt, o.goods, o.ttn, o.ttn, o.ttn, o.ttn, o.ttn, o.carrier, o.code]]));
       }
       // Замовлення, яких LP-CRM не віддала (видалені тощо), — щоб не просити їх щоразу.
       const seen = new Set(got.map((o) => o.code));
@@ -296,6 +305,67 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
     return { errors };
   }
 
+  // ---------------------------------------------------------------- 4) чек, прив'язаний у LP-CRM
+  // API LP-CRM номера чека не віддає — читаємо його зі списку замовлень вебінтерфейсу (той самий, що бачить менеджер),
+  // окремим користувачем LP-CRM (логін і пароль — у «Перевірка → Налаштування»). У LP-CRM нічого не змінюємо.
+  async function syncLpWeb(budget, s) {
+    const login = s.chk_lp_login; const pass = s.chk_lp_pass;
+    if (!login || !pass) return { skipped: 'немає входу в LP-CRM' };
+    const web = fromS(s, 'chk_lp_web');
+    if (web.error_at && Date.now() - Date.parse(web.error_at) < WEB_FAIL_MS) return { skipped: web.error };
+    const rows = await db.all(`SELECT code, id FROM chk_orders WHERE listed_at != '' AND id != '' AND day != ''
+      AND (web_at = '' OR (web_refs IN ('', '[]', '?') AND web_at < ?) OR web_at < ?)
+      ORDER BY web_at != '', web_at, day DESC LIMIT ?`,
+    [new Date(Date.now() - WEB_RECHECK_NONE_MS).toISOString(), new Date(Date.now() - WEB_RECHECK_MS).toISOString(), WEB_BATCH * 3]);
+    if (!rows.length) return {};
+    let cookie = web.cookie || '';
+    const ups = [];
+    let more = false; let err = '';
+    try {
+      for (let i = 0; i < rows.length; i += WEB_BATCH) {
+        if (budget.web >= WEB_MAX - (cookie ? 0 : 2)) { more = true; break; }
+        const part = rows.slice(i, i + WEB_BATCH);
+        let got = null;
+        for (let attempt = 0; !got; attempt++) {
+          if (!cookie) { budget.web += 2; cookie = await lpWebLogin(fetchFn, s.lpcrm_subdomain, login, pass); web.login_at = nowIso(); }
+          budget.web++;
+          try { got = await lpWebReceipts(fetchFn, s.lpcrm_subdomain, cookie, part.map((r) => r.id)); } catch (e) {
+            if (!e.expired || attempt > 0) throw e;
+            cookie = ''; // сесія скінчилась — увійти ще раз
+            if (budget.web > WEB_MAX - 3) { more = true; break; }
+          }
+        }
+        if (!got) break;
+        cookie = got.mergeCookie(cookie);
+        const seen = new Set(got.seen);
+        const at = nowIso();
+        for (const r of part) {
+          // Замовлення, якого цей користувач LP-CRM не бачить (немає доступу до відділу), — позначаємо «?».
+          if (!seen.has(String(r.id))) { ups.push([`UPDATE chk_orders SET web_at = ?, web_refs = '?' WHERE code = ?`, [at, r.code]]); continue; }
+          const list = got.byCode[r.code] || [];
+          const main = mainReceipt(list);
+          const ref = main ? main.uuid : '';
+          ups.push([`UPDATE chk_orders SET web_at = ?, web_refs = ?, ref_state = CASE WHEN receipt_ref = ? THEN ref_state ELSE '' END, receipt_ref = ? WHERE code = ?`,
+            [at, JSON.stringify(list), ref, ref, r.code]]);
+        }
+      }
+      Object.assign(web, { ok_at: nowIso(), error: '', error_at: '' });
+    } catch (e) {
+      if (e.pending) more = true;
+      else {
+        err = e.message;
+        web.error = e.message.slice(0, 200);
+        // Невірний логін / пароль — пауза, щоб LP-CRM не заблокувала вхід капчею; збій мережі — спробуємо наступного разу.
+        if (e.auth) { web.error_at = nowIso(); cookie = ''; }
+      }
+    }
+    web.cookie = cookie;
+    ups.push([`INSERT INTO settings (key, value) VALUES ('chk_lp_web', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(web)]]);
+    for (let i = 0; i < ups.length; i += 100) await db.batch(ups.slice(i, i + 100));
+    if (rows.length >= WEB_BATCH * 3) more = true;
+    return { more, error: err ? `LP-CRM (номери чеків): ${err}` : undefined };
+  }
+
   // Чеки, прив'язані до замовлень у LP-CRM, яких немає серед завантажених (інший день, інша каса): беремо за номером
   // з кожної каси з доступом. Жодна не бачить — каса цього ФОП не підключена в сервісі (ref_state = nofop).
   async function syncReceiptRefs(budget, s) {
@@ -351,7 +421,7 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       for (const k of ['chk_cb_fail', 'chk_ref_tried']) delete s[k];
     }
     if (state.prom_v !== 2) { await db.run(`UPDATE chk_orders SET mp_at = '' WHERE mp_pay = 'other'`); state.prom_v = 2; }
-    const budget = { lp: 0, np: 0, rd: 0, prom: 0, cb: 0 };
+    const budget = { lp: 0, np: 0, rd: 0, prom: 0, cb: 0, web: 0 };
     const res = {};
     try {
       const cr = { subdomain: s.lpcrm_subdomain, key: s.lpcrm_key };
@@ -361,13 +431,14 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       res.rd = await syncRd(budget, s).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
       res.prom = await syncProm(budget).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
       res.cb = await syncReceipts(budget, s).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
+      res.web = await syncLpWeb(budget, s).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
       res.refs = await syncReceiptRefs(budget, s).catch((e) => { if (e.pending) throw e; return { error: e.message }; });
     } catch (e) {
       if (!e.pending) throw e;
       res.more = true;
     } finally {
-      const more = Boolean(res.more || res.crm?.more || res.rd?.more || res.prom?.more || res.cb?.more || res.refs?.more);
-      const errs = [res.crm?.error, res.np?.error, res.rd?.error, res.prom?.error && `Prom: ${res.prom.error}`, res.cb?.error, ...Object.entries(res.cb?.errors || {}).map(([k, v]) => `Checkbox ${k}: ${v}`)].filter(Boolean);
+      const more = Boolean(res.more || res.crm?.more || res.rd?.more || res.prom?.more || res.cb?.more || res.web?.more || res.refs?.more);
+      const errs = [res.crm?.error, res.np?.error, res.rd?.error, res.prom?.error && `Prom: ${res.prom.error}`, res.cb?.error, res.web?.error, ...Object.entries(res.cb?.errors || {}).map(([k, v]) => `Checkbox ${k}: ${v}`)].filter(Boolean);
       Object.assign(state, { more, finished: more ? state.finished : nowIso(), at: nowIso(), errors: errs.slice(0, 5) });
       // Стан, зняття замка і (раз на добу) чистка старих даних — одним пакетом.
       const fin = [];
@@ -437,6 +508,9 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
       o.fopId = ids[0] ?? null; // для показу «каса відділу»
       o.fopOk = ids.length ? (id) => orgs.has(orgOf.get(String(id))) : null; // чек цієї каси підходить відділу?
       o.canRead = ids.some((id) => readable.has(orgOf.get(String(id))));
+      // Чеки з LP-CRM (вебінтерфейс): webSeen — перевірено й замовлення видно; webList — усі прив'язані чеки.
+      o.webSeen = Boolean(o.web_at) && o.web_refs !== '?';
+      try { o.webList = o.webSeen ? JSON.parse(o.web_refs || '[]') : []; } catch { o.webList = []; }
     }
     // Коди товарів LP-CRM (довідник «Каталог»: product_id → код у квадратних дужках назви) — для зіставлення з чеком за товарами.
     const pids = [...new Set(orders.flatMap((o) => String(o.goods || '').split(' ').filter(Boolean)))];
@@ -699,6 +773,59 @@ export function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
   }
   const tgGroupMoved = (from, to) => db.run(`UPDATE settings SET value = ? WHERE key = 'chk_tg_chat' AND value = ?`, [String(to), String(from)]);
   const tgGroupLeft = (chat) => db.run(`DELETE FROM settings WHERE key IN ('chk_tg_chat', 'chk_tg_title') AND (SELECT value FROM settings WHERE key = 'chk_tg_chat') = ?`, [String(chat)]);
+
+  // Вхід у LP-CRM для номерів чеків (окремий користувач LP-CRM, лише перегляд). Пароль назовні не віддаємо.
+  const lpWebInfo = async () => {
+    const s = await loadSettings(db);
+    const web = fromS(s, 'chk_lp_web');
+    const n = await db.get(`SELECT SUM(web_at != '' AND web_refs != '?') AS seen, SUM(web_refs = '?') AS hidden, SUM(receipt_ref != '') AS linked
+      FROM chk_orders WHERE listed_at != '' AND day != ''`);
+    return { login: s.chk_lp_login || '', has_pass: Boolean(s.chk_lp_pass), ok_at: web.ok_at || '', error: web.error || '', error_at: web.error_at || '',
+      seen: n?.seen || 0, hidden: n?.hidden || 0, linked: n?.linked || 0 };
+  };
+  app.get('/api/checks/lpweb', async (c) => { need(c, 'users'); return c.json(await lpWebInfo()); });
+  app.put('/api/checks/lpweb', async (c) => {
+    need(c, 'users');
+    const b = await c.req.json().catch(() => ({}));
+    const login = String(b.login ?? '').trim().slice(0, 100);
+    const pass = String(b.password ?? '');
+    if (!login) throw fail(400, 'Вкажіть логін користувача LP-CRM.');
+    const s = await loadSettings(db);
+    if (!pass && !s.chk_lp_pass) throw fail(400, 'Вкажіть пароль користувача LP-CRM.');
+    const stmts = [[`INSERT INTO settings (key, value) VALUES ('chk_lp_login', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [login]],
+      // новий логін / пароль — нова сесія й нова спроба входу
+      [`DELETE FROM settings WHERE key = 'chk_lp_web'`, []]];
+    if (pass) stmts.push([`INSERT INTO settings (key, value) VALUES ('chk_lp_pass', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [pass.slice(0, 200)]]);
+    await db.batch(stmts);
+    return c.json(await lpWebInfo());
+  });
+  app.delete('/api/checks/lpweb', async (c) => {
+    need(c, 'users');
+    await db.batch([[`DELETE FROM settings WHERE key IN ('chk_lp_login', 'chk_lp_pass', 'chk_lp_web')`, []],
+      [`UPDATE chk_orders SET web_at = '', web_refs = ''`, []]]);
+    return c.json({ ok: true });
+  });
+  // «Перевірити вхід»: увійти й прочитати чеки 20 останніх замовлень.
+  app.post('/api/checks/lpweb/test', async (c) => {
+    need(c, 'users');
+    const s = await loadSettings(db);
+    if (!s.chk_lp_login || !s.chk_lp_pass) throw fail(400, 'Спершу збережіть логін і пароль.');
+    const web = fromS(s, 'chk_lp_web');
+    if (web.error_at && Date.now() - Date.parse(web.error_at) < 15 * 60e3) throw fail(400, `Остання спроба входу не вдалася (${web.error}). Перевірте логін і пароль і збережіть їх ще раз — повторити можна через 15 хв (інакше LP-CRM попросить капчу).`);
+    const ids = (await db.all(`SELECT id FROM chk_orders WHERE id != '' AND listed_at != '' ORDER BY day DESC, id DESC LIMIT 20`)).map((r) => r.id);
+    try {
+      const cookie = await lpWebLogin(fetchFn, s.lpcrm_subdomain, s.chk_lp_login, s.chk_lp_pass);
+      const got = ids.length ? await lpWebReceipts(fetchFn, s.lpcrm_subdomain, cookie, ids) : { byCode: {}, seen: [], mergeCookie: (x) => x };
+      Object.assign(web, { cookie: got.mergeCookie(cookie), ok_at: nowIso(), login_at: nowIso(), error: '', error_at: '' });
+      await setJson('chk_lp_web', web);
+      return c.json({ ok: true, orders: ids.length, seen: got.seen.length, with_receipt: Object.keys(got.byCode).length });
+    } catch (e) {
+      if (e.pending) throw e;
+      Object.assign(web, { cookie: '', error: e.message.slice(0, 200), error_at: e.auth ? nowIso() : web.error_at || '' });
+      await setJson('chk_lp_web', web);
+      throw fail(400, e.message);
+    }
+  });
 
   // «Оновити зараз»: один крок збору; сторінка повторює, доки more = true.
   app.post('/api/checks/refresh', async (c) => {

@@ -2,7 +2,8 @@
 // відділи LP-CRM, значення «Поле 1» (канали) і шаблони накладних.
 import { can, publicUser } from '../../core/auth.js';
 import { MASK, fail, need, parseTpl, loadSettings } from '../../core/common.js';
-const noTel = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith('binotel_')));
+// Binotel і «Перевірка» (вхід у LP-CRM, сесія, стан) — у браузер не віддаємо, у них свої сторінки налаштувань.
+const noTel = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => !k.startsWith('binotel_') && !k.startsWith('chk_')));
 import { DEFAULT_WARNING } from '../../core/schema.js';
 import { checkImages } from '../../core/validate.js';
 import { FOP_REQUISITES, REQUISITES_DENIED, changedFields, describeChanges, logAudit } from '../../core/requisites.js';
