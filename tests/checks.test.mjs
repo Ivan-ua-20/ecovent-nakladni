@@ -79,7 +79,7 @@ const ORDERS = [
   O(10029, 11, 3800, '20450000000029', { office: '22', datetime: `${D} 09:00:00`, products: [{ product_id: '699', name: 'Осушувач HUMIX', price: '3800', quantity: '1' }] }),
   // Єдиний схожий чек — на іншій касі й з іншим способом оплати: не видаємо його за чек замовлення, а показуємо як «схожий»
   O(10030, 14, 7600, '20450000000030', { office: '12', datetime: `${D} 09:00:00`, products: [{ product_id: '700', name: 'ComfoDry 12', price: '7600', quantity: '1' }] }),
-  // Два підхожі чеки: автофіскалізації LP-CRM (нестандартний UUID) і пробитий вручну (UUID v4) — береться чек LP-CRM
+  // Два підхожі чеки: пробитий вручну (UUID v4) раніше й автофіскалізації LP-CRM пізніше — береться найближчий за часом (ручний)
   O(10031, 11, 5200, '20450000000031', { office: '22', datetime: `${D} 09:00:00`, products: [{ product_id: '701', name: 'ComfoDry 20', price: '5200', quantity: '1' }] }),
   // Є лише чек, пробитий вручну в Checkbox, — «Увага»
   O(10032, 11, 6100, '20450000000032', { office: '22', datetime: `${D} 09:00:00`, products: [{ product_id: '701', name: 'ComfoDry 20', price: '6100', quantity: '1' }] }),
@@ -300,8 +300,8 @@ assert.equal(row(10029).receipt?.id, 'h29', 'чек на 3800 — замовле
 assert.ok(!row(10028).receipt || row(10028).receipt.id !== 'h29');
 assert.equal(row(10030).receipt, null, 'чек іншої каси з іншим способом оплати — не чек цього замовлення');
 assert.match(texts(10030), /bad: Чек на касі відділу не знайдено\. Схожий чек: ФОП Агафіца Д\.М\., 7600 грн, «Картка», .* — якщо це чек цього замовлення, його пробито не на тій касі/);
-assert.equal(row(10031).receipt?.id, 'a1b2c3d4-1111-2b2d-96c9-2b0571f31323', 'спершу чек автофіскалізації LP-CRM, а не пробитий вручну');
-assert.doesNotMatch(texts(10031), /вручну/);
+assert.equal(row(10031).receipt?.id, '0f77f5f4-d16e-42cc-9a09-0d1a1c345590', 'найближчий за часом, навіть якщо пробитий вручну (як післяплата Meest)');
+assert.match(texts(10031), /warn: Чек пробито вручну в Checkbox/);
 assert.equal(row(10032).receipt?.id, '5e0a7b1c-2d3e-4f50-8a6b-7c8d9e0f1a2b');
 assert.match(texts(10032), /warn: Чек пробито вручну в Checkbox/);
 // Результат не залежить від обраного періоду
@@ -325,7 +325,7 @@ assert.equal(row(10011).mp_pay, 'Пром-оплата');
 const rc = (await call('GET', `/api/checks/receipts?day=${D}`, null, H)).j;
 const g1 = rc.groups.find((g) => g.fop === 'ФОП Агафіца Д.М.');
 assert.equal(g1.rows.length, 9); // r1, r4, r7, rx, h29 + c30, два чеки ComfoDry 20 на 5200 і чек на 6100
-assert.equal(g1.free, 3); // rx, c30 (лише «схожий» для 10030) і ручний чек на 5200 (замовлення взяло чек LP-CRM)
+assert.equal(g1.free, 3); // rx, c30 (лише «схожий» для 10030) і чек LP-CRM на 5200 (замовлення взяло раніший ручний)
 assert.equal(g1.rows.find((r) => r.id === 'rx').order, null);
 assert.equal(g1.rows.find((r) => r.id === 'r1').order.id, '10001');
 
