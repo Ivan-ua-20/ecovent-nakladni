@@ -121,3 +121,22 @@ assert.equal((await req('GET', '/api/b2b/promos')).promos.length, 1);
 assert.equal((await call('GET', '/api/b2b/promos', null, A)).status, 403, 'партнер — ні');
 
 console.log('OK — B2B «Акції»: позиції, однаковий % для всіх, більша маржа, фіксація РРЦ, артикули, перевірка, зупинка');
+
+// ---------- кабінет партнера: акційний прайс ----------
+{
+  const pr = await req('POST', '/api/b2b/promos', { name: 'Зима', date_from: shift(20), date_to: shift(25), items: [{ level: 'product', ref_id: 13, margin: 30 }, { level: 'brand', ref_id: 902, margin: 25 }] });
+  const mine = (await req('GET', '/api/b2b/p/promos', null, A)).promos;
+  assert.deepEqual(mine.map((x) => [x.name, x.status, x.products]), [['Зима', 'planned', 3]], 'зупинена ЧП — не показується; NovaDry + 2 Levoit');
+  const pl = await req('GET', `/api/b2b/p/promos/${pr.id}/price-list`, null, A);
+  const nova = pl.products.find((x) => x.id === 13);
+  assert.deepEqual([nova.price, nova.price_promo, nova.margin_promo, nova.brand], [8000, 7000, 30, 'Evoair'], 'звичайна 20% → на акції 30%');
+  assert.equal(pl.wh, true, 'у партнера А є окрема маржа на склад');
+  assert.equal(nova.price_wh_promo, 7000);
+  const core = pl.products.find((x) => x.id === 21);
+  assert.deepEqual([core.price, core.price_promo], [8200, 7500]);
+  // Б: Levoit 30% звичайна > 25% акційна — ціна на акції = звичайна
+  const plB = await req('GET', `/api/b2b/p/promos/${pr.id}/price-list`, null, B);
+  assert.deepEqual(plB.products.filter((x) => x.id === 21).map((x) => [x.price, x.price_promo]), [[7000, 7000]]);
+  assert.equal((await call('GET', `/api/b2b/p/promos/${bf.id}/price-list`, null, A)).status, 404, 'зупинена — ні');
+  console.log('OK — B2B «Акції»: акційний прайс у кабінеті партнера');
+}

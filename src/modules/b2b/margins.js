@@ -17,7 +17,7 @@ const pct = (v, label, allowEmpty = false) => {
 };
 const parseIds = (v) => { try { return (JSON.parse(v || '[]') || []).map(Number).filter(Boolean); } catch { return []; } };
 
-export function mountB2bMargins(app, { db, brandNames, partnerPrice, onCron = () => {} }) {
+export function mountB2bMargins(app, { db, brandNames, partnerPrice, myPartner, onCron = () => {} }) {
   const userName = (c) => { const u = c.get('user'); return String(u?.name || u?.login || '').slice(0, 80); };
   const catNames = async () => new Map((await db.all(`SELECT id, name FROM an_categories`).catch(() => [])).map((r) => [r.id, r.name]));
   const status = (r, t) => (!r.date_from && !r.date_to ? 'permanent' : r.date_to && r.date_to < t ? 'past' : r.date_from && r.date_from > t ? 'planned' : 'active');
@@ -328,6 +328,53 @@ export function mountB2bMargins(app, { db, brandNames, partnerPrice, onCron = ()
       [`UPDATE b2b_promos SET deleted_at = ?, updated_by = ? WHERE id = ?`, [nowIso(), userName(c), p.id]],
     ]);
     return c.json({ ok: true });
+  });
+
+  // ---------- кабінет партнера: акції й акційний прайс ----------
+  // Чинні й заплановані акції, що діють для партнера, і скільки його товарів (відкриті бренди) у кожній.
+  const partnerPromos = async (p) => {
+    const t = kyivDay();
+    const rows = await db.all(`SELECT * FROM b2b_promos WHERE deleted_at = '' AND stopped_at = '' AND date_to >= ?
+      AND (partners = '' OR EXISTS (SELECT 1 FROM json_each(partners) WHERE CAST(value AS INTEGER) = ?)) ORDER BY date_from, id`, [t, p.id]);
+    return rows.map((x) => ({ ...x, status: promoStatus(x, t), at: x.date_from > t ? x.date_from : t }));
+  };
+  // Товари акції для партнера: звичайна ціна й ціна на акції (на перший день акції або сьогодні, якщо вже діє).
+  async function promoPrices(p, promo) {
+    const items = await db.all(`SELECT level, ref_id, margin, margin_wh FROM b2b_margin_rules WHERE promo_id = ? AND deleted_at = ''`, [promo.id]);
+    const cov = await covered(items);
+    if (!cov.length) return [];
+    const ids = J(cov.map((r) => r.product_id));
+    const q = (d) => db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.brand_id, COALESCE(a.cat_manual, a.category_id, 0) AS cat, ${PM_COLS}
+      FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN} LEFT JOIN an_products a ON a.product_id = c.product_id
+      WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 AND c.product_id IN (SELECT value FROM json_each(?)) ORDER BY c.name`, [d, p.id, ids]);
+    const [now, norm, brands, cats] = await Promise.all([q(promo.at), q('0000-00-00'), brandNames(), catNames()]);
+    const nm = new Map(norm.map((r) => [r.product_id, r]));
+    return now.map((r) => {
+      const n = nm.get(r.product_id) || r;
+      return {
+        id: r.product_id, name: r.name, article: r.article || '', brand: brands.get(r.brand_id) || 'Інші', category: cats.get(r.cat) || 'Інше', rrp: r.rrp,
+        price: partnerPrice(n.rrp, n.margin), price_promo: partnerPrice(r.rrp, r.margin), margin: n.margin, margin_promo: r.margin,
+        price_wh: partnerPrice(n.rrp, n.margin_wh), price_wh_promo: partnerPrice(r.rrp, r.margin_wh),
+      };
+    });
+  }
+  app.get('/api/b2b/p/promos', async (c) => {
+    const p = await myPartner(c);
+    const list = await partnerPromos(p);
+    const out = [];
+    for (const x of list.slice(0, 10)) {
+      const rows = await promoPrices(p, x);
+      if (rows.length) out.push({ id: x.id, name: x.name, date_from: x.date_from, date_to: x.date_to, status: x.status, products: rows.length });
+    }
+    return c.json({ promos: out });
+  });
+  app.get('/api/b2b/p/promos/:id{[0-9]+}/price-list', async (c) => {
+    const p = await myPartner(c);
+    const x = (await partnerPromos(p)).find((r) => r.id === Number(c.req.param('id')));
+    if (!x) throw fail(404, 'Акцію не знайдено або вона вже закінчилась.');
+    const wh = await db.get(`SELECT 1 AS ok FROM b2b_margins WHERE partner_id = ? AND margin_wh IS NOT NULL AND margin_wh != margin LIMIT 1`, [p.id]);
+    const products = await promoPrices(p, x);
+    return c.json({ promo: { id: x.id, name: x.name, date_from: x.date_from, date_to: x.date_to, status: x.status }, wh: Boolean(wh) || products.some((r) => r.price_wh_promo !== r.price_promo), products });
   });
 
   // Товари бренду чи категорії — для вибору галочками.
