@@ -13791,7 +13791,7 @@ var parseIds = (v) => {
     return [];
   }
 };
-function mountB2bMargins(app, { db, brandNames, partnerPrice: partnerPrice2, onCron = () => {
+function mountB2bMargins(app, { db, brandNames, partnerPrice: partnerPrice2, myPartner, onCron = () => {
 } }) {
   const userName8 = (c) => {
     const u = c.get("user");
@@ -14140,6 +14140,58 @@ function mountB2bMargins(app, { db, brandNames, partnerPrice: partnerPrice2, onC
       [`UPDATE b2b_promos SET deleted_at = ?, updated_by = ? WHERE id = ?`, [nowIso(), userName8(c), p.id]]
     ]);
     return c.json({ ok: true });
+  });
+  const partnerPromos = async (p) => {
+    const t = kyivDay();
+    const rows = await db.all(`SELECT * FROM b2b_promos WHERE deleted_at = '' AND stopped_at = '' AND date_to >= ?
+      AND (partners = '' OR EXISTS (SELECT 1 FROM json_each(partners) WHERE CAST(value AS INTEGER) = ?)) ORDER BY date_from, id`, [t, p.id]);
+    return rows.map((x) => ({ ...x, status: promoStatus(x, t), at: x.date_from > t ? x.date_from : t }));
+  };
+  async function promoPrices(p, promo) {
+    const items = await db.all(`SELECT level, ref_id, margin, margin_wh FROM b2b_margin_rules WHERE promo_id = ? AND deleted_at = ''`, [promo.id]);
+    const cov = await covered(items);
+    if (!cov.length) return [];
+    const ids = J2(cov.map((r) => r.product_id));
+    const q = (d) => db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.brand_id, COALESCE(a.cat_manual, a.category_id, 0) AS cat, ${PM_COLS}
+      FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN} LEFT JOIN an_products a ON a.product_id = c.product_id
+      WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 AND c.product_id IN (SELECT value FROM json_each(?)) ORDER BY c.name`, [d, p.id, ids]);
+    const [now, norm, brands, cats] = await Promise.all([q(promo.at), q("0000-00-00"), brandNames(), catNames()]);
+    const nm = new Map(norm.map((r) => [r.product_id, r]));
+    return now.map((r) => {
+      const n = nm.get(r.product_id) || r;
+      return {
+        id: r.product_id,
+        name: r.name,
+        article: r.article || "",
+        brand: brands.get(r.brand_id) || "\u0406\u043D\u0448\u0456",
+        category: cats.get(r.cat) || "\u0406\u043D\u0448\u0435",
+        rrp: r.rrp,
+        price: partnerPrice2(n.rrp, n.margin),
+        price_promo: partnerPrice2(r.rrp, r.margin),
+        margin: n.margin,
+        margin_promo: r.margin,
+        price_wh: partnerPrice2(n.rrp, n.margin_wh),
+        price_wh_promo: partnerPrice2(r.rrp, r.margin_wh)
+      };
+    });
+  }
+  app.get("/api/b2b/p/promos", async (c) => {
+    const p = await myPartner(c);
+    const list = await partnerPromos(p);
+    const out = [];
+    for (const x of list.slice(0, 10)) {
+      const rows = await promoPrices(p, x);
+      if (rows.length) out.push({ id: x.id, name: x.name, date_from: x.date_from, date_to: x.date_to, status: x.status, products: rows.length });
+    }
+    return c.json({ promos: out });
+  });
+  app.get("/api/b2b/p/promos/:id{[0-9]+}/price-list", async (c) => {
+    const p = await myPartner(c);
+    const x = (await partnerPromos(p)).find((r) => r.id === Number(c.req.param("id")));
+    if (!x) throw fail(404, "\u0410\u043A\u0446\u0456\u044E \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0430\u0431\u043E \u0432\u043E\u043D\u0430 \u0432\u0436\u0435 \u0437\u0430\u043A\u0456\u043D\u0447\u0438\u043B\u0430\u0441\u044C.");
+    const wh = await db.get(`SELECT 1 AS ok FROM b2b_margins WHERE partner_id = ? AND margin_wh IS NOT NULL AND margin_wh != margin LIMIT 1`, [p.id]);
+    const products = await promoPrices(p, x);
+    return c.json({ promo: { id: x.id, name: x.name, date_from: x.date_from, date_to: x.date_to, status: x.status }, wh: Boolean(wh) || products.some((r) => r.price_wh_promo !== r.price_promo), products });
   });
   app.get("/api/b2b/promos/products", async (c) => {
     need(c, "b2b.admin");
@@ -14990,7 +15042,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   const attention = async (user) => [...await home.attention(), ...await crm.attention(user), ...await newProducts.attention()];
   mountB2bPrices(app, { db, services, partnerPrice, myPartner });
   mountB2bNews(app, { db, fetchFn, services, myPartner, partnerPrice, brandNames, onCron });
-  mountB2bMargins(app, { db, brandNames, partnerPrice, onCron });
+  mountB2bMargins(app, { db, brandNames, partnerPrice, myPartner, onCron });
   app.post("/api/b2b/partners/:id/tg-group", async (c) => {
     need(c, "b2b.admin");
     const p = await getPartner(c.req.param("id"));

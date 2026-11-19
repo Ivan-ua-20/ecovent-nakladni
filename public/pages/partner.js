@@ -2,6 +2,8 @@
 import { esc, money } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
+
+const dDay = (s) => String(s || '').split('-').reverse().join('.');
 import { npPickerHtml, wireNpPicker, npAddressText, NP_TYPES } from './np-picker.js';
 import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, wireTeamForm, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi, psBar, wirePsBar, psMatch, psHl, psEmpty, urgentBadge, urgentRow, cancelNote, askDeliveryChange, deliveryReqText, deliveryReqMoney, askCancel } from './b2b-shared.js';
 
@@ -211,7 +213,55 @@ export function createPartnerPages(ctx = {}) {
         </div>`, { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="pxGo">⬇ Завантажити</button>' });
       $('#pxGo', m.el).onclick = () => { const by = $('input[name="pxBy"]:checked', m.el)?.value || 'brand'; m.close(); xlsxBook(by); };
     });
+    // Акційний прайс: кнопка з'являється, коли для партнера є чинна чи запланована акція.
+    api('GET', '/api/b2b/p/promos').then(({ promos }) => {
+      const row = $('#pcXlsx')?.parentElement;
+      if (!row || !promos.length) return;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn';
+      b.id = 'pcPromo';
+      b.textContent = promos.length === 1 ? `🔥 Акційний прайс · ${promos[0].name}` : '🔥 Акційні прайси';
+      row.insertBefore(b, $('#pcXlsx'));
+      b.onclick = () => {
+        if (promos.length === 1) { promoXlsx(promos[0].id, partner.name); return; }
+        const m = modal('Акційний прайс', `<div class="form-stack">${promos.map((x) => `<button type="button" class="btn" data-px="${x.id}" style="justify-content:space-between">
+            <span><b>${esc(x.name)}</b> · ${dDay(x.date_from)} – ${dDay(x.date_to)}</span><span class="small muted">${x.products} тов. · ${x.status === 'active' ? 'діє' : 'заплановано'}</span></button>`).join('')}</div>`,
+        { footer: '<button class="btn" data-close>Закрити</button>' });
+        $$('[data-px]', m.el).forEach((x) => (x.onclick = () => { m.close(); promoXlsx(Number(x.dataset.px), partner.name); }));
+      };
+    }).catch(() => {});
     draw();
+  }
+
+  // Excel «акційний прайс»: аркуш «Про акцію» + аркуш на кожен бренд — звичайна ціна, ціна на акції, вигода.
+  async function promoXlsx(id, who = '') {
+    try {
+      const { promo, products, wh } = await api('GET', `/api/b2b/p/promos/${id}/price-list`);
+      if (!products.length) { toast('У цій акції немає товарів з вашого каталогу', true); return; }
+      const period = `${dDay(promo.date_from)} – ${dDay(promo.date_to)}`;
+      const cols = [{ title: 'Товар', width: 60 }, { title: 'Артикул', width: 18 }, { title: 'Категорія', width: 26 }, { title: 'РРЦ, грн', width: 12, fmt: 'money' },
+        { title: wh ? 'Звичайна ціна (відправка клієнтам), грн' : 'Звичайна ціна, грн', width: 16, fmt: 'money' },
+        { title: wh ? 'Ціна на акції (відправка клієнтам), грн' : 'Ціна на акції, грн', width: 16, fmt: 'money' },
+        { title: 'Вигода, грн', width: 12, fmt: 'money' }, { title: 'Знижка від РРЦ на акції', width: 14, fmt: 'pct' },
+        ...(wh ? [{ title: 'Звичайна ціна на ваш склад, грн', width: 16, fmt: 'money' }, { title: 'Ціна на акції на ваш склад, грн', width: 16, fmt: 'money' }] : [])];
+      const groups = new Map();
+      for (const p of products) { if (!groups.has(p.brand)) groups.set(p.brand, []); groups.get(p.brand).push(p); }
+      const r2 = (n) => Math.round(Number(n) * 100) / 100;
+      const sheets = [...groups].sort((a, b) => a[0].localeCompare(b[0], 'uk')).map(([brand, list]) => ({
+        name: brand, cols,
+        rows: [...list].sort((a, b) => a.category.localeCompare(b.category, 'uk') || a.name.localeCompare(b.name, 'uk'))
+          .map((p) => [p.name, p.article, p.category, Number(p.rrp), Number(p.price), Number(p.price_promo), r2(p.price - p.price_promo), r2(p.margin_promo),
+            ...(wh ? [Number(p.price_wh), Number(p.price_wh_promo)] : [])]),
+      }));
+      const info = { name: 'Про акцію', cols: [{ title: 'Акція', width: 28 }, { title: promo.name, width: 70 }], rows: [
+        ['Період', `${period} включно`], ['Товарів', String(products.length)],
+        ['Ціни', 'з ПДВ; «Ціна на акції» діє в дати акції — на порталі вона ставиться автоматично'],
+        ['Ціна закупівлі', 'фіксується в момент оформлення закупівлі на порталі'],
+        ['Партнер', who], ['Сформовано', new Date().toLocaleString('uk-UA')]] };
+      downloadXlsx(`Акційний прайс ${promo.name} ${period} ${who}.xlsx`.replace(/[\\/:*?"<>|]+/g, '_'), [info, ...sheets]);
+      toast(`Завантажено: ${products.length} товарів, ${sheets.length} ${sheets.length === 1 ? 'бренд' : 'брендів'}`);
+    } catch (er) { toast(er.message, true); }
   }
 
   // ---------------------------------------------------------------- юрособи

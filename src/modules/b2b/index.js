@@ -754,7 +754,7 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   const attention = async (user) => [...await home.attention(), ...await crm.attention(user), ...await newProducts.attention()];
   mountB2bPrices(app, { db, services, partnerPrice, myPartner });
   mountB2bNews(app, { db, fetchFn, services, myPartner, partnerPrice, brandNames, onCron });
-  mountB2bMargins(app, { db, brandNames, partnerPrice, onCron });
+  mountB2bMargins(app, { db, brandNames, partnerPrice, myPartner, onCron });
 
   // ---------- Telegram-група партнера ----------
   // Адмін бере код у картці партнера, додає бота в групу і пишe там «/link КОД» (код діє 30 хв).
