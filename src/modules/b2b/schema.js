@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 45,
+  version: 46,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -332,6 +332,30 @@ export const schema = {
     deleted_at TEXT DEFAULT ''
   )`,
   `CREATE INDEX IF NOT EXISTS b2b_margin_rules_ref ON b2b_margin_rules (level, ref_id)`,
+  // Акції (margins.js): назва, дати, кому ('' — усім, JSON id) один раз; позиції — правила b2b_margin_rules з promo_id.
+  // fix_rrp = 1 — відсоток рахується від РРЦ на початок акції (b2b_promo_rrp), навіть якщо ціну в LP-CRM потім знизили.
+  // stopped_at — акцію зупинено вручну (її правила видалено).
+  `CREATE TABLE IF NOT EXISTS b2b_promos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    date_from TEXT NOT NULL,
+    date_to TEXT NOT NULL,
+    partners TEXT DEFAULT '',
+    fix_rrp INTEGER DEFAULT 1,
+    created_by TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_by TEXT DEFAULT '',
+    updated_at TEXT DEFAULT '',
+    stopped_at TEXT DEFAULT '',
+    deleted_at TEXT DEFAULT ''
+  )`,
+  // РРЦ товару на початок акції (00:00 за Києвом у день «з»), відновлена з журналу змін цін b2b_price_log.
+  `CREATE TABLE IF NOT EXISTS b2b_promo_rrp (
+    promo_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    rrp REAL NOT NULL,
+    PRIMARY KEY (promo_id, product_id)
+  )`,
   // ---------- Новини для партнерів (news.js) ----------
   // body — JSON блоків статті (текст, фото, відео, файл, товар); audience — JSON id партнерів ('' — усім);
   // status — draft | published; publish_at — з якого часу видно (у майбутньому — заплановано);
@@ -508,6 +532,8 @@ export const schema = {
     ['b2b_catalog', 'announced_at', "TEXT DEFAULT ''"],
     // API: № замовлення в системі партнера (external_id) — щоб повторний запит не створив дубль.
     ['b2b_orders', 'ext_id', "TEXT DEFAULT ''"],
+    // Позиція акції b2b_promos (0 — окреме правило).
+    ['b2b_margin_rules', 'promo_id', 'INTEGER DEFAULT 0'],
   ],
   // Індекси на нові колонки — після ALTER TABLE (у старих базах колонок ще немає, коли створюються таблиці).
   async seed(db) {
@@ -524,6 +550,7 @@ export const schema = {
       [`CREATE INDEX IF NOT EXISTS b2b_payments_payer ON b2b_payments (payer_code)`, []],
       [`CREATE UNIQUE INDEX IF NOT EXISTS b2b_orders_ext ON b2b_orders (partner_id, ext_id) WHERE ext_id != ''`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_orders_upd ON b2b_orders (partner_id, updated_at)`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_margin_rules_promo ON b2b_margin_rules (promo_id) WHERE promo_id > 0`, []],
     ]);
     // Один раз: усе, що вже мало РРЦ до появи новинок, — не новинка (інакше першою розсилкою пішов би весь каталог).
     const done = await db.get(`SELECT value FROM settings WHERE key = 'b2b_newprod_init'`);

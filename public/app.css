@@ -1351,3 +1351,18 @@ body.pub-mode #auth { display: block; padding: 0; min-height: 100vh; background:
 .mr-seg label.on { background: var(--accent); color: #fff; }
 .mr-prod { position: relative; }
 .mr-check { border: 1px solid #cfe6e0; background: #f7fbfa; border-radius: 12px; padding: 12px 14px; }
+
+/* B2B «Акції» (b2b-margins.js) */
+.pr-card { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; }
+.pr-card.pr-old b { color: var(--muted); }
+.pr-top { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+@media (max-width: 640px) { .pr-top { grid-template-columns: 1fr; } }
+.pr-items .pr-pct { width: 80px; text-align: right; }
+.pr-items .linkbtn { padding: 0; }
+.pr-plist { display: flex; flex-wrap: wrap; gap: 6px; }
+.pr-add { border: 1px dashed var(--line); border-radius: 12px; padding: 10px 12px; display: grid; gap: 8px; }
+.pr-add textarea { width: 100%; }
+.pr-pick { max-height: 50vh; overflow: auto; display: grid; gap: 2px; }
+.pr-pi { display: flex; gap: 8px; align-items: baseline; padding: 4px 2px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.pr-pi span:nth-child(2) { flex: 1; }
+.pr-prices { max-height: 50vh; overflow: auto; }

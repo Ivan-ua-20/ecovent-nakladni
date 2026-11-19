@@ -7004,13 +7004,20 @@ var DEBT = `('pay_wait', 'partial')`;
 var PM_JOIN = `CROSS JOIN (SELECT ? AS d) td
   LEFT JOIN b2b_product_margins pm ON pm.partner_id = m.partner_id AND pm.product_id = c.product_id AND (pm.until = '' OR pm.until >= td.d)`;
 var RULE_CAT = `(SELECT COALESCE(ap.cat_manual, ap.category_id) FROM an_products ap WHERE ap.product_id = c.product_id)`;
-var ruleSub = (col, promo) => `(SELECT ${col} FROM b2b_margin_rules r WHERE r.deleted_at = ''
+var ruleSub = (col, promo) => `(SELECT ${col} FROM b2b_margin_rules r
+    LEFT JOIN b2b_promo_rrp fx ON r.promo_id > 0 AND fx.promo_id = r.promo_id AND fx.product_id = c.product_id
+    WHERE r.deleted_at = ''
     AND ${promo ? `(r.date_from != '' OR r.date_to != '') AND (r.date_from = '' OR r.date_from <= td.d) AND (r.date_to = '' OR r.date_to >= td.d)` : `r.date_from = '' AND r.date_to = ''`}
     AND (r.partners = '' OR EXISTS (SELECT 1 FROM json_each(r.partners) WHERE CAST(value AS INTEGER) = m.partner_id))
     AND ((r.level = 'product' AND r.ref_id = c.product_id) OR (r.level = 'category' AND r.ref_id = ${RULE_CAT}) OR (r.level = 'brand' AND r.ref_id = c.brand_id))
     ORDER BY CASE r.level WHEN 'product' THEN 0 WHEN 'category' THEN 1 ELSE 2 END, r.id DESC LIMIT 1)`;
-var PM_COLS = `COALESCE(${ruleSub("r.margin", true)}, pm.margin, ${ruleSub("r.margin", false)}, m.margin) AS margin,
-  COALESCE(${ruleSub("COALESCE(r.margin_wh, r.margin)", true)}, pm.margin_wh, pm.margin, ${ruleSub("COALESCE(r.margin_wh, r.margin)", false)}, m.margin_wh, m.margin) AS margin_wh,
+var NORMAL = `COALESCE(pm.margin, ${ruleSub("r.margin", false)}, m.margin)`;
+var NORMAL_WH = `COALESCE(pm.margin_wh, pm.margin, ${ruleSub("COALESCE(r.margin_wh, r.margin)", false)}, m.margin_wh, m.margin)`;
+var FIX = ruleSub("fx.rrp", true);
+var fixed = (x) => `CASE WHEN ${FIX} > 0 AND c.rrp > 0 THEN MAX(0, ROUND(100 - (100 - (${x})) * ${FIX} / c.rrp, 6)) ELSE (${x}) END`;
+var withPromo = (promo, normal) => `CASE WHEN ${promo} IS NULL THEN ${normal} ELSE ${fixed(`MAX(${promo}, COALESCE(${normal}, ${promo}))`)} END`;
+var PM_COLS = `${withPromo(ruleSub("r.margin", true), NORMAL)} AS margin,
+  ${withPromo(ruleSub("COALESCE(r.margin_wh, r.margin)", true), NORMAL_WH)} AS margin_wh,
   (${ruleSub("r.id", true)} IS NOT NULL OR pm.margin IS NOT NULL) AS special,
   COALESCE(${ruleSub("r.date_to", true)}, pm.until, '') AS special_until,
   COALESCE(${ruleSub("r.name", true)}, '') AS promo_name`;
@@ -13784,7 +13791,8 @@ var parseIds = (v) => {
     return [];
   }
 };
-function mountB2bMargins(app, { db, brandNames, partnerPrice: partnerPrice2 }) {
+function mountB2bMargins(app, { db, brandNames, partnerPrice: partnerPrice2, onCron = () => {
+} }) {
   const userName8 = (c) => {
     const u = c.get("user");
     return String(u?.name || u?.login || "").slice(0, 80);
@@ -13826,7 +13834,7 @@ function mountB2bMargins(app, { db, brandNames, partnerPrice: partnerPrice2 }) {
   app.get("/api/b2b/margin-rules", async (c) => {
     need(c, "b2b.admin");
     const pid = Number(c.req.query("partner")) || 0;
-    const rows = await db.all(`SELECT * FROM b2b_margin_rules r WHERE r.deleted_at = ''
+    const rows = await db.all(`SELECT * FROM b2b_margin_rules r WHERE r.deleted_at = '' AND COALESCE(r.promo_id, 0) = 0
       ${pid ? `AND (r.partners = '' OR EXISTS (SELECT 1 FROM json_each(r.partners) WHERE CAST(value AS INTEGER) = ?))` : ""}
       ORDER BY (r.date_from = '' AND r.date_to = ''), CASE WHEN r.date_to != '' AND r.date_to < ? THEN 1 ELSE 0 END, r.date_from DESC, r.id DESC LIMIT 500`, pid ? [pid, kyivDay()] : [kyivDay()]);
     return c.json({ rules: await describe(rows) });
@@ -13873,8 +13881,11 @@ function mountB2bMargins(app, { db, brandNames, partnerPrice: partnerPrice2 }) {
     }
     return { name: String(b.name ?? "").trim().slice(0, 80), level, ref_id: ref, margin, margin_wh: marginWh, date_from: from, date_to: to, partners };
   }
-  async function overlap(f, exceptId = 0) {
-    const rows = await db.all(`SELECT * FROM b2b_margin_rules WHERE deleted_at = '' AND level = ? AND ref_id = ? AND id != ?`, [f.level, f.ref_id, exceptId]);
+  async function overlap(f, exceptId = 0, exceptPromo = 0) {
+    const rows = await db.all(
+      `SELECT * FROM b2b_margin_rules WHERE deleted_at = '' AND level = ? AND ref_id = ? AND id != ? AND COALESCE(promo_id, 0) != ?`,
+      [f.level, f.ref_id, exceptId, exceptPromo || -1]
+    );
     const mine = parseIds(f.partners);
     const promo = Boolean(f.date_from || f.date_to);
     for (const r of rows) {
@@ -13903,7 +13914,9 @@ function mountB2bMargins(app, { db, brandNames, partnerPrice: partnerPrice2 }) {
   app.put("/api/b2b/margin-rules/:id{[0-9]+}", async (c) => {
     need(c, "b2b.admin");
     const id = Number(c.req.param("id"));
-    if (!await db.get(`SELECT id FROM b2b_margin_rules WHERE id = ? AND deleted_at = ''`, [id])) throw fail(404, "\u041F\u0440\u0430\u0432\u0438\u043B\u043E \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const was = await db.get(`SELECT id, promo_id FROM b2b_margin_rules WHERE id = ? AND deleted_at = ''`, [id]);
+    if (!was) throw fail(404, "\u041F\u0440\u0430\u0432\u0438\u043B\u043E \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    if (was.promo_id) throw fail(400, "\u0426\u0435 \u043F\u043E\u0437\u0438\u0446\u0456\u044F \u0430\u043A\u0446\u0456\u0457 \u2014 \u0437\u043C\u0456\u043D\u0456\u0442\u044C \u0457\u0457 \u0443 \u0432\u0456\u043A\u043D\u0456 \u0430\u043A\u0446\u0456\u0457.");
     const f = await fields(await c.req.json().catch(() => ({})));
     await overlap(f, id);
     await db.run(
@@ -13916,6 +13929,308 @@ function mountB2bMargins(app, { db, brandNames, partnerPrice: partnerPrice2 }) {
     need(c, "b2b.admin");
     await db.run(`UPDATE b2b_margin_rules SET deleted_at = ?, updated_by = ? WHERE id = ?`, [nowIso(), userName8(c), Number(c.req.param("id"))]);
     return c.json({ ok: true });
+  });
+  const promoStatus = (p, t) => p.stopped_at ? "stopped" : p.date_to < t ? "past" : p.date_from > t ? "planned" : "active";
+  const kyivStartIso = (d) => {
+    const probe = /* @__PURE__ */ new Date(`${d}T12:00:00Z`);
+    const h10 = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Kyiv", hour: "2-digit", hourCycle: "h23" }).format(probe));
+    return new Date(Date.parse(`${d}T00:00:00Z`) - (h10 - 12) * 36e5).toISOString();
+  };
+  async function covered(items) {
+    if (!items.length) return [];
+    const ids = (lv) => J2([...new Set(items.filter((i) => i.level === lv).map((i) => Number(i.ref_id)))]);
+    return db.all(`SELECT c.product_id, c.name, c.article, c.rrp, c.brand_id, COALESCE(a.cat_manual, a.category_id, 0) AS cat
+      FROM b2b_catalog c LEFT JOIN an_products a ON a.product_id = c.product_id
+      WHERE c.hidden = 0 AND (c.brand_id IN (SELECT value FROM json_each(?)) OR COALESCE(a.cat_manual, a.category_id, 0) IN (SELECT value FROM json_each(?))
+        OR c.product_id IN (SELECT value FROM json_each(?))) ORDER BY c.name LIMIT 3000`, [ids("brand"), ids("category"), ids("product")]);
+  }
+  const itemFor = (items, r) => r ? items.find((i) => i.level === "product" && Number(i.ref_id) === r.product_id) || items.find((i) => i.level === "category" && Number(i.ref_id) === r.cat) || items.find((i) => i.level === "brand" && Number(i.ref_id) === r.brand_id) : null;
+  async function rrpAt(rows, d) {
+    if (!rows.length) return /* @__PURE__ */ new Map();
+    const logs = await db.all(
+      `SELECT product_id, old_rrp FROM b2b_price_log WHERE at >= ? AND product_id IN (SELECT value FROM json_each(?)) ORDER BY at, id`,
+      [kyivStartIso(d), J2(rows.map((r) => r.product_id))]
+    );
+    const first = /* @__PURE__ */ new Map();
+    for (const l of logs) if (!first.has(l.product_id) && l.old_rrp > 0) first.set(l.product_id, l.old_rrp);
+    return new Map(rows.map((r) => [r.product_id, first.get(r.product_id) || r.rrp]));
+  }
+  async function snapshot(p) {
+    if (!p || !p.fix_rrp || p.stopped_at || p.deleted_at || p.date_from > kyivDay()) return 0;
+    const items = await db.all(`SELECT level, ref_id FROM b2b_margin_rules WHERE promo_id = ? AND deleted_at = ''`, [p.id]);
+    const have = new Set((await db.all(`SELECT product_id FROM b2b_promo_rrp WHERE promo_id = ?`, [p.id])).map((r) => r.product_id));
+    const todo = (await covered(items)).filter((r) => r.rrp > 0 && !have.has(r.product_id));
+    if (!todo.length) return 0;
+    const at = await rrpAt(todo, p.date_from);
+    for (let i = 0; i < todo.length; i += 80) {
+      await db.batch(todo.slice(i, i + 80).map((r) => [`INSERT OR IGNORE INTO b2b_promo_rrp (promo_id, product_id, rrp) VALUES (?, ?, ?)`, [p.id, r.product_id, at.get(r.product_id)]]));
+    }
+    return todo.length;
+  }
+  onCron("b2b-promos", "B2B \xAB\u0410\u043A\u0446\u0456\u0457\xBB: \u0420\u0420\u0426 \u043D\u0430 \u043F\u043E\u0447\u0430\u0442\u043E\u043A \u0430\u043A\u0446\u0456\u0439", async () => {
+    const t = kyivDay();
+    const list = await db.all(`SELECT * FROM b2b_promos WHERE deleted_at = '' AND stopped_at = '' AND fix_rrp = 1 AND date_from <= ? AND date_to >= ?`, [t, t]);
+    let n = 0;
+    for (const p of list) n += await snapshot(p);
+    return { ok: true, promos: list.length, fixed: n };
+  });
+  async function promoFields(b, id = 0) {
+    const name = String(b.name ?? "").trim().slice(0, 80);
+    if (!name) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043D\u0430\u0437\u0432\u0443 \u0430\u043A\u0446\u0456\u0457.");
+    const from = day(b.date_from);
+    const to = day(b.date_to);
+    if (!from || !to) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u0434\u0430\u0442\u0438 \u0430\u043A\u0446\u0456\u0457 \xAB\u0437\xBB \u0456 \xAB\u043F\u043E\xBB.");
+    if (from > to) throw fail(400, "\u0414\u0430\u0442\u0430 \xAB\u0437\xBB \u043F\u0456\u0437\u043D\u0456\u0448\u0430 \u0437\u0430 \xAB\u043F\u043E\xBB.");
+    let partners = "";
+    if (Array.isArray(b.partners) && b.partners.length) {
+      const ids = [...new Set(b.partners.map(Number).filter(Boolean))];
+      const ok = await db.all(`SELECT id FROM b2b_partners WHERE id IN (SELECT value FROM json_each(?)) AND COALESCE(deleted_at, '') = ''`, [J2(ids)]);
+      if (ok.length !== ids.length) throw fail(400, "\u041D\u0435 \u0432\u0441\u0456\u0445 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0456\u0432 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443.");
+      partners = J2(ids.sort((x, y) => x - y));
+    }
+    const raw2 = Array.isArray(b.items) ? b.items : [];
+    if (!raw2.length) throw fail(400, "\u0414\u043E\u0434\u0430\u0439\u0442\u0435 \u0432 \u0430\u043A\u0446\u0456\u044E \u0445\u043E\u0447\u0430 \u0431 \u043E\u0434\u0438\u043D \u0431\u0440\u0435\u043D\u0434, \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044E \u0447\u0438 \u0442\u043E\u0432\u0430\u0440.");
+    if (raw2.length > 1e3) throw fail(400, "\u0417\u0430\u0431\u0430\u0433\u0430\u0442\u043E \u043F\u043E\u0437\u0438\u0446\u0456\u0439 (\u0434\u043E 1000).");
+    const brands = await brandNames();
+    const cats = await catNames();
+    const prodIds = raw2.filter((i) => i.level === "product").map((i) => Number(i.ref_id));
+    const prods = new Map(prodIds.length ? (await db.all(`SELECT product_id, name FROM b2b_catalog WHERE product_id IN (SELECT value FROM json_each(?))`, [J2(prodIds)])).map((r) => [r.product_id, r.name]) : []);
+    const seen = /* @__PURE__ */ new Set();
+    const items = [];
+    for (const i of raw2) {
+      const level = LEVELS[i.level] ? i.level : "";
+      const ref = Number(i.ref_id) || 0;
+      if (!level || !ref) throw fail(400, "\u041F\u043E\u0437\u0438\u0446\u0456\u044F \u0430\u043A\u0446\u0456\u0457 \u0431\u0435\u0437 \u0431\u0440\u0435\u043D\u0434\u0443, \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u0457 \u0447\u0438 \u0442\u043E\u0432\u0430\u0440\u0443.");
+      const nm = level === "brand" ? brands.get(ref) : level === "category" ? cats.get(ref) : prods.get(ref);
+      if (!nm) throw fail(400, `${LEVELS[level]} #${ref} \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443.`);
+      const k = `${level}:${ref}`;
+      if (seen.has(k)) throw fail(400, `\xAB${nm}\xBB \u0434\u043E\u0434\u0430\u043D\u043E \u0432 \u0430\u043A\u0446\u0456\u044E \u0434\u0432\u0456\u0447\u0456.`);
+      seen.add(k);
+      items.push({ level, ref_id: ref, ref_name: nm, margin: pct2(i.margin, nm), margin_wh: pct2(i.margin_wh, `${nm} (B2B)`, true) });
+    }
+    for (const it of items) {
+      try {
+        await overlap({ ...it, date_from: from, date_to: to, partners }, 0, id || -1);
+      } catch (e) {
+        throw fail(400, `\xAB${it.ref_name}\xBB: ${e.message}`);
+      }
+    }
+    return { name, date_from: from, date_to: to, partners, fix_rrp: b.fix_rrp === false ? 0 : 1, items };
+  }
+  async function savePromo(c, id, f) {
+    const who = userName8(c);
+    const now = nowIso();
+    if (id) {
+      await db.run(
+        `UPDATE b2b_promos SET name = ?, date_from = ?, date_to = ?, partners = ?, fix_rrp = ?, updated_by = ?, updated_at = ? WHERE id = ?`,
+        [f.name, f.date_from, f.date_to, f.partners, f.fix_rrp, who, now, id]
+      );
+    } else {
+      id = (await db.run(
+        `INSERT INTO b2b_promos (name, date_from, date_to, partners, fix_rrp, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [f.name, f.date_from, f.date_to, f.partners, f.fix_rrp, who, now]
+      )).lastId;
+    }
+    const st = [[`DELETE FROM b2b_margin_rules WHERE promo_id = ?`, [id]], [`DELETE FROM b2b_promo_rrp WHERE promo_id = ?`, [id]]];
+    for (const it of f.items) {
+      st.push([
+        `INSERT INTO b2b_margin_rules (name, level, ref_id, margin, margin_wh, date_from, date_to, partners, promo_id, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [f.name, it.level, it.ref_id, it.margin, it.margin_wh, f.date_from, f.date_to, f.partners, id, who, now]
+      ]);
+    }
+    for (let i = 0; i < st.length; i += 100) await db.batch(st.slice(i, i + 100));
+    await snapshot(await db.get(`SELECT * FROM b2b_promos WHERE id = ?`, [id]));
+    return id;
+  }
+  const promoOf = async (id) => {
+    const p = await db.get(`SELECT * FROM b2b_promos WHERE id = ? AND deleted_at = ''`, [Number(id)]);
+    if (!p) throw fail(404, "\u0410\u043A\u0446\u0456\u044E \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    return p;
+  };
+  app.get("/api/b2b/promos", async (c) => {
+    need(c, "b2b.admin");
+    const pid = Number(c.req.query("partner")) || 0;
+    const t = kyivDay();
+    const rows = await db.all(`SELECT p.*, (SELECT COUNT(*) FROM b2b_margin_rules r WHERE r.promo_id = p.id AND r.level = 'brand') AS nb,
+        (SELECT COUNT(*) FROM b2b_margin_rules r WHERE r.promo_id = p.id AND r.level = 'category') AS nc,
+        (SELECT COUNT(*) FROM b2b_margin_rules r WHERE r.promo_id = p.id AND r.level = 'product') AS np
+      FROM b2b_promos p WHERE p.deleted_at = ''
+      ${pid ? `AND (p.partners = '' OR EXISTS (SELECT 1 FROM json_each(p.partners) WHERE CAST(value AS INTEGER) = ?))` : ""}
+      ORDER BY CASE WHEN p.stopped_at = '' AND p.date_to >= ? THEN 0 ELSE 1 END, p.date_from DESC, p.id DESC LIMIT 200`, pid ? [pid, t] : [t]);
+    const pn = new Map((await db.all(`SELECT id, name FROM b2b_partners`)).map((p) => [p.id, p.name]));
+    return c.json({ today: t, promos: rows.map((p) => {
+      const ids = parseIds(p.partners);
+      return {
+        id: p.id,
+        name: p.name,
+        date_from: p.date_from,
+        date_to: p.date_to,
+        fix_rrp: Boolean(p.fix_rrp),
+        status: promoStatus(p, t),
+        stopped_at: p.stopped_at,
+        all: !ids.length,
+        partners: ids,
+        partner_names: ids.map((x) => pn.get(x) || `#${x}`),
+        brands: p.nb,
+        categories: p.nc,
+        products: p.np
+      };
+    }) });
+  });
+  app.get("/api/b2b/promos/:id{[0-9]+}", async (c) => {
+    need(c, "b2b.admin");
+    const p = await promoOf(c.req.param("id"));
+    const rules = await db.all(`SELECT level, ref_id, margin, margin_wh FROM b2b_margin_rules WHERE promo_id = ? ORDER BY id`, [p.id]);
+    const [brands, cats] = await Promise.all([brandNames(), catNames()]);
+    const pIds = rules.filter((r) => r.level === "product").map((r) => r.ref_id);
+    const prods = new Map(pIds.length ? (await db.all(`SELECT product_id, name, article, rrp, brand_id FROM b2b_catalog WHERE product_id IN (SELECT value FROM json_each(?))`, [J2(pIds)])).map((r) => [r.product_id, r]) : []);
+    const ids = parseIds(p.partners);
+    return c.json({
+      id: p.id,
+      name: p.name,
+      date_from: p.date_from,
+      date_to: p.date_to,
+      fix_rrp: Boolean(p.fix_rrp),
+      partners: ids,
+      all: !ids.length,
+      status: promoStatus(p, kyivDay()),
+      stopped_at: p.stopped_at,
+      items: rules.map((r) => {
+        const pr = prods.get(r.ref_id);
+        return {
+          level: r.level,
+          ref_id: r.ref_id,
+          margin: r.margin,
+          margin_wh: r.margin_wh,
+          ref_name: r.level === "brand" ? brands.get(r.ref_id) || `\u0411\u0440\u0435\u043D\u0434 ${r.ref_id}` : r.level === "category" ? cats.get(r.ref_id) || `\u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044F ${r.ref_id}` : pr?.name || `\u0422\u043E\u0432\u0430\u0440 ${r.ref_id}`,
+          ...r.level === "product" ? { article: pr?.article || "", rrp: pr?.rrp || 0, brand_id: pr?.brand_id || 0, brand: brands.get(pr?.brand_id) || "\u0406\u043D\u0448\u0456" } : {}
+        };
+      })
+    });
+  });
+  app.post("/api/b2b/promos", async (c) => {
+    need(c, "b2b.admin");
+    const f = await promoFields(await c.req.json().catch(() => ({})));
+    return c.json({ id: await savePromo(c, 0, f) });
+  });
+  app.put("/api/b2b/promos/:id{[0-9]+}", async (c) => {
+    need(c, "b2b.admin");
+    const p = await promoOf(c.req.param("id"));
+    if (p.stopped_at) throw fail(400, "\u0410\u043A\u0446\u0456\u044E \u0437\u0443\u043F\u0438\u043D\u0435\u043D\u043E \u2014 \u0441\u0442\u0432\u043E\u0440\u0456\u0442\u044C \u043D\u043E\u0432\u0443 (\xAB\u041F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0438\xBB).");
+    const f = await promoFields(await c.req.json().catch(() => ({})), p.id);
+    await savePromo(c, p.id, f);
+    return c.json({ ok: true, id: p.id });
+  });
+  app.post("/api/b2b/promos/:id{[0-9]+}/stop", async (c) => {
+    need(c, "b2b.admin");
+    const p = await promoOf(c.req.param("id"));
+    const y = new Date(Date.parse(`${kyivDay()}T12:00:00Z`) - 864e5).toISOString().slice(0, 10);
+    await db.batch([
+      [`UPDATE b2b_margin_rules SET date_to = ?, updated_by = ?, updated_at = ? WHERE promo_id = ?`, [y < p.date_from ? "0000-00-00" : y, userName8(c), nowIso(), p.id]],
+      [`UPDATE b2b_promos SET stopped_at = ?, updated_by = ? WHERE id = ?`, [nowIso(), userName8(c), p.id]]
+    ]);
+    return c.json({ ok: true });
+  });
+  app.delete("/api/b2b/promos/:id{[0-9]+}", async (c) => {
+    need(c, "b2b.admin");
+    const p = await promoOf(c.req.param("id"));
+    await db.batch([
+      [`DELETE FROM b2b_margin_rules WHERE promo_id = ?`, [p.id]],
+      [`DELETE FROM b2b_promo_rrp WHERE promo_id = ?`, [p.id]],
+      [`UPDATE b2b_promos SET deleted_at = ?, updated_by = ? WHERE id = ?`, [nowIso(), userName8(c), p.id]]
+    ]);
+    return c.json({ ok: true });
+  });
+  app.get("/api/b2b/promos/products", async (c) => {
+    need(c, "b2b.admin");
+    const brand = Number(c.req.query("brand")) || 0;
+    const cat = Number(c.req.query("category")) || 0;
+    if (!brand && !cat) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u0431\u0440\u0435\u043D\u0434 \u0430\u0431\u043E \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0456\u044E.");
+    const rows = await db.all(`SELECT c.product_id AS id, c.name, c.article, c.rrp, c.brand_id FROM b2b_catalog c LEFT JOIN an_products a ON a.product_id = c.product_id
+      WHERE c.hidden = 0 AND ${brand ? "c.brand_id = ?" : "COALESCE(a.cat_manual, a.category_id, 0) = ?"} ORDER BY c.name LIMIT 1000`, [brand || cat]);
+    const brands = await brandNames();
+    return c.json({ products: rows.map((r) => ({ ...r, brand: brands.get(r.brand_id) || "\u0406\u043D\u0448\u0456" })) });
+  });
+  app.post("/api/b2b/promos/resolve", async (c) => {
+    need(c, "b2b.admin");
+    const b = await c.req.json().catch(() => ({}));
+    const codes = [...new Set(String(b.text || "").split(/[\n\r\t;,]+/).map((x) => x.trim()).filter(Boolean))].slice(0, 1e3);
+    if (!codes.length) return c.json({ found: [], missing: [] });
+    const rows = await db.all(`SELECT c.product_id AS id, c.name, c.article, c.rrp, c.brand_id FROM b2b_catalog c
+      WHERE c.hidden = 0 AND (LOWER(TRIM(c.article)) IN (SELECT LOWER(value) FROM json_each(?)) OR CAST(c.product_id AS TEXT) IN (SELECT value FROM json_each(?)))`, [J2(codes), J2(codes)]);
+    const brands = await brandNames();
+    const byArt = /* @__PURE__ */ new Map();
+    const byId = /* @__PURE__ */ new Map();
+    for (const r of rows) {
+      if (r.article) byArt.set(String(r.article).trim().toLowerCase(), r);
+      byId.set(String(r.id), r);
+    }
+    const found = /* @__PURE__ */ new Map();
+    const missing = [];
+    for (const code of codes) {
+      const r = byArt.get(code.toLowerCase()) || byId.get(code);
+      if (r) found.set(r.id, { ...r, brand: brands.get(r.brand_id) || "\u0406\u043D\u0448\u0456", code });
+      else missing.push(code);
+    }
+    return c.json({ found: [...found.values()], missing });
+  });
+  app.post("/api/b2b/promos/preview", async (c) => {
+    need(c, "b2b.admin");
+    const b = await c.req.json().catch(() => ({}));
+    const id = Number(b.id) || 0;
+    const errors = [];
+    let f = null;
+    try {
+      f = await promoFields(b, id);
+    } catch (e) {
+      errors.push(e.message);
+    }
+    const items = f?.items || (Array.isArray(b.items) ? b.items.map((i) => ({ level: i.level, ref_id: Number(i.ref_id), margin: Number(i.margin) || 0 })) : []);
+    const rows = await covered(items);
+    const from = f?.date_from || (/^\d{4}-\d{2}-\d{2}$/.test(String(b.date_from || "")) ? b.date_from : kyivDay());
+    const fix = b.fix_rrp !== false;
+    const base2 = fix ? await rrpAt(rows.filter((r) => r.rrp > 0), from) : /* @__PURE__ */ new Map();
+    const warnings = [];
+    const noRrp = rows.filter((r) => !(r.rrp > 0));
+    if (noRrp.length) warnings.push(`\u0411\u0435\u0437 \u0420\u0420\u0426 (\u0437\u043D\u0438\u0436\u043A\u0430 \u043D\u0435 \u0434\u0456\u0454): ${noRrp.length} \u2014 ${noRrp.slice(0, 5).map((r) => r.name).join(", ")}${noRrp.length > 5 ? "\u2026" : ""}`);
+    const ids = f ? parseIds(f.partners) : [];
+    const partners = await db.all(`SELECT id, name FROM b2b_partners WHERE active = 1 AND COALESCE(deleted_at, '') = '' ${ids.length ? "AND id IN (SELECT value FROM json_each(?))" : ""} ORDER BY name`, ids.length ? [J2(ids)] : []);
+    const byId = new Map(rows.map((r) => [r.product_id, r]));
+    const higher = [];
+    if (rows.length) {
+      for (const p of partners.slice(0, 30)) {
+        const norm = await db.all(`SELECT c.product_id, ${PM_COLS} FROM b2b_margins m JOIN b2b_catalog c ON c.brand_id = m.brand_id ${PM_JOIN}
+          WHERE m.partner_id = ? AND c.hidden = 0 AND c.rrp > 0 AND c.product_id IN (SELECT value FROM json_each(?))`, ["0000-00-00", p.id, J2(rows.map((r) => r.product_id))]);
+        const n = norm.filter((r) => {
+          const it = itemFor(items, byId.get(r.product_id));
+          return it && Number(r.margin) > Number(it.margin);
+        }).length;
+        if (n) higher.push(`${p.name} \u2014 ${n} ${n === 1 ? "\u0442\u043E\u0432\u0430\u0440" : "\u0442\u043E\u0432\u0430\u0440\u0456\u0432"}`);
+      }
+    }
+    if (higher.length) warnings.push(`\u0417\u0432\u0438\u0447\u0430\u0439\u043D\u0430 \u043C\u0430\u0440\u0436\u0430 \u0432\u0438\u0449\u0430 \u0437\u0430 \u0430\u043A\u0446\u0456\u0439\u043D\u0443, \u0457\u043C \u043B\u0438\u0448\u0438\u0442\u044C\u0441\u044F \u0437\u0432\u0438\u0447\u0430\u0439\u043D\u0430: ${higher.join("; ")}`);
+    return c.json({
+      errors,
+      warnings,
+      count: rows.length,
+      partners: partners.length,
+      coverage: items.map((i) => ({ level: i.level, ref_id: i.ref_id, n: rows.filter((r) => itemFor(items, r) === i).length })),
+      rows: rows.filter((r) => r.rrp > 0).slice(0, 1e3).map((r) => {
+        const it = itemFor(items, r);
+        const rrp0 = fix ? base2.get(r.product_id) || r.rrp : r.rrp;
+        return {
+          id: r.product_id,
+          name: r.name,
+          article: r.article || "",
+          rrp: r.rrp,
+          rrp_start: rrp0,
+          margin: it?.margin ?? null,
+          margin_wh: it?.margin_wh ?? null,
+          price: it ? partnerPrice2(rrp0, it.margin) : null,
+          price_wh: it ? partnerPrice2(rrp0, it.margin_wh ?? it.margin) : null
+        };
+      })
+    });
   });
   app.get("/api/b2b/margin-rules/check", async (c) => {
     need(c, "b2b.admin");
@@ -14675,7 +14990,7 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   const attention = async (user) => [...await home.attention(), ...await crm.attention(user), ...await newProducts.attention()];
   mountB2bPrices(app, { db, services, partnerPrice, myPartner });
   mountB2bNews(app, { db, fetchFn, services, myPartner, partnerPrice, brandNames, onCron });
-  mountB2bMargins(app, { db, brandNames, partnerPrice });
+  mountB2bMargins(app, { db, brandNames, partnerPrice, onCron });
   app.post("/api/b2b/partners/:id/tg-group", async (c) => {
     need(c, "b2b.admin");
     const p = await getPartner(c.req.param("id"));
@@ -22752,7 +23067,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 45,
+  version: 46,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23081,6 +23396,30 @@ var schema11 = {
     deleted_at TEXT DEFAULT ''
   )`,
     `CREATE INDEX IF NOT EXISTS b2b_margin_rules_ref ON b2b_margin_rules (level, ref_id)`,
+    // Акції (margins.js): назва, дати, кому ('' — усім, JSON id) один раз; позиції — правила b2b_margin_rules з promo_id.
+    // fix_rrp = 1 — відсоток рахується від РРЦ на початок акції (b2b_promo_rrp), навіть якщо ціну в LP-CRM потім знизили.
+    // stopped_at — акцію зупинено вручну (її правила видалено).
+    `CREATE TABLE IF NOT EXISTS b2b_promos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    date_from TEXT NOT NULL,
+    date_to TEXT NOT NULL,
+    partners TEXT DEFAULT '',
+    fix_rrp INTEGER DEFAULT 1,
+    created_by TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_by TEXT DEFAULT '',
+    updated_at TEXT DEFAULT '',
+    stopped_at TEXT DEFAULT '',
+    deleted_at TEXT DEFAULT ''
+  )`,
+    // РРЦ товару на початок акції (00:00 за Києвом у день «з»), відновлена з журналу змін цін b2b_price_log.
+    `CREATE TABLE IF NOT EXISTS b2b_promo_rrp (
+    promo_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    rrp REAL NOT NULL,
+    PRIMARY KEY (promo_id, product_id)
+  )`,
     // ---------- Новини для партнерів (news.js) ----------
     // body — JSON блоків статті (текст, фото, відео, файл, товар); audience — JSON id партнерів ('' — усім);
     // status — draft | published; publish_at — з якого часу видно (у майбутньому — заплановано);
@@ -23257,7 +23596,9 @@ var schema11 = {
     ["b2b_catalog", "first_priced_at", "TEXT DEFAULT ''"],
     ["b2b_catalog", "announced_at", "TEXT DEFAULT ''"],
     // API: № замовлення в системі партнера (external_id) — щоб повторний запит не створив дубль.
-    ["b2b_orders", "ext_id", "TEXT DEFAULT ''"]
+    ["b2b_orders", "ext_id", "TEXT DEFAULT ''"],
+    // Позиція акції b2b_promos (0 — окреме правило).
+    ["b2b_margin_rules", "promo_id", "INTEGER DEFAULT 0"]
   ],
   // Індекси на нові колонки — після ALTER TABLE (у старих базах колонок ще немає, коли створюються таблиці).
   async seed(db) {
@@ -23273,7 +23614,8 @@ var schema11 = {
       [`CREATE INDEX IF NOT EXISTS b2b_orders_crmext ON b2b_orders (crm_ext) WHERE crm_ext != ''`, []],
       [`CREATE INDEX IF NOT EXISTS b2b_payments_payer ON b2b_payments (payer_code)`, []],
       [`CREATE UNIQUE INDEX IF NOT EXISTS b2b_orders_ext ON b2b_orders (partner_id, ext_id) WHERE ext_id != ''`, []],
-      [`CREATE INDEX IF NOT EXISTS b2b_orders_upd ON b2b_orders (partner_id, updated_at)`, []]
+      [`CREATE INDEX IF NOT EXISTS b2b_orders_upd ON b2b_orders (partner_id, updated_at)`, []],
+      [`CREATE INDEX IF NOT EXISTS b2b_margin_rules_promo ON b2b_margin_rules (promo_id) WHERE promo_id > 0`, []]
     ]);
     const done = await db.get(`SELECT value FROM settings WHERE key = 'b2b_newprod_init'`);
     if (!done) {
