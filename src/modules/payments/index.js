@@ -324,7 +324,19 @@ export function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, not
       `SELECT t.id, t.date, t.amount, t.purpose, t.payer_name FROM odb_tx_possible p JOIN odb_tx t ON t.id = p.tx_id
        WHERE p.odb_id = ? AND t.link_id IS NULL ORDER BY t.date DESC LIMIT 10`, [link.odb_id],
     );
-    return c.json({ link, payments, possible });
+    // Схожі платежі: клієнт міг заплатити звичайним переказом (не за посиланням) — тоді Opendatabot їх не пов'язує.
+    // Той самий рахунок, сума = сума посилання або залишок (±1 ₴), не раніше ніж за добу до створення. Прив'язує людина.
+    let similar = [];
+    if (['pending', 'partial', 'check'].includes(link.status) && link.account_iban) {
+      const left = round2(link.amount - (link.paid_amount || 0));
+      similar = (await db.all(
+        `SELECT t.id, t.date, t.amount, t.purpose, t.payer_name FROM odb_tx t
+         WHERE +t.iban = ? AND +t.link_id IS NULL AND t.date >= ? AND (ABS(t.amount - ?) <= 1 OR ABS(t.amount - ?) <= 1)
+         ORDER BY t.date DESC LIMIT 10`,
+        [link.account_iban, kyivParts(new Date(Date.parse(link.created_at) - 86400000)), link.amount, left],
+      )).filter((t) => !possible.some((p) => p.id === t.id));
+    }
+    return c.json({ link, payments, possible, similar });
   });
 
   app.post('/api/odb/links', async (c) => {
@@ -606,8 +618,10 @@ export function mountOdb(app, { db, fetchFn, services = {}, base = ODB_BASE, not
     }
     const prev = await db.get(`SELECT link_id FROM odb_tx WHERE id = ?`, [c.req.param('id')]);
     await db.run(`UPDATE odb_tx SET link_id = ?, manual = 1 WHERE id = ?`, [linkId, c.req.param('id')]);
-    await relink({ txIds: [c.req.param('id')], linkIds: [linkId, prev?.link_id].filter(Boolean) });
-    return c.json({ ok: true });
+    const paid = await relink({ txIds: [c.req.param('id')], linkIds: [linkId, prev?.link_id].filter(Boolean) });
+    // посилання стало оплаченим після ручної прив'язки — таке саме повідомлення в Telegram, як при автоматичній
+    if (linkId && paid.length) await notify({ linkIds: paid }).catch(() => 0);
+    return c.json({ ok: true, paid: paid.length });
   });
 
   // ---------------------------------------------------------------- аналітика оплат (власник і адміни)
