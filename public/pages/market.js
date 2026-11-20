@@ -3,7 +3,7 @@
 // Розетка: історія за обраний період, типово 4 роки (завантажується у фоні; поки сторінка відкрита — можна швидше);
 // відгуки на товари — фільтр «хто ще не залишив відгук» і нагадування (Viber, Telegram, дзвінок, чат Розетки).
 import { esc } from '../invoice.js';
-import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime, todayKyiv } from '../core/ui.js';
+import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime, todayKyiv, telLink } from '../core/ui.js';
 import { crmCreateFlow } from './mpcrm.js';
 
 const uah = (n) => `${Number(n || 0).toLocaleString('uk-UA', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} ₴`;
@@ -246,7 +246,7 @@ export function createMarketPages({ can }) {
           ${thumb(o)}
           <span class="mp3-c mp3-no"><span class="num">${esc(o.number)}${cp(o.number, 'Номер замовлення')}</span><span class="muted small ell">${esc(hm(o.created_at))}${many ? ` · ${esc(name.get(o.account_id) || '')}` : ''}</span></span>
           <span class="mp3-c"><span class="ell" style="font-weight:500">${it ? esc(it.name) : '—'}${it ? cp(it.name, 'Назва товару') : ''}</span><span class="muted small ell">${it?.qty > 1 ? `× ${it.qty} · ` : ''}${o.items.length > 1 ? `+${o.items.length - 1} товар · ` : ''}${it?.id ? `код ${esc(it.id)}${cp(it.id, 'Код товару')}` : ''}</span></span>
-          <span class="mp3-c"><span class="ell">${esc(o.customer || '—')}${o.customer ? cp(o.customer, 'ПІБ') : ''} ${dupTag(o)}</span><span class="muted small ell">${ph ? `${esc(ph)}${cp(ph, 'Телефон')} · ` : ''}${esc(o.delivery || '')}${o.ttn ? ` · ТТН ${esc(o.ttn)}${cp(o.ttn, 'ТТН')}` : ''}</span></span>
+          <span class="mp3-c"><span class="ell">${esc(o.customer || '—')}${o.customer ? cp(o.customer, 'ПІБ') : ''} ${dupTag(o)}</span><span class="muted small ell">${ph ? `${telLink(ph)}${cp(ph, 'Телефон')} · ` : ''}${esc(o.delivery || '')}${o.ttn ? ` · ТТН ${esc(o.ttn)}${cp(o.ttn, 'ТТН')}` : ''}</span></span>
           <span class="mp3-c mp3-tags">${payTag(o)}${crm}${o.called_at ? `<span class="mp-tag ok" title="${esc(fmtDateTime(o.called_at))}">подзвонив${o.called_by ? ` · ${esc(o.called_by)}` : ''}</span>` : ''}${showRv() ? `<span data-rvcell="${esc(keyOf(o))}" class="small">${rvCell(o)}</span>` : ''}</span>
           <span class="mp3-st"><span class="mp3-dot" style="background:${stColor(o)}"></span>${status}</span>
           ${rz ? `<span>${callChip(o)}</span>` : ''}
@@ -561,8 +561,8 @@ export function createMarketPages({ can }) {
             ${o.called_at ? `<div class="small" style="margin-top:6px">✓ Подзвонив${o.called_by ? ` ${esc(o.called_by)}` : ''} · ${esc(fmtDateTime(o.called_at))}</div>` : ''}
             ${calledBtn ? `<div style="margin-top:8px">${calledBtn}</div>` : ''}</div>` : calledBtn ? `<div class="mp-wide-box">${calledBtn}</div>` : ''}
           <div class="mp-box"><div class="mp-cap">Покупець</div><b>${esc(o.customer || '—')}</b>${cp(o.customer, 'ПІБ')}
-            ${ph ? `<div style="margin-top:2px">${esc(ph)}${cp(ph, 'Телефон')}</div>` : ''}
-            ${o.recipient ? `<div class="small" style="margin-top:4px"><span class="muted">Отримувач:</span> ${esc(o.recipient)}${cp(o.recipient, 'ПІБ отримувача')}${o.recipient_phone ? ` · ${esc(o.recipient_phone)}${cp(intlPhone(o.recipient_phone), 'Телефон отримувача')}` : ''}</div>` : ''}</div>
+            ${ph ? `<div style="margin-top:2px">${telLink(ph)}${cp(ph, 'Телефон')}</div>` : ''}
+            ${o.recipient ? `<div class="small" style="margin-top:4px"><span class="muted">Отримувач:</span> ${esc(o.recipient)}${cp(o.recipient, 'ПІБ отримувача')}${o.recipient_phone ? ` · ${telLink(intlPhone(o.recipient_phone))}${cp(intlPhone(o.recipient_phone), 'Телефон отримувача')}` : ''}</div>` : ''}</div>
           <div class="mp-box"><div class="mp-cap">Доставка</div><b>${esc(o.delivery || '—')}</b>${o.address ? `<div class="small">${esc(o.address)}${cp(o.address, 'Адресу')}</div>` : ''}${o.ttn ? `<div class="small">ТТН <b>${esc(o.ttn)}</b>${cp(o.ttn, 'ТТН')}</div>` : '<div class="small muted">ТТН ще не створено</div>'}</div>
           ${rz ? `<div class="mp-box"><div class="mp-cap">Оплата</div><b>${esc(o.pay_type || '—')}</b><div class="small ${o.paid ? '' : 'muted'}">${o.paid ? '<b style="color:var(--ok)">✓ Оплачено</b>' : esc(o.pay_status || (o.pay_type ? 'не оплачено' : 'ще не отримано з Розетки'))}</div><div style="margin-top:4px"><b>${uah(o.total)}</b>${cp(String(o.total), 'Сума')}</div></div>` : ''}
           ${rz ? `<div class="mp-box mp3-crm" id="mpDCrm"><div class="mp-cap">LP-CRM</div>${crmBox(o)}</div>` : ''}

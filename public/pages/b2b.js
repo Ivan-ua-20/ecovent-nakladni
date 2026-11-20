@@ -1,7 +1,7 @@
 // B2B (власник і адміністратори): партнери, їхні користувачі, бренди й маржа, каталог з цінами з LP-CRM,
 // закупівлі (рахунок, накладна, файли), замовлення клієнтів партнерів (передача в LP-CRM).
 import { esc, money } from '../invoice.js';
-import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
+import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime, telLink } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
 import { catalogPriceModal, partnerPriceModal } from './b2b-price.js';
 import { npTtnModal } from './b2b-npttn.js';
@@ -1232,7 +1232,7 @@ export function createB2bPages(ctx = {}) {
         ${rows.map((o) => `<tr class="click ${o.pending ? 'row-info' : (o.no_supply || (o.np && !o.ttn)) && o.status !== 'cancelled' ? 'row-bad' : ''} ${urgentRow(o)}" data-o="${o.id}">
           ${selCell(o.id)}
           <td><b>${esc(o.number)}</b>${o.urgent && o.status !== 'cancelled' ? `<div>${urgentBadge(o)}</div>` : ''}<div>${supplyMark(o)}</div>${o.pending ? '<div><span class="badge info">🔵 чекає підтвердження партнера</span></div>' : ''}<div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
-          <td>${esc(o.partner)}<div class="small">${esc(o.client_name)} · ${esc(phoneFmt(o.client_phone))}</div><div class="small muted">${o.ttn ? `ТТН ${esc(o.ttn)} · ` : ''}${o.labels ? `📎 маркування: ${o.labels}` : (o.status === 'new' ? '<span class="badge bad">без маркування</span>' : '')}${o.files > (o.labels || 0) ? ` · 📄 документів: ${o.files - (o.labels || 0)}` : ''}</div></td>
+          <td>${esc(o.partner)}<div class="small">${esc(o.client_name)} · ${telLink(o.client_phone, phoneFmt(o.client_phone))}</div><div class="small muted">${o.ttn ? `ТТН ${esc(o.ttn)} · ` : ''}${o.labels ? `📎 маркування: ${o.labels}` : (o.status === 'new' ? '<span class="badge bad">без маркування</span>' : '')}${o.files > (o.labels || 0) ? ` · 📄 документів: ${o.files - (o.labels || 0)}` : ''}</div></td>
           <td class="r"><b>${uah(o.total)}</b></td>
           <td>${statusBadge(o)}</td>
           <td class="hide-m">${payBadge(o)}</td>
@@ -1341,7 +1341,7 @@ export function createB2bPages(ctx = {}) {
           ${o.comment ? `<div class="card small"><b>Коментар партнера:</b> ${esc(o.comment)}</div>` : ''}
           <div class="card form-stack ${o.no_supply && !closed ? 'card-bad' : ''}">
             <h3>Клієнт і доставка</h3>
-            <div><b>${esc(o.client_name)}</b> · ${esc(phoneFmt(o.client_phone))}</div>
+            <div><b>${esc(o.client_name)}</b> · ${telLink(o.client_phone, phoneFmt(o.client_phone))}</div>
             ${o.np ? `<div class="alert ${o.ttn ? 'info' : 'bad'} small np-admin"><b>ТТН створює Ековент.</b> ${esc(npAddressText(o.np))}
                 <div>${o.np.cod ? `Клієнт платить при отриманні: <b>${esc(String(o.np.cod))} грн</b>` : 'Без оплати при отриманні'}</div></div>
               <div>ТТН: ${o.ttn ? `<b>${esc(o.ttn)}</b>${o.np_meta ? ` <span class="small muted">· ${esc(o.np_meta.sender || '')}${o.np_meta.control ? ` · контроль оплати ${esc(String(o.np_meta.control))} грн` : ''}${o.np_meta.cost ? ` · доставка ${esc(String(o.np_meta.cost))} грн` : ''}${o.np_meta.by ? ` · створив(ла) ${esc(o.np_meta.by)}` : ''}</span>` : ''}` : '<span class="badge bad">ще не створено</span>'}</div>

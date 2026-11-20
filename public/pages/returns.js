@@ -2,7 +2,7 @@
 // Розетка-постачальник, маркетплейси, LP-CRM). Інформаційний розділ: фільтри зліва, показники, таблиця; оновлення —
 // фоном раз на 12 год або кнопкою «Оновити інформацію».
 import { esc, money } from '../invoice.js';
-import { $, $$, main, api, toast, fmtDateTime } from '../core/ui.js';
+import { $, $$, main, api, toast, fmtDateTime, telHref } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
 import { fpLayout, wireFp, fpGroup, fpBtn } from './b2b-shared.js';
 import { icon, iconize } from '../core/icons.js';
@@ -18,7 +18,6 @@ const CAR = { np: 'Нова пошта', rd: 'Розетка Делівері', 
 const phoneFmt = (p) => { const d = String(p || '').replace(/\D/g, '').slice(-9); return d.length === 9 ? `0${d.slice(0, 2)} ${d.slice(2, 5)} ${d.slice(5, 7)} ${d.slice(7)}` : esc(p || ''); };
 const dShort = (iso) => (iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}` : '');
 const daysWord = (n) => `${n} дн`;
-const telHref = (p) => { const d = String(p || '').replace(/\D/g, '').slice(-9); return d.length === 9 ? `tel:+380${d}` : ''; };
 
 export function createReturnsPages() {
   const f = { st: 'active', src: '', to: '', reason: '', car: '', q: '', from: '', till: '' };
