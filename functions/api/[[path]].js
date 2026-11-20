@@ -131,11 +131,11 @@ var getPattern = (label, next) => {
   }
   return null;
 };
-var tryDecode = (str3, decoder) => {
+var tryDecode = (str4, decoder) => {
   try {
-    return decoder(str3);
+    return decoder(str4);
   } catch {
-    return str3.replace(/(?:%[0-9A-Fa-f]{2})+/g, (match2) => {
+    return str4.replace(/(?:%[0-9A-Fa-f]{2})+/g, (match2) => {
       try {
         return decoder(match2);
       } catch {
@@ -144,7 +144,7 @@ var tryDecode = (str3, decoder) => {
     });
   }
 };
-var tryDecodeURI = (str3) => tryDecode(str3, decodeURI);
+var tryDecodeURI = (str4) => tryDecode(str4, decodeURI);
 var getPath = (request) => {
   const url = request.url;
   const start = url.indexOf("/", url.indexOf(":") + 4);
@@ -188,7 +188,7 @@ var checkOptionalParameter = (path) => {
   });
   return results.filter((v, i, a) => a.indexOf(v) === i);
 };
-var tryDecodeURIComponent = (str3) => str3.indexOf("%") !== -1 ? tryDecode(str3, decodeURIComponent_) : str3;
+var tryDecodeURIComponent = (str4) => str4.indexOf("%") !== -1 ? tryDecode(str4, decodeURIComponent_) : str4;
 var _decodeURI = (value) => {
   if (value.indexOf("+") !== -1) value = value.replace(/\+/g, " ");
   return tryDecodeURIComponent(value);
@@ -525,20 +525,20 @@ var raw = (value, callbacks) => {
   escapedString.callbacks = callbacks;
   return escapedString;
 };
-var resolveCallback = async (str3, phase, preserveCallbacks, context, buffer) => {
-  if (typeof str3 === "object" && !(str3 instanceof String)) {
-    if (!(str3 instanceof Promise)) str3 = str3.toString();
-    if (str3 instanceof Promise) str3 = await str3;
+var resolveCallback = async (str4, phase, preserveCallbacks, context, buffer) => {
+  if (typeof str4 === "object" && !(str4 instanceof String)) {
+    if (!(str4 instanceof Promise)) str4 = str4.toString();
+    if (str4 instanceof Promise) str4 = await str4;
   }
-  const callbacks = str3.callbacks;
-  if (!callbacks?.length) return Promise.resolve(str3);
-  if (buffer) buffer[0] += str3;
-  else buffer = [str3];
+  const callbacks = str4.callbacks;
+  if (!callbacks?.length) return Promise.resolve(str4);
+  if (buffer) buffer[0] += str4;
+  else buffer = [str4];
   const resStr = Promise.all(callbacks.map((c) => c({
     phase,
     buffer,
     context
-  }))).then((res) => Promise.all(res.filter(Boolean).map((str4) => resolveCallback(str4, phase, false, context, buffer))).then(() => buffer[0]));
+  }))).then((res) => Promise.all(res.filter(Boolean).map((str5) => resolveCallback(str5, phase, false, context, buffer))).then(() => buffer[0]));
   if (preserveCallbacks) return raw(await resStr, callbacks);
   else return resStr;
 };
@@ -6015,8 +6015,8 @@ function mountAnalytics(app, { db, fetchFn, services = {}, shared: shared2 = {},
   }
   return { addProducts };
 }
-async function hashKey(str3) {
-  const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(str3));
+async function hashKey(str4) {
+  const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(str4));
   return [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
@@ -6644,10 +6644,10 @@ function listFilter(c, { client = false } = {}) {
   const q = String(c.req.query("q") || "").trim().slice(0, 60);
   if (q) {
     const or = [];
-    const num6 = /^(?:b2b\s*-?\s*)?(\d{1,9})$/i.exec(q);
-    if (num6) {
+    const num7 = /^(?:b2b\s*-?\s*)?(\d{1,9})$/i.exec(q);
+    if (num7) {
       or.push("o.id = ?");
-      params.push(Number(num6[1]));
+      params.push(Number(num7[1]));
     }
     const low3 = q.toLocaleLowerCase("uk");
     const variants = [.../* @__PURE__ */ new Set([
@@ -6946,8 +6946,8 @@ function parseNpLabel(text) {
   }
   return ttn ? { ttn, phone: phones.at(-1) || "", recipient, address, rozetka: /РОЗ\s?(\d{6,})/.exec(t)?.[1] || "" } : null;
 }
-function hintsOf(str3) {
-  const s3 = String(str3 || "");
+function hintsOf(str4) {
+  const s3 = String(str4 || "");
   const order2 = /B2B[\s-]*(\d{1,9})/i.exec(s3)?.[1];
   const kind = /накладн|\bрн\b|\bвн\b/i.test(s3) ? "waybill" : /рахун|\bсф\b|invoice/i.test(s3) ? "invoice" : "";
   const number = /(?:№|N|#|номер)\s*([A-Za-zА-Яа-яІЇЄ]{0,4}-?\d{1,10})/i.exec(s3)?.[1] || "";
@@ -8665,11 +8665,11 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
           const o = byCode.get(r.crm_ext);
           const s3 = o ? String(o.status ?? o.status_id ?? "") : "";
           const name = o ? String((names[s3]?.name ?? names[s3]) || s3 || "\u2014").trim() : "\u041D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 CRM";
-          const num7 = o && /^\d+$/.test(String(o.id ?? "")) ? String(o.id) : r.crm_id;
-          const same = name === (r.crm_status || "") && (num7 || "") === (r.crm_id || "");
+          const num8 = o && /^\d+$/.test(String(o.id ?? "")) ? String(o.id) : r.crm_id;
+          const same = name === (r.crm_status || "") && (num8 || "") === (r.crm_id || "");
           if (cron && same) continue;
-          st.push(same ? [`UPDATE b2b_orders SET crm_checked_at = ? WHERE id = ?`, [now, r.id]] : [`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ?, crm_ext = ?, crm_id = ?, updated_at = ? WHERE id = ?`, [name, now, r.crm_ext, num7 || "", now, r.id]]);
-          if (num7 && !r.crm_id) linked.push([r.id, num7]);
+          st.push(same ? [`UPDATE b2b_orders SET crm_checked_at = ? WHERE id = ?`, [now, r.id]] : [`UPDATE b2b_orders SET crm_status = ?, crm_checked_at = ?, crm_ext = ?, crm_id = ?, updated_at = ? WHERE id = ?`, [name, now, r.crm_ext, num8 || "", now, r.id]]);
+          if (num8 && !r.crm_id) linked.push([r.id, num8]);
           if (o && r.crm_status && r.crm_status !== WAIT && name !== r.crm_status) changed.push([r, r.crm_status, name]);
         }
       }
@@ -8683,7 +8683,7 @@ function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, orders, h
         await tgPartner(r.partner_id, `${tone === "ok" ? "\u2705" : "\u21A9\uFE0F"} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043A\u043B\u0456\u0454\u043D\u0442\u0430 ${orderNo(r.id)} (${h10(r.client_name || "")})${r.crm_id ? ` \xB7 LP-CRM \u2116 ${h10(r.crm_id)}` : ""}: <b>${h10(now2)}</b>`).catch(() => 0);
       }
     }
-    for (const [id, num7] of linked) await hooks.crmLinked?.(id, num7).catch(() => 0);
+    for (const [id, num8] of linked) await hooks.crmLinked?.(id, num8).catch(() => 0);
     if (linked.length) {
       const sup = await db.all(`SELECT DISTINCT supply_id FROM b2b_orders WHERE id IN (SELECT value FROM json_each(?)) AND supply_id IS NOT NULL`, [JSON.stringify(linked.map(([id]) => id))]);
       for (const r of sup) await supplyInWork(r.supply_id).catch(() => 0);
@@ -8934,18 +8934,18 @@ ${link(c, `b2bclients/${o.id}`)}`);
   }
   const dt2 = (iso) => iso ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
   const ukDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d || "") ? d.split("-").reverse().join(".") : "";
-  const num6 = (n) => new Intl.NumberFormat("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n).replace(/\s/g, " ");
+  const num7 = (n) => new Intl.NumberFormat("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n).replace(/\s/g, " ");
   async function payText(o, partnerName, { own = false } = {}) {
     if (!o.supply_id) return { paid: !!o.paid_at, text: o.paid_at ? `\u2705 \u041E\u041F\u041B\u0410\u0427\u0415\u041D\u041E (\u0431\u0435\u0437 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456, \u043F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E ${dt2(o.paid_at)})` : "\u23F3 \u0411\u0415\u0417 \u0417\u0410\u041A\u0423\u041F\u0406\u0412\u041B\u0406 \u2014 \u041E\u0427\u0406\u041A\u0423\u0404\u041C\u041E \u041E\u041F\u041B\u0410\u0422\u0423" };
     const s3 = await db.get(`SELECT * FROM b2b_orders WHERE id = ?`, [o.supply_id]);
     if (!s3) return { paid: false, text: "" };
     if (s3.status === "open") return { paid: false, text: `\u23F3 \u0411\u0415\u0417 \u0417\u0410\u041A\u0423\u041F\u0406\u0412\u041B\u0406 (\u0432\u0456\u0434\u043A\u0440\u0438\u0442\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(s3.id)}, \u0440\u0430\u0445\u0443\u043D\u043E\u043A \u0449\u0435 \u043D\u0435 \u0441\u0444\u043E\u0440\u043C\u043E\u0432\u0430\u043D\u043E) \u2014 \u041E\u0427\u0406\u041A\u0423\u0404\u041C\u041E \u041E\u041F\u041B\u0410\u0422\u0423` };
     const ent = String(s3.entity || "").split("\n")[0].replace(/^(ФОП|ТОВ|ПП)(?=[А-ЯІЇЄҐ])/u, "$1 ");
-    const inv = s3.invoice_no ? `\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${s3.invoice_no}${s3.invoice_date ? ` \u0432\u0456\u0434 ${ukDate(s3.invoice_date)}` : ""} \u043D\u0430 ${num6(s3.total)} \u0433\u0440\u043D` : `\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u0449\u0435 \u043D\u0435 \u0432\u0438\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E (${num6(s3.total)} \u0433\u0440\u043D)`;
+    const inv = s3.invoice_no ? `\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u2116 ${s3.invoice_no}${s3.invoice_date ? ` \u0432\u0456\u0434 ${ukDate(s3.invoice_date)}` : ""} \u043D\u0430 ${num7(s3.total)} \u0433\u0440\u043D` : `\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u0449\u0435 \u043D\u0435 \u0432\u0438\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E (${num7(s3.total)} \u0433\u0440\u043D)`;
     const wb = s3.waybill_no ? `\u0412\u041D \u2116 ${s3.waybill_no}` : "";
     const pays = await db.all(`SELECT amount, date, payer_name, payer_code, account FROM b2b_payments WHERE order_id = ? ORDER BY date`, [s3.id]).catch(() => []);
     const from = (t) => own && t.payer_code && ent.includes(t.payer_code) ? "" : ` \u0432\u0456\u0434 ${t.payer_name || "\u2014"}${t.payer_code ? ` (${t.payer_code})` : ""}`;
-    const lines = pays.map((t) => `\u041E\u043F\u043B\u0430\u0442\u0430 ${dt2(t.date)} \u2014 ${num6(t.amount)} \u0433\u0440\u043D${from(t)}${t.account ? ` \u043D\u0430 ${t.account}` : ""}`);
+    const lines = pays.map((t) => `\u041E\u043F\u043B\u0430\u0442\u0430 ${dt2(t.date)} \u2014 ${num7(t.amount)} \u0433\u0440\u043D${from(t)}${t.account ? ` \u043D\u0430 ${t.account}` : ""}`);
     const head = (label) => own ? `${label} \u2014 ` : `${label}: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(s3.id)}, `;
     if (["paid", "done"].includes(s3.status)) {
       const how = lines.length ? lines : [`\u041F\u043E\u0437\u043D\u0430\u0447\u0435\u043D\u043E \xAB\u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E\xBB \u0432\u0440\u0443\u0447\u043D\u0443${s3.paid_by && s3.paid_by !== "Opendatabot" ? ` (${s3.paid_by})` : ""}${s3.paid_at ? ` ${dt2(s3.paid_at)}` : ""}`];
@@ -8953,7 +8953,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
     }
     const payer = own ? `\u043F\u043B\u0430\u0442\u043D\u0438\u043A: ${ent}` : `\u0440\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430 ${ent}, \u0432\u0456\u0434 \xAB${partnerName}\xBB`;
     if (s3.status === "partial") {
-      return { paid: false, text: [`${head("\u23F3 \u0427\u0410\u0421\u0422\u041A\u041E\u0412\u041E \u041E\u041F\u041B\u0410\u0427\u0415\u041D\u041E")}${inv} \u2014 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E ${num6(s3.paid_amount)}, \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${num6(s3.total - s3.paid_amount)} \u0433\u0440\u043D`, ...own ? [`\u041F\u043B\u0430\u0442\u043D\u0438\u043A: ${ent}`] : [], ...lines].join("\n") };
+      return { paid: false, text: [`${head("\u23F3 \u0427\u0410\u0421\u0422\u041A\u041E\u0412\u041E \u041E\u041F\u041B\u0410\u0427\u0415\u041D\u041E")}${inv} \u2014 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043E ${num7(s3.paid_amount)}, \u0437\u0430\u043B\u0438\u0448\u043E\u043A ${num7(s3.total - s3.paid_amount)} \u0433\u0440\u043D`, ...own ? [`\u041F\u043B\u0430\u0442\u043D\u0438\u043A: ${ent}`] : [], ...lines].join("\n") };
     }
     if (s3.pay_terms === "postpay") {
       return { paid: false, text: `\u23F3 \u0412\u0406\u0414\u0421\u0422\u0420\u041E\u0427\u041A\u0410 \u041E\u041F\u041B\u0410\u0422\u0418${s3.due_date ? ` \u0434\u043E ${ukDate(s3.due_date)}` : ` ${s3.pay_days} \u0434\u043D. \u0432\u0456\u0434 \u0440\u0430\u0445\u0443\u043D\u043A\u0443`}${own ? " \u2014 " : `: \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F ${orderNo(s3.id)}, `}${inv}; ${payer}${overdueDays(s3) ? ` \u2014 \u041F\u0420\u041E\u0421\u0422\u0420\u041E\u0427\u0415\u041D\u041E ${overdueDays(s3)} \u0434\u043D.` : ""}` };
@@ -9682,12 +9682,12 @@ ${link(c, `porders/${s3.id}`)}`);
     await log(o.id, c.get("user"), val ? `${was && was !== val ? `\u0437\u0430\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM (\u0431\u0443\u043B\u043E ${was}) \u043D\u0430` : "\u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM"} ${isCode ? `\u043A\u043E\u0434 ${val}` : `\u2116 ${val}`}` : "\u0432\u0456\u0434\u0432\u2019\u044F\u0437\u0430\u043D\u043E \u043D\u043E\u043C\u0435\u0440 LP-CRM");
     if (val && val !== o.crm_id && val !== o.crm_ext) {
       await refreshCrm({ ids: [o.id] });
-      const num7 = (await db.get(`SELECT crm_id FROM b2b_orders WHERE id = ?`, [o.id]))?.crm_id || "";
-      if (!isCode && num7) await hooks.crmLinked?.(o.id, num7).catch(() => 0);
+      const num8 = (await db.get(`SELECT crm_id FROM b2b_orders WHERE id = ?`, [o.id]))?.crm_id || "";
+      if (!isCode && num8) await hooks.crmLinked?.(o.id, num8).catch(() => 0);
       if (o.status === "new") await warnUnpaidShipped(c, o);
       const relinked = Boolean(o.crm_id || o.crm_ext);
-      await tgPartner(o.partner_id, relinked ? `\u{1F501} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h10(o.client_name)}): \u043D\u043E\u043C\u0435\u0440 \u0443 CRM \u0437\u043C\u0456\u043D\u0435\u043D\u043E${num7 ? ` \u043D\u0430 ${num7}` : ""}.
-${link(c, `pclients/${o.id}`)}` : `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h10(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${num7 ? `, \u2116 \u0443 CRM ${num7}` : ""}.
+      await tgPartner(o.partner_id, relinked ? `\u{1F501} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h10(o.client_name)}): \u043D\u043E\u043C\u0435\u0440 \u0443 CRM \u0437\u043C\u0456\u043D\u0435\u043D\u043E${num8 ? ` \u043D\u0430 ${num8}` : ""}.
+${link(c, `pclients/${o.id}`)}` : `\u{1F69A} \u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h10(o.client_name)}) \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443${num8 ? `, \u2116 \u0443 CRM ${num8}` : ""}.
 ${link(c, `pclients/${o.id}`)}`);
       await supplyInWork(o.supply_id, c).catch(() => 0);
     }
@@ -10321,12 +10321,12 @@ function mountB2bTgDocs(app, { db, services, orders, hooks }) {
     }
     return { warnings, ttn: np?.ttn || "" };
   }
-  async function crmLinked(orderId, num6) {
+  async function crmLinked(orderId, num7) {
     const chat = await labelsChat();
     if (!chat) return;
     const o = await db.get(`SELECT id, client_name, ttn, (SELECT COUNT(*) FROM b2b_files f WHERE f.order_id = b2b_orders.id AND f.kind = 'label') AS labels FROM b2b_orders WHERE id = ?`, [orderId]);
     if (!o?.labels) return;
-    await notify()?.sendText({ chatIds: [chat] }, `\u{1F517} ${orderNo(o.id)} \xB7 <b>${h5(o.client_name)}</b> \u2192 CRM \u2116 <b>${h5(num6)}</b>${o.ttn ? ` \xB7 \u0422\u0422\u041D ${h5(o.ttn)}` : ""}`).catch(() => 0);
+    await notify()?.sendText({ chatIds: [chat] }, `\u{1F517} ${orderNo(o.id)} \xB7 <b>${h5(o.client_name)}</b> \u2192 CRM \u2116 <b>${h5(num7)}</b>${o.ttn ? ` \xB7 \u0422\u0422\u041D ${h5(o.ttn)}` : ""}`).catch(() => 0);
   }
   async function tgGroupFile(msg, base2) {
     const chat = String(msg.chat.id);
@@ -10564,8 +10564,8 @@ ${[...checks, ...itemLines.slice(0, 20), ...more].join("\n")}${!kind ? "\n\n<b>\
     if (msg.text && !msg.text.startsWith("/")) {
       const d = await db.get(`SELECT * FROM b2b_tg_docs WHERE chat_id = ? AND state = 'await_number' ORDER BY id DESC LIMIT 1`, [chat]);
       if (!d) return false;
-      const num6 = String(msg.text).trim().replace(/^№\s*/, "").slice(0, 40);
-      await saveDoc(d, { number: num6, state: "pending" });
+      const num7 = String(msg.text).trim().replace(/^№\s*/, "").slice(0, 40);
+      await saveDoc(d, { number: num7, state: "pending" });
       await show({ ...await docOf(d.id) }, { fresh: true });
       return true;
     }
@@ -15198,6 +15198,63 @@ async function rzGetOrder(fetchFn, token, orderId, expand = "") {
 async function rzSetOrderStatus(fetchFn, token, orderId, status) {
   return getContent(fetchFn, token, `/orders/${encodeURIComponent(orderId)}`, { method: "PUT", body: { status: Number(status) } });
 }
+async function rzContent(fetchFn, token, path, opts = {}) {
+  const res = await send(fetchFn, path, { token, ...opts });
+  const j = await res.json().catch(() => null);
+  if (!j?.success) {
+    const e = rzError(j || { errors: { message: res.status === 429 ? "\u0437\u0430\u0431\u0430\u0433\u0430\u0442\u043E \u0437\u0430\u043F\u0438\u0442\u0456\u0432" : `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${res.status}` } });
+    const er = j?.errors || {};
+    const det = er.details && typeof er.details === "object" ? Object.values(er.details).flat().filter((x) => typeof x === "string").join("; ") : typeof er.details === "string" ? er.details : "";
+    const extra = [er.description, det].filter(Boolean).join(" \u2014 ");
+    if (extra && !e.message.includes(extra)) e.message = `${e.message}: ${extra}`.slice(0, 600);
+    throw e;
+  }
+  return j.content;
+}
+var RZ_TTN = {
+  // ROZETKA Delivery
+  rdUserInfo: (f, t, orderId) => rzContent(f, t, `/delivery-rozetka/get-user-info/${encodeURIComponent(orderId)}`),
+  rdSettings: (f, t) => rzContent(f, t, "/delivery-rozetka/settings"),
+  rdCreate: (f, t, body) => rzContent(f, t, "/delivery-rozetka/create-order-ttn", { method: "POST", body }),
+  // Нова пошта (ключ НП підключено в кабінеті Розетки)
+  npUserInfo: (f, t, orderId) => rzContent(f, t, `/ttns/get-user-info/${encodeURIComponent(orderId)}`),
+  npSettings: (f, t) => rzContent(f, t, "/ttn-settings/setting?expand=conterparty,sender,address,cargo"),
+  npCommon: (f, t) => rzContent(f, t, "/ttns/common-data"),
+  npCreate: (f, t, body) => rzContent(f, t, "/ttns/create-ttn", { method: "POST", body }),
+  // Meest
+  meUserInfo: (f, t, orderId) => rzContent(f, t, `/meests/get-user-info/${encodeURIComponent(orderId)}`),
+  meSettings: (f, t) => rzContent(f, t, "/meests/ttn-settings"),
+  meCreate: (f, t, body) => rzContent(f, t, "/meests/create-ttn", { method: "POST", body })
+};
+async function rzCarrierPdf(fetchFn, token, carrier, ttn) {
+  const path = carrier === "np" ? `/ttns/ttn-print?${new URLSearchParams([["ttnNumbers[]", ttn]])}` : `/meests/ttn-print/stickers?${new URLSearchParams({ ttn })}`;
+  const res = await send(fetchFn, path, { token });
+  const buf = new Uint8Array(await res.arrayBuffer());
+  if (isPdf(buf)) return buf;
+  let j = null;
+  try {
+    j = JSON.parse(new TextDecoder().decode(buf));
+  } catch {
+    return null;
+  }
+  if (j && !j.success) throw rzError(j);
+  const c = j?.content;
+  const file = typeof c === "string" ? c : c?.file || c?.content || "";
+  if (file && !/^https?:/.test(file)) {
+    try {
+      const pdf = unb64(file.replace(/^data:[^,]+,/, ""));
+      if (isPdf(pdf)) return pdf;
+    } catch {
+    }
+  }
+  const url = c?.url || c?.link || (/^https?:/.test(file) ? file : "");
+  if (url) {
+    const r = await fetchFn(url);
+    const pdf = new Uint8Array(await r.arrayBuffer());
+    if (isPdf(pdf)) return pdf;
+  }
+  return null;
+}
 async function rzMessageCounts(fetchFn, token) {
   return await getContent(fetchFn, token, "/messages/counts") || {};
 }
@@ -15290,11 +15347,11 @@ function promPayment(o) {
   const prosale = type.includes("prosale") || /пром[\s-]*оплат|prom[\s-]*оплат|prom[\s-]*pay/i.test(name);
   const credit = !prosale && /(частин|частям|розстроч|рассроч|кредит)/i.test(name);
   const cod = !prosale && !credit && /(при отриманн|при получени|наложен|накладен|післяплат|послеоплат|оплата при|cash on delivery)/i.test(name);
-  const num6 = (v) => {
+  const num7 = (v) => {
     const x = Number(String(v ?? "").replace(/[^\d.,]/g, "").replace(",", "."));
     return Number.isFinite(x) ? x : 0;
   };
-  return { kind: prosale ? "prosale" : credit ? "credit" : cod ? "cod" : "other", paid: prosale && /^(paid|оплач)/.test(status), name: name || (prosale ? "\u041F\u0440\u043E\u043C-\u043E\u043F\u043B\u0430\u0442\u0430" : ""), status, total: num6(o?.full_price ?? o?.price) };
+  return { kind: prosale ? "prosale" : credit ? "credit" : cod ? "cod" : "other", paid: prosale && /^(paid|оплач)/.test(status), name: name || (prosale ? "\u041F\u0440\u043E\u043C-\u043E\u043F\u043B\u0430\u0442\u0430" : ""), status, total: num7(o?.full_price ?? o?.price) };
 }
 
 // src/integrations/epicentr.js
@@ -16901,8 +16958,8 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
       const o = found.find((x) => String(x.order_id) === r.crm_code);
       const sid = o ? String(o.status ?? o.status_id ?? "") : "";
       const name = o ? String((names[sid]?.name ?? names[sid]) || sid || "").trim() : "\u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 LP-CRM";
-      const num6 = o && /^\d+$/.test(String(o.id ?? "")) ? String(o.id) : r.crm_id;
-      st.push([`UPDATE rzs_orders SET crm_status = ?, crm_new = ?, crm_checked_at = ?, crm_code = ?, crm_id = ? WHERE id = ?`, [name, /^нов/i.test(name) ? 1 : 0, now, r.crm_code, num6 || "", r.id]]);
+      const num7 = o && /^\d+$/.test(String(o.id ?? "")) ? String(o.id) : r.crm_id;
+      st.push([`UPDATE rzs_orders SET crm_status = ?, crm_new = ?, crm_checked_at = ?, crm_code = ?, crm_id = ? WHERE id = ?`, [name, /^нов/i.test(name) ? 1 : 0, now, r.crm_code, num7 || "", r.id]]);
     }
     if (st.length) await db.batch(st);
     return known.length;
@@ -17822,8 +17879,8 @@ function normDate(v) {
   if (s3 && !Number.isNaN(d.getTime())) return kyivParts(d);
   return kyivParts(/* @__PURE__ */ new Date());
 }
-async function sha1(str3) {
-  const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(str3));
+async function sha1(str4) {
+  const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(str4));
   return [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 async function hmacHex(key, body) {
@@ -18995,10 +19052,10 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
       const o = found.find((x) => String(x.order_id) === r.crm_code);
       const sid = o ? String(o.status ?? o.status_id ?? "") : "";
       const name = o ? String((names[sid]?.name ?? names[sid]) || sid || "").trim() : "\u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0432 LP-CRM";
-      const num6 = o && /^\d+$/.test(String(o.id ?? "")) ? String(o.id) : r.crm_id;
+      const num7 = o && /^\d+$/.test(String(o.id ?? "")) ? String(o.id) : r.crm_id;
       st.push([
         `UPDATE mp_orders SET crm_status = ?, crm_checked_at = ?, crm_code = ?, crm_id = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ?`,
-        [name.slice(0, 80), now, r.crm_code, num6 || "", r.account_id, r.id]
+        [name.slice(0, 80), now, r.crm_code, num7 || "", r.account_id, r.id]
       ]);
     }
     if (st.length) await db.batch(st);
@@ -19006,6 +19063,235 @@ function mountMarketCrm(app, { db, fetchFn, services = {}, onCron = () => {
   }
   onCron("market-crm", "\u0421\u0442\u0430\u0442\u0443\u0441 \u0443 LP-CRM \u0434\u043B\u044F \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (\u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441), \u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u0438\u0445 \u0434\u043E LP-CRM", () => refreshStatus());
   return { refreshStatus, findCrm };
+}
+
+// src/modules/market/ttn.js
+var CARRIERS = { rd: "ROZETKA Delivery", np: "\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430", me: "Meest" };
+var carrierOf = (delivery) => {
+  const s3 = String(delivery || "").toLowerCase();
+  if (/rozetka|розетка/.test(s3)) return "rd";
+  if (/нова\s*пошта|nova\s*poshta|новая\s*почта/.test(s3)) return "np";
+  if (/meest|міст|мист/.test(s3)) return "me";
+  return "";
+};
+var num6 = (v) => {
+  const n = Number(String(v ?? "").replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+};
+var str3 = (v, n = 200) => String(v ?? "").trim().slice(0, n);
+var parseJ = (v) => {
+  if (v && typeof v === "object") return v;
+  try {
+    return JSON.parse(v || "null");
+  } catch {
+    return null;
+  }
+};
+var phone12 = (p) => {
+  const d = String(p || "").replace(/\D/g, "");
+  return d.length === 10 && d.startsWith("0") ? `38${d}` : d.length === 9 ? `380${d}` : d;
+};
+function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
+  async function prep(acc, o, carrier) {
+    const call2 = (fn) => rzCall(acc, (t) => fn(fetchFn, t, o.id));
+    const callS = (fn) => rzCall(acc, (t) => fn(fetchFn, t));
+    const items = parseJ(o.items) || [];
+    const descr = str3(items.map((i) => i.name).filter(Boolean).join(", "), 100);
+    const base2 = { carrier, carrier_name: CARRIERS[carrier], paid: Boolean(o.paid), pay: [o.pay_type, o.pay_status].filter(Boolean).join(" \xB7 "), total: num6(o.total), description: descr };
+    if (carrier === "rd") {
+      const [ui2, st2] = await Promise.all([call2(RZ_TTN.rdUserInfo), callS(RZ_TTN.rdSettings).catch(() => null)]);
+      const s4 = st2?.sender || null;
+      const p = (st2?.parcels || [])[0] || {};
+      const d = ui2?.itemDimensions || {};
+      const lim = ui2?.departmentRestrictions || null;
+      return {
+        ...base2,
+        amount: num6(ui2?.amount) || base2.total,
+        recipient: {
+          name: str3(ui2?.name),
+          phone: str3(ui2?.phone, 20),
+          place: [ui2?.city, [ui2?.street, ui2?.houseNumber].filter(Boolean).join(" "), ui2?.apartmentNumber ? `\u043A\u0432. ${ui2.apartmentNumber}` : ""].filter(Boolean).join(", "),
+          kind: ui2?.departmentType === 2 ? "\u043F\u043E\u0448\u0442\u043E\u043C\u0430\u0442" : ui2?.departmentId ? "\u0432\u0456\u0434\u0434\u0456\u043B\u0435\u043D\u043D\u044F" : "\u0430\u0434\u0440\u0435\u0441\u0430"
+        },
+        sender: s4?.department ? { name: str3(s4.name), place: str3(s4.address || s4.city), phone: str3((s4.phones || [])[0] || "", 20) } : null,
+        sender_hint: "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043D\u0438\u043A\u0430 \u0437\u0430\u0434\u0430\u044E\u0442\u044C \u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438: ROZETKA Delivery \u2192 \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u043F\u0435\u0440\u0435\u0434\u0437\u0430\u043F\u043E\u0432\u043D\u0435\u043D\u043D\u044F.",
+        parcel: { weight: num6(p.weight) || num6(d.weight) || 1, length: num6(p.length) || num6(d.length) || 20, width: num6(p.width) || num6(d.width) || 20, height: num6(p.height) || num6(d.height) || 20, places: 1, description: str3(p.description, 100) || descr },
+        limits: lim ? { weight: num6(lim.max_weight) || null, cost: num6(lim.max_cost) || null, length: num6(lim.max_length) || null, width: num6(lim.max_width) || null, height: num6(lim.max_height) || null } : null,
+        cod_allowed: ui2?.isReturnMoneyAllowed !== false
+      };
+    }
+    if (carrier === "np") {
+      const [ui2, st2, cm] = await Promise.all([call2(RZ_TTN.npUserInfo), callS(RZ_TTN.npSettings).catch(() => null), callS(RZ_TTN.npCommon).catch(() => null)]);
+      const sel = parseJ(st2?.selected_sender) || {};
+      const cargo = parseJ(st2?.selected_cargo) || st2?.cargo || {};
+      const ok = Boolean(st2?.conterparty?.Ref && st2?.sender?.Ref && st2?.address?.Ref);
+      return {
+        ...base2,
+        amount: num6(ui2?.amount) || base2.total,
+        recipient: {
+          name: str3(ui2?.name),
+          phone: str3(ui2?.phone, 20),
+          place: ui2?.is_warehouse ? str3(ui2?.place_number) : [ui2?.city_name, ui2?.street, ui2?.place_house, ui2?.place_flat ? `\u043A\u0432. ${ui2.place_flat}` : ""].filter(Boolean).join(", "),
+          kind: ui2?.is_warehouse ? "\u0432\u0456\u0434\u0434\u0456\u043B\u0435\u043D\u043D\u044F" : "\u0430\u0434\u0440\u0435\u0441\u0430"
+        },
+        sender: ok ? { name: str3(st2.conterparty?.Description || [sel.LastName, sel.FirstName].filter(Boolean).join(" ")), place: str3(st2.address?.Description), phone: str3(sel.Phones, 20) } : null,
+        sender_hint: "\u041A\u043B\u044E\u0447 \u041D\u041F \u0456 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043D\u0438\u043A\u0430 \u0437\u0430\u0434\u0430\u044E\u0442\u044C \u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438: \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430 (\u0422\u0422\u041D).",
+        parcel: { weight: num6(cargo.Weight) || 1, length: 20, width: 20, height: 20, places: 1, description: str3(cargo.Description && cargo.Description !== "none" ? cargo.Description : "", 100) || descr },
+        payment_control: Boolean(cm?.CanAfterpaymentOnGoodsCost),
+        payment_control_on: Boolean(cm?.CanAfterpaymentOnGoodsCost && st2?.is_add_payment_control !== false),
+        cod_allowed: true
+      };
+    }
+    const [ui, st] = await Promise.all([call2(RZ_TTN.meUserInfo), callS(RZ_TTN.meSettings).catch(() => null)]);
+    const s3 = parseJ(st?.selected_sender);
+    const pc = (parseJ(st?.selected_cargo)?.placesItems || [])[0] || {};
+    return {
+      ...base2,
+      amount: num6(ui?.amount) || base2.total,
+      recipient: { name: str3(ui?.name), phone: str3(ui?.phone, 20), place: [ui?.city, [ui?.street, ui?.houseNumber].filter(Boolean).join(" ")].filter(Boolean).join(", "), kind: ui?.branchId ? "\u0432\u0456\u0434\u0434\u0456\u043B\u0435\u043D\u043D\u044F" : "\u0430\u0434\u0440\u0435\u0441\u0430" },
+      sender: s3?.branchID ? { name: str3(s3.name), place: "\u0432\u0456\u0434\u0434\u0456\u043B\u0435\u043D\u043D\u044F Meest", phone: str3(s3.phone, 20) } : null,
+      sender_hint: "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043D\u0438\u043A\u0430 \u0437\u0430\u0434\u0430\u044E\u0442\u044C \u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438: \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 Meest.",
+      parcel: { weight: num6(pc.weight) || 1, length: num6(pc.length) || 20, width: num6(pc.width) || 20, height: num6(pc.height) || 20, places: 1, description: descr },
+      cod_allowed: true,
+      branch: Boolean(ui?.branchId)
+    };
+  }
+  const loadOrder = async (c, b) => {
+    need(c, "market.edit");
+    const o = await rzOrderOf(b, c);
+    return { o, acc: await accOf("rozetka", o.account_id) };
+  };
+  app.get("/api/mp/ttn/prep", async (c) => {
+    const { o, acc } = await loadOrder(c, { account: c.req.query("account"), id: c.req.query("id") });
+    const carrier = CARRIERS[c.req.query("carrier")] ? c.req.query("carrier") : carrierOf(o.delivery);
+    if (!carrier) return c.json({ carrier: "", delivery: o.delivery, carriers: CARRIERS });
+    try {
+      return c.json({ ...await prep(acc, o, carrier), delivery: o.delivery, ttn: o.ttn || "", carriers: CARRIERS });
+    } catch (e) {
+      if (e.pending) throw e;
+      throw fail(400, `${CARRIERS[carrier]}: \u043D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u043E\u0442\u0440\u0438\u043C\u0430\u0442\u0438 \u0434\u0430\u043D\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0437 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (${e.message.replace(/^Розетка:\s*/, "")}). \u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0449\u043E \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0430 \u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u2014 ${CARRIERS[carrier]} \u0456 \u043C\u043E\u0434\u0443\u043B\u044C \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438.`);
+    }
+  });
+  app.post("/api/mp/ttn/create", async (c) => {
+    const b = await c.req.json().catch(() => ({}));
+    const { o, acc } = await loadOrder(c, b);
+    if (o.ttn) throw fail(400, `\u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u0454 \u0422\u0422\u041D ${o.ttn}.`);
+    if (Number(o.status_group) === 3) throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u0435 \u2014 \u0422\u0422\u041D \u043D\u0435 \u0441\u0442\u0432\u043E\u0440\u044E\u0454\u0442\u044C\u0441\u044F.");
+    const carrier = CARRIERS[b.carrier] ? b.carrier : carrierOf(o.delivery);
+    if (!carrier) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C \u043F\u0435\u0440\u0435\u0432\u0456\u0437\u043D\u0438\u043A\u0430.");
+    const p = await prep(acc, o, carrier);
+    if (!p.sender) throw fail(400, `\u041D\u0435 \u043D\u0430\u043B\u0430\u0448\u0442\u043E\u0432\u0430\u043D\u043E \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043D\u0438\u043A\u0430. ${p.sender_hint}`);
+    const weight = num6(b.weight);
+    const length = Math.round(num6(b.length));
+    const width = Math.round(num6(b.width));
+    const height = Math.round(num6(b.height));
+    const places = Math.max(1, Math.min(20, Math.round(num6(b.places) || 1)));
+    const declared = Math.round(num6(b.declared) || p.amount);
+    const cod = Math.max(0, Math.round(num6(b.cod)));
+    const payer = b.payer === "recipient" ? "recipient" : "sender";
+    const description = str3(b.description, 100) || p.description || "\u0422\u043E\u0432\u0430\u0440";
+    if (!(weight >= 0.1) || !(length >= 1) || !(width >= 1) || !(height >= 1)) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u0432\u0430\u0433\u0443 (\u0432\u0456\u0434 0,1 \u043A\u0433) \u0456 \u0433\u0430\u0431\u0430\u0440\u0438\u0442\u0438 (\u0432\u0456\u0434 1 \u0441\u043C).");
+    if (carrier === "rd" && (weight > 30 || Math.max(length, width, height) > 120)) throw fail(400, "ROZETKA Delivery: \u0432\u0430\u0433\u0430 \u0434\u043E 30 \u043A\u0433, \u043A\u043E\u0436\u043D\u0430 \u0441\u0442\u043E\u0440\u043E\u043D\u0430 \u0434\u043E 120 \u0441\u043C.");
+    if (p.limits?.weight && weight > p.limits.weight) throw fail(400, `\u0412\u0430\u0433\u0430 \u0431\u0456\u043B\u044C\u0448\u0430 \u0437\u0430 \u043B\u0456\u043C\u0456\u0442 \u0432\u0456\u0434\u0434\u0456\u043B\u0435\u043D\u043D\u044F \u043E\u0434\u0435\u0440\u0436\u0443\u0432\u0430\u0447\u0430 (${p.limits.weight} \u043A\u0433).`);
+    if (cod && !p.cod_allowed) throw fail(400, "\u0423 \u0432\u0456\u0434\u0434\u0456\u043B\u0435\u043D\u043D\u0456 \u043E\u0434\u0435\u0440\u0436\u0443\u0432\u0430\u0447\u0430 \u043D\u0430\u043A\u043B\u0430\u0434\u0435\u043D\u0438\u0439 \u043F\u043B\u0430\u0442\u0456\u0436 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0438\u0439.");
+    let ttn = "";
+    const res = {};
+    if (carrier === "rd") {
+      const st = await rzCall(acc, (t) => RZ_TTN.rdSettings(fetchFn, t));
+      const s3 = st.sender;
+      const r = await rzCall(acc, (t) => RZ_TTN.rdCreate(fetchFn, t, {
+        order_id: Number(o.id),
+        payer,
+        places,
+        description,
+        params: { weight, length, width, height, volume: Math.round(length * width * height / 4e3 * 1e3) / 1e3 },
+        sender: { type: s3.type, city: s3.city, address: s3.address, department: s3.department, name: s3.name, phones: s3.phones || [], info: s3.info || "" },
+        has_paid: !cod,
+        cost: cod,
+        carrier: Number(s3.carrier) || 1
+      }));
+      ttn = str3(r?.ttn || r?.DeliveryTtn?.ttn, 40);
+      res.price = num6(r?.delivery_price);
+    } else if (carrier === "np") {
+      const [ui, st, cm] = await Promise.all([
+        rzCall(acc, (t) => RZ_TTN.npUserInfo(fetchFn, t, o.id)),
+        rzCall(acc, (t) => RZ_TTN.npSettings(fetchFn, t)),
+        rzCall(acc, (t) => RZ_TTN.npCommon(fetchFn, t))
+      ]);
+      const sel = parseJ(st.selected_sender) || {};
+      const control = Boolean(b.payment_control) && Boolean(cm?.CanAfterpaymentOnGoodsCost);
+      const recCp = (cm?.recipientCounterParties || [])[0]?.Ref || "";
+      const seats = Array.from({ length: places }, () => ({ volumetricWidth: width, volumetricLength: length, volumetricHeight: height, weight: Math.max(1, Math.round(weight / places)) }));
+      const body = {
+        order_id: Number(o.id),
+        ServiceType: ui.is_warehouse ? "WarehouseWarehouse" : "WarehouseDoors",
+        CargoType: "Parcel",
+        Cost: String(declared),
+        Description: description,
+        SeatsAmount: String(places),
+        Weight: String(weight),
+        VolumeGeneral: String(Math.max(4e-4, Math.round(length * width * height / 1e6 * places * 1e4) / 1e4)),
+        OptionsSeat: seats,
+        PayerType: payer === "recipient" || cod && !control ? "Recipient" : "Sender",
+        PaymentMethod: "Cash",
+        Sender: st.conterparty?.Ref,
+        CitySender: st.address?.CityRef,
+        SenderAddress: st.address?.Ref,
+        ContactSender: st.sender?.Ref,
+        SendersPhone: phone12(sel.Phones),
+        RecipientsPhone: phone12(ui.phone),
+        InfoRegClientBarcodes: String(o.id),
+        CanAfterpaymentOnGoodsCost: control,
+        BackwardDeliveryPayer: "Recipient",
+        ...cod ? control ? { AfterpaymentOnGoodsCost: String(cod) } : { BackwardDeliveryMoney: String(cod) } : {},
+        ...ui.is_warehouse ? { Recipient: recCp, CityRecipient: ui.cityRef, RecipientAddress: ui.warehouseRef, ContactRecipient: str3(ui.name) } : {
+          NewAddress: "1",
+          RecipientType: "PrivatePerson",
+          RecipientName: str3(ui.name),
+          RecipientCityName: str3(ui.city_name),
+          RecipientArea: str3(ui.area),
+          RecipientAreaRegions: str3(ui.region),
+          RecipientAddressName: str3(ui.street),
+          RecipientHouse: str3(ui.place_house, 20),
+          RecipientFlat: str3(ui.place_flat, 20)
+        }
+      };
+      const r = await rzCall(acc, (t) => RZ_TTN.npCreate(fetchFn, t, body));
+      const d = (r?.data || [])[0] || r?.[0] || r || {};
+      if (r && r.success === false) throw fail(400, `\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430: ${[...r.errors || []].join("; ") || "\u0422\u0422\u041D \u043D\u0435 \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E"}`);
+      ttn = str3(d.IntDocNumber, 40);
+      res.price = num6(d.CostOnSite);
+    } else {
+      const [ui, st] = await Promise.all([rzCall(acc, (t) => RZ_TTN.meUserInfo(fetchFn, t, o.id)), rzCall(acc, (t) => RZ_TTN.meSettings(fetchFn, t))]);
+      const s3 = parseJ(st.selected_sender) || {};
+      if (!ui.branchId) throw fail(400, "Meest: \u0437\u0430\u0440\u0430\u0437 \u043F\u0456\u0434\u0442\u0440\u0438\u043C\u0443\u0454\u0442\u044C\u0441\u044F \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0430 \u043B\u0438\u0448\u0435 \u0434\u043E \u0432\u0456\u0434\u0434\u0456\u043B\u0435\u043D\u043D\u044F.");
+      const r = await rzCall(acc, (t) => RZ_TTN.meCreate(fetchFn, t, {
+        order_id: Number(o.id),
+        payType: "cash",
+        receiverPay: payer === "recipient",
+        notation: description,
+        ...cod ? { COD: cod } : {},
+        sender: { name: s3.name, phone: s3.phone, branchID: s3.branchID, service: "Branch" },
+        receiver: { name: str3(ui.name), phone: `+${phone12(ui.phone)}`, branchID: ui.branchId, service: "Branch" },
+        placesItems: [{ quantity: places, weight, volume: Math.round(length * width * height / 1e6 * 1e4) / 1e4, insurance: declared, length, width, height }]
+      }));
+      ttn = str3(r?.ttn || r?.DeliveryTtn?.ttn, 40);
+      res.price = num6(r?.delivery_price);
+    }
+    if (!ttn) throw fail(502, "\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u043D\u0435 \u043F\u043E\u0432\u0435\u0440\u043D\u0443\u043B\u0430 \u043D\u043E\u043C\u0435\u0440 \u0422\u0422\u041D \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438, \u0422\u0422\u041D \u043C\u043E\u0433\u043B\u0430 \u0441\u0442\u0432\u043E\u0440\u0438\u0442\u0438\u0441\u044F.");
+    await db.run(`UPDATE mp_orders SET ttn = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ?`, [ttn, o.account_id, o.id]);
+    return c.json({ ok: true, ttn, carrier, price: res.price || null });
+  });
+  app.get("/api/mp/ttn/label", async (c) => {
+    need(c, "market.view");
+    const o = await rzOrderOf({ account: c.req.query("account"), id: c.req.query("id") }, c);
+    if (!o.ttn) throw fail(400, "\u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0449\u0435 \u043D\u0435\u043C\u0430\u0454 \u0422\u0422\u041D.");
+    const acc = await accOf("rozetka", o.account_id);
+    const carrier = carrierOf(o.delivery) || (/^(RMP|PRM|UNK)-/i.test(o.ttn) ? "rd" : /^\d{14}$/.test(o.ttn) ? "np" : "me");
+    const pdf = carrier === "rd" ? await rzCall(acc, (t) => rzTtnPdf(fetchFn, t, o.ttn)) : await rzCall(acc, (t) => rzCarrierPdf(fetchFn, t, carrier, o.ttn));
+    if (!pdf) throw fail(404, "\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u043D\u0435 \u0432\u0456\u0434\u0434\u0430\u043B\u0430 \u0444\u0430\u0439\u043B \u0422\u0422\u041D \u2014 \u0441\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0437\u0430 \u0445\u0432\u0438\u043B\u0438\u043D\u0443 \u0430\u0431\u043E \u043D\u0430\u0434\u0440\u0443\u043A\u0443\u0439\u0442\u0435 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438.");
+    return new Response(pdf, { headers: { "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="TTN-${o.ttn}.pdf"`, "Cache-Control": "no-store" } });
+  });
 }
 
 // src/modules/market/items.js
@@ -19499,7 +19785,7 @@ var MARKETS = [
 ];
 var RZ_NEW = ["1"];
 var RZ_DELIVERY = ["3", "4", "5", "81", "82"];
-var RZ_TTN = ["61", "80"];
+var RZ_TTN2 = ["61", "80"];
 var RZ_FAILED = ["11", "12", "19", "20", "38", "85", "88"];
 var RZ_CANCEL = ["17", "18", "28", "29", "31", "33", "35", "37", "39", "40", "41", "42", "44", "45", "49", "50"];
 var RZ_CANCEL_CLIENT = ["45"];
@@ -19509,7 +19795,7 @@ var inList2 = (a) => a.map((x) => `'${x}'`).join(", ");
 var groupSql = (successSql) => `(CASE WHEN ${successSql} THEN 'success' WHEN status IN (${inList2(RZ_FAILED)}) THEN 'failed'
   WHEN status_group = 3 OR (status_group = 0 AND status IN (${inList2(RZ_CANCEL)})) THEN 'cancelled'
   WHEN status IN (${inList2(RZ_NEW)}) THEN 'new' WHEN status IN (${inList2(RZ_DELIVERY)}) THEN 'delivery'
-  WHEN status IN (${inList2(RZ_TTN)}) OR ttn != '' THEN 'ttn' ELSE 'work' END)`;
+  WHEN status IN (${inList2(RZ_TTN2)}) OR ttn != '' THEN 'ttn' ELSE 'work' END)`;
 var rzGroupOf = (status, group, okSet = /* @__PURE__ */ new Set(), hasTtn = false) => {
   const st = String(status);
   if (Number(group) === 2 || !Number(group) && okSet.has(st)) return "success";
@@ -19517,7 +19803,7 @@ var rzGroupOf = (status, group, okSet = /* @__PURE__ */ new Set(), hasTtn = fals
   if (Number(group) === 3 || !Number(group) && RZ_CANCEL.includes(st)) return "cancelled";
   if (RZ_NEW.includes(st)) return "new";
   if (RZ_DELIVERY.includes(st)) return "delivery";
-  if (RZ_TTN.includes(st) || hasTtn) return "ttn";
+  if (RZ_TTN2.includes(st) || hasTtn) return "ttn";
   return "work";
 };
 var rzCancelBy = (status) => RZ_CANCEL_CLIENT.includes(String(status)) ? "client" : RZ_CANCEL_AUTO.includes(String(status)) ? "auto" : "manager";
@@ -20575,6 +20861,7 @@ ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc3(it.ch.user_fio
     if (!acc) throw fail(404, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     return acc;
   };
+  mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf });
   app.post("/api/mp/history/start", async (c) => {
     need(c, "api");
     const b = await c.req.json().catch(() => ({}));
@@ -20740,7 +21027,7 @@ function payRules(saved = {}) {
   for (const [id, d] of Object.entries(saved)) if (!out[id] && d && CLASSES[d.cls]) out[id] = { name: d.name || `\u041E\u043F\u043B\u0430\u0442\u0430 ${id}`, cls: d.cls, cb: d.cb || "" };
   return out;
 }
-function carrierOf(ttn, delivery = "") {
+function carrierOf2(ttn, delivery = "") {
   const t = String(ttn || "").replace(/\s/g, "").toUpperCase();
   if (!t) return "";
   if (/^\d{14}$/.test(t)) return "np";
@@ -20750,7 +21037,7 @@ function carrierOf(ttn, delivery = "") {
   if (/укрпошт/i.test(delivery)) return "up";
   return "other";
 }
-var CARRIERS = { np: "\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430", rd: "\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u0414\u0435\u043B\u0456\u0432\u0435\u0440\u0456", prm: "Prom (\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u0414\u0435\u043B\u0456\u0432\u0435\u0440\u0456)", meest: "Meest", up: "\u0423\u043A\u0440\u043F\u043E\u0448\u0442\u0430", other: "\u0406\u043D\u0448\u0430 \u0441\u043B\u0443\u0436\u0431\u0430" };
+var CARRIERS2 = { np: "\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430", rd: "\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u0414\u0435\u043B\u0456\u0432\u0435\u0440\u0456", prm: "Prom (\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u0414\u0435\u043B\u0456\u0432\u0435\u0440\u0456)", meest: "Meest", up: "\u0423\u043A\u0440\u043F\u043E\u0448\u0442\u0430", other: "\u0406\u043D\u0448\u0430 \u0441\u043B\u0443\u0436\u0431\u0430" };
 var PART_RE = /(передоплат|предоплат|частков|аванс|завдат)/i;
 function partialOf(comment) {
   const c = String(comment || "");
@@ -20944,7 +21231,7 @@ function evaluate(o, ctx) {
     }
   } else if (o.carrier === "meest") add("info", "Meest: \u043D\u0430\u043B\u043E\u0436\u043A\u0443 \u043F\u043E\u043A\u0438 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u044F\u0439\u0442\u0435 \u0432\u0440\u0443\u0447\u043D\u0443.");
   else if (o.carrier === "prm") add(o.day < ctx.today ? "info" : "wait", o.day < ctx.today ? "\u0422\u0422\u041D Prom: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0437 \u0446\u0456\u0454\u044E \u0422\u0422\u041D \u0441\u0435\u0440\u0435\u0434 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C Prom \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0432\u0440\u0443\u0447\u043D\u0443." : "\u0422\u0422\u041D Prom: \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 Prom \u0449\u0435 \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
-  else add("info", `${CARRIERS[o.carrier] || "\u0421\u043B\u0443\u0436\u0431\u0430 \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0438"}: \u043D\u0430\u043B\u043E\u0436\u043A\u0430 \u043D\u0435 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u044F\u0454\u0442\u044C\u0441\u044F.`);
+  else add("info", `${CARRIERS2[o.carrier] || "\u0421\u043B\u0443\u0436\u0431\u0430 \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0438"}: \u043D\u0430\u043B\u043E\u0436\u043A\u0430 \u043D\u0435 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u044F\u0454\u0442\u044C\u0441\u044F.`);
   grp = "mp";
   if (o.mp_pay && cls) {
     const isProsale = /пром[\s-]*оплат/i.test(rule?.name || "");
@@ -21070,7 +21357,7 @@ function normalizeCheckOrder(raw2) {
     site: String(raw2.site || "").trim().slice(0, 80),
     delivery,
     ttn,
-    carrier: carrierOf(ttn, delivery),
+    carrier: carrierOf2(ttn, delivery),
     phone: p9(raw2.phone),
     buyer: String(raw2.bayer_name || "").trim().slice(0, 120),
     user: String(raw2.user || "").trim().slice(0, 40),
@@ -21686,7 +21973,7 @@ function mountChecks(app, { db, fetchFn, onCron, services = {} }) {
         user: o.user,
         comment: o.comment,
         ttn: o.ttn,
-        carrier: CARRIERS[o.carrier] || "",
+        carrier: CARRIERS2[o.carrier] || "",
         cod: o.cod,
         cod_kind: o.cod_kind,
         mp_pay: o.mp_pay ? o.mp_pay_name || o.mp_pay : "",
