@@ -23,19 +23,23 @@ await ins('7001', 'ROZETKA Delivery', true);
 await ins('7002', 'Нова Пошта', false);
 await ins('7003', 'Meest ПОШТА', false);
 await ins('7004', 'ROZETKA Delivery', false, { group: 3 });
+await ins('7005', 'Нова Пошта', false);
 
 const sent = [];
+const hits = [];
 const ok = (content) => new Response(JSON.stringify({ success: true, content }));
 const fetchFn = async (url, opts = {}) => {
   const u = new URL(url);
   if (u.hostname !== 'api-seller.rozetka.com.ua') throw new Error(`неочікуваний запит ${url}`);
   const path = u.pathname;
+  hits.push(path);
   const body = opts.body ? JSON.parse(opts.body) : null;
   if (body) sent.push({ path, body });
   if (path.startsWith('/delivery-rozetka/get-user-info/')) return ok({ name: 'Метельський Сергій', phone: '380674951531', amount: '6699.00', city: 'Вінницькі Хутори', street: 'Немирівське шосе', houseNumber: '94Є', departmentId: 'dep-1', departmentType: 0,
     departmentRestrictions: { max_weight: 30, max_cost: 30000 }, itemDimensions: { width: 25, height: 50, length: 35, weight: 4.2 }, isReturnMoneyAllowed: true });
   if (path === '/delivery-rozetka/settings') return ok({ sender: { type: 'natural', city: 'Чернівці', address: 'Чернівці, відділення 2', department: 'snd-dep', name: 'ФОП Лупу В.Ф.', phones: ['380501112233'], info: '', carrier: 1 }, parcels: [] });
   if (path === '/delivery-rozetka/create-order-ttn') return ok({ ttn: 'RMP-459041120', delivery_price: 75 });
+  if (path === '/ttns/get-user-info/7005') return new Response(JSON.stringify({ success: false, errors: { message: 'error_nova_poshta', description: 'Помилка при запиті в Нову Пошту', details: ['Занадто багато запитів'] } }));
   if (path.startsWith('/ttns/get-user-info/')) return ok({ name: 'Метельський Сергій', phone: '380674951531', is_warehouse: 1, cityRef: 'city-r', warehouseRef: 'wh-r', place_number: 'Відділення №3', amount: '6699.00' });
   if (path === '/ttn-settings/setting') return ok({ ttn_key: 'SECRET-NP-KEY', selected_sender: JSON.stringify({ Phones: '380501112233', LastName: 'Лупу', FirstName: 'Василь' }), conterparty: { Ref: 'cp-r', Description: 'ФОП Лупу' }, sender: { Ref: 'contact-r' }, address: { Ref: 'addr-r', CityRef: 'city-s', Description: 'Чернівці №2' }, is_add_payment_control: true });
   if (path === '/ttns/common-data') return ok({ CanAfterpaymentOnGoodsCost: true, recipientCounterParties: [{ Ref: 'rcp-r' }] });
@@ -78,6 +82,10 @@ const np = sent.find((x) => x.path === '/ttns/create-ttn').body;
 assert.deepEqual([np.order_id, np.ServiceType, np.Sender, np.ContactSender, np.SenderAddress, np.CitySender, np.Recipient, np.CityRecipient, np.RecipientAddress],
   [7002, 'WarehouseWarehouse', 'cp-r', 'contact-r', 'addr-r', 'city-s', 'rcp-r', 'city-r', 'wh-r']);
 assert.deepEqual([np.CanAfterpaymentOnGoodsCost, np.AfterpaymentOnGoodsCost, np.BackwardDeliveryMoney, np.PayerType], [true, '6699', undefined, 'Sender']);
+
+assert.deepEqual(['/ttns/get-user-info/7002', '/ttn-settings/setting', '/ttns/common-data'].map((x) => hits.filter((h) => h === x).length), [1, 1, 1], 'вікно + створення — кожен запит до НП лише раз');
+// НП обмежила запити — зрозуміла порада
+assert.match((await req('GET', '/api/mp/ttn/prep?account=1&id=7005')).j.error, /тимчасово обмежила кількість запитів/);
 
 // ---------- Meest ----------
 r = await req('POST', '/api/mp/ttn/create', { account: 1, id: '7003', weight: 4, length: 35, width: 25, height: 50, places: 1, declared: 6699, cod: 6699, payer: 'recipient' });

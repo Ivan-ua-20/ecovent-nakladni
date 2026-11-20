@@ -155,6 +155,11 @@ async function rzContent(fetchFn, token, path, opts = {}) {
     const det = er.details && typeof er.details === 'object' ? Object.values(er.details).flat().filter((x) => typeof x === 'string').join('; ') : (typeof er.details === 'string' ? er.details : '');
     const extra = [er.description, det].filter(Boolean).join(' — ');
     if (extra && !e.message.includes(extra)) e.message = `${e.message}: ${extra}`.slice(0, 600);
+    // НП обмежує частоту запитів — зрозуміла порада замість технічного тексту
+    if (/занадто багато запитів|too many requests|слишком много запросов/i.test(`${extra} ${er.message || ''}`)) {
+      e.message = 'Нова пошта тимчасово обмежила кількість запитів. Зачекайте 1–2 хвилини й натисніть ще раз — дані вже збережені.';
+      e.rate = true;
+    }
     throw e;
   }
   return j.content;
