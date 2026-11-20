@@ -26,7 +26,7 @@ export async function createTtn(o, { done } = {}) {
       return;
     }
     const x = p.parcel;
-    const cod = p.paid ? 0 : Math.round(p.amount);
+    const cod = p.paid || p.installment ? 0 : Math.round(p.amount);
     f.innerHTML = `<div class="head-row" style="margin:0"><b>${esc(p.carrier_name)}</b><span class="small muted">Доставка в замовленні: ${esc(p.delivery || '—')}</span></div>
       <div class="grid2">
         <div class="mp-box"><div class="mp-cap">Одержувач (із замовлення)</div><b>${esc(p.recipient.name || '—')}</b> · ${esc(p.recipient.phone || '')}
@@ -36,7 +36,7 @@ export async function createTtn(o, { done } = {}) {
       </div>
       <div class="mp-box"><div class="mp-cap">Оплата</div>
         ${p.paid ? `<span class="badge ok">✓ Оплачено${p.pay ? ` · ${esc(p.pay)}` : ''}</span> <span class="small muted">— накладеного платежу не буде</span>`
-          : `<span class="badge warn">Не оплачено${p.pay ? ` · ${esc(p.pay)}` : ''}</span>`}
+          : `<span class="badge warn">Не оплачено${p.pay ? ` · ${esc(p.pay)}` : ''}</span>${p.installment ? ' <span class="small muted">— оплата частинами: гроші надходять від банку, накладений платіж не потрібен</span>' : ''}`}
         <div class="grid2" style="margin-top:8px">
           <label class="f"><span>Накладений платіж, ₴ (0 — без нього)</span><input name="cod" inputmode="decimal" value="${cod}" ${p.cod_allowed ? '' : 'disabled'}></label>
           <label class="f"><span>Оголошена вартість, ₴</span><input name="declared" inputmode="decimal" value="${Math.round(p.amount)}"></label></div>
@@ -63,7 +63,8 @@ export async function createTtn(o, { done } = {}) {
       if (p.limits?.weight && v('weight') > p.limits.weight) w.push(`Вага більша за ліміт відділення одержувача (${p.limits.weight} кг).`);
       if (p.limits?.cost && v('declared') > p.limits.cost) w.push(`Оголошена вартість більша за ліміт відділення (${uah(p.limits.cost)}).`);
       if (p.carrier === 'rd' && (v('weight') > 30 || Math.max(v('length'), v('width'), v('height')) > 120)) w.push('ROZETKA Delivery: до 30 кг і до 120 см на сторону.');
-      if (!p.paid && !v('cod')) w.push('Замовлення не оплачене, а накладеного платежу немає — гроші з покупця не візьмуть.');
+      if (!p.paid && !p.installment && !v('cod')) w.push('Замовлення не оплачене, а накладеного платежу немає — гроші з покупця не візьмуть.');
+      if (p.installment && v('cod')) w.push('Оплата частинами: гроші надходять від банку — з накладеним платежем покупець заплатить удруге.');
       if (p.paid && v('cod')) w.push('Замовлення вже оплачене — накладений платіж візьме гроші вдруге.');
       $('[data-warn]', f).innerHTML = w.length ? `<div class="alert warn small">${w.map(esc).join('<br>')}</div>` : '';
     };

@@ -18,16 +18,31 @@ const str = (v, n = 200) => String(v ?? '').trim().slice(0, n);
 const parseJ = (v) => { if (v && typeof v === 'object') return v; try { return JSON.parse(v || 'null'); } catch { return null; } };
 const phone12 = (p) => { const d = String(p || '').replace(/\D/g, ''); return d.length === 10 && d.startsWith('0') ? `38${d}` : d.length === 9 ? `380${d}` : d; };
 
+// Кеш відповідей Розетки на час ізоляту: Нова пошта обмежує частоту запитів («Занадто багато запитів»),
+// а вікно відкривається, потім створює ТТН — ті самі дані не запитуємо вдруге. Налаштування — 10 хв, дані замовлення — 5 хв.
+const CACHE = new Map();
+const TTL = { settings: 10 * 60e3, order: 5 * 60e3 };
+
 export function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
+  const cached = async (key, ttl, load) => {
+    const hit = CACHE.get(key);
+    if (hit && Date.now() - hit.at < ttl) return hit.v;
+    const v = await load();
+    CACHE.set(key, { at: Date.now(), v });
+    if (CACHE.size > 300) CACHE.delete(CACHE.keys().next().value);
+    return v;
+  };
   // Дані для вікна: одержувач, відправник, оплата, посилка за замовчуванням, обмеження відділення.
+  // Запити до Розетки — по черзі (НП не любить кілька одночасних), з кешем.
   async function prep(acc, o, carrier) {
-    const call = (fn) => rzCall(acc, (t) => fn(fetchFn, t, o.id));
-    const callS = (fn) => rzCall(acc, (t) => fn(fetchFn, t));
+    const call = (fn) => cached(`${acc.id}|${fn.name || ''}|${carrier}|o${o.id}`, TTL.order, () => rzCall(acc, (t) => fn(fetchFn, t, o.id)));
+    const callS = (fn, tag) => cached(`${acc.id}|${tag}`, TTL.settings, () => rzCall(acc, (t) => fn(fetchFn, t)));
     const items = parseJ(o.items) || [];
     const descr = str(items.map((i) => i.name).filter(Boolean).join(', '), 100);
-    const base = { carrier, carrier_name: CARRIERS[carrier], paid: Boolean(o.paid), pay: [o.pay_type, o.pay_status].filter(Boolean).join(' · '), total: num(o.total), description: descr };
+    const base = { carrier, carrier_name: CARRIERS[carrier], paid: Boolean(o.paid), installment: /частин|кредит|розстроч|покупка частинами/i.test(`${o.pay_type} ${o.pay_status}`), pay: [o.pay_type, o.pay_status].filter(Boolean).join(' · '), total: num(o.total), description: descr };
     if (carrier === 'rd') {
-      const [ui, st] = await Promise.all([call(RZ_TTN.rdUserInfo), callS(RZ_TTN.rdSettings).catch(() => null)]);
+      const ui = await call(RZ_TTN.rdUserInfo);
+      const st = await callS(RZ_TTN.rdSettings, 'rdSettings').catch(() => null);
       const s = st?.sender || null;
       const p = (st?.parcels || [])[0] || {};
       const d = ui?.itemDimensions || {};
@@ -40,11 +55,13 @@ export function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
         sender_hint: 'Відправника задають у кабінеті Розетки: ROZETKA Delivery → Налаштування передзаповнення.',
         parcel: { weight: num(p.weight) || num(d.weight) || 1, length: num(p.length) || num(d.length) || 20, width: num(p.width) || num(d.width) || 20, height: num(p.height) || num(d.height) || 20, places: 1, description: str(p.description, 100) || descr },
         limits: lim ? { weight: num(lim.max_weight) || null, cost: num(lim.max_cost) || null, length: num(lim.max_length) || null, width: num(lim.max_width) || null, height: num(lim.max_height) || null } : null,
-        cod_allowed: ui?.isReturnMoneyAllowed !== false,
+        cod_allowed: ui?.isReturnMoneyAllowed !== false, _raw: { ui, st },
       };
     }
     if (carrier === 'np') {
-      const [ui, st, cm] = await Promise.all([call(RZ_TTN.npUserInfo), callS(RZ_TTN.npSettings).catch(() => null), callS(RZ_TTN.npCommon).catch(() => null)]);
+      const ui = await call(RZ_TTN.npUserInfo);
+      const st = await callS(RZ_TTN.npSettings, 'npSettings').catch(() => null);
+      const cm = await callS(RZ_TTN.npCommon, 'npCommon').catch(() => null);
       const sel = parseJ(st?.selected_sender) || {};
       const cargo = parseJ(st?.selected_cargo) || st?.cargo || {};
       const ok = Boolean(st?.conterparty?.Ref && st?.sender?.Ref && st?.address?.Ref);
@@ -56,10 +73,11 @@ export function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
         sender_hint: 'Ключ НП і відправника задають у кабінеті Розетки: Налаштування → Нова пошта (ТТН).',
         parcel: { weight: num(cargo.Weight) || 1, length: 20, width: 20, height: 20, places: 1, description: str(cargo.Description && cargo.Description !== 'none' ? cargo.Description : '', 100) || descr },
         payment_control: Boolean(cm?.CanAfterpaymentOnGoodsCost), payment_control_on: Boolean(cm?.CanAfterpaymentOnGoodsCost && st?.is_add_payment_control !== false),
-        cod_allowed: true,
+        cod_allowed: true, _raw: { ui, st, cm },
       };
     }
-    const [ui, st] = await Promise.all([call(RZ_TTN.meUserInfo), callS(RZ_TTN.meSettings).catch(() => null)]);
+    const ui = await call(RZ_TTN.meUserInfo);
+    const st = await callS(RZ_TTN.meSettings, 'meSettings').catch(() => null);
     const s = parseJ(st?.selected_sender);
     const pc = (parseJ(st?.selected_cargo)?.placesItems || [])[0] || {};
     return {
@@ -68,7 +86,7 @@ export function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
       sender: s?.branchID ? { name: str(s.name), place: 'відділення Meest', phone: str(s.phone, 20) } : null,
       sender_hint: 'Відправника задають у кабінеті Розетки: Налаштування → Meest.',
       parcel: { weight: num(pc.weight) || 1, length: num(pc.length) || 20, width: num(pc.width) || 20, height: num(pc.height) || 20, places: 1, description: descr },
-      cod_allowed: true, branch: Boolean(ui?.branchId),
+      cod_allowed: true, branch: Boolean(ui?.branchId), _raw: { ui, st },
     };
   }
 
@@ -83,7 +101,8 @@ export function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
     const carrier = CARRIERS[c.req.query('carrier')] ? c.req.query('carrier') : carrierOf(o.delivery);
     if (!carrier) return c.json({ carrier: '', delivery: o.delivery, carriers: CARRIERS });
     try {
-      return c.json({ ...(await prep(acc, o, carrier)), delivery: o.delivery, ttn: o.ttn || '', carriers: CARRIERS });
+      const { _raw, ...view } = await prep(acc, o, carrier);
+      return c.json({ ...view, delivery: o.delivery, ttn: o.ttn || '', carriers: CARRIERS });
     } catch (e) {
       if (e.pending) throw e;
       throw fail(400, `${CARRIERS[carrier]}: не вдалося отримати дані замовлення з Розетки (${e.message.replace(/^Розетка:\s*/, '')}). Перевірте, що доставка в замовленні — ${CARRIERS[carrier]} і модуль підключено в кабінеті Розетки.`);
@@ -112,7 +131,7 @@ export function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
     let ttn = '';
     const res = { };
     if (carrier === 'rd') {
-      const st = await rzCall(acc, (t) => RZ_TTN.rdSettings(fetchFn, t));
+      const { st } = p._raw;
       const s = st.sender;
       const r = await rzCall(acc, (t) => RZ_TTN.rdCreate(fetchFn, t, {
         order_id: Number(o.id), payer, places, description,
@@ -123,9 +142,8 @@ export function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
       ttn = str(r?.ttn || r?.DeliveryTtn?.ttn, 40);
       res.price = num(r?.delivery_price);
     } else if (carrier === 'np') {
-      const [ui, st, cm] = await Promise.all([
-        rzCall(acc, (t) => RZ_TTN.npUserInfo(fetchFn, t, o.id)), rzCall(acc, (t) => RZ_TTN.npSettings(fetchFn, t)), rzCall(acc, (t) => RZ_TTN.npCommon(fetchFn, t)),
-      ]);
+      const { ui, st, cm } = p._raw;
+      if (!st || !cm) throw fail(400, `Нова пошта: не вдалося отримати налаштування з Розетки. ${p.sender_hint}`);
       const sel = parseJ(st.selected_sender) || {};
       const control = Boolean(b.payment_control) && Boolean(cm?.CanAfterpaymentOnGoodsCost);
       const recCp = (cm?.recipientCounterParties || [])[0]?.Ref || '';
@@ -150,7 +168,7 @@ export function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
       ttn = str(d.IntDocNumber, 40);
       res.price = num(d.CostOnSite);
     } else {
-      const [ui, st] = await Promise.all([rzCall(acc, (t) => RZ_TTN.meUserInfo(fetchFn, t, o.id)), rzCall(acc, (t) => RZ_TTN.meSettings(fetchFn, t))]);
+      const { ui, st } = p._raw;
       const s = parseJ(st.selected_sender) || {};
       if (!ui.branchId) throw fail(400, 'Meest: зараз підтримується доставка лише до відділення.');
       const r = await rzCall(acc, (t) => RZ_TTN.meCreate(fetchFn, t, {
