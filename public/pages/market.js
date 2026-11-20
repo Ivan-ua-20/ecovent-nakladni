@@ -5,6 +5,7 @@
 import { esc } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime, todayKyiv, telLink } from '../core/ui.js';
 import { crmCreateFlow } from './mpcrm.js';
+import { createTtn } from './mpttn.js';
 
 const uah = (n) => `${Number(n || 0).toLocaleString('uk-UA', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} ₴`;
 const dt = (s) => String(s || '').slice(0, 16).replace(/^(\d{4})-(\d{2})-(\d{2})/, '$3.$2.$1');
@@ -563,7 +564,8 @@ export function createMarketPages({ can }) {
           <div class="mp-box"><div class="mp-cap">Покупець</div><b>${esc(o.customer || '—')}</b>${cp(o.customer, 'ПІБ')}
             ${ph ? `<div style="margin-top:2px">${telLink(ph)}${cp(ph, 'Телефон')}</div>` : ''}
             ${o.recipient ? `<div class="small" style="margin-top:4px"><span class="muted">Отримувач:</span> ${esc(o.recipient)}${cp(o.recipient, 'ПІБ отримувача')}${o.recipient_phone ? ` · ${telLink(intlPhone(o.recipient_phone))}${cp(intlPhone(o.recipient_phone), 'Телефон отримувача')}` : ''}</div>` : ''}</div>
-          <div class="mp-box"><div class="mp-cap">Доставка</div><b>${esc(o.delivery || '—')}</b>${o.address ? `<div class="small">${esc(o.address)}${cp(o.address, 'Адресу')}</div>` : ''}${o.ttn ? `<div class="small">ТТН <b>${esc(o.ttn)}</b>${cp(o.ttn, 'ТТН')}</div>` : '<div class="small muted">ТТН ще не створено</div>'}</div>
+          <div class="mp-box"><div class="mp-cap">Доставка</div><b>${esc(o.delivery || '—')}</b>${o.address ? `<div class="small">${esc(o.address)}${cp(o.address, 'Адресу')}</div>` : ''}${o.ttn ? `<div class="small">ТТН <b>${esc(o.ttn)}</b>${cp(o.ttn, 'ТТН')}</div>${rz ? `<div style="margin-top:6px"><a class="btn sm" target="_blank" rel="noopener" href="/api/mp/ttn/label?${new URLSearchParams({ account: o.account_id, id: o.id })}">🖨 ТТН / наліпка</a></div>` : ''}`
+              : `<div class="small muted">ТТН ще не створено</div>${rz && can('market.edit') && Number(o.status_group) === 1 ? '<div style="margin-top:6px"><button type="button" class="btn sm primary" id="mpDTtn">Створити ТТН</button></div>' : ''}`}</div>
           ${rz ? `<div class="mp-box"><div class="mp-cap">Оплата</div><b>${esc(o.pay_type || '—')}</b><div class="small ${o.paid ? '' : 'muted'}">${o.paid ? '<b style="color:var(--ok)">✓ Оплачено</b>' : esc(o.pay_status || (o.pay_type ? 'не оплачено' : 'ще не отримано з Розетки'))}</div><div style="margin-top:4px"><b>${uah(o.total)}</b>${cp(String(o.total), 'Сума')}</div></div>` : ''}
           ${rz ? `<div class="mp-box mp3-crm" id="mpDCrm"><div class="mp-cap">LP-CRM</div>${crmBox(o)}</div>` : ''}
           ${o.dups?.length || o.dup_of ? `<div class="mp-box mp-wide-box"><div class="mp-cap">Інші замовлення цього покупця</div>
@@ -584,6 +586,7 @@ export function createMarketPages({ can }) {
       $('#mpDPrev').onclick = () => { const x = neighbour(-1); if (x) showDetail(x); };
       $('#mpDNext').onclick = () => { const x = neighbour(1); if (x) showDetail(x); };
       $('#mpDCopyAll').onclick = async () => { if (await copyText(allText(o))) toast('Замовлення скопійовано'); };
+      if ($('#mpDTtn')) $('#mpDTtn').onclick = () => createTtn(o, { done: (r) => { o.ttn = r.ttn; load(); showDetail(o); } });
       if ($('#mpDCalled')) $('#mpDCalled').onclick = async () => {
         try { Object.assign(o, await api('POST', '/api/mp/called', { account: o.account_id, id: o.id, undo: Boolean(o.called_at) })); toast(o.called_at ? 'Відмічено: подзвонив' : 'Відмітку знято'); showDetail(o); load(); }
         catch (er) { toast(er.message, true); }
