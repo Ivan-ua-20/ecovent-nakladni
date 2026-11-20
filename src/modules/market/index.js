@@ -8,6 +8,7 @@ import { rzOrdersSearch, rzItemComments, rzSuccessStatuses, rzOrderChat, rzSendM
 import { promOrders } from '../../integrations/prom.js';
 import { epcOrdersPage } from '../../integrations/epicentr.js';
 import { mountMarketCrm } from './crm.js';
+import { mountMarketTtn } from './ttn.js';
 import { mountMarketItems } from './items.js';
 import { mountMarketRemind, recallSql, RECALL_DAYS } from './remind.js';
 
@@ -964,6 +965,8 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     if (!acc) throw fail(404, 'Магазин не знайдено.');
     return acc;
   };
+  // «Створити ТТН» (ROZETKA Delivery, Нова пошта, Meest) із картки замовлення — ttn.js.
+  mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf });
   app.post('/api/mp/history/start', async (c) => {
     need(c, 'api');
     const b = await c.req.json().catch(() => ({}));

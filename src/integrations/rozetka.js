@@ -144,6 +144,53 @@ export async function rzSetOrderStatus(fetchFn, token, orderId, status) {
   return getContent(fetchFn, token, `/orders/${encodeURIComponent(orderId)}`, { method: 'PUT', body: { status: Number(status) } });
 }
 
+// ---------- Створення ТТН із замовлення (ROZETKA Delivery, Нова пошта, Meest — через кабінет продавця) ----------
+// Помилка з поясненням Розетки (description, details), а не лише кодом.
+async function rzContent(fetchFn, token, path, opts = {}) {
+  const res = await send(fetchFn, path, { token, ...opts });
+  const j = await res.json().catch(() => null);
+  if (!j?.success) {
+    const e = rzError(j || { errors: { message: res.status === 429 ? 'забагато запитів' : `помилка ${res.status}` } });
+    const er = j?.errors || {};
+    const det = er.details && typeof er.details === 'object' ? Object.values(er.details).flat().filter((x) => typeof x === 'string').join('; ') : (typeof er.details === 'string' ? er.details : '');
+    const extra = [er.description, det].filter(Boolean).join(' — ');
+    if (extra && !e.message.includes(extra)) e.message = `${e.message}: ${extra}`.slice(0, 600);
+    throw e;
+  }
+  return j.content;
+}
+export const RZ_TTN = {
+  // ROZETKA Delivery
+  rdUserInfo: (f, t, orderId) => rzContent(f, t, `/delivery-rozetka/get-user-info/${encodeURIComponent(orderId)}`),
+  rdSettings: (f, t) => rzContent(f, t, '/delivery-rozetka/settings'),
+  rdCreate: (f, t, body) => rzContent(f, t, '/delivery-rozetka/create-order-ttn', { method: 'POST', body }),
+  // Нова пошта (ключ НП підключено в кабінеті Розетки)
+  npUserInfo: (f, t, orderId) => rzContent(f, t, `/ttns/get-user-info/${encodeURIComponent(orderId)}`),
+  npSettings: (f, t) => rzContent(f, t, '/ttn-settings/setting?expand=conterparty,sender,address,cargo'),
+  npCommon: (f, t) => rzContent(f, t, '/ttns/common-data'),
+  npCreate: (f, t, body) => rzContent(f, t, '/ttns/create-ttn', { method: 'POST', body }),
+  // Meest
+  meUserInfo: (f, t, orderId) => rzContent(f, t, `/meests/get-user-info/${encodeURIComponent(orderId)}`),
+  meSettings: (f, t) => rzContent(f, t, '/meests/ttn-settings'),
+  meCreate: (f, t, body) => rzContent(f, t, '/meests/create-ttn', { method: 'POST', body }),
+};
+// PDF наліпки / ТТН НП чи Meest із кабінету Розетки (null — не PDF).
+export async function rzCarrierPdf(fetchFn, token, carrier, ttn) {
+  const path = carrier === 'np' ? `/ttns/ttn-print?${new URLSearchParams([['ttnNumbers[]', ttn]])}` : `/meests/ttn-print/stickers?${new URLSearchParams({ ttn })}`;
+  const res = await send(fetchFn, path, { token });
+  const buf = new Uint8Array(await res.arrayBuffer());
+  if (isPdf(buf)) return buf;
+  let j = null;
+  try { j = JSON.parse(new TextDecoder().decode(buf)); } catch { return null; }
+  if (j && !j.success) throw rzError(j);
+  const c = j?.content;
+  const file = typeof c === 'string' ? c : c?.file || c?.content || '';
+  if (file && !/^https?:/.test(file)) { try { const pdf = unb64(file.replace(/^data:[^,]+,/, '')); if (isPdf(pdf)) return pdf; } catch { /* не base64 */ } }
+  const url = c?.url || c?.link || (/^https?:/.test(file) ? file : '');
+  if (url) { const r = await fetchFn(url); const pdf = new Uint8Array(await r.arrayBuffer()); if (isPdf(pdf)) return pdf; }
+  return null;
+}
+
 // Лічильники непрочитаного: ordersChatUnread, itemsChatUnread тощо (одним запитом).
 export async function rzMessageCounts(fetchFn, token) {
   return (await getContent(fetchFn, token, '/messages/counts')) || {};
