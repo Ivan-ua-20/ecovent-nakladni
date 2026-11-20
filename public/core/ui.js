@@ -2,6 +2,21 @@
 import { esc } from '../invoice.js';
 
 export const $ = (sel, root = document) => root.querySelector(sel);
+// Телефон → посилання tel:+380… : клік відкриває програму для дзвінків (MicroSIP, Zoiper, Binotel, «Зв'язок із телефоном»),
+// на телефоні — набір номера. Український номер у будь-якому записі (0…, 380…, +380…, 9 цифр); інший — як є.
+export const telHref = (p) => {
+  const d = String(p || '').replace(/\D/g, '');
+  if (!d) return '';
+  if (d.length === 9) return `tel:+380${d}`;
+  if (d.length === 10 && d.startsWith('0')) return `tel:+38${d}`;
+  if (d.length === 12 && d.startsWith('380')) return `tel:+${d}`;
+  return d.length >= 7 ? `tel:+${d}` : '';
+};
+export const telLink = (p, text = p) => {
+  const h = telHref(p);
+  const t = esc(text || p || '');
+  return h ? `<a class="tel-a" href="${h}" title="Подзвонити">${t}</a>` : t;
+};
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 // Запит з адреси сторінки (#/rzorders?q=…, з пошуку по сайту): повертає його один раз і прибирає з адреси.
 export function takeHashQuery() {

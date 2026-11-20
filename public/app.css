@@ -1366,3 +1366,7 @@ body.pub-mode #auth { display: block; padding: 0; min-height: 100vh; background:
 .pr-pi { display: flex; gap: 8px; align-items: baseline; padding: 4px 2px; border-bottom: 1px solid var(--line); cursor: pointer; }
 .pr-pi span:nth-child(2) { flex: 1; }
 .pr-prices { max-height: 50vh; overflow: auto; }
+
+/* Телефон — посилання tel: (core/ui.js telLink) */
+.tel-a { color: inherit; text-decoration: underline dotted; text-underline-offset: 2px; }
+.tel-a:hover { color: var(--accent); text-decoration-style: solid; }

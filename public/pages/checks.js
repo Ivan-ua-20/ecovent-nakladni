@@ -2,7 +2,7 @@
 // оплати, ФОП), оплата на рахунок ↔ ФОП чека, можливі дублі. Окрема вкладка «Чеки за день» — замість зошита: кожен чек ФОП
 // з замовленням, до якого його зіставлено. «Налаштування» — що очікувати для кожного виду оплати LP-CRM.
 import { esc, money } from '../invoice.js';
-import { $, $$, main, api, toast, fmtDateTime, todayKyiv, modal, confirmDanger } from '../core/ui.js';
+import { $, $$, main, api, toast, fmtDateTime, todayKyiv, modal, confirmDanger, telLink } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
 import { fpLayout, wireFp, fpGroup, fpBtn, fpKpi } from './b2b-shared.js';
 
@@ -57,7 +57,7 @@ export function createChecksPages() {
   const open = new Set();
   const row = (r) => `<tr class="chk-row chk-row-${esc(r.level)}" data-code="${esc(r.code)}" tabindex="0" aria-expanded="${open.has(r.code)}">
     <td class="nowrap"><b>№ ${esc(r.id || r.code)}</b><div class="small muted">${dmy(r.day)} · ${esc(r.status)}</div><div class="small muted">${esc(r.user || '')}</div></td>
-    <td>${esc(r.buyer || '—')}${r.phone ? `<div class="small muted">${phoneFmt(r.phone)}</div>` : ''}<div class="small muted">${esc(r.channel || r.office || '')}</div></td>
+    <td>${esc(r.buyer || '—')}${r.phone ? `<div class="small muted">${telLink(r.phone, phoneFmt(r.phone))}</div>` : ''}<div class="small muted">${esc(r.channel || r.office || '')}</div></td>
     <td class="nowrap"><b>${uah(r.total)}</b><div class="small">${esc(r.payment)}</div>${r.ttn ? `<div class="small muted">${esc(r.carrier)} · ${esc(r.ttn)}</div>` : ''}</td>
     <td><div class="chk-head"><span class="badge ${LV[r.level]?.[0] || ''}">${LV[r.level]?.[1] || ''}</span>${actions(r)}</div>${strip(r)}
       ${markLine(r)}

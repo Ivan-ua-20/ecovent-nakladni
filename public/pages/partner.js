@@ -1,6 +1,6 @@
 // Кабінет партнера (B2B): каталог, юрособи, закупівлі (оформлення, зміна до рахунку, файли), замовлення клієнтів, інструкція.
 import { esc, money } from '../invoice.js';
-import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime } from '../core/ui.js';
+import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime, telLink } from '../core/ui.js';
 import { downloadXlsx } from '../core/xlsx.js';
 
 const dDay = (s) => String(s || '').split('-').reverse().join('.');
@@ -273,7 +273,7 @@ export function createPartnerPages(ctx = {}) {
       <div class="alert info help" style="margin-bottom:14px">Люди, які забирають закупівлі зі складу при самовивозі: ваш менеджер, водій, кур’єр.
         У закупівлі з самовивозом їх обирають зі списку — склад готує товар на цю людину й знає, кого чекати. Можна й вписати іншу людину вручну.</div>
       ${rows.length ? `<table class="list"><thead><tr><th>ПІБ</th><th>Телефон</th><th class="hide-m">Примітка</th><th class="hide-m">Додав</th><th></th></tr></thead><tbody>
-        ${rows.map((k) => `<tr><td><b>${esc(k.name)}</b></td><td class="nowrap">${esc(pickupPhone(k.phone))}</td><td class="small hide-m">${esc(k.note || '')}</td>
+        ${rows.map((k) => `<tr><td><b>${esc(k.name)}</b></td><td class="nowrap">${telLink(k.phone, pickupPhone(k.phone))}</td><td class="small hide-m">${esc(k.note || '')}</td>
           <td class="small muted hide-m">${esc(k.created_by || '')}</td>
           <td style="text-align:right">${canEdit() ? `<button class="btn sm" data-ke="${k.id}">Змінити</button> <button class="btn sm danger" data-kd="${k.id}">Прибрати</button>` : ''}</td></tr>`).join('')}</tbody></table>`
         : '<div class="card empty"><div class="big">Кур’єрів ще немає</div>Додайте людей, які забиратимуть закупівлі зі складу, — або впишіть їх у першій закупівлі з самовивозом (галочка «Зберегти в Кур’єри»).</div>'}`;
@@ -677,7 +677,7 @@ export function createPartnerPages(ctx = {}) {
     const table = rows.length ? `<table class="list"><thead><tr><th>№</th><th>Клієнт</th><th class="r">Сума</th><th>Статус</th><th class="hide-m">Оплата</th><th>Статус відправлення</th></tr></thead><tbody>
         ${rows.map((o) => `<tr class="click ${o.pending ? 'row-info' : o.no_supply && o.status !== 'cancelled' ? 'row-bad' : ''} ${urgentRow(o)}" data-o="${o.id}">
           <td><b>${esc(o.number)}</b>${o.urgent && o.status !== 'cancelled' ? `<div>${urgentBadge(o)}</div>` : ''}<div>${supplyMark(o)}</div>${o.pending ? '<div><span class="badge info">🔵 зміни менеджера — підтвердіть</span></div>' : ''}<div class="small muted hide-m">${esc(fmtDateTime(o.created_at))}</div></td>
-          <td>${esc(o.client_name)}<div class="small muted">${esc(phoneFmt(o.client_phone))}${o.ttn ? ` · ТТН ${esc(o.ttn)}` : ''}</div></td>
+          <td>${esc(o.client_name)}<div class="small muted">${telLink(o.client_phone, phoneFmt(o.client_phone))}${o.ttn ? ` · ТТН ${esc(o.ttn)}` : ''}</div></td>
           <td class="r"><b>${uah(o.total)}</b></td>
           <td>${statusBadge(o)}</td>
           <td class="hide-m">${payBadge(o)}</td>
@@ -731,7 +731,7 @@ export function createPartnerPages(ctx = {}) {
         <div class="form-stack">
           <div class="card form-stack">
             <h3>Клієнт і доставка</h3>
-            <div><b>${esc(o.client_name)}</b><div>${esc(phoneFmt(o.client_phone))}</div></div>
+            <div><b>${esc(o.client_name)}</b><div>${telLink(o.client_phone, phoneFmt(o.client_phone))}</div></div>
             ${o.np ? `<div>Доставка: <b>${esc(npAddressText(o.np))}</b></div>
               <div class="small">${o.np.cod ? `Клієнт платить при отриманні: <b>${uah(o.np.cod)}</b>` : 'Без оплати при отриманні'}</div>` : ''}
             <div>ТТН: ${o.ttn ? `<b>${esc(o.ttn)}</b>${o.np ? ' <span class="badge info">створив Ековент</span>' : ''}` : o.np ? '<span class="badge warn">створить Ековент</span>' : '<span class="muted">не вказано</span>'}</div>
