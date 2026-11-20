@@ -307,6 +307,21 @@ tgSent.length = 0;
 await hook(tx(951, { amount: 10, date: '2025-01-01T10:00:00Z' }));
 assert.equal(tgSent.length, 0, 'старі платежі не розсилаються');
 
+// клієнт заплатив звичайним переказом (не за посиланням): Opendatabot не пов'язав — «схожі платежі» і ручна прив'язка
+const ml3 = (await req('POST', '/api/odb/links', { account_id: 'a1', amount: 3800, client: 'Степанов' }, MH)).link;
+await hook(tx(952, { amount: 3800, payer: 'Степанова Галина', code: '', date: new Date().toISOString() }));
+await hook(tx(953, { iban: ACCS[2].iban, amount: 3800, payer: 'Інший', code: '', date: new Date().toISOString() }));
+let L3 = await req('GET', `/api/odb/links/${ml3.id}`, null, MH);
+assert.equal(L3.link.status, 'pending', 'без прив’язки Opendatabot — не оплачено');
+assert.deepEqual(L3.similar.map((p) => p.payer_name), ['Степанова Галина'], 'схожий — той самий рахунок і сума; інший рахунок — ні');
+tgSent.length = 0;
+const att = await req('PUT', `/api/odb/payments/${L3.similar[0].id}`, { link_id: ml3.id }, MH);
+assert.equal(att.paid, 1);
+L3 = await req('GET', `/api/odb/links/${ml3.id}`, null, MH);
+assert.equal(L3.link.status, 'paid');
+assert.equal(L3.similar.length, 0);
+assert.ok(tgSent.some((m) => m.chat_id === '555' && new RegExp(`Оплачено: рахунок № ${ml3.number}`).test(m.text)), 'після ручної прив’язки — повідомлення в Telegram');
+
 // ---------- 8. Аналітика оплат ----------
 assert.equal(await status(() => req('GET', '/api/odb/stats', null, MH)), 403, 'аналітика оплат — лише адміни');
 const st = await req('GET', '/api/odb/stats?from=2026-01-01&to=2026-12-31&group=month&cmpFrom=2025-01-01&cmpTo=2025-12-31');

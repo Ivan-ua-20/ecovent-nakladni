@@ -185,7 +185,7 @@ export function createPayUI(ctx) {
   }
 
   async function openLink(id) {
-    const { link: l, payments, possible } = await api('GET', `/api/odb/links/${id}`);
+    const { link: l, payments, possible, similar = [] } = await api('GET', `/api/odb/links/${id}`);
     const open = ['pending', 'partial', 'check'].includes(l.status);
     const m = modal(`Посилання № ${l.number}`, `
       <div class="pl-res-body">
@@ -203,6 +203,10 @@ export function createPayUI(ctx) {
       ${payments.length ? `<table class="list"><tbody>${payments.map((p) => `<tr><td>${esc(dt(p.date))}</td><td class="r"><b>${uah(p.amount)}</b></td><td class="small">${esc(p.payer_name)}${p.manual ? ' <span class="badge">вручну</span>' : ''}<div class="muted">${esc(p.purpose)}</div></td></tr>`).join('')}</tbody></table>` : '<div class="small muted">Платежів ще немає.</div>'}
       ${possible.length ? `<h4 style="margin:16px 0 6px">Можливо, це оплата за цим рахунком</h4>
         <table class="list"><tbody>${possible.map((p) => `<tr><td>${esc(dt(p.date))}</td><td class="r"><b>${uah(p.amount)}</b></td><td class="small">${esc(p.payer_name)}<div class="muted">${esc(p.purpose)}</div></td>
+          <td><button class="btn sm" data-attach="${esc(p.id)}">Прив’язати</button></td></tr>`).join('')}</tbody></table>` : ''}
+      ${similar.length ? `<h4 style="margin:16px 0 6px">Схожі платежі</h4>
+        <p class="small muted" style="margin:0 0 6px">Той самий рахунок і та сама сума, але без номера посилання — клієнт міг заплатити звичайним переказом. Перевірте платника й прив’яжіть, якщо це він.</p>
+        <table class="list"><tbody>${similar.map((p) => `<tr><td>${esc(dt(p.date))}</td><td class="r"><b>${uah(p.amount)}</b></td><td class="small">${esc(p.payer_name)}<div class="muted">${esc(p.purpose)}</div></td>
           <td><button class="btn sm" data-attach="${esc(p.id)}">Прив’язати</button></td></tr>`).join('')}</tbody></table>` : ''}`,
     {
       wide: true,
@@ -299,17 +303,20 @@ export function createPayUI(ctx) {
             <td>${r.link_id ? `<button class="linkbtn" data-open="${r.link_id}">№ ${esc(r.link_number)}</button> ${badge(r.link_status)}${r.link_author ? `<div class="small muted">${esc(r.link_author)}</div>` : ''}`
               : r.b2b?.order_id ? `<a class="linkbtn" href="#/b2borders/${r.b2b.order_id}">Закупівля ${esc(r.b2b.number)}</a> <span class="badge ok">B2B</span>`
               : r.b2b?.check ? `<div class="small"><span class="badge warn">B2B: перевірити</span> ${r.b2b.candidates.map((id) => `<a href="#/b2borders/${id}">B2B-${id}</a>`).join(', ')}</div>`
-              : check ? `<button class="btn sm" data-check="${esc(r.id)}" data-amount="${r.amount}">Перевірити</button>` : ''}</td></tr>`;
+              : check ? `<button class="btn sm" data-check="${esc(r.id)}" data-amount="${r.amount}" data-iban="${esc(r.iban)}">Перевірити</button>`
+              : `<button class="btn sm" data-check="${esc(r.id)}" data-amount="${r.amount}" data-iban="${esc(r.iban)}" title="Прив’язати платіж до посилання на оплату">Прив’язати</button>`}</td></tr>`;
         }).join('')}</tbody></table></div>` : '<div class="card empty">За цей період надходжень немає.</div>'}`;
       $$('[data-open]', box).forEach((b) => (b.onclick = () => openLink(b.dataset.open)));
-      $$('[data-check]', box).forEach((b) => (b.onclick = () => attachDialog(b.dataset.check, Number(b.dataset.amount))));
+      $$('[data-check]', box).forEach((b) => (b.onclick = () => attachDialog(b.dataset.check, Number(b.dataset.amount), b.dataset.iban)));
     } catch (er) { box.innerHTML = `<div class="alert bad">${esc(er.message)}</div>`; }
   }
 
-  async function attachDialog(txId, amount) {
+  async function attachDialog(txId, amount, iban = '') {
     const { links } = await api('GET', '/api/odb/links?filter=unpaid');
-    const sorted = links.sort((a, b) => Math.abs(a.amount - a.paid_amount - amount) - Math.abs(b.amount - b.paid_amount - amount));
-    const m = modal('До якого посилання цей платіж?', `<p class="small muted">Opendatabot не зміг точно визначити рахунок. Виберіть посилання — зверху найближчі за сумою (${uah(amount)}).</p>
+    // зверху — посилання на той самий рахунок, далі — найближчі за сумою
+    const score = (l) => (iban && l.account_iban === iban ? 0 : 1e9) + Math.abs(l.amount - l.paid_amount - amount);
+    const sorted = links.sort((a, b) => score(a) - score(b));
+    const m = modal('До якого посилання цей платіж?', `<p class="small muted">Opendatabot не пов’язав цей платіж із посиланням (наприклад, клієнт заплатив звичайним переказом). Виберіть посилання — зверху ті, що на цей самий рахунок і найближчі за сумою (${uah(amount)}). Після прив’язки посилання стане оплаченим і прийде повідомлення в Telegram.</p>
       ${sorted.length ? `<table class="list"><tbody>${sorted.slice(0, 15).map((l) => `<tr><td><b>№ ${esc(l.number)}</b></td><td>${esc(l.client || '')}</td><td class="r">${uah(l.amount)}</td><td>${badge(l.status)}</td>
         <td><button class="btn sm" data-pick="${l.id}">Прив’язати</button></td></tr>`).join('')}</tbody></table>` : '<div class="small muted">Неоплачених посилань немає.</div>'}`, { wide: true });
     $$('[data-pick]', m.el).forEach((b) => (b.onclick = async () => {
