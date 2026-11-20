@@ -15207,6 +15207,10 @@ async function rzContent(fetchFn, token, path, opts = {}) {
     const det = er.details && typeof er.details === "object" ? Object.values(er.details).flat().filter((x) => typeof x === "string").join("; ") : typeof er.details === "string" ? er.details : "";
     const extra = [er.description, det].filter(Boolean).join(" \u2014 ");
     if (extra && !e.message.includes(extra)) e.message = `${e.message}: ${extra}`.slice(0, 600);
+    if (/занадто багато запитів|too many requests|слишком много запросов/i.test(`${extra} ${er.message || ""}`)) {
+      e.message = "\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430 \u0442\u0438\u043C\u0447\u0430\u0441\u043E\u0432\u043E \u043E\u0431\u043C\u0435\u0436\u0438\u043B\u0430 \u043A\u0456\u043B\u044C\u043A\u0456\u0441\u0442\u044C \u0437\u0430\u043F\u0438\u0442\u0456\u0432. \u0417\u0430\u0447\u0435\u043A\u0430\u0439\u0442\u0435 1\u20132 \u0445\u0432\u0438\u043B\u0438\u043D\u0438 \u0439 \u043D\u0430\u0442\u0438\u0441\u043D\u0456\u0442\u044C \u0449\u0435 \u0440\u0430\u0437 \u2014 \u0434\u0430\u043D\u0456 \u0432\u0436\u0435 \u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u0456.";
+      e.rate = true;
+    }
     throw e;
   }
   return j.content;
@@ -19091,15 +19095,26 @@ var phone12 = (p) => {
   const d = String(p || "").replace(/\D/g, "");
   return d.length === 10 && d.startsWith("0") ? `38${d}` : d.length === 9 ? `380${d}` : d;
 };
+var CACHE = /* @__PURE__ */ new Map();
+var TTL = { settings: 10 * 6e4, order: 5 * 6e4 };
 function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
+  const cached = async (key, ttl, load) => {
+    const hit = CACHE.get(key);
+    if (hit && Date.now() - hit.at < ttl) return hit.v;
+    const v = await load();
+    CACHE.set(key, { at: Date.now(), v });
+    if (CACHE.size > 300) CACHE.delete(CACHE.keys().next().value);
+    return v;
+  };
   async function prep(acc, o, carrier) {
-    const call2 = (fn) => rzCall(acc, (t) => fn(fetchFn, t, o.id));
-    const callS = (fn) => rzCall(acc, (t) => fn(fetchFn, t));
+    const call2 = (fn) => cached(`${acc.id}|${fn.name || ""}|${carrier}|o${o.id}`, TTL.order, () => rzCall(acc, (t) => fn(fetchFn, t, o.id)));
+    const callS = (fn, tag) => cached(`${acc.id}|${tag}`, TTL.settings, () => rzCall(acc, (t) => fn(fetchFn, t)));
     const items = parseJ(o.items) || [];
     const descr = str3(items.map((i) => i.name).filter(Boolean).join(", "), 100);
-    const base2 = { carrier, carrier_name: CARRIERS[carrier], paid: Boolean(o.paid), pay: [o.pay_type, o.pay_status].filter(Boolean).join(" \xB7 "), total: num6(o.total), description: descr };
+    const base2 = { carrier, carrier_name: CARRIERS[carrier], paid: Boolean(o.paid), installment: /частин|кредит|розстроч|покупка частинами/i.test(`${o.pay_type} ${o.pay_status}`), pay: [o.pay_type, o.pay_status].filter(Boolean).join(" \xB7 "), total: num6(o.total), description: descr };
     if (carrier === "rd") {
-      const [ui2, st2] = await Promise.all([call2(RZ_TTN.rdUserInfo), callS(RZ_TTN.rdSettings).catch(() => null)]);
+      const ui2 = await call2(RZ_TTN.rdUserInfo);
+      const st2 = await callS(RZ_TTN.rdSettings, "rdSettings").catch(() => null);
       const s4 = st2?.sender || null;
       const p = (st2?.parcels || [])[0] || {};
       const d = ui2?.itemDimensions || {};
@@ -19117,11 +19132,14 @@ function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
         sender_hint: "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043D\u0438\u043A\u0430 \u0437\u0430\u0434\u0430\u044E\u0442\u044C \u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438: ROZETKA Delivery \u2192 \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u043F\u0435\u0440\u0435\u0434\u0437\u0430\u043F\u043E\u0432\u043D\u0435\u043D\u043D\u044F.",
         parcel: { weight: num6(p.weight) || num6(d.weight) || 1, length: num6(p.length) || num6(d.length) || 20, width: num6(p.width) || num6(d.width) || 20, height: num6(p.height) || num6(d.height) || 20, places: 1, description: str3(p.description, 100) || descr },
         limits: lim ? { weight: num6(lim.max_weight) || null, cost: num6(lim.max_cost) || null, length: num6(lim.max_length) || null, width: num6(lim.max_width) || null, height: num6(lim.max_height) || null } : null,
-        cod_allowed: ui2?.isReturnMoneyAllowed !== false
+        cod_allowed: ui2?.isReturnMoneyAllowed !== false,
+        _raw: { ui: ui2, st: st2 }
       };
     }
     if (carrier === "np") {
-      const [ui2, st2, cm] = await Promise.all([call2(RZ_TTN.npUserInfo), callS(RZ_TTN.npSettings).catch(() => null), callS(RZ_TTN.npCommon).catch(() => null)]);
+      const ui2 = await call2(RZ_TTN.npUserInfo);
+      const st2 = await callS(RZ_TTN.npSettings, "npSettings").catch(() => null);
+      const cm = await callS(RZ_TTN.npCommon, "npCommon").catch(() => null);
       const sel = parseJ(st2?.selected_sender) || {};
       const cargo = parseJ(st2?.selected_cargo) || st2?.cargo || {};
       const ok = Boolean(st2?.conterparty?.Ref && st2?.sender?.Ref && st2?.address?.Ref);
@@ -19139,10 +19157,12 @@ function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
         parcel: { weight: num6(cargo.Weight) || 1, length: 20, width: 20, height: 20, places: 1, description: str3(cargo.Description && cargo.Description !== "none" ? cargo.Description : "", 100) || descr },
         payment_control: Boolean(cm?.CanAfterpaymentOnGoodsCost),
         payment_control_on: Boolean(cm?.CanAfterpaymentOnGoodsCost && st2?.is_add_payment_control !== false),
-        cod_allowed: true
+        cod_allowed: true,
+        _raw: { ui: ui2, st: st2, cm }
       };
     }
-    const [ui, st] = await Promise.all([call2(RZ_TTN.meUserInfo), callS(RZ_TTN.meSettings).catch(() => null)]);
+    const ui = await call2(RZ_TTN.meUserInfo);
+    const st = await callS(RZ_TTN.meSettings, "meSettings").catch(() => null);
     const s3 = parseJ(st?.selected_sender);
     const pc = (parseJ(st?.selected_cargo)?.placesItems || [])[0] || {};
     return {
@@ -19153,7 +19173,8 @@ function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
       sender_hint: "\u0412\u0456\u0434\u043F\u0440\u0430\u0432\u043D\u0438\u043A\u0430 \u0437\u0430\u0434\u0430\u044E\u0442\u044C \u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438: \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 Meest.",
       parcel: { weight: num6(pc.weight) || 1, length: num6(pc.length) || 20, width: num6(pc.width) || 20, height: num6(pc.height) || 20, places: 1, description: descr },
       cod_allowed: true,
-      branch: Boolean(ui?.branchId)
+      branch: Boolean(ui?.branchId),
+      _raw: { ui, st }
     };
   }
   const loadOrder = async (c, b) => {
@@ -19166,7 +19187,8 @@ function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
     const carrier = CARRIERS[c.req.query("carrier")] ? c.req.query("carrier") : carrierOf(o.delivery);
     if (!carrier) return c.json({ carrier: "", delivery: o.delivery, carriers: CARRIERS });
     try {
-      return c.json({ ...await prep(acc, o, carrier), delivery: o.delivery, ttn: o.ttn || "", carriers: CARRIERS });
+      const { _raw, ...view } = await prep(acc, o, carrier);
+      return c.json({ ...view, delivery: o.delivery, ttn: o.ttn || "", carriers: CARRIERS });
     } catch (e) {
       if (e.pending) throw e;
       throw fail(400, `${CARRIERS[carrier]}: \u043D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u043E\u0442\u0440\u0438\u043C\u0430\u0442\u0438 \u0434\u0430\u043D\u0456 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0437 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (${e.message.replace(/^Розетка:\s*/, "")}). \u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0449\u043E \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0430 \u0432 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u2014 ${CARRIERS[carrier]} \u0456 \u043C\u043E\u0434\u0443\u043B\u044C \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438.`);
@@ -19197,7 +19219,7 @@ function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
     let ttn = "";
     const res = {};
     if (carrier === "rd") {
-      const st = await rzCall(acc, (t) => RZ_TTN.rdSettings(fetchFn, t));
+      const { st } = p._raw;
       const s3 = st.sender;
       const r = await rzCall(acc, (t) => RZ_TTN.rdCreate(fetchFn, t, {
         order_id: Number(o.id),
@@ -19213,11 +19235,8 @@ function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
       ttn = str3(r?.ttn || r?.DeliveryTtn?.ttn, 40);
       res.price = num6(r?.delivery_price);
     } else if (carrier === "np") {
-      const [ui, st, cm] = await Promise.all([
-        rzCall(acc, (t) => RZ_TTN.npUserInfo(fetchFn, t, o.id)),
-        rzCall(acc, (t) => RZ_TTN.npSettings(fetchFn, t)),
-        rzCall(acc, (t) => RZ_TTN.npCommon(fetchFn, t))
-      ]);
+      const { ui, st, cm } = p._raw;
+      if (!st || !cm) throw fail(400, `\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430: \u043D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u043E\u0442\u0440\u0438\u043C\u0430\u0442\u0438 \u043D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u0437 \u0420\u043E\u0437\u0435\u0442\u043A\u0438. ${p.sender_hint}`);
       const sel = parseJ(st.selected_sender) || {};
       const control = Boolean(b.payment_control) && Boolean(cm?.CanAfterpaymentOnGoodsCost);
       const recCp = (cm?.recipientCounterParties || [])[0]?.Ref || "";
@@ -19262,7 +19281,7 @@ function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
       ttn = str3(d.IntDocNumber, 40);
       res.price = num6(d.CostOnSite);
     } else {
-      const [ui, st] = await Promise.all([rzCall(acc, (t) => RZ_TTN.meUserInfo(fetchFn, t, o.id)), rzCall(acc, (t) => RZ_TTN.meSettings(fetchFn, t))]);
+      const { ui, st } = p._raw;
       const s3 = parseJ(st.selected_sender) || {};
       if (!ui.branchId) throw fail(400, "Meest: \u0437\u0430\u0440\u0430\u0437 \u043F\u0456\u0434\u0442\u0440\u0438\u043C\u0443\u0454\u0442\u044C\u0441\u044F \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0430 \u043B\u0438\u0448\u0435 \u0434\u043E \u0432\u0456\u0434\u0434\u0456\u043B\u0435\u043D\u043D\u044F.");
       const r = await rzCall(acc, (t) => RZ_TTN.meCreate(fetchFn, t, {
