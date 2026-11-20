@@ -18163,7 +18163,17 @@ function mountOdb(app, { db, fetchFn, services = {}, base: base2 = ODB_BASE, not
        WHERE p.odb_id = ? AND t.link_id IS NULL ORDER BY t.date DESC LIMIT 10`,
       [link.odb_id]
     );
-    return c.json({ link, payments, possible });
+    let similar = [];
+    if (["pending", "partial", "check"].includes(link.status) && link.account_iban) {
+      const left = round2(link.amount - (link.paid_amount || 0));
+      similar = (await db.all(
+        `SELECT t.id, t.date, t.amount, t.purpose, t.payer_name FROM odb_tx t
+         WHERE +t.iban = ? AND +t.link_id IS NULL AND t.date >= ? AND (ABS(t.amount - ?) <= 1 OR ABS(t.amount - ?) <= 1)
+         ORDER BY t.date DESC LIMIT 10`,
+        [link.account_iban, kyivParts(new Date(Date.parse(link.created_at) - 864e5)), link.amount, left]
+      )).filter((t) => !possible.some((p) => p.id === t.id));
+    }
+    return c.json({ link, payments, possible, similar });
   });
   app.post("/api/odb/links", async (c) => {
     need(c, "docs.edit");
@@ -18446,8 +18456,9 @@ function mountOdb(app, { db, fetchFn, services = {}, base: base2 = ODB_BASE, not
     }
     const prev = await db.get(`SELECT link_id FROM odb_tx WHERE id = ?`, [c.req.param("id")]);
     await db.run(`UPDATE odb_tx SET link_id = ?, manual = 1 WHERE id = ?`, [linkId, c.req.param("id")]);
-    await relink({ txIds: [c.req.param("id")], linkIds: [linkId, prev?.link_id].filter(Boolean) });
-    return c.json({ ok: true });
+    const paid = await relink({ txIds: [c.req.param("id")], linkIds: [linkId, prev?.link_id].filter(Boolean) });
+    if (linkId && paid.length) await notify({ linkIds: paid }).catch(() => 0);
+    return c.json({ ok: true, paid: paid.length });
   });
   const PERSON = "person";
   const payerKey = `CASE WHEN length(t.payer_code) = 10 THEN '${PERSON}' WHEN t.payer_code != '' THEN t.payer_code ELSE 'name:' || t.payer_name END`;
