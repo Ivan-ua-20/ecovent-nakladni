@@ -44,7 +44,7 @@ export const DEFECT_STATE = {
 const claimNo = (id) => `О-${id}`;
 const OPEN = ['new', 'review', 'approved'];
 
-export function mountB2bClaims(app, { db, services = {}, myPartner, orders }) {
+export function mountB2bClaims(app, { db, services = {}, myPartner, orders, repair = null }) {
   const { orderOf, itemRows, storeFile, sendFile, groupOf, log, tgAdmins, tgPartner, tgGroup, link, uah, h, entityText } = orders;
   const userName = (u) => u?.name || u?.login || '';
   const J = (v, d) => { try { return JSON.parse(v || '') ?? d; } catch { return d; } };
@@ -91,6 +91,7 @@ export function mountB2bClaims(app, { db, services = {}, myPartner, orders }) {
     await tgGroup(fresh.partner_id, text);
     await tgPartner(fresh.partner_id, `${text}\n${link(c, `pclaims/${r.id}`)}`);
     await tgAdmins(`${text}\n${link(c, `b2bclaims/${r.id}`)}`);
+    await repair?.tgRepair(`${text}\n${link(c, `b2bclaims/${r.id}`)}`); // група «Ремонт» — усі події заявок
   }
 
   // Товари джерела (замовлення клієнта чи закупівля) для форми заявки.
@@ -156,6 +157,7 @@ export function mountB2bClaims(app, { db, services = {}, myPartner, orders }) {
     const g = await groupOf(cl.partner_id);
     if (g) await services.notify?.sendFile?.({ chatIds: [g] }, f, caption).catch(() => 0);
     await services.notify?.sendFile?.({ chatIds: await adminChats() }, f, caption).catch(() => 0);
+    await repair?.fileRepair(f, caption);
     return { id: f.id };
   }
   const adminChats = async () => (await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin', 'admin_lite') LIMIT 5`)).map((r) => r.tg_chat_id);

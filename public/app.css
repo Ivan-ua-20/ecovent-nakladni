@@ -543,6 +543,7 @@ tr.row-urgent:not(.row-bad):not(.row-info) td { background: #fff4e8; }
 tr.row-info td { background: var(--info-soft); }
 tr.row-info td:first-child { box-shadow: inset 3px 0 0 var(--info); }
 .card.card-info { border-color: var(--info); box-shadow: inset 3px 0 0 var(--info); }
+.card.card-warn { border-color: var(--warn); box-shadow: inset 3px 0 0 var(--warn); }
 .card.card-bad { border-color: var(--bad); box-shadow: inset 3px 0 0 var(--bad); }
 
 /* B2B: вибір закупівлі для замовлення клієнта */

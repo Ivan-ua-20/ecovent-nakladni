@@ -20,6 +20,7 @@ import { mountB2bHome } from './home.js';
 import { mountB2bCrm } from './crm.js';
 import { mountB2bNewProducts } from './newproducts.js';
 import { mountB2bClaims } from './claims.js';
+import { mountB2bRepair } from './repair.js';
 import { mountB2bFeeds } from './feeds.js';
 import { mountB2bApi } from './api.js';
 import { mountB2bNews } from './news.js';
@@ -741,7 +742,8 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
   mountB2bClients(app, { db, fetchFn, services, myPartner, orders, hooks, onCron });
   mountB2bNpTtn(app, { db, fetchFn, services, myPartner, orders, hooks });
   mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice });
-  mountB2bClaims(app, { db, services, myPartner, orders });
+  const repair = mountB2bRepair(app, { db, services, myPartner, orders });
+  mountB2bClaims(app, { db, services, myPartner, orders, repair });
   mountB2bApi(app, { db, myPartner, tgPartner: orders.tgPartner, CLIENT_STATUS, orderNo, payState, PAY_NAME });
   mountB2bFeeds(app, { db, myPartner, tgPartner: orders.tgPartner, tgGroup: orders.tgGroup, link: orders.link });
   const tgdocs = mountB2bTgDocs(app, { db, services, orders, hooks });
@@ -774,15 +776,15 @@ export function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {}
     await audit(c, p.id, `відв'язано Telegram-групу «${p.tg_group_title || p.tg_group}»`);
     return c.json({ ok: true });
   });
-  const tgGroupLink = async (code, chat, title) => {
+  const tgGroupLink = async (code, chat, title, thread = null) => {
     const p = await db.get(`SELECT id, name, tg_group_code FROM b2b_partners WHERE tg_group_code LIKE ? AND COALESCE(deleted_at, '') = ''`, [`${code}|%`]);
-    if (!p || (Number(p.tg_group_code.split('|')[1]) || 0) < Date.now()) return tgdocs.linkSpecialGroup(code, chat, title);
+    if (!p || (Number(p.tg_group_code.split('|')[1]) || 0) < Date.now()) return (await repair.linkRepairGroup(code, chat, title, thread)) || tgdocs.linkSpecialGroup(code, chat, title);
     await db.run(`UPDATE b2b_partners SET tg_group = ?, tg_group_title = ?, tg_group_code = '' WHERE id = ?`, [chat, String(title).slice(0, 120), p.id]);
     await logAudit(db, { user: null, kind: 'b2b', refId: p.id, action: `прив'язано Telegram-групу «${title}»`, changes: [] }).catch(() => 0);
     return `✅ Групу прив'язано до партнера <b>${String(p.name).replace(/[<>&]/g, '')}</b>. Сюди надходитимуть закупівлі, рахунки й накладні (файлами) та оплати.`;
   };
-  const tgGroupMoved = (from, to) => db.run(`UPDATE b2b_partners SET tg_group = ? WHERE tg_group = ?`, [to, from]);
-  const tgGroupLeft = (chat) => db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '' WHERE tg_group = ?`, [chat]);
+  const tgGroupMoved = async (from, to) => { await repair.groupMoved(from, to); return db.run(`UPDATE b2b_partners SET tg_group = ? WHERE tg_group = ?`, [to, from]); };
+  const tgGroupLeft = async (chat) => { await repair.groupLeft(chat); return db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '' WHERE tg_group = ?`, [chat]); };
 
   return { attention, search: home.search, autopause: crm.autopause, crmOrderInfo: orders.crmOrderInfo, partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupMessage: tgdocs.tgGroupMessage, onPayments: pay.onPayments, payInfo: pay.payInfo };
 }

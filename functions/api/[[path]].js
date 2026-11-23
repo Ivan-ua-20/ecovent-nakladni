@@ -6153,8 +6153,8 @@ function mountTg(app, { db, fetchFn, services = {} }) {
       }
       const g = /^\/(?:link|start)(?:@\w+)?\s+([0-9a-f]{12,24})\b/i.exec(String(msg.text || ""));
       if (!g) return c.json({ ok: true });
-      const reply2 = await b2b?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || "") || await services.checks?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || "") || "\u041A\u043E\u0434 \u043D\u0435 \u043F\u0456\u0434\u0456\u0439\u0448\u043E\u0432. \u0412\u0456\u0437\u044C\u043C\u0456\u0442\u044C \u043D\u043E\u0432\u0438\u0439 \u043A\u043E\u0434 \u0443 \u043A\u0430\u0440\u0442\u0446\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0430 \u0441\u0430\u0439\u0442\u0456.";
-      await tg(s3.tg_token, "sendMessage", { chat_id: chat, text: reply2, parse_mode: "HTML" }).catch(() => {
+      const reply2 = await b2b?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || "", msg.is_topic_message ? msg.message_thread_id : null) || await services.checks?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || "") || "\u041A\u043E\u0434 \u043D\u0435 \u043F\u0456\u0434\u0456\u0439\u0448\u043E\u0432. \u0412\u0456\u0437\u044C\u043C\u0456\u0442\u044C \u043D\u043E\u0432\u0438\u0439 \u043A\u043E\u0434 \u0443 \u043A\u0430\u0440\u0442\u0446\u0456 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u043D\u0430 \u0441\u0430\u0439\u0442\u0456.";
+      await tg(s3.tg_token, "sendMessage", { chat_id: chat, ...msg.is_topic_message ? { message_thread_id: msg.message_thread_id } : {}, text: reply2, parse_mode: "HTML" }).catch(() => {
       });
       return c.json({ ok: true });
     }
@@ -6178,6 +6178,10 @@ function mountTg(app, { db, fetchFn, services = {} }) {
     });
     return c.json({ ok: true });
   });
+  const dest = (chat) => {
+    const [id, th] = String(chat).split("#");
+    return th ? { chat_id: id, message_thread_id: Number(th) } : { chat_id: id };
+  };
   const LABEL = { paid: "\u2705 \u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E", over: "\u2705 \u041E\u043F\u043B\u0430\u0447\u0435\u043D\u043E (\u043F\u0435\u0440\u0435\u043F\u043B\u0430\u0442\u0430)", partial: "\u{1F7E1} \u0427\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430" };
   async function notify({ linkIds = [], freshRows = [] }) {
     const s3 = await settings();
@@ -6235,7 +6239,7 @@ ${h(l.alias || "")}${l.created_by ? `
     let sent = 0;
     for (const chat of [...chats].slice(0, 30)) {
       try {
-        await tg(s3.tg_token, "sendMessage", { chat_id: chat, text, parse_mode: "HTML", disable_web_page_preview: true });
+        await tg(s3.tg_token, "sendMessage", { ...dest(chat), text, parse_mode: "HTML", disable_web_page_preview: true });
         sent++;
       } catch {
       }
@@ -6289,15 +6293,15 @@ ${h(l.alias || "")}${l.created_by ? `
     let sent = 0;
     for (const chat of chatIds.slice(0, 5)) {
       if (fileId) {
-        const r = await tg(s3.tg_token, "sendDocument", { chat_id: chat, document: fileId, ...caption ? { caption: caption.slice(0, 1e3), parse_mode: "HTML" } : {} }).catch(() => null);
+        const r = await tg(s3.tg_token, "sendDocument", { ...dest(chat), document: fileId, ...caption ? { caption: caption.slice(0, 1e3), parse_mode: "HTML" } : {} }).catch(() => null);
         if (r) {
           sent++;
-          lastMessage = { chat: String(chat), id: r.message_id };
+          lastMessage = { chat: dest(chat).chat_id, id: r.message_id };
         }
         continue;
       }
       const fd = new FormData();
-      fd.append("chat_id", String(chat));
+      for (const [k, v] of Object.entries(dest(chat))) fd.append(k, String(v));
       if (caption) {
         fd.append("caption", caption.slice(0, 1e3));
         fd.append("parse_mode", "HTML");
@@ -6308,7 +6312,7 @@ ${h(l.alias || "")}${l.created_by ? `
         const j = await r.json().catch(() => null);
         if (j?.ok) {
           sent++;
-          lastMessage = { chat: String(chat), id: j.result?.message_id };
+          lastMessage = { chat: dest(chat).chat_id, id: j.result?.message_id };
         }
       } catch {
       }
@@ -6983,8 +6987,10 @@ var ORDER_STATUS = {
 var CLIENT_STATUS = {
   new: "\u041D\u043E\u0432\u0435",
   crm: "\u041F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 CRM",
+  returned: "\u041F\u043E\u0432\u0435\u0440\u043D\u0443\u0442\u043E",
   cancelled: "\u0421\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E"
 };
+var RETURN_TO = { partner: "\u043D\u0430 \u044E\u0440\u043E\u0441\u043E\u0431\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430", warranty: "\u043D\u0430 \u043D\u043E\u043C\u0435\u0440 \u0433\u0430\u0440\u0430\u043D\u0442\u0456\u0439\u043D\u043E\u0433\u043E \u0432\u0456\u0434\u0434\u0456\u043B\u0443 \u0415\u043A\u043E\u0432\u0435\u043D\u0442" };
 var ANY_STATUS = { ...ORDER_STATUS, ...CLIENT_STATUS };
 function payState(o) {
   if (o.kind !== "client") return "";
@@ -9054,17 +9060,18 @@ ${link(base2, `porders/${s3.id}`)}` : ""}`);
     if (o.kind !== "client") throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     return o;
   }
-  const tracking = async (o) => {
-    if (!o.ttn) throw fail(400, "\u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u0449\u0435 \u043D\u0435\u043C\u0430\u0454 \u0422\u0422\u041D.");
+  const tracking = async (o, ret = false) => {
+    const ttn = ret ? o.return_ttn : o.ttn;
+    if (!ttn) throw fail(400, ret ? "\u0422\u0422\u041D \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u043D\u0435 \u0432\u043A\u0430\u0437\u0430\u043D\u043E." : "\u0423 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u0456 \u0449\u0435 \u043D\u0435\u043C\u0430\u0454 \u0422\u0422\u041D.");
     if (!services.marking?.trackTtn) throw fail(400, "\u0412\u0456\u0434\u0441\u0442\u0435\u0436\u0435\u043D\u043D\u044F \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0435.");
-    return { ttn: o.ttn, ...await services.marking.trackTtn(o.ttn, o.client_phone) };
+    return { ttn, ...await services.marking.trackTtn(ttn, ret ? "" : o.client_phone) };
   };
-  app.get("/api/b2b/p/clients/:id/tracking", async (c) => c.json(await tracking(await myClientOrder(c, await myPartner(c)))));
+  app.get("/api/b2b/p/clients/:id/tracking", async (c) => c.json(await tracking(await myClientOrder(c, await myPartner(c)), c.req.query("return") === "1")));
   app.get("/api/b2b/clients/:id/tracking", async (c) => {
     need(c, "b2b.admin");
     const o = await db.get(`SELECT * FROM b2b_orders WHERE id = ? AND kind = 'client'`, [c.req.param("id")]);
     if (!o) throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
-    return c.json(await tracking(o));
+    return c.json(await tracking(o, c.req.query("return") === "1"));
   });
   app.get("/api/b2b/p/clients/:id", async (c) => {
     const p = await myPartner(c);
@@ -9471,6 +9478,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
   const VIEWS = {
     new: `o.status = 'new'`,
     crm: `o.status = 'crm'`,
+    returned: `o.status = 'returned'`,
     nosupply: `(o.supply_id IS NULL OR s.status = 'open') AND o.status != 'cancelled'`,
     cancelled: `o.status = 'cancelled'`,
     urgent: `o.urgent = 1 AND o.status != 'cancelled'`
@@ -9500,7 +9508,7 @@ ${link(c, `b2bclients/${o.id}`)}`);
       params
     );
     const cnt = await db.get(`SELECT SUM(o.status = 'new') AS new, SUM(o.status = 'crm') AS crm, SUM((o.supply_id IS NULL OR s.status = 'open') AND o.status != 'cancelled') AS nosupply,
-      SUM(o.status = 'cancelled') AS cancelled, SUM(o.urgent = 1 AND o.status != 'cancelled') AS urgent FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id WHERE o.kind = 'client'`);
+      SUM(o.status = 'cancelled') AS cancelled, SUM(o.status = 'returned') AS returned, SUM(o.urgent = 1 AND o.status != 'cancelled') AS urgent FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id WHERE o.kind = 'client'`);
     return c.json({ rows: rows.map(publicOrder), counts: cnt || {}, crm: (await crmConfig()).on, crm_statuses: await crmStatuses(pid || null) });
   });
   async function clientOrder(c) {
@@ -11919,7 +11927,7 @@ var DEFECT_STATE = {
 };
 var claimNo = (id) => `\u041E-${id}`;
 var OPEN = ["new", "review", "approved"];
-function mountB2bClaims(app, { db, services = {}, myPartner, orders }) {
+function mountB2bClaims(app, { db, services = {}, myPartner, orders, repair = null }) {
   const { orderOf, itemRows, storeFile, sendFile, groupOf, log, tgAdmins, tgPartner, tgGroup, link, uah: uah5, h: h10, entityText } = orders;
   const userName8 = (u) => u?.name || u?.login || "";
   const J5 = (v, d) => {
@@ -11980,6 +11988,8 @@ ${itemsLine(c.want_items)}` : ""}${r.deliver_to ? `
     await tgPartner(fresh.partner_id, `${text}
 ${link(c, `pclaims/${r.id}`)}`);
     await tgAdmins(`${text}
+${link(c, `b2bclaims/${r.id}`)}`);
+    await repair?.tgRepair(`${text}
 ${link(c, `b2bclaims/${r.id}`)}`);
   }
   async function sourceOf(orderId, partnerId) {
@@ -12061,6 +12071,7 @@ ${link(c, `b2bclaims/${r.id}`)}`);
     const g = await groupOf(cl.partner_id);
     if (g) await services.notify?.sendFile?.({ chatIds: [g] }, f, caption).catch(() => 0);
     await services.notify?.sendFile?.({ chatIds: await adminChats() }, f, caption).catch(() => 0);
+    await repair?.fileRepair(f, caption);
     return { id: f.id };
   }
   const adminChats = async () => (await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role IN ('owner', 'admin', 'admin_lite') LIMIT 5`)).map((r) => r.tg_chat_id);
@@ -12300,6 +12311,123 @@ ${delivery === "pickup" ? "\u{1F697} \u0421\u0430\u043C\u043E\u0432\u0438\u0432\
     return c.json({ ok: true });
   });
   return { CLAIM_STATUS };
+}
+
+// src/modules/b2b/repair.js
+var KEYS = ["b2b_repair_chat", "b2b_repair_title", "b2b_repair_code"];
+function mountB2bRepair(app, { db, services = {}, myPartner, orders }) {
+  const { orderOf, log, tgAdmins, tgPartner, link, h: h10 } = orders;
+  const set = (key, value) => db.run(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]);
+  const repairChat = async () => (await db.get(`SELECT value FROM settings WHERE key = 'b2b_repair_chat'`))?.value || "";
+  const tgRepair = async (text) => {
+    const chat = await repairChat();
+    return chat ? services.notify?.sendText({ chatIds: [chat] }, text).catch(() => 0) : 0;
+  };
+  const fileRepair = async (file, caption) => {
+    const chat = await repairChat();
+    return chat ? services.notify?.sendFile?.({ chatIds: [chat] }, file, caption).catch(() => 0) : 0;
+  };
+  app.get("/api/b2b/repair-group", async (c) => {
+    need(c, "b2b.admin");
+    const s3 = await loadSettings(db);
+    return c.json({ chat: s3.b2b_repair_chat || "", title: s3.b2b_repair_title || "", bot: s3.tg_bot || "", warranty_phone: s3.b2b_warranty_phone || "" });
+  });
+  app.post("/api/b2b/repair-group", async (c) => {
+    need(c, "b2b.admin");
+    const s3 = await loadSettings(db);
+    if (!s3.tg_token || !s3.tg_bot) throw fail(400, "Telegram-\u0431\u043E\u0442\u0430 \u0449\u0435 \u043D\u0435 \u043F\u0456\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 Telegram).");
+    const code = randomToken(6);
+    await set("b2b_repair_code", `${code}|${Date.now() + 30 * 6e4}`);
+    return c.json({ code, bot: s3.tg_bot });
+  });
+  app.delete("/api/b2b/repair-group", async (c) => {
+    need(c, "b2b.admin");
+    await db.run(`DELETE FROM settings WHERE key IN (SELECT value FROM json_each(?))`, [JSON.stringify(KEYS)]);
+    return c.json({ ok: true });
+  });
+  app.put("/api/b2b/warranty-phone", async (c) => {
+    need(c, "b2b.admin");
+    const raw2 = String((await c.req.json().catch(() => ({}))).phone ?? "").trim().slice(0, 40);
+    const digits = raw2.replace(/\D/g, "");
+    if (raw2 && digits.length < 9) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043D\u043E\u043C\u0435\u0440 \u0442\u0435\u043B\u0435\u0444\u043E\u043D\u0443 \u043F\u043E\u0432\u043D\u0456\u0441\u0442\u044E, \u043D\u0430\u043F\u0440. +380 67 123 45 67.");
+    await set("b2b_warranty_phone", raw2);
+    return c.json({ ok: true, phone: raw2 });
+  });
+  async function linkRepairGroup(code, chat, title, thread) {
+    const s3 = await loadSettings(db);
+    const [want, exp] = String(s3.b2b_repair_code || "").split("|");
+    if (!want || want !== code || (Number(exp) || 0) < Date.now()) return "";
+    await set("b2b_repair_chat", thread ? `${chat}#${thread}` : String(chat));
+    await set("b2b_repair_title", String(title).slice(0, 120));
+    await db.run(`DELETE FROM settings WHERE key = 'b2b_repair_code'`);
+    return "\u2705 \u0413\u0440\u0443\u043F\u0443 \u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u043E \u044F\u043A <b>\xAB\u0420\u0435\u043C\u043E\u043D\u0442\xBB</b>: \u0441\u044E\u0434\u0438 \u043D\u0430\u0434\u0445\u043E\u0434\u0438\u0442\u0438\u043C\u0443\u0442\u044C \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u043A\u043B\u0456\u0454\u043D\u0442\u0456\u0432 B2B \u0456 \u0432\u0441\u0456 \u0437\u0430\u044F\u0432\u043A\u0438 \xAB\u0411\u0440\u0430\u043A / \u043E\u0431\u043C\u0456\u043D\xBB.";
+  }
+  async function groupMoved(from, to) {
+    const cur = await repairChat();
+    if (cur && cur.split("#")[0] === String(from)) await set("b2b_repair_chat", [to, ...cur.split("#").slice(1)].join("#"));
+  }
+  async function groupLeft(chat) {
+    const cur = await repairChat();
+    if (cur && cur.split("#")[0] === String(chat)) await db.run(`DELETE FROM settings WHERE key IN ('b2b_repair_chat', 'b2b_repair_title')`);
+  }
+  const itemsOf = (id) => db.all(`SELECT name, article, qty FROM b2b_order_items WHERE order_id = ? ORDER BY id`, [id]);
+  async function returnText(c, o, partnerName) {
+    const items = await itemsOf(o.id);
+    const s3 = await loadSettings(db);
+    const to = o.return_to === "warranty" ? `\u043D\u043E\u043C\u0435\u0440 \u0433\u0430\u0440\u0430\u043D\u0442\u0456\u0439\u043D\u043E\u0433\u043E \u0432\u0456\u0434\u0434\u0456\u043B\u0443${s3.b2b_warranty_phone ? ` (${h10(s3.b2b_warranty_phone)})` : ""}` : "\u044E\u0440\u043E\u0441\u043E\u0431\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430";
+    return `\u21A9\uFE0F <b>\u041F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \xB7 ${orderNo(o.id)} \xB7 ${h10(partnerName)}</b>
+\u0422\u0422\u041D \u0434\u043E \u043D\u0430\u0441: <b>${h10(o.return_ttn)}</b>
+\u0407\u0434\u0435 \u043D\u0430: ${to}
+LP-CRM: ${o.crm_id ? `\u2116 <b>${h10(o.crm_id)}</b>` : "\u0449\u0435 \u0431\u0435\u0437 \u043D\u043E\u043C\u0435\u0440\u0430"}
+\u041A\u043B\u0456\u0454\u043D\u0442: ${h10(o.client_name || "\u2014")}${o.client_phone ? `, +${h10(o.client_phone)}` : ""}${o.ttn ? `
+\u0422\u0422\u041D \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0438 \u043A\u043B\u0456\u0454\u043D\u0442\u0443: ${h10(o.ttn)}` : ""}
+\u0422\u043E\u0432\u0430\u0440:
+${items.map((i) => `\u2022 ${h10(i.name)}${i.article ? ` (${h10(i.article)})` : ""} \xD7 ${i.qty}`).join("\n")}
+<b>\u041A\u043E\u043C\u0435\u043D\u0442\u0430\u0440 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430:</b> ${h10(o.return_note)}
+${link(c, `b2bclients/${o.id}`)}`;
+  }
+  app.get("/api/b2b/p/return-info", async (c) => {
+    await myPartner(c);
+    const s3 = await loadSettings(db);
+    return c.json({ warranty_phone: s3.b2b_warranty_phone || "", to: RETURN_TO });
+  });
+  app.post("/api/b2b/p/clients/:id/return", async (c) => {
+    const p = await myPartner(c);
+    need(c, "b2b.order");
+    const o = await orderOf(c.req.param("id"), p.id);
+    if (o.kind !== "client") throw fail(404, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    if (o.status === "returned") throw fail(400, "\u041F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E.");
+    if (o.status !== "crm") throw fail(400, "\u041F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u043C\u043E\u0436\u043D\u0430 \u043E\u0444\u043E\u0440\u043C\u0438\u0442\u0438 \u043B\u0438\u0448\u0435 \u0434\u043B\u044F \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F, \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E\u0433\u043E \u0432 \u0440\u043E\u0431\u043E\u0442\u0443 (\u0441\u0442\u0430\u0442\u0443\u0441 \xAB\u041F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 CRM\xBB).");
+    const b = await c.req.json().catch(() => ({}));
+    const ttn = String(b.ttn ?? "").replace(/\s/g, "");
+    if (!/^\d{10,20}$/.test(ttn)) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u0422\u0422\u041D \u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u2014 \u043B\u0438\u0448\u0435 \u0446\u0438\u0444\u0440\u0438 (14 \u0446\u0438\u0444\u0440 \u0434\u043B\u044F \u041D\u043E\u0432\u043E\u0457 \u043F\u043E\u0448\u0442\u0438).");
+    const to = RETURN_TO[b.to] ? b.to : "";
+    if (!to) throw fail(400, "\u041E\u0431\u0435\u0440\u0456\u0442\u044C, \u043D\u0430 \u043A\u043E\u0433\u043E \u0457\u0434\u0435 \u043F\u043E\u0441\u0438\u043B\u043A\u0430: \u043D\u0430 \u044E\u0440\u043E\u0441\u043E\u0431\u0443 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 \u0447\u0438 \u043D\u0430 \u043D\u043E\u043C\u0435\u0440 \u0433\u0430\u0440\u0430\u043D\u0442\u0456\u0439\u043D\u043E\u0433\u043E \u0432\u0456\u0434\u0434\u0456\u043B\u0443.");
+    const note = String(b.note ?? "").trim().slice(0, 1e3);
+    if (note.length < 5) throw fail(400, "\u041D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440: \u0447\u043E\u043C\u0443 \u043F\u043E\u0432\u0435\u0440\u0442\u0430\u044E\u0442\u044C \u0456 \u0432 \u044F\u043A\u043E\u043C\u0443 \u0441\u0442\u0430\u043D\u0456 \u0442\u043E\u0432\u0430\u0440.");
+    const now = nowIso();
+    const r = await db.run(
+      `UPDATE b2b_orders SET status = 'returned', return_ttn = ?, return_to = ?, return_note = ?, returned_at = ?, updated_at = ? WHERE id = ? AND status = 'crm'`,
+      [ttn, to, note, now, now, o.id]
+    );
+    if (!r.changes) throw fail(409, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \u0437\u043C\u0456\u043D\u0435\u043D\u043E \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443.");
+    await log(o.id, c.get("user"), `\u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F: \u0422\u0422\u041D ${ttn}, ${RETURN_TO[to]} \u2014 ${note}`.slice(0, 1800));
+    const text = await returnText(c, { ...o, return_ttn: ttn, return_to: to, return_note: note }, p.name);
+    const sent = await tgRepair(text);
+    if (!sent) await tgAdmins(text);
+    return c.json({ ok: true });
+  });
+  app.post("/api/b2b/clients/:id/unreturn", async (c) => {
+    need(c, "b2b.admin");
+    const o = await orderOf(c.req.param("id"));
+    if (o.kind !== "client" || o.status !== "returned") throw fail(400, "\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u0432 \u0441\u0442\u0430\u0442\u0443\u0441\u0456 \xAB\u041F\u043E\u0432\u0435\u0440\u043D\u0443\u0442\u043E\xBB.");
+    await db.run(`UPDATE b2b_orders SET status = 'crm', updated_at = ? WHERE id = ? AND status = 'returned'`, [nowIso(), o.id]);
+    await log(o.id, c.get("user"), `\u043F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E (\u0422\u0422\u041D ${o.return_ttn}) \u2014 \u0437\u043D\u043E\u0432\u0443 \xAB\u041F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u0432 CRM\xBB`);
+    await tgPartner(o.partner_id, `\u21A9\uFE0F \u041F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${orderNo(o.id)} (${h10(o.client_name)}) \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u2014 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0437\u043D\u043E\u0432\u0443 \u0432 \u0440\u043E\u0431\u043E\u0442\u0456.`);
+    await tgRepair(`\u21A9\uFE0F \u041F\u043E\u0432\u0435\u0440\u043D\u0435\u043D\u043D\u044F ${orderNo(o.id)} (\u0422\u0422\u041D ${h10(o.return_ttn)}) \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u043E\u043C.`);
+    return c.json({ ok: true });
+  });
+  return { tgRepair, fileRepair, linkRepairGroup, groupMoved, groupLeft };
 }
 
 // src/modules/b2b/feeds.js
@@ -15029,7 +15157,8 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
   mountB2bClients(app, { db, fetchFn, services, myPartner, orders, hooks, onCron });
   mountB2bNpTtn(app, { db, fetchFn, services, myPartner, orders, hooks });
   mountB2bEdits(app, { db, orders, hooks, myPartner, partnerPrice });
-  mountB2bClaims(app, { db, services, myPartner, orders });
+  const repair = mountB2bRepair(app, { db, services, myPartner, orders });
+  mountB2bClaims(app, { db, services, myPartner, orders, repair });
   mountB2bApi(app, { db, myPartner, tgPartner: orders.tgPartner, CLIENT_STATUS, orderNo, payState, PAY_NAME });
   mountB2bFeeds(app, { db, myPartner, tgPartner: orders.tgPartner, tgGroup: orders.tgGroup, link: orders.link });
   const tgdocs = mountB2bTgDocs(app, { db, services, orders, hooks });
@@ -15059,15 +15188,21 @@ function mountB2b(app, { db, fetchFn, services = {}, onCleanup = () => {
     await audit(c, p.id, `\u0432\u0456\u0434\u0432'\u044F\u0437\u0430\u043D\u043E Telegram-\u0433\u0440\u0443\u043F\u0443 \xAB${p.tg_group_title || p.tg_group}\xBB`);
     return c.json({ ok: true });
   });
-  const tgGroupLink = async (code, chat, title) => {
+  const tgGroupLink = async (code, chat, title, thread = null) => {
     const p = await db.get(`SELECT id, name, tg_group_code FROM b2b_partners WHERE tg_group_code LIKE ? AND COALESCE(deleted_at, '') = ''`, [`${code}|%`]);
-    if (!p || (Number(p.tg_group_code.split("|")[1]) || 0) < Date.now()) return tgdocs.linkSpecialGroup(code, chat, title);
+    if (!p || (Number(p.tg_group_code.split("|")[1]) || 0) < Date.now()) return await repair.linkRepairGroup(code, chat, title, thread) || tgdocs.linkSpecialGroup(code, chat, title);
     await db.run(`UPDATE b2b_partners SET tg_group = ?, tg_group_title = ?, tg_group_code = '' WHERE id = ?`, [chat, String(title).slice(0, 120), p.id]);
     await logAudit(db, { user: null, kind: "b2b", refId: p.id, action: `\u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u043E Telegram-\u0433\u0440\u0443\u043F\u0443 \xAB${title}\xBB`, changes: [] }).catch(() => 0);
     return `\u2705 \u0413\u0440\u0443\u043F\u0443 \u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u043E \u0434\u043E \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430 <b>${String(p.name).replace(/[<>&]/g, "")}</b>. \u0421\u044E\u0434\u0438 \u043D\u0430\u0434\u0445\u043E\u0434\u0438\u0442\u0438\u043C\u0443\u0442\u044C \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456, \u0440\u0430\u0445\u0443\u043D\u043A\u0438 \u0439 \u043D\u0430\u043A\u043B\u0430\u0434\u043D\u0456 (\u0444\u0430\u0439\u043B\u0430\u043C\u0438) \u0442\u0430 \u043E\u043F\u043B\u0430\u0442\u0438.`;
   };
-  const tgGroupMoved = (from, to) => db.run(`UPDATE b2b_partners SET tg_group = ? WHERE tg_group = ?`, [to, from]);
-  const tgGroupLeft = (chat) => db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '' WHERE tg_group = ?`, [chat]);
+  const tgGroupMoved = async (from, to) => {
+    await repair.groupMoved(from, to);
+    return db.run(`UPDATE b2b_partners SET tg_group = ? WHERE tg_group = ?`, [to, from]);
+  };
+  const tgGroupLeft = async (chat) => {
+    await repair.groupLeft(chat);
+    return db.run(`UPDATE b2b_partners SET tg_group = '', tg_group_title = '' WHERE tg_group = ?`, [chat]);
+  };
   return { attention, search: home.search, autopause: crm.autopause, crmOrderInfo: orders.crmOrderInfo, partnerPrice, tgGroupLink, tgGroupMoved, tgGroupLeft, tgPrivate: tgdocs.tgPrivate, tgCallback: tgdocs.tgCallback, tgGroupMessage: tgdocs.tgGroupMessage, onPayments: pay.onPayments, payInfo: pay.payInfo };
 }
 
@@ -16389,10 +16524,10 @@ function mountRetail(app, { db, fetchFn, services = {}, onTick = () => {
     }
     const ready2 = (x) => ["confirmed", "problem"].includes(x.status) && !x.ttn && ["verified", "skipped"].includes(x.uzd_status);
     const events = { inv: [], ttn: [] };
-    const KEYS = ["status", "uzd_status", "ttn", "invoice_no", "document_link"];
+    const KEYS2 = ["status", "uzd_status", "ttn", "invoice_no", "document_link"];
     saveOrders2.changed = rows.filter((r) => {
       const o = old.get(r.id);
-      return !o || KEYS.some((k) => String(r[k] ?? "") !== String(o[k] ?? "") && !(k === "uzd_status" && !r[k]));
+      return !o || KEYS2.some((k) => String(r[k] ?? "") !== String(o[k] ?? "") && !(k === "uzd_status" && !r[k]));
     }).length;
     for (const r of rows) {
       const o = old.get(r.id);
@@ -23436,7 +23571,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 46,
+  version: 47,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23852,6 +23987,11 @@ var schema11 = {
   // supply_id — закупівля, з якої взято товари (порожньо — «без закупівлі»); дані клієнта й ТТН партнера;
   // crm_* — передача в LP-CRM: номер замовлення в CRM (автоматично або вручну), його статус, код, з яким відправили.
   columns: [
+    // Повернення замовлення клієнта (статус «returned»): ТТН до нас, на кого їде (partner — юрособа партнера, warranty — номер гарантійного відділу), коментар партнера.
+    ["b2b_orders", "return_ttn", "TEXT DEFAULT ''"],
+    ["b2b_orders", "return_to", "TEXT DEFAULT ''"],
+    ["b2b_orders", "return_note", "TEXT DEFAULT ''"],
+    ["b2b_orders", "returned_at", "TEXT DEFAULT ''"],
     // Новини: public — відкрита всім без входу (без партнерських цін; за замовчуванням), 0 — лише партнерам після входу;
     // tg_short — «Коротко для Telegram» (до 4 рядків); tg_photo — file_id фото в Telegram (щоб не завантажувати вдруге).
     ["b2b_news", "public", "INTEGER DEFAULT 1"],

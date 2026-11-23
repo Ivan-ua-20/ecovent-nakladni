@@ -25,8 +25,11 @@ export const ORDER_STATUS = {
 export const CLIENT_STATUS = {
   new: 'Нове',
   crm: 'Передано в CRM',
+  returned: 'Повернуто',
   cancelled: 'Скасовано',
 };
+// Повернення замовлення клієнта: на кого їде посилка до нас.
+export const RETURN_TO = { partner: 'на юрособу партнера', warranty: 'на номер гарантійного відділу Ековент' };
 const ANY_STATUS = { ...ORDER_STATUS, ...CLIENT_STATUS };
 // Стан оплати замовлення клієнта: за закупівлею, з якої воно зібране; «без закупівлі» — оплачено вручну адміністратором.
 export function payState(o) {
