@@ -3,8 +3,22 @@
 
 export const schema = {
   name: 'market',
-  version: 11,
+  version: 12,
   tables: [
+  // Особисті входи менеджерів у кабінет продавця Розетки (rzme.js): дії від їхнього імені. state — ok | bad (Розетка не прийняла вхід).
+  `CREATE TABLE IF NOT EXISTS rz_user_logins (
+    user_id INTEGER NOT NULL,
+    account_id INTEGER NOT NULL,
+    username TEXT NOT NULL DEFAULT '',
+    password TEXT NOT NULL DEFAULT '',
+    token TEXT DEFAULT '',
+    token_at TEXT DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'ok',
+    error TEXT DEFAULT '',
+    checked_at TEXT DEFAULT '',
+    updated_at TEXT DEFAULT '',
+    PRIMARY KEY (user_id, account_id)
+  )`,
   // Товари магазинів маркетплейсів (з замовлень) і їх прив'язка до товарів LP-CRM (див. items.js).
   // Кілька товарів маркетплейсу (дублі, інший магазин) можуть вести до одного product_id; link_source — manual | learned |
   // copied | code | sku | unlink; in_shop — товар ще є в магазині (для майбутнього списку товарів кабінету).

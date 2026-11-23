@@ -6,8 +6,9 @@ export function createUsersPages(ctx) {
   const { can, loadBoot, activeFops, fopById, tplById } = ctx;
 
 async function viewUsers() {
-  const [{ users, roles }, vals, tgInfo, markets] = await Promise.all([api('GET', '/api/users'), can('analytics') ? api('GET', '/api/an/values').catch(() => null) : null,
-    api('GET', '/api/users/tg').catch(() => null), can('market.view') ? api('GET', '/api/mp/shops').catch(() => []) : []]);
+  const [{ users, roles }, vals, tgInfo, markets, rzl] = await Promise.all([api('GET', '/api/users'), can('analytics') ? api('GET', '/api/an/values').catch(() => null) : null,
+    api('GET', '/api/users/tg').catch(() => null), can('market.view') ? api('GET', '/api/mp/shops').catch(() => []) : [],
+    can('market.view') ? api('GET', '/api/mp/rz/logins').catch(() => null) : null]);
   // Доступ до розділів (менеджер і перегляд): B2B, Рітейл, Маркетплейси (+ магазини), сповіщення в Telegram.
   const SECS = [
     { k: 'b2b', label: 'B2B партнери', lv: [['view', 'перегляд'], ['full', 'повний — зміни, ціни, оплати, партнери']], tg: true },
@@ -31,6 +32,17 @@ async function viewUsers() {
     return t.connected ? `<span class="badge ok">✓ підключено</span><div class="small">${esc(t.name || '')}</div>${t.at ? `<div class="small muted">${esc(fmtDateTime(t.at))}</div>` : ''}`
       : '<span class="small muted">не підключено</span>';
   };
+  // Особисті входи в Розетку (кожен підключає сам — «Розетка» вгорі): ✓ підключено, ! Розетка не прийняла вхід, — немає.
+  const rzOf = new Map((rzl?.logins || []).map((r) => [`${r.user_id}:${r.account_id}`, r]));
+  const rzCell = (u) => {
+    if (!rzl?.accounts.length || u.role === 'partner' || (u.access && u.access.market === 'none')) return '';
+    const shops = rzl.accounts.filter((a) => !u.access?.shops || u.access.shops.includes(`rozetka:${a.id}`));
+    return shops.map((a) => {
+      const r = rzOf.get(`${u.id}:${a.id}`);
+      const [cls, mark, hint] = !r ? ['', '—', 'не підключено — дії від «Для сервісу»'] : r.state === 'ok' ? ['ok', '✓', r.username] : ['bad', '!', `Розетка не прийняла вхід: ${r.error || ''}`];
+      return `<span class="badge ${cls}" title="${esc(hint)}">${esc(a.name)} ${mark}</span>`;
+    }).join(' ');
+  };
   const crmUsers = (vals?.users || []).map((x) => x.v);
   const me = ctx.boot.user;
   const assignable = ['admin', 'admin_lite', 'manager', 'viewer'];
@@ -42,13 +54,15 @@ async function viewUsers() {
       <b>Перегляд</b> — лише дивитися, друкувати й завантажувати.
       Менеджеру й перегляду можна відкрити розділи <b>B2B</b>, <b>Рітейл</b>, <b>Маркетплейси</b> (і лише потрібні магазини) — «Змінити» → «Доступ до розділів». 👁 — лише перегляд, 🔔 — сповіщення розділу в Telegram.</div>
     ${tgInfo ? `<div class="small muted" style="margin-bottom:8px">Telegram-бот${tgInfo.bot ? ` <b>@${esc(tgInfo.bot)}</b>` : ''}: підключили ${tgInfo.users.filter((t) => t.connected).length} з ${tgInfo.users.length}. Кожен підключає себе сам — «Telegram» угорі сторінки.</div>` : ''}
-    <table class="list"><thead><tr><th>Логін</th><th>Ім’я</th><th>Роль</th><th>Логіни LP-CRM</th><th>Telegram-бот</th><th>Доступ</th><th>Аналітика</th><th>Стан</th><th></th></tr></thead><tbody>
+    ${rzl ? `<label class="check small" style="margin-bottom:8px"><input type="checkbox" id="uRzReq" ${rzl.require ? 'checked' : ''}> Вимагати особистий вхід у Розетку: без нього менеджерам не можна писати покупцям, скасовувати, змінювати статус і створювати ТТН (власника й адміністраторів не стосується)</label>` : ''}
+    <table class="list"><thead><tr><th>Логін</th><th>Ім’я</th><th>Роль</th><th>Логіни LP-CRM</th><th>Telegram-бот</th>${rzl ? '<th>Розетка</th>' : ''}<th>Доступ</th><th>Аналітика</th><th>Стан</th><th></th></tr></thead><tbody>
       ${users.map((u) => `<tr>
         <td><b>${esc(u.login)}</b>${String(u.id) === String(me.id) ? ' <span class="badge info">це ви</span>' : ''}</td>
         <td>${esc(u.name)}</td>
         <td>${u.role === 'owner' ? `<span class="badge ok">${esc(u.role_name)}</span>` : esc(u.role_name)}</td>
         <td class="small">${u.crm_logins.length ? u.crm_logins.map(esc).join(', ') : (u.role === 'manager' ? '<span class="muted">не прив’язано</span>' : '')}</td>
         <td>${tgCell(u)}</td>
+        ${rzl ? `<td class="small">${rzCell(u)}</td>` : ''}
         <td>${accCell(u)}</td>
         <td>${me.role === 'owner' && u.role !== 'owner'
           ? `<label class="check" title="Доступ до розділу «Аналітика» (змінює лише власник)"><input type="checkbox" data-an="${u.id}" ${u.analytics ? 'checked' : ''}> ${u.analytics ? 'так' : 'ні'}</label>`
@@ -57,6 +71,10 @@ async function viewUsers() {
         <td style="text-align:right">${u.role === 'owner' && me.role !== 'owner' ? '' : `<button class="btn sm" data-uedit="${u.id}">Змінити</button>`}</td>
       </tr>`).join('')}
     </tbody></table>`;
+  if ($('#uRzReq')) $('#uRzReq').onchange = async (e) => {
+    try { await api('PUT', '/api/mp/rz/require', { on: e.target.checked }); toast(e.target.checked ? 'Особистий вхід у Розетку обов’язковий' : 'Без особистого входу дії підуть від «Для сервісу»'); }
+    catch (er) { toast(er.message, true); e.target.checked = !e.target.checked; }
+  };
   $$('[data-an]').forEach((cb) => (cb.onchange = async () => {
     try { await api('PUT', `/api/users/${cb.dataset.an}`, { analytics: cb.checked }); toast(cb.checked ? 'Аналітику увімкнено' : 'Аналітику вимкнено'); viewUsers(); }
     catch (e) { toast(e.message, true); cb.checked = !cb.checked; }
