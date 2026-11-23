@@ -19243,7 +19243,8 @@ var phone12 = (p) => {
 };
 var CACHE = /* @__PURE__ */ new Map();
 var TTL = { settings: 10 * 6e4, order: 5 * 6e4 };
-function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
+function mountMarketTtn(app, { db, fetchFn, rzCall, rzAct, accOf, rzOrderOf }) {
+  const act = (c, acc, fn) => rzAct ? rzAct(c, acc, fn) : rzCall(acc, fn);
   const cached = async (key, ttl, load) => {
     const hit = CACHE.get(key);
     if (hit && Date.now() - hit.at < ttl) return hit.v;
@@ -19367,7 +19368,7 @@ function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
     if (carrier === "rd") {
       const { st } = p._raw;
       const s3 = st.sender;
-      const r = await rzCall(acc, (t) => RZ_TTN.rdCreate(fetchFn, t, {
+      const r = await act(c, acc, (t) => RZ_TTN.rdCreate(fetchFn, t, {
         order_id: Number(o.id),
         payer,
         places,
@@ -19421,7 +19422,7 @@ function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
           RecipientFlat: str3(ui.place_flat, 20)
         }
       };
-      const r = await rzCall(acc, (t) => RZ_TTN.npCreate(fetchFn, t, body));
+      const r = await act(c, acc, (t) => RZ_TTN.npCreate(fetchFn, t, body));
       const d = (r?.data || [])[0] || r?.[0] || r || {};
       if (r && r.success === false) throw fail(400, `\u041D\u043E\u0432\u0430 \u043F\u043E\u0448\u0442\u0430: ${[...r.errors || []].join("; ") || "\u0422\u0422\u041D \u043D\u0435 \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E"}`);
       ttn = str3(d.IntDocNumber, 40);
@@ -19430,7 +19431,7 @@ function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
       const { ui, st } = p._raw;
       const s3 = parseJ(st.selected_sender) || {};
       if (!ui.branchId) throw fail(400, "Meest: \u0437\u0430\u0440\u0430\u0437 \u043F\u0456\u0434\u0442\u0440\u0438\u043C\u0443\u0454\u0442\u044C\u0441\u044F \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0430 \u043B\u0438\u0448\u0435 \u0434\u043E \u0432\u0456\u0434\u0434\u0456\u043B\u0435\u043D\u043D\u044F.");
-      const r = await rzCall(acc, (t) => RZ_TTN.meCreate(fetchFn, t, {
+      const r = await act(c, acc, (t) => RZ_TTN.meCreate(fetchFn, t, {
         order_id: Number(o.id),
         payType: "cash",
         receiverPay: payer === "recipient",
@@ -19457,6 +19458,122 @@ function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
     if (!pdf) throw fail(404, "\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u043D\u0435 \u0432\u0456\u0434\u0434\u0430\u043B\u0430 \u0444\u0430\u0439\u043B \u0422\u0422\u041D \u2014 \u0441\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0437\u0430 \u0445\u0432\u0438\u043B\u0438\u043D\u0443 \u0430\u0431\u043E \u043D\u0430\u0434\u0440\u0443\u043A\u0443\u0439\u0442\u0435 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438.");
     return new Response(pdf, { headers: { "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="TTN-${o.ttn}.pdf"`, "Cache-Control": "no-store" } });
   });
+}
+
+// src/modules/market/rzme.js
+var TOKEN_MS = 20 * 60 * 60 * 1e3;
+var PUB = "user_id, account_id, username, state, error, checked_at, updated_at";
+function mountRzPersonal(app, { db, fetchFn, rzCall, accOf }) {
+  const requireOn = async () => (await loadSettings(db)).rz_require_personal === "1";
+  const exempt = (u) => can(u, "users");
+  const rowOf = (userId, accountId) => db.get(`SELECT * FROM rz_user_logins WHERE user_id = ? AND account_id = ?`, [userId, accountId]);
+  async function login(acc, username, password) {
+    const r = await rzLogin(fetchFn, username, password);
+    if (acc.market_id && r.marketId && String(r.marketId) !== String(acc.market_id)) {
+      throw fail(400, `\u0426\u0435\u0439 \u043B\u043E\u0433\u0456\u043D \u0432\u0445\u043E\u0434\u0438\u0442\u044C \u0443 \u043C\u0430\u0433\u0430\u0437\u0438\u043D \xAB${r.marketTitle || r.marketId}\xBB, \u0430 \u043D\u0435 \u0432 \xAB${acc.name}\xBB. \u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0434\u043B\u044F \u044F\u043A\u043E\u0433\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0443 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u0439\u043E\u0433\u043E \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E.`);
+    }
+    return r;
+  }
+  async function tokenOf(row, acc, force = false) {
+    if (!force && row.token && Date.now() - Date.parse(row.token_at || 0) < TOKEN_MS) return row.token;
+    try {
+      const r = await login(acc, row.username, row.password);
+      await db.run(
+        `UPDATE rz_user_logins SET token = ?, token_at = ?, state = 'ok', error = '', checked_at = ? WHERE user_id = ? AND account_id = ?`,
+        [r.token, nowIso(), nowIso(), row.user_id, row.account_id]
+      );
+      row.token = r.token;
+      return r.token;
+    } catch (e) {
+      if (e.pending || !(e.rzCode || e.status === 400)) throw e;
+      await db.run(
+        `UPDATE rz_user_logins SET state = 'bad', error = ?, token = '', checked_at = ? WHERE user_id = ? AND account_id = ?`,
+        [String(e.message || e).slice(0, 300), nowIso(), row.user_id, row.account_id]
+      );
+      throw Object.assign(new Error("personal-login"), { personalBad: true, cause: e });
+    }
+  }
+  async function rzAct(c, acc, fn) {
+    const u = c.get("user");
+    const row = await rowOf(u.id, acc.id);
+    if (row && row.state === "ok") {
+      try {
+        try {
+          return await fn(await tokenOf(row, acc));
+        } catch (e) {
+          if (!e.rzAuth) throw e;
+          return await fn(await tokenOf(row, acc, true));
+        }
+      } catch (e) {
+        if (!e.personalBad) throw e;
+      }
+    }
+    if (!exempt(u) && await requireOn()) {
+      throw fail(403, row?.state === "bad" ? `\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u043D\u0435 \u043F\u0440\u0438\u0439\u043D\u044F\u043B\u0430 \u0432\u0430\u0448 \u0432\u0445\u0456\u0434 \u0443 \xAB${acc.name}\xBB (\u043C\u043E\u0436\u043B\u0438\u0432\u043E, \u0437\u043C\u0456\u043D\u0435\u043D\u043E \u043F\u0430\u0440\u043E\u043B\u044C). \u041E\u043D\u043E\u0432\u0456\u0442\u044C \u0439\u043E\u0433\u043E: \xAB\u0420\u043E\u0437\u0435\u0442\u043A\u0430\xBB \u0432\u0433\u043E\u0440\u0456 \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0438.` : `\u041F\u0456\u0434\u043A\u043B\u044E\u0447\u0456\u0442\u044C \u0441\u0432\u0456\u0439 \u0432\u0445\u0456\u0434 \u0443 \u0420\u043E\u0437\u0435\u0442\u043A\u0443 \u0434\u043B\u044F \xAB${acc.name}\xBB: \xAB\u0420\u043E\u0437\u0435\u0442\u043A\u0430\xBB \u0432\u0433\u043E\u0440\u0456 \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0438. \u0411\u0435\u0437 \u043D\u044C\u043E\u0433\u043E \u0434\u0456\u0457 \u0432 \u0420\u043E\u0437\u0435\u0442\u0446\u0456 \u0432\u0438\u043C\u043A\u043D\u0435\u043D\u043E.`);
+    }
+    return rzCall(acc, fn);
+  }
+  app.get("/api/mp/rz/me", async (c) => {
+    need(c, "market.view");
+    const u = c.get("user");
+    const [accs, mine] = await Promise.all([
+      db.all(`SELECT id, name FROM rz_accounts WHERE active = 1 ORDER BY name`),
+      db.all(`SELECT ${PUB} FROM rz_user_logins WHERE user_id = ?`, [u.id])
+    ]);
+    const by = new Map(mine.map((r) => [r.account_id, r]));
+    return c.json({
+      require: await requireOn(),
+      exempt: exempt(u),
+      canAct: can(u, "market.edit"),
+      accounts: accs.filter((a) => shopAllowed(u, "rozetka", a.id)).map((a) => {
+        const r = by.get(a.id);
+        return { id: a.id, name: a.name, state: r ? r.state : "none", username: r?.username || "", error: r?.state === "bad" ? r.error : "", checked_at: r?.checked_at || "" };
+      })
+    });
+  });
+  app.put("/api/mp/rz/me/:account", async (c) => {
+    need(c, "market.edit");
+    const u = c.get("user");
+    const acc = await accOf("rozetka", c.req.param("account"));
+    if (!shopAllowed(u, "rozetka", acc.id)) throw fail(403, "\u0423 \u0432\u0430\u0441 \u043D\u0435\u043C\u0430\u0454 \u0434\u043E\u0441\u0442\u0443\u043F\u0443 \u0434\u043E \u0446\u044C\u043E\u0433\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0443.");
+    const b = await c.req.json().catch(() => ({}));
+    const username = String(b.username || "").trim().slice(0, 120);
+    const password = String(b.password || "");
+    if (!username || !password) throw fail(400, "\u0412\u043A\u0430\u0436\u0456\u0442\u044C \u043B\u043E\u0433\u0456\u043D \u0456 \u043F\u0430\u0440\u043E\u043B\u044C \u0441\u0432\u043E\u0433\u043E \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0441\u044C\u043A\u043E\u0433\u043E \u0432\u0445\u043E\u0434\u0443 \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442 \u043F\u0440\u043E\u0434\u0430\u0432\u0446\u044F \u0420\u043E\u0437\u0435\u0442\u043A\u0438.");
+    if (acc.username && username.toLowerCase() === String(acc.username).toLowerCase()) {
+      throw fail(400, "\u0426\u0435 \u0441\u043B\u0443\u0436\u0431\u043E\u0432\u0438\u0439 \u0432\u0445\u0456\u0434 \u0441\u0435\u0440\u0432\u0456\u0441\u0443. \u041F\u043E\u0442\u0440\u0456\u0431\u0435\u043D \u0432\u0430\u0448 \u043E\u0441\u043E\u0431\u0438\u0441\u0442\u0438\u0439 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0441\u044C\u043A\u0438\u0439 \u043B\u043E\u0433\u0456\u043D \u2014 \u0439\u043E\u0433\u043E \u0441\u0442\u0432\u043E\u0440\u044E\u0454 \u0430\u0434\u043C\u0456\u043D\u0456\u0441\u0442\u0440\u0430\u0442\u043E\u0440 \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0443 \u0432 \u0420\u043E\u0437\u0435\u0442\u0446\u0456 (\u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0438).");
+    }
+    const r = await login(acc, username, password);
+    const now = nowIso();
+    await db.run(
+      `INSERT INTO rz_user_logins (user_id, account_id, username, password, token, token_at, state, error, checked_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'ok', '', ?, ?)
+      ON CONFLICT(user_id, account_id) DO UPDATE SET username = excluded.username, password = excluded.password, token = excluded.token,
+        token_at = excluded.token_at, state = 'ok', error = '', checked_at = excluded.checked_at, updated_at = excluded.updated_at`,
+      [u.id, acc.id, username, password, r.token, now, now, now]
+    );
+    return c.json({ ok: true, market: r.marketTitle || acc.name });
+  });
+  app.delete("/api/mp/rz/me/:account", async (c) => {
+    need(c, "market.view");
+    await db.run(`DELETE FROM rz_user_logins WHERE user_id = ? AND account_id = ?`, [c.get("user").id, Number(c.req.param("account")) || 0]);
+    return c.json({ ok: true });
+  });
+  app.get("/api/mp/rz/logins", async (c) => {
+    need(c, "users");
+    const [accs, rows] = await Promise.all([
+      db.all(`SELECT id, name FROM rz_accounts WHERE active = 1 ORDER BY name`),
+      db.all(`SELECT ${PUB} FROM rz_user_logins`)
+    ]);
+    return c.json({ require: await requireOn(), accounts: accs, logins: rows });
+  });
+  app.put("/api/mp/rz/require", async (c) => {
+    need(c, "users");
+    const on = Boolean((await c.req.json().catch(() => ({}))).on);
+    await putSetting(db, "rz_require_personal", on ? "1" : "0");
+    return c.json({ ok: true, require: on });
+  });
+  return { rzAct };
 }
 
 // src/modules/market/items.js
@@ -20922,7 +21039,7 @@ ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc3(it.ch.user_fio
       return null;
     });
     if (!chat?.id || !chat.userId) throw fail(400, "\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u043D\u0435 \u0434\u0430\u043B\u0430 \u0447\u0430\u0442 \u0446\u044C\u043E\u0433\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2014 \u043D\u0430\u043F\u0438\u0448\u0456\u0442\u044C \u043F\u043E\u043A\u0443\u043F\u0446\u044E \u0443 Viber \u0430\u0431\u043E Telegram.");
-    await rzCall(acc, (t) => rzSendMessage(fetchFn, t, { chatId: chat.id, receiverId: chat.userId, body: text }));
+    await rzAct(c, acc, (t) => rzSendMessage(fetchFn, t, { chatId: chat.id, receiverId: chat.userId, body: text }));
     return c.json(await markAsked(o, c.get("user"), "chat"));
   });
   app.get("/api/mp/rz/raw/:account/:id", async (c) => {
@@ -20942,7 +21059,7 @@ ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc3(it.ch.user_fio
     if (b.in_account != null && Number(b.in_account) !== Number(o.account_id)) throw fail(400, "\u0426\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0456\u043D\u0448\u043E\u0433\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0443 \u2014 \u0437\u043C\u0456\u043D\u044E\u0432\u0430\u0442\u0438 \u0439\u043E\u0433\u043E \u043C\u043E\u0436\u043D\u0430 \u043B\u0438\u0448\u0435 \u0432 \u0442\u043E\u043C\u0443 \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0456.");
     if (Number(o.status_group) !== 1) throw fail(400, `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432\u0436\u0435 \xAB${o.status_name || o.status}\xBB \u2014 \u0441\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438 \u043D\u0435 \u043C\u043E\u0436\u043D\u0430.`);
     const acc = await accOf("rozetka", o.account_id);
-    await rzCall(acc, (t) => rzSetOrderStatus(fetchFn, t, o.id, b.status));
+    await rzAct(c, acc, (t) => rzSetOrderStatus(fetchFn, t, o.id, b.status));
     await db.run(
       `UPDATE mp_orders SET status = ?, status_name = ?, status_group = 3, changed_at = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ?`,
       [String(Number(b.status)), reason, kyivDT(/* @__PURE__ */ new Date()), o.account_id, o.id]
@@ -20993,7 +21110,7 @@ ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc3(it.ch.user_fio
           continue;
         }
         const acc = await accOf("rozetka", o.account_id);
-        await rzCall(acc, (t) => rzSetOrderStatus(fetchFn, t, o.id, b.status));
+        await rzAct(c, acc, (t) => rzSetOrderStatus(fetchFn, t, o.id, b.status));
         await db.run(
           `UPDATE mp_orders SET status = ?, status_name = ?, status_group = 1, changed_at = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ?`,
           [String(b.status), to.name, kyivDT(/* @__PURE__ */ new Date()), o.account_id, o.id]
@@ -21026,7 +21143,8 @@ ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc3(it.ch.user_fio
     if (!acc) throw fail(404, "\u041C\u0430\u0433\u0430\u0437\u0438\u043D \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
     return acc;
   };
-  mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf });
+  const { rzAct } = mountRzPersonal(app, { db, fetchFn, rzCall, accOf });
+  mountMarketTtn(app, { db, fetchFn, rzCall, rzAct, accOf, rzOrderOf });
   app.post("/api/mp/history/start", async (c) => {
     need(c, "api");
     const b = await c.req.json().catch(() => ({}));
@@ -24353,8 +24471,22 @@ var schema13 = {
 // src/modules/market/schema.js
 var schema14 = {
   name: "market",
-  version: 11,
+  version: 12,
   tables: [
+    // Особисті входи менеджерів у кабінет продавця Розетки (rzme.js): дії від їхнього імені. state — ok | bad (Розетка не прийняла вхід).
+    `CREATE TABLE IF NOT EXISTS rz_user_logins (
+    user_id INTEGER NOT NULL,
+    account_id INTEGER NOT NULL,
+    username TEXT NOT NULL DEFAULT '',
+    password TEXT NOT NULL DEFAULT '',
+    token TEXT DEFAULT '',
+    token_at TEXT DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'ok',
+    error TEXT DEFAULT '',
+    checked_at TEXT DEFAULT '',
+    updated_at TEXT DEFAULT '',
+    PRIMARY KEY (user_id, account_id)
+  )`,
     // Товари магазинів маркетплейсів (з замовлень) і їх прив'язка до товарів LP-CRM (див. items.js).
     // Кілька товарів маркетплейсу (дублі, інший магазин) можуть вести до одного product_id; link_source — manual | learned |
     // copied | code | sku | unlink; in_shop — товар ще є в магазині (для майбутнього списку товарів кабінету).

@@ -23,7 +23,9 @@ const phone12 = (p) => { const d = String(p || '').replace(/\D/g, ''); return d.
 const CACHE = new Map();
 const TTL = { settings: 10 * 60e3, order: 5 * 60e3 };
 
-export function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
+export function mountMarketTtn(app, { db, fetchFn, rzCall, rzAct, accOf, rzOrderOf }) {
+  // створення ТТН — від імені менеджера (його вхід у Розетку), якщо підключено
+  const act = (c, acc, fn) => (rzAct ? rzAct(c, acc, fn) : rzCall(acc, fn));
   const cached = async (key, ttl, load) => {
     const hit = CACHE.get(key);
     if (hit && Date.now() - hit.at < ttl) return hit.v;
@@ -133,7 +135,7 @@ export function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
     if (carrier === 'rd') {
       const { st } = p._raw;
       const s = st.sender;
-      const r = await rzCall(acc, (t) => RZ_TTN.rdCreate(fetchFn, t, {
+      const r = await act(c, acc, (t) => RZ_TTN.rdCreate(fetchFn, t, {
         order_id: Number(o.id), payer, places, description,
         params: { weight, length, width, height, volume: Math.round((length * width * height) / 4000 * 1000) / 1000 },
         sender: { type: s.type, city: s.city, address: s.address, department: s.department, name: s.name, phones: s.phones || [], info: s.info || '' },
@@ -162,7 +164,7 @@ export function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
           : { NewAddress: '1', RecipientType: 'PrivatePerson', RecipientName: str(ui.name), RecipientCityName: str(ui.city_name), RecipientArea: str(ui.area), RecipientAreaRegions: str(ui.region),
             RecipientAddressName: str(ui.street), RecipientHouse: str(ui.place_house, 20), RecipientFlat: str(ui.place_flat, 20) }),
       };
-      const r = await rzCall(acc, (t) => RZ_TTN.npCreate(fetchFn, t, body));
+      const r = await act(c, acc, (t) => RZ_TTN.npCreate(fetchFn, t, body));
       const d = (r?.data || [])[0] || r?.[0] || r || {};
       if (r && r.success === false) throw fail(400, `Нова пошта: ${[...(r.errors || [])].join('; ') || 'ТТН не створено'}`);
       ttn = str(d.IntDocNumber, 40);
@@ -171,7 +173,7 @@ export function mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf }) {
       const { ui, st } = p._raw;
       const s = parseJ(st.selected_sender) || {};
       if (!ui.branchId) throw fail(400, 'Meest: зараз підтримується доставка лише до відділення.');
-      const r = await rzCall(acc, (t) => RZ_TTN.meCreate(fetchFn, t, {
+      const r = await act(c, acc, (t) => RZ_TTN.meCreate(fetchFn, t, {
         order_id: Number(o.id), payType: 'cash', receiverPay: payer === 'recipient', notation: description,
         ...(cod ? { COD: cod } : {}),
         sender: { name: s.name, phone: s.phone, branchID: s.branchID, service: 'Branch' },

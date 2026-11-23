@@ -6,6 +6,7 @@ import { esc } from '../invoice.js';
 import { $, $$, main, api, toast, modal, confirmDanger, fmtDateTime, todayKyiv, telLink } from '../core/ui.js';
 import { crmCreateFlow } from './mpcrm.js';
 import { createTtn } from './mpttn.js';
+import { rzMe, rzWho, wireRzWho } from './rzme.js';
 
 const uah = (n) => `${Number(n || 0).toLocaleString('uk-UA', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} ₴`;
 const dt = (s) => String(s || '').slice(0, 16).replace(/^(\d{4})-(\d{2})-(\d{2})/, '$3.$2.$1');
@@ -449,7 +450,9 @@ export function createMarketPages({ can }) {
           ${list.length > 1 ? `<div class="small">${list.map((x) => `№${esc(x.number)}`).join(', ')}</div>` : ''}
           <label class="f"><span>Причина (так побачить Розетка)</span><select id="mpCR">${REASONS.map(([k, t]) => `<option value="${k}" ${k === def ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>
           <div class="small muted">Статус зміниться в кабінеті Розетки. Відновити скасоване замовлення звідси не можна.</div>
+          <div id="mpCWho"></div>
         </div>`, { footer: '<button class="btn" data-close>Не скасовувати</button><button class="btn danger" id="mpCGo">Скасувати в Розетці</button>' });
+      rzWho(list[0].key.split(':')[0]).then((h) => { if ($('#mpCWho', m.el)) { $('#mpCWho', m.el).innerHTML = h; wireRzWho(m.el); } });
       $('#mpCGo', m.el).onclick = async (e) => {
         const b = e.currentTarget;
         b.disabled = true; b.innerHTML = '<span class="spinner"></span> Скасовую…';
@@ -468,8 +471,12 @@ export function createMarketPages({ can }) {
     }
     async function moveToWork(keys) {
       const nums = keys.map((k) => { const o = byKey.get(k); return o ? `№${o.number} · ${uah(o.total)}` : k.split(':')[1]; });
+      const me = await rzMe();
+      const accIds = [...new Set(keys.map((k) => Number(k.split(':')[0])))];
+      const notMine = (me?.accounts || []).filter((a) => accIds.includes(Number(a.id)) && a.state !== 'ok').map((a) => `«${a.name}»`);
+      const who = notMine.length ? ` Ваш вхід не підключено для ${notMine.join(', ')} — там статус змінить службовий вхід «Для сервісу»${me.require && !me.exempt ? ' (або дію буде заборонено)' : ''}.` : ' Зміна йде від вашого імені в Розетці.';
       if (!(await confirmDanger(`Перевести ${keys.length} замовл. в «Обробляється менеджером»?`,
-        `${nums.slice(0, 12).join(', ')}${nums.length > 12 ? ` і ще ${nums.length - 12}` : ''}. Статус зміниться в кабінеті Розетки — покупець побачить, що замовлення обробляється. Повернути «Нове» не можна. Переводимо по 10 за раз; якщо Розетка відхилить якесь замовлення, решта все одно переведуться.`, `Перевести ${keys.length}`))) return;
+        `${nums.slice(0, 12).join(', ')}${nums.length > 12 ? ` і ще ${nums.length - 12}` : ''}.${esc(who)} Статус зміниться в кабінеті Розетки — покупець побачить, що замовлення обробляється. Повернути «Нове» не можна. Переводимо по 10 за раз; якщо Розетка відхилить якесь замовлення, решта все одно переведуться.`, `Перевести ${keys.length}`))) return;
       const b = $('#mpPickGo');
       if (b) { b.disabled = true; b.innerHTML = '<span class="spinner"></span> Переводжу…'; }
       let todo = keys.map((k) => { const [account, ...id] = k.split(':'); return { account: Number(account), id: id.join(':'), key: k }; });
@@ -644,8 +651,9 @@ export function createMarketPages({ can }) {
         <div class="btn-row" style="flex-wrap:wrap">
           <button class="btn" data-via="copy">Скопіювати текст</button>
           <button class="btn" id="rvChat">Надіслати в чат Розетки</button>
-        </div>`,
+        </div><div id="rvWho" style="margin-top:6px"></div>`,
       { footer: `${o.asked_at ? '<button class="btn" id="rvUndo">Зняти позначку</button>' : ''}<button class="btn" id="rvManual">Нагадав іншим способом</button><button class="btn primary" data-close>Готово</button>` });
+      rzWho(o.account_id).then((h) => { if ($('#rvWho', md.el)) { $('#rvWho', md.el).innerHTML = h; wireRzWho(md.el); } });
       const text = () => $('#rvText', md.el).value.trim();
       const mark = async (via) => {
         try { Object.assign(o, await api('POST', '/api/mp/review/ask', { account: o.account_id, id: o.id, via })); toast(`Позначено: нагадав (${VIA[via]})`); load(); }

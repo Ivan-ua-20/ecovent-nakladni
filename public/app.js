@@ -144,7 +144,7 @@ function renderNav(active = 'invoice') {
     <div class="top-user">
       ${can('api') && !s.lpcrm_key ? '<a href="#/settings" class="top-warn">LP-CRM не підключено</a>' : ''}
       <span><b>${esc(u?.name || '')}</b> · ${esc(u?.partner_role_name ? `Партнер · ${u.partner_role_name}` : (u?.role_name || ''))}</span>
-      <a href="#" id="navTg">Telegram</a><a href="#" id="navPwd">Пароль</a><a href="#" id="navOut">Вийти</a>
+      <a href="#" id="navTg">Telegram</a>${can('market.view') && !can('b2b.partner') ? '<a href="#" id="navRz">Розетка</a>' : ''}<a href="#" id="navPwd">Пароль</a><a href="#" id="navOut">Вийти</a>
     </div>`;
   const tabs = visibleTabs(cur);
   $('.subnav').innerHTML = tabs.length > 1
@@ -160,6 +160,7 @@ function renderNav(active = 'invoice') {
   };
   $('#navPwd').onclick = (e) => { e.preventDefault(); changeOwnPassword(); };
   $('#navTg').onclick = (e) => { e.preventDefault(); tgDialog(); };
+  if ($('#navRz')) $('#navRz').onclick = async (e) => { e.preventDefault(); (await import('./pages/rzme.js')).rzLoginsDialog(); };
   wireSearch();
 }
 

@@ -9,6 +9,7 @@ import { promOrders } from '../../integrations/prom.js';
 import { epcOrdersPage } from '../../integrations/epicentr.js';
 import { mountMarketCrm } from './crm.js';
 import { mountMarketTtn } from './ttn.js';
+import { mountRzPersonal } from './rzme.js';
 import { mountMarketItems } from './items.js';
 import { mountMarketRemind, recallSql, RECALL_DAYS } from './remind.js';
 
@@ -861,7 +862,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     const acc = await accOf('rozetka', o.account_id);
     const chat = await rzCall(acc, (t) => rzOrderChat(fetchFn, t, o.id)).catch((e) => { if (e.pending) throw e; return null; });
     if (!chat?.id || !chat.userId) throw fail(400, 'Розетка не дала чат цього замовлення — напишіть покупцю у Viber або Telegram.');
-    await rzCall(acc, (t) => rzSendMessage(fetchFn, t, { chatId: chat.id, receiverId: chat.userId, body: text }));
+    await rzAct(c, acc, (t) => rzSendMessage(fetchFn, t, { chatId: chat.id, receiverId: chat.userId, body: text }));
     return c.json(await markAsked(o, c.get('user'), 'chat'));
   });
 
@@ -886,7 +887,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     if (b.in_account != null && Number(b.in_account) !== Number(o.account_id)) throw fail(400, 'Це замовлення іншого магазину — змінювати його можна лише в тому магазині.');
     if (Number(o.status_group) !== 1) throw fail(400, `Замовлення вже «${o.status_name || o.status}» — скасувати не можна.`);
     const acc = await accOf('rozetka', o.account_id);
-    await rzCall(acc, (t) => rzSetOrderStatus(fetchFn, t, o.id, b.status));
+    await rzAct(c, acc, (t) => rzSetOrderStatus(fetchFn, t, o.id, b.status));
     await db.run(`UPDATE mp_orders SET status = ?, status_name = ?, status_group = 3, changed_at = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ?`,
       [String(Number(b.status)), reason, kyivDT(new Date()), o.account_id, o.id]);
     return c.json({ ok: true, status: String(Number(b.status)), status_name: reason });
@@ -935,7 +936,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
         const o = await rzOrderOf(x, c);
         if (!to.from.includes(String(o.status))) { failed.push({ key, error: `уже «${o.status_name || o.status}»` }); continue; }
         const acc = await accOf('rozetka', o.account_id);
-        await rzCall(acc, (t) => rzSetOrderStatus(fetchFn, t, o.id, b.status));
+        await rzAct(c, acc, (t) => rzSetOrderStatus(fetchFn, t, o.id, b.status));
         await db.run(`UPDATE mp_orders SET status = ?, status_name = ?, status_group = 1, changed_at = ? WHERE mp = 'rozetka' AND account_id = ? AND id = ?`,
           [String(b.status), to.name, kyivDT(new Date()), o.account_id, o.id]);
         done.push(key);
@@ -966,7 +967,9 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
     return acc;
   };
   // «Створити ТТН» (ROZETKA Delivery, Нова пошта, Meest) із картки замовлення — ttn.js.
-  mountMarketTtn(app, { db, fetchFn, rzCall, accOf, rzOrderOf });
+  // дії від імені менеджера (його вхід у Розетку), якщо підключено; маршрути вище звертаються до rzAct лише під час запиту
+  const { rzAct } = mountRzPersonal(app, { db, fetchFn, rzCall, accOf });
+  mountMarketTtn(app, { db, fetchFn, rzCall, rzAct, accOf, rzOrderOf });
   app.post('/api/mp/history/start', async (c) => {
     need(c, 'api');
     const b = await c.req.json().catch(() => ({}));

@@ -2,6 +2,7 @@
 // Дані одержувача й відправника приходять з кабінету Розетки; тут — перевірка, вага й габарити, оплата.
 import { esc } from '../invoice.js';
 import { $, $$, api, toast, modal } from '../core/ui.js';
+import { rzWho, wireRzWho } from './rzme.js';
 
 const uah = (n) => `${Number(n || 0).toLocaleString('uk-UA', { maximumFractionDigits: 2 })} ₴`;
 
@@ -55,7 +56,9 @@ export async function createTtn(o, { done } = {}) {
       <div class="btn-row" style="align-items:center;flex-wrap:wrap"><span class="small">Доставку оплачує:</span>
         <label class="check small"><input type="radio" name="payer" value="sender" checked> відправник (ми)</label>
         <label class="check small"><input type="radio" name="payer" value="recipient"> одержувач</label></div>
-      <details class="small muted"><summary>Інший перевізник</summary>${chips()}</details>`;
+      <details class="small muted"><summary>Інший перевізник</summary>${chips()}</details>
+      <div data-who></div>`;
+    rzWho(o.account_id).then((h) => { const w = $('[data-who]', f); if (w) { w.innerHTML = h; wireRzWho(f); } });
     $$('[data-car]', f).forEach((b) => (b.onclick = () => load(b.dataset.car)));
     const warn = () => {
       const v = (n) => Number(String(f.querySelector(`[name=${n}]`)?.value || '').replace(',', '.')) || 0;
