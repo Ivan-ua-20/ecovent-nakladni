@@ -5,7 +5,7 @@ import { downloadXlsx } from '../core/xlsx.js';
 
 const dDay = (s) => String(s || '').split('-').reverse().join('.');
 import { npPickerHtml, wireNpPicker, npAddressText, NP_TYPES } from './np-picker.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, wireTeamForm, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi, psBar, wirePsBar, psMatch, psHl, psEmpty, urgentBadge, urgentRow, cancelNote, askDeliveryChange, deliveryReqText, deliveryReqMoney, askCancel } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, payBadge, supplyMark, crmCell, phoneFmt, historyCard, uploadFile, teamTable, teamFormHtml, teamFormData, wireTeamForm, filterBar, wireFilterBar, filterQs, trackBtn, wireTracking, pickupCard, wirePickupCard, pickupFields, pickupRead, wirePickupFields, pickupPhone , crmBadge, crmStatusSelect, feedsList, wireFeedsList, apiKeysCard, fpLayout, wireFp, fpGroup, fpBtn, filterSide, fpKpi, psBar, wirePsBar, psMatch, psHl, psEmpty, urgentBadge, urgentRow, cancelNote, askDeliveryChange, deliveryReqText, deliveryReqMoney, askCancel, returnCard, askReturn } from './b2b-shared.js';
 
 const KINDS = { fop: 'ФОП', tov: 'ТОВ', other: 'Інша юрособа' };
 
@@ -710,9 +710,10 @@ export function createPartnerPages(ctx = {}) {
       <div class="head-row"><h2>Замовлення ${esc(o.number)} ${statusBadge(o)} ${payBadge(o)} ${urgentBadge(o)}</h2>
         <div class="btn-row"><a class="btn" href="#/pclients">← До списку</a>
           ${canEdit() && o.status !== 'cancelled' ? `<button class="btn ${o.urgent ? '' : 'urgent-btn'}" id="cUrgent" aria-pressed="${o.urgent ? 'true' : 'false'}">${o.urgent ? 'Зняти «Терміново»' : '🔥 Терміново'}</button>` : ''}
-          ${o.status === 'crm' && canEdit() ? '<button class="btn" id="cClaim">🛠 Брак / обмін</button>' : ''}
+          ${o.status === 'crm' && canEdit() ? '<button class="btn" id="cClaim">🛠 Брак / обмін</button><button class="btn" id="cReturn">↩️ Повернення</button>' : ''}
           ${editable ? `<a class="btn" href="#/pclients/${o.id}/edit">Змінити</a><button class="btn danger" id="cCancel">Скасувати</button>` : ''}</div></div>
       ${cancelNote(o)}
+      ${o.status === 'returned' ? `<div style="margin-bottom:12px">${returnCard(o)}</div>` : ''}
       ${o.pending ? `<div class="card form-stack card-info" style="margin-bottom:12px">
           <h3 style="margin:0">🔵 Менеджер змінив замовлення — підтвердіть або відхиліть</h3>
           ${o.pending.crm_old ? `<div class="small">Старе замовлення в LP-CRM № <b>${esc(o.pending.crm_old)}</b> анульовано — після підтвердження буде створене нове.</div>` : ''}
@@ -765,6 +766,12 @@ export function createPartnerPages(ctx = {}) {
       try { await api('POST', `/api/b2b/p/clients/${o.id}/reject`); toast('Зміни відхилено — повернуто як було'); viewClient(o.id); } catch (e) { toast(e.message, true); }
     });
     if ($('#cClaim')) $('#cClaim').onclick = () => ctx.openClaimForm(o.id).catch((e) => toast(e.message, true));
+    wireTracking(`/api/b2b/p/clients/${o.id}/tracking?return=1`, 'ret');
+    $('#cReturn') && ($('#cReturn').onclick = () => askReturn(o, async (d) => {
+      await api('POST', `/api/b2b/p/clients/${o.id}/return`, d);
+      toast('Повернення оформлено — інформацію передано Ековенту');
+      viewClient(o.id);
+    }).catch((e) => toast(e.message, true)));
     $('#cUrgent') && ($('#cUrgent').onclick = async () => {
       try {
         await api('POST', `/api/b2b/p/clients/${o.id}/urgent`, { urgent: !o.urgent });

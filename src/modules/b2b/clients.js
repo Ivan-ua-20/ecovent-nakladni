@@ -553,17 +553,19 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
   }
 
   // Статус доставки клієнту за ТТН (Нова пошта) — на запит, нічого не зберігає.
-  const tracking = async (o) => {
-    if (!o.ttn) throw fail(400, 'У замовленні ще немає ТТН.');
+  // ?return=1 — ТТН повернення (посилка їде до нас).
+  const tracking = async (o, ret = false) => {
+    const ttn = ret ? o.return_ttn : o.ttn;
+    if (!ttn) throw fail(400, ret ? 'ТТН повернення не вказано.' : 'У замовленні ще немає ТТН.');
     if (!services.marking?.trackTtn) throw fail(400, 'Відстеження Нової пошти недоступне.');
-    return { ttn: o.ttn, ...(await services.marking.trackTtn(o.ttn, o.client_phone)) };
+    return { ttn, ...(await services.marking.trackTtn(ttn, ret ? '' : o.client_phone)) };
   };
-  app.get('/api/b2b/p/clients/:id/tracking', async (c) => c.json(await tracking(await myClientOrder(c, await myPartner(c)))));
+  app.get('/api/b2b/p/clients/:id/tracking', async (c) => c.json(await tracking(await myClientOrder(c, await myPartner(c)), c.req.query('return') === '1')));
   app.get('/api/b2b/clients/:id/tracking', async (c) => {
     need(c, 'b2b.admin');
     const o = await db.get(`SELECT * FROM b2b_orders WHERE id = ? AND kind = 'client'`, [c.req.param('id')]);
     if (!o) throw fail(404, 'Замовлення не знайдено.');
-    return c.json(await tracking(o));
+    return c.json(await tracking(o, c.req.query('return') === '1'));
   });
 
   app.get('/api/b2b/p/clients/:id', async (c) => {
@@ -954,6 +956,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
   const VIEWS = {
     new: `o.status = 'new'`,
     crm: `o.status = 'crm'`,
+    returned: `o.status = 'returned'`,
     nosupply: `(o.supply_id IS NULL OR s.status = 'open') AND o.status != 'cancelled'`,
     cancelled: `o.status = 'cancelled'`,
     urgent: `o.urgent = 1 AND o.status != 'cancelled'`,
@@ -976,7 +979,7 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
        WHERE ${where.join(' AND ')} ORDER BY (o.urgent = 1 AND o.status = 'new') DESC, o.id DESC LIMIT 300`, params,
     );
     const cnt = await db.get(`SELECT SUM(o.status = 'new') AS new, SUM(o.status = 'crm') AS crm, SUM((o.supply_id IS NULL OR s.status = 'open') AND o.status != 'cancelled') AS nosupply,
-      SUM(o.status = 'cancelled') AS cancelled, SUM(o.urgent = 1 AND o.status != 'cancelled') AS urgent FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id WHERE o.kind = 'client'`);
+      SUM(o.status = 'cancelled') AS cancelled, SUM(o.status = 'returned') AS returned, SUM(o.urgent = 1 AND o.status != 'cancelled') AS urgent FROM b2b_orders o LEFT JOIN b2b_orders s ON s.id = o.supply_id WHERE o.kind = 'client'`);
     return c.json({ rows: rows.map(publicOrder), counts: cnt || {}, crm: (await crmConfig()).on, crm_statuses: await crmStatuses(pid || null) });
   });
 

@@ -8,7 +8,7 @@ import { npTtnModal } from './b2b-npttn.js';
 import { npAddressText } from './np-picker.js';
 import { marginRulesBlock } from './b2b-margins.js';
 import { viewAdminSupplyForm } from './b2b-supply.js';
-import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, wireTeamForm, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard, urgentBadge, urgentRow, askCancel, cancelNote, deliveryReqText, deliveryReqMoney } from './b2b-shared.js';
+import { uah, statusBadge, fmtDay, fileSize, itemsTable, uploadFile, payBadge, supplyMark, crmCell, phoneFmt, historyCard, teamTable, teamFormHtml, teamFormData, wireTeamForm, filterBar, wireFilterBar, filterQs, selCell, selHead, wireBulk, bulkBar, trackBtn, wireTracking, askNote, PAID_NOTE_HINT, pickupCard, wirePickupCard , crmBadge, crmStatusSelect, FEED_KIND, feedsList, wireFeedsList, apiKeysCard, urgentBadge, urgentRow, askCancel, cancelNote, deliveryReqText, deliveryReqMoney, returnCard } from './b2b-shared.js';
 
 const pct = (v) => `${String(Number(v) || 0).replace('.', ',')}%`;
 
@@ -1209,7 +1209,7 @@ export function createB2bPages(ctx = {}) {
 
   // ---------------------------------------------------------------- замовлення клієнтів партнерів
   let clFilter = { view: '', partner: '', q: '', from: '', to: '', pay: '', crm_status: '' };
-  const VIEWS = { '': 'Усі', urgent: '🔥 Термінові', new: 'Нові', crm: 'Передані в CRM', nosupply: 'Без закупівлі', cancelled: 'Скасовані' };
+  const VIEWS = { '': 'Усі', urgent: '🔥 Термінові', new: 'Нові', crm: 'Передані в CRM', returned: '↩️ Повернуто', nosupply: 'Без закупівлі', cancelled: 'Скасовані' };
   async function viewClients(id) {
     if (id) return viewClient(id);
     const qs = filterQs(clFilter);
@@ -1217,7 +1217,7 @@ export function createB2bPages(ctx = {}) {
       api('GET', `/api/b2b/clients${qs ? `?${qs}` : ''}`), api('GET', '/api/b2b/partners'), api('GET', '/api/b2b/crm-settings'),
     ]);
     main.innerHTML = `
-      <div class="head-row"><h2>Замовлення клієнтів</h2><div class="btn-row"><button class="btn" id="clLabels">Група маркувань</button><button class="btn" id="clCfg">Налаштування CRM</button></div></div>
+      <div class="head-row"><h2>Замовлення клієнтів</h2><div class="btn-row"><button class="btn" id="clLabels">Група маркувань</button><button class="btn" id="clRepair">Група «Ремонт»</button><button class="btn" id="clCfg">Налаштування CRM</button></div></div>
       <div class="alert ${crm ? 'info' : 'warn'}" style="margin-bottom:12px">${crm
         ? `Кнопка «Додати в CRM» створює замовлення в LP-CRM (відділ ID ${esc(cfg.office)}, ціни партнера, вкладка «Нові»).`
         : 'Передача в LP-CRM вимкнена: поки ключ не має дозволу на addNewOrder, створюйте замовлення в CRM вручну і вписуйте його номер — партнер бачитиме статус. Увімкнути — «Налаштування CRM».'}</div>
@@ -1254,6 +1254,7 @@ export function createB2bPages(ctx = {}) {
     if ($('#crmSt')) $('#crmSt').onchange = (e) => { clFilter.crm_status = e.target.value; viewClients(); };
     $$('[data-o]').forEach((tr) => (tr.onclick = () => { location.hash = `#/b2bclients/${tr.dataset.o}`; }));
     $('#clLabels').onclick = () => labelsGroup();
+    $('#clRepair').onclick = () => groupModal('repair');
     $('#clCfg').onclick = () => {
       const TTN_F = { '': 'ніде більше', additional_2: 'Додаткове поле 2', additional_3: 'Додаткове поле 3', additional_4: 'Додаткове поле 4' };
       const m = modal('Передача замовлень у LP-CRM', `<form id="crmF" class="form-stack">
@@ -1292,6 +1293,12 @@ export function createB2bPages(ctx = {}) {
         <b>ПІБ клієнта · CRM № … (або «ще не в CRM») · B2B-… · ТТН</b>; коли замовлення отримує № у CRM — окремий рядок із номером.
         З маркування Нової пошти бот читає ТТН і телефон: порожню ТТН у замовленні заповнює, розбіжності показує.`,
     },
+    repair: {
+      url: '/api/b2b/repair-group', title: 'Група «Ремонт» у Telegram', example: '«Ремонт» (у гілці General, якщо в групі є гілки)', ok: 'Групу прив’язано як «Ремонт»',
+      about: `Сюди бот надсилає <b>повернення</b> замовлень клієнтів (ТТН до нас, на кого їде посилка, № у LP-CRM, клієнт, товар, коментар партнера)
+        і <b>усі події заявок «Брак / обмін»</b>: нова заявка, фото й відео, коментарі, ТТН браку, рішення, закриття.
+        Команду <code>/link</code> надішліть у тій гілці, куди мають іти повідомлення — бот запам’ятає саме її.`,
+    },
     fin: {
       url: '/api/b2b/fin-group', title: 'Група «Фінансові питання»', example: '«Фінансові питання»', ok: 'Групу прив’язано як «Фінансові питання»',
       about: `<b>Нова закупівля</b> → бот пише в гілку General запит рахунку (на кого, товари, сума). Бухгалтер надсилає PDF рахунку
@@ -1307,6 +1314,8 @@ export function createB2bPages(ctx = {}) {
     const m = modal(G.title, `<div class="form-stack">
         ${g.chat ? `<div>✅ Прив’язано: <b>${esc(g.title || g.chat)}</b></div>` : '<div class="small muted">Групу ще не прив’язано.</div>'}
         <div class="small">${G.about}</div>
+        ${key === 'repair' ? `<label class="f"><span>Номер гарантійного відділу — партнери бачать його у формі повернення</span>
+          <div class="btn-row"><input id="grPhone" value="${esc(g.warranty_phone || '')}" placeholder="+380 67 123 45 67" maxlength="40" style="max-width:220px"><button class="btn" type="button" id="grPhoneSave">Зберегти номер</button></div></label>` : ''}
         <div id="grCode"></div>
       </div>`, { footer: `${g.chat ? '<button class="btn danger" id="grOff" style="margin-right:auto">Відв’язати</button>' : ''}<button class="btn" data-close>Закрити</button><button class="btn primary" id="grLink">${g.chat ? 'Прив’язати іншу' : 'Прив’язати групу'}</button>` });
     $('#grLink', m.el).onclick = async () => {
@@ -1318,6 +1327,9 @@ export function createB2bPages(ctx = {}) {
           <li>Бот відповість «${G.ok}». Код діє 30 хвилин.</li></ol>`;
       } catch (e) { toast(e.message, true); }
     };
+    $('#grPhoneSave', m.el) && ($('#grPhoneSave', m.el).onclick = async () => {
+      try { await api('PUT', '/api/b2b/warranty-phone', { phone: $('#grPhone', m.el).value }); toast('Номер збережено'); } catch (e) { toast(e.message, true); }
+    });
     $('#grOff', m.el) && ($('#grOff', m.el).onclick = async () => { try { await api('DELETE', G.url); m.close(); toast('Відв’язано'); } catch (e) { toast(e.message, true); } });
   }
   const labelsGroup = () => groupModal('labels');
@@ -1329,6 +1341,7 @@ export function createB2bPages(ctx = {}) {
     main.innerHTML = `
       <div class="head-row"><h2>${esc(o.number)} · ${esc(partner?.name || '')} ${statusBadge(o)} ${payBadge(o)} ${urgentBadge(o)}</h2><div class="btn-row"><a class="btn" href="#/b2bclients">← До списку</a>${!closed && !ro() ? `<button class="btn ${o.urgent ? '' : 'urgent-btn'}" id="clUrgent" aria-pressed="${o.urgent ? 'true' : 'false'}">${o.urgent ? 'Зняти «Терміново»' : '🔥 Терміново'}</button>` : ''}${o.status === 'crm' && !ro() ? '<button class="btn" id="clClaim">🛠 Брак / обмін</button>' : ''}${closed ? '' : '<button class="btn" id="clEdit">✏️ Змінити</button>'}<button class="btn danger" id="clDel">Видалити</button></div></div>
       ${cancelNote(o)}
+      ${o.status === 'returned' ? `<div style="margin-bottom:12px">${returnCard(o, { admin: !ro() })}</div>` : ''}
       ${o.pending ? `<div class="card form-stack card-info" style="margin-bottom:12px"><b>🔵 Чекає підтвердження партнера</b>
           ${o.pending.crm_old ? `<div class="small">Старе замовлення в LP-CRM № <b>${esc(o.pending.crm_old)}</b> анульовано — скасуйте його в CRM; нове передайте після підтвердження.</div>` : ''}
           ${o.pending.changes.length ? `<ul class="small" style="margin:0;padding-left:18px">${o.pending.changes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
@@ -1439,6 +1452,11 @@ export function createB2bPages(ctx = {}) {
     };
     $('#clEdit') && ($('#clEdit').onclick = () => editClient(o, items));
     if ($('#clClaim')) $('#clClaim').onclick = () => ctx.openClaimForm(o.id, { admin: true }).catch((e) => toast(e.message, true));
+    wireTracking(`/api/b2b/clients/${o.id}/tracking?return=1`, 'ret');
+    $('#retUndo') && ($('#retUndo').onclick = async () => {
+      if (!(await confirmDanger(`Скасувати повернення ${o.number}?`, 'Замовлення знову стане «Передано в CRM»; партнер і група «Ремонт» отримають повідомлення.', 'Скасувати повернення'))) return;
+      try { await api('POST', `/api/b2b/clients/${o.id}/unreturn`); toast('Повернення скасовано'); viewClient(o.id); } catch (e) { toast(e.message, true); }
+    });
     if (!closed && !ro()) wirePriceTable(items, async (rows) => {
       const r = await api('PUT', `/api/b2b/clients/${o.id}/prices`, { items: rows.map((x) => ({ product_id: x.product_id, price: x.price, rrp: x.rrp })) });
       toast(!r.changed ? 'Змін немає' : r.draft ? `Ціни змінено в чернетці ${r.draft} — для всіх її замовлень` : `Ціни збережено, партнеру надіслано сповіщення${r.crm ? `. У LP-CRM № ${r.crm} змініть вручну` : ''}`);

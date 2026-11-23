@@ -132,9 +132,9 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
       }
       const g = /^\/(?:link|start)(?:@\w+)?\s+([0-9a-f]{12,24})\b/i.exec(String(msg.text || ''));
       if (!g) return c.json({ ok: true }); // звичайні повідомлення в групі бот ігнорує
-      const reply = (await b2b?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || ''))
+      const reply = (await b2b?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || '', msg.is_topic_message ? msg.message_thread_id : null))
         || (await services.checks?.tgGroupLink?.(g[1].toLowerCase(), String(chat), msg.chat.title || '')) || 'Код не підійшов. Візьміть новий код у картці партнера на сайті.';
-      await tg(s.tg_token, 'sendMessage', { chat_id: chat, text: reply, parse_mode: 'HTML' }).catch(() => {});
+      await tg(s.tg_token, 'sendMessage', { chat_id: chat, ...(msg.is_topic_message ? { message_thread_id: msg.message_thread_id } : {}), text: reply, parse_mode: 'HTML' }).catch(() => {});
       return c.json({ ok: true });
     }
     const m = /^\/start(?:@\w+)?\s+([0-9a-f]{24})\b/.exec(String(msg.text || ''));
@@ -157,6 +157,9 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
     await tg(s.tg_token, 'sendMessage', { chat_id: chat, text: reply, parse_mode: 'HTML' }).catch(() => {});
     return c.json({ ok: true });
   });
+
+  // Чат може бути «id#гілка» (група з темами): тоді повідомлення йде в цю гілку.
+  const dest = (chat) => { const [id, th] = String(chat).split('#'); return th ? { chat_id: id, message_thread_id: Number(th) } : { chat_id: id }; };
 
   // ---------- розсилка: оплачені посилання і нові надходження ----------
   const LABEL = { paid: '✅ Оплачено', over: '✅ Оплачено (переплата)', partial: '🟡 Часткова оплата' };
@@ -209,7 +212,7 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
     if (partnerId) for (const r of await db.all(`SELECT tg_chat_id FROM users WHERE active = 1 AND tg_chat_id != '' AND role = 'partner' AND partner_id = ?`, [partnerId])) chats.add(r.tg_chat_id);
     let sent = 0;
     for (const chat of [...chats].slice(0, 30)) {
-      try { await tg(s.tg_token, 'sendMessage', { chat_id: chat, text, parse_mode: 'HTML', disable_web_page_preview: true }); sent++; } catch { /* заблокував бота */ }
+      try { await tg(s.tg_token, 'sendMessage', { ...dest(chat), text, parse_mode: 'HTML', disable_web_page_preview: true }); sent++; } catch { /* заблокував бота */ }
     }
     return sent;
   }
@@ -264,18 +267,18 @@ export function mountTg(app, { db, fetchFn, services = {} }) {
     for (const chat of chatIds.slice(0, 5)) {
       if (fileId) {
         // файл уже в Telegram — пересилаємо за file_id, без повторного завантаження
-        const r = await tg(s.tg_token, 'sendDocument', { chat_id: chat, document: fileId, ...(caption ? { caption: caption.slice(0, 1000), parse_mode: 'HTML' } : {}) }).catch(() => null);
-        if (r) { sent++; lastMessage = { chat: String(chat), id: r.message_id }; }
+        const r = await tg(s.tg_token, 'sendDocument', { ...dest(chat), document: fileId, ...(caption ? { caption: caption.slice(0, 1000), parse_mode: 'HTML' } : {}) }).catch(() => null);
+        if (r) { sent++; lastMessage = { chat: dest(chat).chat_id, id: r.message_id }; }
         continue;
       }
       const fd = new FormData();
-      fd.append('chat_id', String(chat));
+      for (const [k, v] of Object.entries(dest(chat))) fd.append(k, String(v));
       if (caption) { fd.append('caption', caption.slice(0, 1000)); fd.append('parse_mode', 'HTML'); }
       fd.append('document', new Blob([bytes], { type: mime || 'application/octet-stream' }), name || 'file');
       try {
         const r = await fetchFn(`${TG}/bot${s.tg_token}/sendDocument`, { method: 'POST', body: fd });
         const j = await r.json().catch(() => null);
-        if (j?.ok) { sent++; lastMessage = { chat: String(chat), id: j.result?.message_id }; }
+        if (j?.ok) { sent++; lastMessage = { chat: dest(chat).chat_id, id: j.result?.message_id }; }
       } catch { /* бота прибрали з групи */ }
     }
     return sent;

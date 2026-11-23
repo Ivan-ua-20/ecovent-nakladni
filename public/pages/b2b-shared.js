@@ -3,7 +3,7 @@ import { esc, money } from '../invoice.js';
 import { fmtDateTime as fmtDT, $, $$, api, toast, modal, confirmDanger } from '../core/ui.js';
 
 export const uah = (n) => `${money(n)} грн`;
-const ST_CLS = { confirm: 'warn', invoice_wait: 'warn', pay_wait: 'warn', partial: 'info', paid: 'ok', done: 'ok', cancelled: 'bad', new: 'warn', crm: 'info' };
+const ST_CLS = { returned: 'warn', confirm: 'warn', invoice_wait: 'warn', pay_wait: 'warn', partial: 'info', paid: 'ok', done: 'ok', cancelled: 'bad', new: 'warn', crm: 'info' };
 export const statusBadge = (o) => `<span class="badge ${ST_CLS[o.status] || ''}">${esc(o.status_name || o.status)}</span>`;
 // Замовлення клієнта: оплата (за закупівлею) і «без закупівлі».
 const PAY_CLS = { paid: 'ok', partial: 'info', unpaid: 'warn' };
@@ -327,12 +327,13 @@ export function wireBulk(actions, { onDone, confirmDanger }) {
 export const bulkBar = () => '<div id="bulkBar" class="btn-row card" hidden style="position:sticky;top:8px;z-index:5;margin-bottom:10px;padding:8px 12px;flex-wrap:wrap;align-items:center"></div>';
 
 // Статус доставки за ТТН (Нова пошта): кнопка в картці замовлення клієнта; url — /api/b2b/p/clients/:id/tracking або адмінський.
-export const trackBtn = () => '<div class="trk"><button class="btn sm" type="button" data-track>Статус доставки</button><span class="small muted" data-track-out></span></div>';
-export function wireTracking(url) {
-  const b = $('[data-track]');
+// key — кілька кнопок на сторінці (напр. ТТН клієнту і ТТН повернення): у кожної свій key.
+export const trackBtn = (key = '') => `<div class="trk"><button class="btn sm" type="button" data-track="${key}">Статус доставки</button><span class="small muted" data-track-out="${key}"></span></div>`;
+export function wireTracking(url, key = '') {
+  const b = $(`[data-track="${key}"]`);
   if (!b) return;
   b.onclick = async () => {
-    const out = $('[data-track-out]');
+    const out = $(`[data-track-out="${key}"]`);
     b.disabled = true;
     out.textContent = 'Перевіряю в Новій пошті…';
     try {
@@ -342,6 +343,44 @@ export function wireTracking(url) {
         : 'Нова пошта не знайшла цю ТТН.';
     } catch (e) { out.textContent = e.message; }
     b.disabled = false;
+  };
+}
+
+// ---------- Повернення замовлення клієнта (статус «Повернуто») ----------
+const RETURN_TO_TXT = { partner: 'на юрособу партнера', warranty: 'на номер гарантійного відділу Ековент' };
+// Картка з даними повернення; trackUrl — кнопка «Статус доставки» ТТН повернення.
+export const returnCard = (o, { admin = false } = {}) => (o.status === 'returned' ? `<div class="card form-stack card-warn">
+    <h3 style="margin:0">↩️ Повернення</h3>
+    <div>ТТН повернення: <b>${esc(o.return_ttn)}</b> · ${esc(RETURN_TO_TXT[o.return_to] || o.return_to || '')}</div>
+    ${trackBtn('ret')}
+    <div class="small"><b>Коментар партнера:</b> ${esc(o.return_note)}</div>
+    ${o.returned_at ? `<div class="small muted">Оформлено ${esc(fmtDT(o.returned_at))}</div>` : ''}
+    ${admin ? '<div class="btn-row"><button class="btn" id="retUndo">Скасувати повернення</button></div>' : ''}
+  </div>` : '');
+// Вікно «Повернення»: ТТН, на кого їде посилка, коментар (усе обов'язково). submit(data) — запит; помилка лишає вікно відкритим.
+export async function askReturn(o, submit) {
+  const info = await api('GET', '/api/b2b/p/return-info').catch(() => ({}));
+  const ph = info.warranty_phone || '';
+  const m = modal(`Повернення ${o.number}`, `<form class="form-stack" id="retF">
+      <div class="small muted">Клієнт: ${esc(o.client_name || '—')}${o.crm_id ? ` · LP-CRM № ${esc(o.crm_id)}` : ''}</div>
+      <label class="f"><span>ТТН повернення (Нова пошта) *</span><input name="ttn" inputmode="numeric" maxlength="20" placeholder="20450000000000" required></label>
+      <div class="f"><span>На кого їде посилка *</span>
+        <label class="check"><input type="radio" name="to" value="partner"> На вашу юрособу (ФОП / ТОВ)</label>
+        <label class="check"><input type="radio" name="to" value="warranty"> На номер гарантійного відділу Ековент${ph ? `: <b>${esc(ph)}</b>` : ''}</label></div>
+      <label class="f"><span>Коментар * — чому повертають, у якому стані товар</span><textarea name="note" rows="3" maxlength="1000" required></textarea></label>
+      <div class="small muted">Після збереження замовлення отримає статус «Повернуто», а інформація піде нашому сервісному відділу.</div>
+    </form>`, { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="retGo">Позначити «Повернуто»</button>' });
+  const f = $('#retF', m.el);
+  const go = $('#retGo', m.el);
+  go.onclick = async () => {
+    const ttn = f.ttn.value.replace(/\s/g, '');
+    const to = f.querySelector('[name=to]:checked')?.value || '';
+    const note = f.note.value.trim();
+    if (!/^\d{10,20}$/.test(ttn)) return toast('Вкажіть ТТН повернення — лише цифри.', true);
+    if (!to) return toast('Оберіть, на кого їде посилка.', true);
+    if (note.length < 5) return toast('Напишіть коментар: чому повертають і в якому стані товар.', true);
+    go.disabled = true;
+    try { await submit({ ttn, to, note }); m.close(); } catch (er) { toast(er.message, true); go.disabled = false; }
   };
 }
 
