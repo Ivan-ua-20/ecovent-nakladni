@@ -21399,10 +21399,8 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
     { sum: "exact", org: true, cb: true, who: "known" },
     { sum: "exact", org: true, cb: false, who: "known" },
     { sum: "exact", org: false, cb: true, who: "unknown" },
-    { sum: "exact", org: false, cb: false, who: "unknown" },
     { sum: "exact", org: false, cb: true, who: "known" },
     { sum: "near", org: true, cb: false, who: "known" },
-    { sum: "near", org: false, cb: false, who: "unknown" },
     { sum: "exact", org: false, cb: false, who: "known", hint: true },
     { sum: "near", org: false, cb: false, who: "known", hint: true }
   ];
