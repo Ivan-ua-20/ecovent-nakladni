@@ -178,7 +178,12 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
     { sum: 'near', org: true, cb: false }, { sum: 'exact', org: false, cb: false, hint: true }, { sum: 'near', org: false, cb: false, hint: true },
   ];
   const similar = new Map();
+  // У кожному проході пари «замовлення — чек» розподіляємо за найменшим розривом у часі (чек після створення замовлення),
+  // а не «старше замовлення обирає першим»: інакше давнє замовлення (напр. післяплата, що чекала відправки) забирає чек,
+  // пробитий через кілька хвилин після нового такого самого замовлення. Чек раніше замовлення (до 1 год) — утричі «дорожчий».
+  const startMs = new Map(goodsOrders.map((o) => [o.code, oMs(o) + 3600e3]));
   for (const pass of PASSES) {
+    const pairs = [];
     for (const o of goodsOrders) {
       if (byOrder.has(o.code) || pinned.has(o.code)) continue;
       const list = cands.get(o.code);
@@ -187,10 +192,18 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
       const orgOk = (r) => o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
       const cb = String(cbOf(o) || '').toLowerCase();
       const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || '').toLowerCase().includes(cb));
-      const ok = (r) => !used.has(r.id) && sumOk(r) && (!pass.org || orgOk(r)) && (!pass.cb || cbOk(r));
+      const t0 = startMs.get(o.code);
+      for (const r of list) {
+        if (used.has(r.id) || !sumOk(r) || (pass.org && !orgOk(r)) || (pass.cb && !cbOk(r))) continue;
+        const gap = atMs.get(r.id) - t0;
+        pairs.push({ cost: gap < 0 ? -gap * 3 : gap, o, r, t0 });
+      }
+    }
+    pairs.sort((a, b) => a.cost - b.cost || a.t0 - b.t0 || atMs.get(a.r.id) - atMs.get(b.r.id));
+    for (const { o, r } of pairs) {
+      if (byOrder.has(o.code) || used.has(r.id)) continue;
       // Найближчий за часом підхожий чек. Ручні чеки — звичайна практика (наприклад, післяплата Meest), тож переваги чекам LP-CRM не даємо.
-      const hit = list.find(ok);
-      if (hit && pass.hint) { if (!similar.has(o.code)) similar.set(o.code, hit); } else if (hit) take(o, { ...hit, byGoods: true });
+      if (pass.hint) { if (!similar.has(o.code)) similar.set(o.code, r); } else take(o, { ...r, byGoods: true });
     }
   }
 

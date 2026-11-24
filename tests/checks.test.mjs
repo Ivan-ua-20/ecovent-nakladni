@@ -38,7 +38,7 @@ await db.run(`DELETE FROM offices`);
 await db.run(`INSERT INTO offices (office_id, name, fop_id) VALUES ('22', 'Ecovent-Expert / ФОП Агафіца Д.М.', 1), ('12', 'Маркетплейси / ФОП ЛУПУ В.Ф.', 2), ('28', 'ТОВ «ЕКОВЕНТ-ДИСТРИБ’ЮШН»', 3), ('30', 'ФОП Ватрич', 4)`);
 await db.run(`INSERT INTO np_accounts (id, name, api_key, active, created_at) VALUES (1, 'НП', 'npk', 1, '')`);
 await db.run(`INSERT INTO rz_accounts (id, name, username, password) VALUES (1, 'Ековент', 'u', 'p')`);
-await raw.run(`INSERT INTO crm_products (product_id, name, code) VALUES (697, 'Тепловентилятор DREO [80173]', '80173'), (698, 'Осушувач [30499]', '30499'), (699, 'Осушувач HUMIX DUO [31599]', '31599'), (700, 'ComfoDry 12 [30414]', '30414'), (701, 'ComfoDry 20 [30421]', '30421')`);
+await raw.run(`INSERT INTO crm_products (product_id, name, code) VALUES (697, 'Тепловентилятор DREO [80173]', '80173'), (698, 'Осушувач [30499]', '30499'), (699, 'Осушувач HUMIX DUO [31599]', '31599'), (700, 'ComfoDry 12 [30414]', '30414'), (701, 'ComfoDry 20 [30421]', '30421'), (702, 'Обігрівач [40001]', '40001')`);
 await db.run(`INSERT INTO prom_accounts (id, name, token, active) VALUES (1, 'Prom Amsterdam', 'ptok', 1)`);
 for (const [id, ttn] of [['p11', '2045 0000 0000 11'], ['p12', 'PRM-0000012'], ['p13', 'PRM-0000013'], ['p14', '20450000000014'], ['p21', '20450000000021']]) {
   await db.run(`INSERT INTO mp_orders (mp, account_id, id, number, created_at, total, ttn) VALUES ('prom', 1, ?, ?, ?, 0, ?)`, [id, id, `${D} 09:00:00`, ttn]);
@@ -83,6 +83,9 @@ const ORDERS = [
   O(10031, 11, 5200, '20450000000031', { office: '22', datetime: `${D} 09:00:00`, products: [{ product_id: '701', name: 'ComfoDry 20', price: '5200', quantity: '1' }] }),
   // Є лише чек, пробитий вручну в Checkbox, — «Увага»
   O(10032, 11, 6100, '20450000000032', { office: '22', datetime: `${D} 09:00:00`, products: [{ product_id: '701', name: 'ComfoDry 20', price: '6100', quantity: '1' }] }),
+  // Давнє замовлення (післяплата, чекало відправки) і нове таке саме: чек, пробитий через 7 хв після нового, — новому
+  O(10033, 15, 3799, 'RMP-100000033', { office: '12', datetime: `${dayAgo(6)} 09:00:00`, products: [{ product_id: '702', name: 'Обігрівач', price: '3799', quantity: '1' }] }),
+  O(10034, 14, 3799, '20450000000034', { office: '12', datetime: `${D} 12:01:00`, products: [{ product_id: '702', name: 'Обігрівач', price: '3799', quantity: '1' }] }),
   O(10011, 10, 610, '20450000000011', { office: '12' }), // Пром-оплата, у Prom оплачено — гаразд
   O(10012, 10, 620, 'PRM-0000012', { office: '12' }), // Пром-оплата, а в Prom «Оплата при отриманні» (Розетка Делівері з Prom)
   O(10013, 4, 630, 'PRM-0000013', { office: '12' }), // післяплата, у Prom оплата при отриманні — наложка є
@@ -118,6 +121,7 @@ const RC = {
   c2: [
     { id: 'p27', type: 'SELL', fiscal_date: `${D}T09:00:00+02:00`, total_sum: 410000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 410000 }], goods: [{ good: { name: 'Осушувач [30499]' } }] },
     { id: 'p26', type: 'SELL', fiscal_date: `${D}T09:10:00+02:00`, total_sum: 410000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора NovaPay', value: 410000 }], goods: [{ good: { name: 'Осушувач [30499]' } }] },
+    { id: 'n34', type: 'SELL', fiscal_date: `${D}T12:08:00+02:00`, total_sum: 379900, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 379900 }], goods: [{ good: { name: 'Обігрівач [40001]' } }] },
     { id: 'g2', type: 'SELL', fiscal_date: `${D}T12:00:00+02:00`, total_sum: 317400, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 317400 }], goods: [{ good: { code: '80173', name: 'Тепловентилятор DREO (DR-HSH-030) [80173]' } }] },
     { id: 'g1', type: 'SELL', fiscal_date: `${D}T10:00:00+02:00`, total_sum: 317400, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 317400 }], goods: [{ good: { code: '', name: 'Тепловентилятор DREO (DR-HSH-030) [80173]' } }] },
     { id: 'r2', type: 'SELL', fiscal_date: `${D}T12:20:00+02:00`, total_sum: 50000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 50000 }], header: '1790000000010002' },
@@ -298,6 +302,8 @@ assert.equal(row(10026).receipt?.id, 'p26', 'NovaPay-замовлення — ч
 assert.doesNotMatch(texts(10026) + texts(10027), /спосіб оплати/);
 assert.equal(row(10029).receipt?.id, 'h29', 'чек на 3800 — замовленню на 3800, а не раніше створеному на 3799');
 assert.ok(!row(10028).receipt || row(10028).receipt.id !== 'h29');
+assert.equal(row(10034).receipt?.id, 'n34', 'чек через 7 хв після нового замовлення — йому, а не давньому такому самому');
+assert.ok(!row(10033).receipt || row(10033).receipt.id !== 'n34');
 assert.equal(row(10030).receipt, null, 'чек іншої каси з іншим способом оплати — не чек цього замовлення');
 assert.match(texts(10030), /bad: Чек на касі відділу не знайдено\. Схожий чек: ФОП Агафіца Д\.М\., 7600 грн, «Картка», .* — якщо це чек цього замовлення, його пробито не на тій касі/);
 assert.equal(row(10031).receipt?.id, '0f77f5f4-d16e-42cc-9a09-0d1a1c345590', 'найближчий за часом, навіть якщо пробитий вручну (як післяплата Meest)');
