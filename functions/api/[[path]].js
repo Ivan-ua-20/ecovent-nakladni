@@ -21407,6 +21407,7 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
   const startMs = new Map(goodsOrders.map((o) => [o.code, oMs(o) + 36e5]));
   for (const pass of PASSES) {
     const pairs = [];
+    const edges = /* @__PURE__ */ new Map();
     for (const o of goodsOrders) {
       if (byOrder.has(o.code) || pinned.has(o.code)) continue;
       const list = cands.get(o.code);
@@ -21416,19 +21417,43 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
       const cb = String(cbOf(o) || "").toLowerCase();
       const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || "").toLowerCase().includes(cb));
       const t0 = startMs.get(o.code);
+      const mine = [];
       for (const r of list) {
         if (used.has(r.id) || !sumOk(r) || pass.org && !orgOk(r) || pass.cb && !cbOk(r)) continue;
         const gap = atMs.get(r.id) - t0;
-        pairs.push({ cost: gap < 0 ? -gap * 3 : gap, o, r, t0 });
+        const p = { cost: gap < 0 ? -gap * 3 : gap, o, r, t0 };
+        pairs.push(p);
+        mine.push(p);
       }
+      if (mine.length) edges.set(o.code, mine.sort((x, y) => x.cost - y.cost));
     }
     pairs.sort((a, b) => a.cost - b.cost || a.t0 - b.t0 || atMs.get(a.r.id) - atMs.get(b.r.id));
-    for (const { o, r } of pairs) {
-      if (byOrder.has(o.code) || used.has(r.id)) continue;
-      if (pass.hint) {
-        if (!similar.has(o.code)) similar.set(o.code, r);
-      } else take(o, { ...r, byGoods: true });
+    if (pass.hint) {
+      for (const { o, r } of pairs) if (!byOrder.has(o.code) && !similar.has(o.code)) similar.set(o.code, r);
+      continue;
     }
+    const holder = /* @__PURE__ */ new Map();
+    const mineOf = /* @__PURE__ */ new Map();
+    for (const p of pairs) {
+      if (mineOf.has(p.o.code) || holder.has(p.r.id)) continue;
+      mineOf.set(p.o.code, p);
+      holder.set(p.r.id, p);
+    }
+    const augment = (code, seen) => {
+      for (const p of edges.get(code) || []) {
+        if (seen.has(p.r.id)) continue;
+        seen.add(p.r.id);
+        const cur = holder.get(p.r.id);
+        if (!cur || augment(cur.o.code, seen)) {
+          mineOf.set(code, p);
+          holder.set(p.r.id, p);
+          return true;
+        }
+      }
+      return false;
+    };
+    for (const code of edges.keys()) if (!mineOf.has(code)) augment(code, /* @__PURE__ */ new Set());
+    for (const p of mineOf.values()) take(p.o, { ...p.r, byGoods: true });
   }
   const free = sells.filter((r) => !used.has(r.id));
   const key = (n) => Math.round(Number(n) * 100);
