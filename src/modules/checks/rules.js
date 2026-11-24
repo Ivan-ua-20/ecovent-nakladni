@@ -360,14 +360,17 @@ export function evaluate(o, ctx) {
   } else if (!r) add('bad', 'Відправлено, а чек у Checkbox не знайдено.');
   else {
     const how = r.byRef ? ' (прив’язаний у LP-CRM)' : r.bySum ? ' (знайдено лише за сумою — можливо, створено вручну)' : r.byGoods ? '' : ' (знайдено за № замовлення)';
-    if (isManualReceipt(r.id) && !r.byRef) add('warn', 'Чек пробито вручну в Checkbox (не автоматично з LP-CRM) — перевірте суму, ФОП і спосіб оплати.');
+    if (isManualReceipt(r.id) && !r.byRef) add('warn', 'Чек створено не автоматизацією LP-CRM (вручну в Checkbox або іншою програмою) — перевірте суму, ФОП і спосіб оплати.');
     if (!r.byRef && o.webSeen) add('warn', 'У LP-CRM чек до замовлення не прив’язаний — цей чек знайдено за товаром і сумою (можливо, пробито вручну). Перевірте, що він саме від цього замовлення.');
     // Наложка в ТТН (сума з маркетплейсу) не збігається з сумою в LP-CRM — клієнт платить суму наложки, тож чек звіряємо з нею:
     // чек на суму з LP-CRM (напр. 19 999 замість 1 999) — переплата податку, це помилка, навіть якщо з LP-CRM чек збігається.
     const payable = cls === 'cod' && o.cod > 0 && !part && !near(o.cod, o.total) ? o.cod : null;
+    // Рітейл Розетки: клієнт платить ціну Розетки (наложка в ТТН), а в LP-CRM — закупівельна; чек на ціну Розетки — правильний.
+    const retailOk = retail && o.cod > 0 && near(r.total, o.cod) && !near(r.total, o.total);
     if (payable != null && !near(r.total, payable)) {
       add('bad', `Чек на ${fmt(r.total)}, а клієнт платить ${fmt(payable)} (наложка в ТТН)${near(r.total, o.total) ? ' — чек пробито на суму з LP-CRM, а вона не збігається з ТТН' : ''}${how}.`);
     } else if (payable != null) add('ok', `Чек ${fmt(r.total)} · ${fopName(r.fop_id)} — як наложка (у LP-CRM сума ${fmt(o.total)})${how}`);
+    else if (retailOk) add('ok', `Чек ${fmt(r.total)} · ${fopName(r.fop_id)} — за ціною Розетки, як наложка (у LP-CRM ${fmt(o.total)})${how}`);
     else if (!part && !near(r.total, o.total)) add('bad', `Чек на ${fmt(r.total)}, а замовлення на ${fmt(o.total)}${how}.`);
     else add('ok', `Чек ${fmt(r.total)} · ${fopName(r.fop_id)}${how}`);
     const labels = (r.pays || []).map((p) => p.label).filter(Boolean);
