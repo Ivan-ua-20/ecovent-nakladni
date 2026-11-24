@@ -21396,12 +21396,15 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
     return [o.code, list];
   }));
   const PASSES = [
-    { sum: "exact", org: true, cb: true },
-    { sum: "exact", org: true, cb: false },
-    { sum: "exact", org: false, cb: true },
-    { sum: "near", org: true, cb: false },
-    { sum: "exact", org: false, cb: false, hint: true },
-    { sum: "near", org: false, cb: false, hint: true }
+    { sum: "exact", org: true, cb: true, who: "known" },
+    { sum: "exact", org: true, cb: false, who: "known" },
+    { sum: "exact", org: false, cb: true, who: "unknown" },
+    { sum: "exact", org: false, cb: false, who: "unknown" },
+    { sum: "exact", org: false, cb: true, who: "known" },
+    { sum: "near", org: true, cb: false, who: "known" },
+    { sum: "near", org: false, cb: false, who: "unknown" },
+    { sum: "exact", org: false, cb: false, who: "known", hint: true },
+    { sum: "near", org: false, cb: false, who: "known", hint: true }
   ];
   const similar = /* @__PURE__ */ new Map();
   const startMs = new Map(goodsOrders.map((o) => [o.code, oMs(o) + 36e5]));
@@ -21410,10 +21413,11 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
     const edges = /* @__PURE__ */ new Map();
     for (const o of goodsOrders) {
       if (byOrder.has(o.code) || pinned.has(o.code)) continue;
+      if (pass.who === "known" !== (o.fopId != null)) continue;
       const list = cands.get(o.code);
       if (!list.length) continue;
       const sumOk = pass.sum === "exact" ? (r) => exact(r.total, o.total) || o.prepayment > 0 && (exact(r.total, o.total - o.prepayment) || exact(r.total, o.prepayment)) : () => true;
-      const orgOk = (r) => o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
+      const orgOk = (r) => o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId);
       const cb = String(cbOf(o) || "").toLowerCase();
       const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || "").toLowerCase().includes(cb));
       const t0 = startMs.get(o.code);
@@ -21429,7 +21433,7 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
     }
     pairs.sort((a, b) => a.cost - b.cost || a.t0 - b.t0 || atMs.get(a.r.id) - atMs.get(b.r.id));
     if (pass.hint) {
-      for (const { o, r } of pairs) if (!byOrder.has(o.code) && !similar.has(o.code)) similar.set(o.code, r);
+      for (const { o, r } of pairs) if (!byOrder.has(o.code) && !used.has(r.id) && !similar.has(o.code)) similar.set(o.code, r);
       continue;
     }
     const holder = /* @__PURE__ */ new Map();

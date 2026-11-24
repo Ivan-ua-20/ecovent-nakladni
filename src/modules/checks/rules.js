@@ -173,9 +173,14 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
   }));
   // Чек іншої каси й з іншим способом оплати — найчастіше чек ІНШОГО такого самого замовлення (той самий товар і сума).
   // Його не видаємо за чек замовлення, а показуємо як «схожий» (hint): замовлення лишається без чека, але видно, що перевірити.
+  // who: 'known' — лише замовлення відділу з відомою касою, 'unknown' — відділу без каси (там «чужої каси» не буває).
+  // Замовлення без каси беруть чек ПІСЛЯ замовлень з касою свого відділу, але ДО пошуку «чека іншої каси».
   const PASSES = [
-    { sum: 'exact', org: true, cb: true }, { sum: 'exact', org: true, cb: false }, { sum: 'exact', org: false, cb: true },
-    { sum: 'near', org: true, cb: false }, { sum: 'exact', org: false, cb: false, hint: true }, { sum: 'near', org: false, cb: false, hint: true },
+    { sum: 'exact', org: true, cb: true, who: 'known' }, { sum: 'exact', org: true, cb: false, who: 'known' },
+    { sum: 'exact', org: false, cb: true, who: 'unknown' }, { sum: 'exact', org: false, cb: false, who: 'unknown' },
+    { sum: 'exact', org: false, cb: true, who: 'known' },
+    { sum: 'near', org: true, cb: false, who: 'known' }, { sum: 'near', org: false, cb: false, who: 'unknown' },
+    { sum: 'exact', org: false, cb: false, who: 'known', hint: true }, { sum: 'near', org: false, cb: false, who: 'known', hint: true },
   ];
   const similar = new Map();
   // У кожному проході пари «замовлення — чек» розподіляємо за найменшим розривом у часі (чек після створення замовлення),
@@ -187,10 +192,11 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
     const edges = new Map(); // замовлення → його підхожі чеки в цьому проході (від найближчого)
     for (const o of goodsOrders) {
       if (byOrder.has(o.code) || pinned.has(o.code)) continue;
+      if ((pass.who === 'known') !== (o.fopId != null)) continue;
       const list = cands.get(o.code);
       if (!list.length) continue;
       const sumOk = pass.sum === 'exact' ? (r) => exact(r.total, o.total) || (o.prepayment > 0 && (exact(r.total, o.total - o.prepayment) || exact(r.total, o.prepayment))) : () => true;
-      const orgOk = (r) => o.fopId == null || (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
+      const orgOk = (r) => (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
       const cb = String(cbOf(o) || '').toLowerCase();
       const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || '').toLowerCase().includes(cb));
       const t0 = startMs.get(o.code);
@@ -205,7 +211,7 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
     }
     pairs.sort((a, b) => a.cost - b.cost || a.t0 - b.t0 || atMs.get(a.r.id) - atMs.get(b.r.id));
     if (pass.hint) {
-      for (const { o, r } of pairs) if (!byOrder.has(o.code) && !similar.has(o.code)) similar.set(o.code, r);
+      for (const { o, r } of pairs) if (!byOrder.has(o.code) && !used.has(r.id) && !similar.has(o.code)) similar.set(o.code, r);
       continue;
     }
     // 1) жадібно — найменший розрив;  2) «ланцюжки заміни»: замовлення без чека бере зайнятий чек, якщо його власник
