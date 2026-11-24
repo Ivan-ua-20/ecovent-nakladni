@@ -164,8 +164,8 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
   const cands = new Map(goodsOrders.map((o) => {
     const end = addDays(o.day, 20);
     const from = oMs(o);
-    const sumNear = (r) => near(r.total, o.total) || (o.prepayment > 0 && (near(r.total, o.total - o.prepayment) || near(r.total, o.prepayment)));
-    const amounts = [o.total, ...(o.prepayment > 0 ? [o.total - o.prepayment, o.prepayment] : [])].flatMap((a) => { const x = Math.round(a); return [x - 1, x, x + 1]; });
+    const sumNear = (r) => near(r.total, o.total) || (o.cod > 0 && near(r.total, o.cod)) || (o.prepayment > 0 && (near(r.total, o.total - o.prepayment) || near(r.total, o.prepayment)));
+    const amounts = [o.total, ...(o.cod > 0 ? [o.cod] : []), ...(o.prepayment > 0 ? [o.total - o.prepayment, o.prepayment] : [])].flatMap((a) => { const x = Math.round(a); return [x - 1, x, x + 1]; });
     const list = [...new Set(o.goodsKeys[0].flatMap((k) => amounts.flatMap((a) => byTok.get(`${k}|${a}`) || [])))]
       .filter((r) => atMs.get(r.id) >= from && rDay(r) >= o.day && rDay(r) <= end && sumNear(r) && goodsHit(o, r))
       .sort((x, y) => atMs.get(x.id) - atMs.get(y.id));
@@ -196,7 +196,7 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
       if ((pass.who === 'known') !== (o.fopId != null)) continue;
       const list = cands.get(o.code);
       if (!list.length) continue;
-      const sumOk = pass.sum === 'exact' ? (r) => exact(r.total, o.total) || (o.prepayment > 0 && (exact(r.total, o.total - o.prepayment) || exact(r.total, o.prepayment))) : () => true;
+      const sumOk = pass.sum === 'exact' ? (r) => exact(r.total, o.total) || (o.cod > 0 && exact(r.total, o.cod)) || (o.prepayment > 0 && (exact(r.total, o.total - o.prepayment) || exact(r.total, o.prepayment))) : () => true;
       const orgOk = (r) => (o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId));
       const cb = String(cbOf(o) || '').toLowerCase();
       const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || '').toLowerCase().includes(cb));
@@ -319,7 +319,7 @@ export function evaluate(o, ctx) {
         else if (part.sum && near(o.cod, o.total) && !near(expCod, o.total)) add('bad', `Передоплата ${fmt(part.sum)}, а наложка — на всю суму ${fmt(o.total)} (має бути ${fmt(expCod)}).`);
         else if (!part.sum && o.cod >= o.total - 0.5) add('warn', 'У коментарі згадано передоплату, але наложка — на всю суму замовлення.');
         else add('ok', `Наложка ${fmt(o.cod)} (часткова оплата)`);
-      } else if (!near(o.cod, o.total)) add('bad', `Наложка ${fmt(o.cod)}, а сума замовлення ${fmt(o.total)}.`);
+      } else if (!near(o.cod, o.total)) add('bad', `Наложка ${fmt(o.cod)}, а сума замовлення в LP-CRM ${fmt(o.total)} — перевірте ціну в LP-CRM (наложку зазвичай бере маркетплейс зі свого замовлення).`);
       else add('ok', `Наложка ${fmt(o.cod)}${o.cod_kind === 'ctrl' ? ' · контроль оплати' : o.cod_kind === 'redelivery' ? ' · грошовий переказ' : o.cod_kind === 'prom' ? ' · оплата при отриманні (Prom)' : ''}`);
     } else if (cls === 'prepay' || cls === 'bank') {
       if (o.cod > 0) add('bad', o.cod_kind === 'prom' ? `Оплата «${rule.name}», а в Prom — «${o.mp_pay_name || 'оплата при отриманні'}» (наложка ${fmt(o.cod)}).` : `Оплата «${rule.name}», а в ТТН стоїть ${o.cod_kind === 'ctrl' ? 'контроль оплати' : 'наложка'} ${fmt(o.cod)}.`);
@@ -362,7 +362,13 @@ export function evaluate(o, ctx) {
     const how = r.byRef ? ' (прив’язаний у LP-CRM)' : r.bySum ? ' (знайдено лише за сумою — можливо, створено вручну)' : r.byGoods ? '' : ' (знайдено за № замовлення)';
     if (isManualReceipt(r.id) && !r.byRef) add('warn', 'Чек пробито вручну в Checkbox (не автоматично з LP-CRM) — перевірте суму, ФОП і спосіб оплати.');
     if (!r.byRef && o.webSeen) add('warn', 'У LP-CRM чек до замовлення не прив’язаний — цей чек знайдено за товаром і сумою (можливо, пробито вручну). Перевірте, що він саме від цього замовлення.');
-    if (!part && !near(r.total, o.total)) add('bad', `Чек на ${fmt(r.total)}, а замовлення на ${fmt(o.total)}${how}.`);
+    // Наложка в ТТН (сума з маркетплейсу) не збігається з сумою в LP-CRM — клієнт платить суму наложки, тож чек звіряємо з нею:
+    // чек на суму з LP-CRM (напр. 19 999 замість 1 999) — переплата податку, це помилка, навіть якщо з LP-CRM чек збігається.
+    const payable = cls === 'cod' && o.cod > 0 && !part && !near(o.cod, o.total) ? o.cod : null;
+    if (payable != null && !near(r.total, payable)) {
+      add('bad', `Чек на ${fmt(r.total)}, а клієнт платить ${fmt(payable)} (наложка в ТТН)${near(r.total, o.total) ? ' — чек пробито на суму з LP-CRM, а вона не збігається з ТТН' : ''}${how}.`);
+    } else if (payable != null) add('ok', `Чек ${fmt(r.total)} · ${fopName(r.fop_id)} — як наложка (у LP-CRM сума ${fmt(o.total)})${how}`);
+    else if (!part && !near(r.total, o.total)) add('bad', `Чек на ${fmt(r.total)}, а замовлення на ${fmt(o.total)}${how}.`);
     else add('ok', `Чек ${fmt(r.total)} · ${fopName(r.fop_id)}${how}`);
     const labels = (r.pays || []).map((p) => p.label).filter(Boolean);
     if (rule?.cb && labels.length && !labels.some((l) => l.toLowerCase().includes(rule.cb.toLowerCase()))) {

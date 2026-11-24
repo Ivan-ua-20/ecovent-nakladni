@@ -38,7 +38,7 @@ await db.run(`DELETE FROM offices`);
 await db.run(`INSERT INTO offices (office_id, name, fop_id) VALUES ('22', 'Ecovent-Expert / ФОП Агафіца Д.М.', 1), ('12', 'Маркетплейси / ФОП ЛУПУ В.Ф.', 2), ('28', 'ТОВ «ЕКОВЕНТ-ДИСТРИБ’ЮШН»', 3), ('30', 'ФОП Ватрич', 4)`);
 await db.run(`INSERT INTO np_accounts (id, name, api_key, active, created_at) VALUES (1, 'НП', 'npk', 1, '')`);
 await db.run(`INSERT INTO rz_accounts (id, name, username, password) VALUES (1, 'Ековент', 'u', 'p')`);
-await raw.run(`INSERT INTO crm_products (product_id, name, code) VALUES (697, 'Тепловентилятор DREO [80173]', '80173'), (698, 'Осушувач [30499]', '30499'), (699, 'Осушувач HUMIX DUO [31599]', '31599'), (700, 'ComfoDry 12 [30414]', '30414'), (701, 'ComfoDry 20 [30421]', '30421'), (702, 'Обігрівач [40001]', '40001'), (703, 'Фільтр [40003]', '40003'), (704, 'Кабель [40004]', '40004'), (705, 'Зволожувач [40005]', '40005')`);
+await raw.run(`INSERT INTO crm_products (product_id, name, code) VALUES (697, 'Тепловентилятор DREO [80173]', '80173'), (698, 'Осушувач [30499]', '30499'), (699, 'Осушувач HUMIX DUO [31599]', '31599'), (700, 'ComfoDry 12 [30414]', '30414'), (701, 'ComfoDry 20 [30421]', '30421'), (702, 'Обігрівач [40001]', '40001'), (703, 'Фільтр [40003]', '40003'), (704, 'Кабель [40004]', '40004'), (705, 'Зволожувач [40005]', '40005'), (706, 'Очищувач [40006]', '40006'), (707, 'Іонізатор [40007]', '40007')`);
 await db.run(`INSERT INTO prom_accounts (id, name, token, active) VALUES (1, 'Prom Amsterdam', 'ptok', 1)`);
 for (const [id, ttn] of [['p11', '2045 0000 0000 11'], ['p12', 'PRM-0000012'], ['p13', 'PRM-0000013'], ['p14', '20450000000014'], ['p21', '20450000000021']]) {
   await db.run(`INSERT INTO mp_orders (mp, account_id, id, number, created_at, total, ttn) VALUES ('prom', 1, ?, ?, ?, 0, ?)`, [id, id, `${D} 09:00:00`, ttn]);
@@ -92,6 +92,9 @@ const ORDERS = [
   // Відділ без каси (99) не забирає чек у замовлення відділу з касою, навіть якщо чек ближчий до нього за часом
   O(10037, 14, 2222, '20450000000037', { office: '12', datetime: `${D} 09:00:00`, products: [{ product_id: '705', name: 'Зволожувач', price: '2222', quantity: '1' }] }),
   O(10038, 14, 2222, '20450000000038', { office: '99', datetime: `${D} 10:00:00`, products: [{ product_id: '705', name: 'Зволожувач', price: '2222', quantity: '1' }] }),
+  // Сума в LP-CRM помилкова (19 999), а в Розетці й у ТТН — 1 999: чек на 19 999 — помилка; чек на 1 999 — правильний
+  O(10039, 15, 19999, 'RMP-100000039', { office: '12', datetime: `${D} 09:00:00`, products: [{ product_id: '706', name: 'Очищувач', price: '19999', quantity: '1' }] }),
+  O(10040, 15, 19999, 'RMP-100000040', { office: '12', datetime: `${D} 09:00:00`, products: [{ product_id: '707', name: 'Іонізатор', price: '19999', quantity: '1' }] }),
   O(10011, 10, 610, '20450000000011', { office: '12' }), // Пром-оплата, у Prom оплачено — гаразд
   O(10012, 10, 620, 'PRM-0000012', { office: '12' }), // Пром-оплата, а в Prom «Оплата при отриманні» (Розетка Делівері з Prom)
   O(10013, 4, 630, 'PRM-0000013', { office: '12' }), // післяплата, у Prom оплата при отриманні — наложка є
@@ -127,6 +130,8 @@ const RC = {
   c2: [
     { id: 'p27', type: 'SELL', fiscal_date: `${D}T09:00:00+02:00`, total_sum: 410000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 410000 }], goods: [{ good: { name: 'Осушувач [30499]' } }] },
     { id: 'p26', type: 'SELL', fiscal_date: `${D}T09:10:00+02:00`, total_sum: 410000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора NovaPay', value: 410000 }], goods: [{ good: { name: 'Осушувач [30499]' } }] },
+    { id: 'x39', type: 'SELL', fiscal_date: `${D}T10:00:00+02:00`, total_sum: 1999900, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 1999900 }], goods: [{ good: { name: 'Очищувач [40006]' } }] },
+    { id: 'x40', type: 'SELL', fiscal_date: `${D}T10:00:00+02:00`, total_sum: 199900, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 199900 }], goods: [{ good: { name: 'Іонізатор [40007]' } }] },
     { id: 'w37', type: 'SELL', fiscal_date: `${D}T10:05:00+02:00`, total_sum: 222200, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 222200 }], goods: [{ good: { name: 'Зволожувач [40005]' } }] },
     { id: 'm2', type: 'SELL', fiscal_date: `${D}T10:05:00+02:00`, total_sum: 100000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 100000 }], goods: [{ good: { name: 'Фільтр [40003]' } }, { good: { name: 'Кабель [40004]' } }] },
     { id: 'm1', type: 'SELL', fiscal_date: `${D}T11:00:00+02:00`, total_sum: 100000, payments: [{ type: 'CASHLESS', label: 'Платіж через інтегратора RozetkaPay', value: 100000 }], goods: [{ good: { name: 'Фільтр [40003]' } }] },
@@ -192,7 +197,11 @@ const fetchFn = async (url, opts = {}) => {
   if (u.hostname === 'api-seller.rozetka.com.ua') {
     calls.rz++;
     if (u.pathname === '/sites') return j({ success: true, content: { access_token: 'tok', market: { id: 1, title: 'Ековент' } } });
-    if (u.pathname === '/delivery-rozetka/ttn-list') return j({ success: true, content: { models: u.searchParams.get('ttn') === 'RMP-100000006' ? [{ ttn: 'RMP-100000006', cod_amount: 0, declared_price: 1200 }] : [], _meta: { pageCount: 1 } } });
+    if (u.pathname === '/delivery-rozetka/ttn-list') {
+      const RDM = { 'RMP-100000006': { cod_amount: 0, declared_price: 1200 }, 'RMP-100000039': { cod_amount: 1999, declared_price: 1999 }, 'RMP-100000040': { cod_amount: 1999, declared_price: 1999 } };
+      const t = u.searchParams.get('ttn');
+      return j({ success: true, content: { models: RDM[t] ? [{ ttn: t, ...RDM[t] }] : [], _meta: { pageCount: 1 } } });
+    }
   }
   if (u.hostname === 'api.telegram.org') {
     const b = JSON.parse(opts.body || '{}');
@@ -311,6 +320,10 @@ assert.equal(row(10026).receipt?.id, 'p26', 'NovaPay-замовлення — ч
 assert.doesNotMatch(texts(10026) + texts(10027), /спосіб оплати/);
 assert.equal(row(10029).receipt?.id, 'h29', 'чек на 3800 — замовленню на 3800, а не раніше створеному на 3799');
 assert.ok(!row(10028).receipt || row(10028).receipt.id !== 'h29');
+assert.match(texts(10039), /bad: Наложка 1999 грн, а сума замовлення в LP-CRM 19999 грн — перевірте ціну в LP-CRM/);
+assert.match(texts(10039), /bad: Чек на 19999 грн, а клієнт платить 1999 грн \(наложка в ТТН\) — чек пробито на суму з LP-CRM/, 'чек на суму з LP-CRM — переплата');
+assert.equal(row(10040).receipt?.id, 'x40', 'чек на суму наложки знаходиться, хоча в LP-CRM сума інша');
+assert.match(texts(10040), /ok: Чек 1999 грн · .* — як наложка \(у LP-CRM сума 19999 грн\)/);
 assert.equal(row(10037).receipt?.id, 'w37', 'чек каси відділу — замовленню цього відділу, а не замовленню відділу без каси');
 assert.equal(row(10038).receipt, null);
 assert.equal(row(10035).receipt?.id, 'm2', 'єдиний підхожий чек — цьому замовленню'); assert.equal(row(10036).receipt?.id, 'm1', 'а сусід бере інший підхожий, а не лишається без чека');
