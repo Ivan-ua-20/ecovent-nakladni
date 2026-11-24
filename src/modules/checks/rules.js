@@ -174,12 +174,13 @@ export function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) ==
   // Чек іншої каси й з іншим способом оплати — найчастіше чек ІНШОГО такого самого замовлення (той самий товар і сума).
   // Його не видаємо за чек замовлення, а показуємо як «схожий» (hint): замовлення лишається без чека, але видно, що перевірити.
   // who: 'known' — лише замовлення відділу з відомою касою, 'unknown' — відділу без каси (там «чужої каси» не буває).
-  // Замовлення без каси беруть чек ПІСЛЯ замовлень з касою свого відділу, але ДО пошуку «чека іншої каси».
+  // Замовлення без каси беруть чек ПІСЛЯ замовлень з касою свого відділу, але ДО пошуку «чека іншої каси», і лише з правильним
+  // способом оплати: залишковий чек з іншим способом — найімовірніше чужий, а «помилка способу оплати» була б хибною.
   const PASSES = [
     { sum: 'exact', org: true, cb: true, who: 'known' }, { sum: 'exact', org: true, cb: false, who: 'known' },
-    { sum: 'exact', org: false, cb: true, who: 'unknown' }, { sum: 'exact', org: false, cb: false, who: 'unknown' },
+    { sum: 'exact', org: false, cb: true, who: 'unknown' },
     { sum: 'exact', org: false, cb: true, who: 'known' },
-    { sum: 'near', org: true, cb: false, who: 'known' }, { sum: 'near', org: false, cb: false, who: 'unknown' },
+    { sum: 'near', org: true, cb: false, who: 'known' },
     { sum: 'exact', org: false, cb: false, who: 'known', hint: true }, { sum: 'near', org: false, cb: false, who: 'known', hint: true },
   ];
   const similar = new Map();
