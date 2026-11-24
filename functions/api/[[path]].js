@@ -21387,8 +21387,8 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
   const cands = new Map(goodsOrders.map((o) => {
     const end = addDays6(o.day, 20);
     const from = oMs(o);
-    const sumNear = (r) => near(r.total, o.total) || o.prepayment > 0 && (near(r.total, o.total - o.prepayment) || near(r.total, o.prepayment));
-    const amounts = [o.total, ...o.prepayment > 0 ? [o.total - o.prepayment, o.prepayment] : []].flatMap((a) => {
+    const sumNear = (r) => near(r.total, o.total) || o.cod > 0 && near(r.total, o.cod) || o.prepayment > 0 && (near(r.total, o.total - o.prepayment) || near(r.total, o.prepayment));
+    const amounts = [o.total, ...o.cod > 0 ? [o.cod] : [], ...o.prepayment > 0 ? [o.total - o.prepayment, o.prepayment] : []].flatMap((a) => {
       const x = Math.round(a);
       return [x - 1, x, x + 1];
     });
@@ -21414,7 +21414,7 @@ function matchReceipts(orders, receipts, sameOrg = (a, b) => String(a) === Strin
       if (pass.who === "known" !== (o.fopId != null)) continue;
       const list = cands.get(o.code);
       if (!list.length) continue;
-      const sumOk = pass.sum === "exact" ? (r) => exact(r.total, o.total) || o.prepayment > 0 && (exact(r.total, o.total - o.prepayment) || exact(r.total, o.prepayment)) : () => true;
+      const sumOk = pass.sum === "exact" ? (r) => exact(r.total, o.total) || o.cod > 0 && exact(r.total, o.cod) || o.prepayment > 0 && (exact(r.total, o.total - o.prepayment) || exact(r.total, o.prepayment)) : () => true;
       const orgOk = (r) => o.fopOk ? o.fopOk(r.fop_id) : sameOrg(r.fop_id, o.fopId);
       const cb = String(cbOf(o) || "").toLowerCase();
       const cbOk = (r) => !cb || (r.pays || []).some((p) => String(p.label || "").toLowerCase().includes(cb));
@@ -21543,7 +21543,7 @@ function evaluate(o, ctx) {
         else if (part.sum && near(o.cod, o.total) && !near(expCod, o.total)) add("bad", `\u041F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0430 ${fmt(part.sum)}, \u0430 \u043D\u0430\u043B\u043E\u0436\u043A\u0430 \u2014 \u043D\u0430 \u0432\u0441\u044E \u0441\u0443\u043C\u0443 ${fmt(o.total)} (\u043C\u0430\u0454 \u0431\u0443\u0442\u0438 ${fmt(expCod)}).`);
         else if (!part.sum && o.cod >= o.total - 0.5) add("warn", "\u0423 \u043A\u043E\u043C\u0435\u043D\u0442\u0430\u0440\u0456 \u0437\u0433\u0430\u0434\u0430\u043D\u043E \u043F\u0435\u0440\u0435\u0434\u043E\u043F\u043B\u0430\u0442\u0443, \u0430\u043B\u0435 \u043D\u0430\u043B\u043E\u0436\u043A\u0430 \u2014 \u043D\u0430 \u0432\u0441\u044E \u0441\u0443\u043C\u0443 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
         else add("ok", `\u041D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)} (\u0447\u0430\u0441\u0442\u043A\u043E\u0432\u0430 \u043E\u043F\u043B\u0430\u0442\u0430)`);
-      } else if (!near(o.cod, o.total)) add("bad", `\u041D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)}, \u0430 \u0441\u0443\u043C\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F ${fmt(o.total)}.`);
+      } else if (!near(o.cod, o.total)) add("bad", `\u041D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)}, \u0430 \u0441\u0443\u043C\u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u0432 LP-CRM ${fmt(o.total)} \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0446\u0456\u043D\u0443 \u0432 LP-CRM (\u043D\u0430\u043B\u043E\u0436\u043A\u0443 \u0437\u0430\u0437\u0432\u0438\u0447\u0430\u0439 \u0431\u0435\u0440\u0435 \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441 \u0437\u0456 \u0441\u0432\u043E\u0433\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F).`);
       else add("ok", `\u041D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)}${o.cod_kind === "ctrl" ? " \xB7 \u043A\u043E\u043D\u0442\u0440\u043E\u043B\u044C \u043E\u043F\u043B\u0430\u0442\u0438" : o.cod_kind === "redelivery" ? " \xB7 \u0433\u0440\u043E\u0448\u043E\u0432\u0438\u0439 \u043F\u0435\u0440\u0435\u043A\u0430\u0437" : o.cod_kind === "prom" ? " \xB7 \u043E\u043F\u043B\u0430\u0442\u0430 \u043F\u0440\u0438 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u0456 (Prom)" : ""}`);
     } else if (cls === "prepay" || cls === "bank") {
       if (o.cod > 0) add("bad", o.cod_kind === "prom" ? `\u041E\u043F\u043B\u0430\u0442\u0430 \xAB${rule.name}\xBB, \u0430 \u0432 Prom \u2014 \xAB${o.mp_pay_name || "\u043E\u043F\u043B\u0430\u0442\u0430 \u043F\u0440\u0438 \u043E\u0442\u0440\u0438\u043C\u0430\u043D\u043D\u0456"}\xBB (\u043D\u0430\u043B\u043E\u0436\u043A\u0430 ${fmt(o.cod)}).` : `\u041E\u043F\u043B\u0430\u0442\u0430 \xAB${rule.name}\xBB, \u0430 \u0432 \u0422\u0422\u041D \u0441\u0442\u043E\u0457\u0442\u044C ${o.cod_kind === "ctrl" ? "\u043A\u043E\u043D\u0442\u0440\u043E\u043B\u044C \u043E\u043F\u043B\u0430\u0442\u0438" : "\u043D\u0430\u043B\u043E\u0436\u043A\u0430"} ${fmt(o.cod)}.`);
@@ -21584,7 +21584,11 @@ function evaluate(o, ctx) {
     const how = r.byRef ? " (\u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u0438\u0439 \u0443 LP-CRM)" : r.bySum ? " (\u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u043B\u0438\u0448\u0435 \u0437\u0430 \u0441\u0443\u043C\u043E\u044E \u2014 \u043C\u043E\u0436\u043B\u0438\u0432\u043E, \u0441\u0442\u0432\u043E\u0440\u0435\u043D\u043E \u0432\u0440\u0443\u0447\u043D\u0443)" : r.byGoods ? "" : " (\u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0437\u0430 \u2116 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F)";
     if (isManualReceipt(r.id) && !r.byRef) add("warn", "\u0427\u0435\u043A \u043F\u0440\u043E\u0431\u0438\u0442\u043E \u0432\u0440\u0443\u0447\u043D\u0443 \u0432 Checkbox (\u043D\u0435 \u0430\u0432\u0442\u043E\u043C\u0430\u0442\u0438\u0447\u043D\u043E \u0437 LP-CRM) \u2014 \u043F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0441\u0443\u043C\u0443, \u0424\u041E\u041F \u0456 \u0441\u043F\u043E\u0441\u0456\u0431 \u043E\u043F\u043B\u0430\u0442\u0438.");
     if (!r.byRef && o.webSeen) add("warn", "\u0423 LP-CRM \u0447\u0435\u043A \u0434\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0435 \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u0438\u0439 \u2014 \u0446\u0435\u0439 \u0447\u0435\u043A \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0437\u0430 \u0442\u043E\u0432\u0430\u0440\u043E\u043C \u0456 \u0441\u0443\u043C\u043E\u044E (\u043C\u043E\u0436\u043B\u0438\u0432\u043E, \u043F\u0440\u043E\u0431\u0438\u0442\u043E \u0432\u0440\u0443\u0447\u043D\u0443). \u041F\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435, \u0449\u043E \u0432\u0456\u043D \u0441\u0430\u043C\u0435 \u0432\u0456\u0434 \u0446\u044C\u043E\u0433\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F.");
-    if (!part && !near(r.total, o.total)) add("bad", `\u0427\u0435\u043A \u043D\u0430 ${fmt(r.total)}, \u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0430 ${fmt(o.total)}${how}.`);
+    const payable = cls === "cod" && o.cod > 0 && !part && !near(o.cod, o.total) ? o.cod : null;
+    if (payable != null && !near(r.total, payable)) {
+      add("bad", `\u0427\u0435\u043A \u043D\u0430 ${fmt(r.total)}, \u0430 \u043A\u043B\u0456\u0454\u043D\u0442 \u043F\u043B\u0430\u0442\u0438\u0442\u044C ${fmt(payable)} (\u043D\u0430\u043B\u043E\u0436\u043A\u0430 \u0432 \u0422\u0422\u041D)${near(r.total, o.total) ? " \u2014 \u0447\u0435\u043A \u043F\u0440\u043E\u0431\u0438\u0442\u043E \u043D\u0430 \u0441\u0443\u043C\u0443 \u0437 LP-CRM, \u0430 \u0432\u043E\u043D\u0430 \u043D\u0435 \u0437\u0431\u0456\u0433\u0430\u0454\u0442\u044C\u0441\u044F \u0437 \u0422\u0422\u041D" : ""}${how}.`);
+    } else if (payable != null) add("ok", `\u0427\u0435\u043A ${fmt(r.total)} \xB7 ${fopName(r.fop_id)} \u2014 \u044F\u043A \u043D\u0430\u043B\u043E\u0436\u043A\u0430 (\u0443 LP-CRM \u0441\u0443\u043C\u0430 ${fmt(o.total)})${how}`);
+    else if (!part && !near(r.total, o.total)) add("bad", `\u0427\u0435\u043A \u043D\u0430 ${fmt(r.total)}, \u0430 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u043D\u0430 ${fmt(o.total)}${how}.`);
     else add("ok", `\u0427\u0435\u043A ${fmt(r.total)} \xB7 ${fopName(r.fop_id)}${how}`);
     const labels = (r.pays || []).map((p) => p.label).filter(Boolean);
     if (rule?.cb && labels.length && !labels.some((l) => l.toLowerCase().includes(rule.cb.toLowerCase()))) {
