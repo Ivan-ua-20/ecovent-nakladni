@@ -3,7 +3,7 @@
 
 export const schema = {
   name: 'b2b',
-  version: 47,
+  version: 48,
   tables: [
   `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -419,6 +419,8 @@ export const schema = {
   // supply_id — закупівля, з якої взято товари (порожньо — «без закупівлі»); дані клієнта й ТТН партнера;
   // crm_* — передача в LP-CRM: номер замовлення в CRM (автоматично або вручну), його статус, код, з яким відправили.
   columns: [
+    // Хто сформував (відправив) закупівлю — користувач сайту; у Telegram-групах його відмічають, якщо підключено Telegram.
+    ['b2b_orders', 'author_id', 'INTEGER'],
     // Повернення замовлення клієнта (статус «returned»): ТТН до нас, на кого їде (partner — юрособа партнера, warranty — номер гарантійного відділу), коментар партнера.
     ['b2b_orders', 'return_ttn', "TEXT DEFAULT ''"],
     ['b2b_orders', 'return_to', "TEXT DEFAULT ''"],

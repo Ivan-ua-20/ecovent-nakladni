@@ -204,6 +204,14 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     const g = await groupOf(partnerId);
     return g ? services.notify?.sendText({ chatIds: [g] }, text).catch(() => 0) : 0;
   };
+  // «Сформував(ла)» у повідомленнях про закупівлю: ім'я; якщо підключено Telegram — відмітка (tg://user — сповіщення людині).
+  async function authorLine(userId) {
+    const u = userId ? await db.get(`SELECT name, login, tg_chat_id FROM users WHERE id = ?`, [userId]) : null;
+    if (!u) return '';
+    const name = h(u.name || u.login || '');
+    const chat = String(u.tg_chat_id || '');
+    return `\n👤 Сформував(ла): ${/^\d+$/.test(chat) ? `<a href="tg://user?id=${chat}">${name}</a>` : `<b>${name}</b>`}`;
+  }
   // Самовивіз: хто забирає зі складу — ПІБ, телефон, примітка (авто, номер, коли приїде).
   const parsePickup = (v) => { try { const x = typeof v === 'string' ? JSON.parse(v || 'null') : v; return x?.name ? x : null; } catch { return null; } };
   const pickupTxt = (x) => (x ? [x.name, x.phone ? `+${x.phone}`.replace(/^\+\+/, '+') : '', x.note].filter(Boolean).join(', ') : '');
@@ -421,13 +429,14 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
       return c.json({ id: r.lastId, number: orderNo(r.lastId), total, draft: true });
     }
     const r = await db.run(
-      `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery), terms, payDays],
+      `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days, author_id) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [p.id, e.id, entityText(e), total, String(b.comment || '').trim().slice(0, 1000), userName(c.get('user')), now, now, deliveryOf(b.delivery), terms, payDays, c.get('user')?.id || null],
     );
     if (pk || ship) await db.batch(pkRows(r.lastId));
     await db.batch([...itemRows(r.lastId, items), [`INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
       [r.lastId, now, userName(c.get('user')), `оформлено закупівлю на ${uah(total)}${deliveryOf(b.delivery) === 'pickup' ? ` (самовивіз${pk ? `, забирає: ${pickupTxt(pk)}` : ''})` : ''}: ${itemsTxt(items)}`.slice(0, 2000)]]]);
-    const full = orderText('🆕 Нова закупівля', { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), ship_to: ship ? JSON.stringify(ship) : '', pay_terms: terms, pay_days: payDays, pickup_by: pk ? JSON.stringify(pk) : '' }, p, items);
+    const full = orderText('🆕 Нова закупівля', { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), ship_to: ship ? JSON.stringify(ship) : '', pay_terms: terms, pay_days: payDays, pickup_by: pk ? JSON.stringify(pk) : '' }, p, items)
+      + await authorLine(c.get('user')?.id);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${r.lastId}`)}`);
     await tgGroup(p.id, full);
     await hooks.finRequest?.(r.lastId).catch(() => 0); // запит рахунку в групу «Фінансові питання»
@@ -834,10 +843,11 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
     if (deliveryOf(o.delivery) === 'pickup' && !parsePickup(o.pickup_by)) throw fail(400, 'Самовивіз: спершу вкажіть, хто забирає зі складу («Змінити» або картка «Хто забирає»).');
     const e = await myEntity(p, o.entity_id).catch(() => { throw fail(400, 'Юрособу чернетки видалено — оберіть іншу («Змінити»).'); });
     await checkTerms(p, o.pay_terms === 'postpay' ? 'postpay' : 'prepay', o.total, o.id);
-    const claim = await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity = ?, created_at = ?, updated_at = ? WHERE id = ? AND status = 'draft'`, [entityText(e), nowIso(), nowIso(), o.id]);
+    const claim = await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity = ?, created_at = ?, updated_at = ?, author_id = ? WHERE id = ? AND status = 'draft'`, [entityText(e), nowIso(), nowIso(), c.get('user')?.id || null, o.id]);
     if (!claim.changes) throw fail(409, 'Чернетку вже відправлено.');
     await log(o.id, c.get('user'), `відправлено закупівлю на ${uah(o.total)}: ${itemsTxt(items)}`);
-    const full = orderText('🆕 Нова закупівля', { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery, pay_terms: o.pay_terms, pay_days: o.pay_days, pickup_by: o.pickup_by }, p, items);
+    const full = orderText('🆕 Нова закупівля', { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery, pay_terms: o.pay_terms, pay_days: o.pay_days, pickup_by: o.pickup_by }, p, items)
+      + await authorLine(c.get('user')?.id);
     await tgAdmins(`${full}\n\n${link(c, `b2borders/${o.id}`)}`);
     await tgGroup(p.id, full);
     await hooks.finRequest?.(o.id).catch(() => 0);
@@ -1468,5 +1478,5 @@ export function mountB2bOrders(app, { db, services, myPartner, partnerPrice, onC
 
   // Видалення замовлень і кошик — у edits.js.
 
-  return { parsePickup, pickupTxt, itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, sendFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, linePrice, aggLines, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
+  return { authorLine, parsePickup, pickupTxt, itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, sendFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, linePrice, aggLines, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah, h };
 }

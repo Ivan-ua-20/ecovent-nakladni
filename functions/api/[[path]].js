@@ -7143,6 +7143,14 @@ function mountB2bOrders(app, { db, services, myPartner, partnerPrice: partnerPri
     const g = await groupOf(partnerId);
     return g ? services.notify?.sendText({ chatIds: [g] }, text).catch(() => 0) : 0;
   };
+  async function authorLine(userId) {
+    const u = userId ? await db.get(`SELECT name, login, tg_chat_id FROM users WHERE id = ?`, [userId]) : null;
+    if (!u) return "";
+    const name = h3(u.name || u.login || "");
+    const chat = String(u.tg_chat_id || "");
+    return `
+\u{1F464} \u0421\u0444\u043E\u0440\u043C\u0443\u0432\u0430\u0432(\u043B\u0430): ${/^\d+$/.test(chat) ? `<a href="tg://user?id=${chat}">${name}</a>` : `<b>${name}</b>`}`;
+  }
   const parsePickup = (v) => {
     try {
       const x = typeof v === "string" ? JSON.parse(v || "null") : v;
@@ -7362,15 +7370,15 @@ ${e.email}` : ""}`;
       return c.json({ id: r3.lastId, number: orderNo(r3.lastId), total, draft: true });
     }
     const r = await db.run(
-      `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [p.id, e.id, entityText(e), total, String(b.comment || "").trim().slice(0, 1e3), userName2(c.get("user")), now, now, deliveryOf(b.delivery), terms, payDays]
+      `INSERT INTO b2b_orders (partner_id, kind, status, entity_id, entity, total, comment, created_by, created_at, updated_at, delivery, pay_terms, pay_days, author_id) VALUES (?, 'supply', 'invoice_wait', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [p.id, e.id, entityText(e), total, String(b.comment || "").trim().slice(0, 1e3), userName2(c.get("user")), now, now, deliveryOf(b.delivery), terms, payDays, c.get("user")?.id || null]
     );
     if (pk || ship) await db.batch(pkRows(r.lastId));
     await db.batch([...itemRows(r.lastId, items), [
       `INSERT INTO b2b_order_log (order_id, at, user_name, action) VALUES (?, ?, ?, ?)`,
       [r.lastId, now, userName2(c.get("user")), `\u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah3(total)}${deliveryOf(b.delivery) === "pickup" ? ` (\u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437${pk ? `, \u0437\u0430\u0431\u0438\u0440\u0430\u0454: ${pickupTxt(pk)}` : ""})` : ""}: ${itemsTxt(items)}`.slice(0, 2e3)]
     ]]);
-    const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), ship_to: ship ? JSON.stringify(ship) : "", pay_terms: terms, pay_days: payDays, pickup_by: pk ? JSON.stringify(pk) : "" }, p, items);
+    const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: r.lastId, entity: entityText(e), total, comment: b.comment, delivery: deliveryOf(b.delivery), ship_to: ship ? JSON.stringify(ship) : "", pay_terms: terms, pay_days: payDays, pickup_by: pk ? JSON.stringify(pk) : "" }, p, items) + await authorLine(c.get("user")?.id);
     await tgAdmins(`${full}
 
 ${link(c, `b2borders/${r.lastId}`)}`);
@@ -7836,10 +7844,10 @@ ${link(c, `b2borders/${o.id}`)}`);
       throw fail(400, "\u042E\u0440\u043E\u0441\u043E\u0431\u0443 \u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438 \u0432\u0438\u0434\u0430\u043B\u0435\u043D\u043E \u2014 \u043E\u0431\u0435\u0440\u0456\u0442\u044C \u0456\u043D\u0448\u0443 (\xAB\u0417\u043C\u0456\u043D\u0438\u0442\u0438\xBB).");
     });
     await checkTerms(p, o.pay_terms === "postpay" ? "postpay" : "prepay", o.total, o.id);
-    const claim = await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity = ?, created_at = ?, updated_at = ? WHERE id = ? AND status = 'draft'`, [entityText(e), nowIso(), nowIso(), o.id]);
+    const claim = await db.run(`UPDATE b2b_orders SET status = 'invoice_wait', entity = ?, created_at = ?, updated_at = ?, author_id = ? WHERE id = ? AND status = 'draft'`, [entityText(e), nowIso(), nowIso(), c.get("user")?.id || null, o.id]);
     if (!claim.changes) throw fail(409, "\u0427\u0435\u0440\u043D\u0435\u0442\u043A\u0443 \u0432\u0436\u0435 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E.");
     await log(o.id, c.get("user"), `\u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u043D\u0430 ${uah3(o.total)}: ${itemsTxt(items)}`);
-    const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery, pay_terms: o.pay_terms, pay_days: o.pay_days, pickup_by: o.pickup_by }, p, items);
+    const full = orderText("\u{1F195} \u041D\u043E\u0432\u0430 \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F", { id: o.id, entity: entityText(e), total: o.total, comment: o.comment, delivery: o.delivery, pay_terms: o.pay_terms, pay_days: o.pay_days, pickup_by: o.pickup_by }, p, items) + await authorLine(c.get("user")?.id);
     await tgAdmins(`${full}
 
 ${link(c, `b2borders/${o.id}`)}`);
@@ -8509,7 +8517,7 @@ ${link(c, `porders/${o.id}`)}`);
     if (!f) throw fail(404, "\u0424\u0430\u0439\u043B \u043D\u0435 \u0437\u043D\u0430\u0439\u0434\u0435\u043D\u043E (\u0437\u0431\u0435\u0440\u0456\u0433\u0430\u044E\u0442\u044C\u0441\u044F 30 \u0434\u043D\u0456\u0432).");
     return sendFile(f);
   });
-  return { parsePickup, pickupTxt, itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, sendFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, linePrice, aggLines, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h3 };
+  return { authorLine, parsePickup, pickupTxt, itemsTxt, itemsDiff, WHOLE, parseShipTo, crmOrderInfo, entityText, myEntity, orderText, deliveryOf, DELIVERY, debtOf, postpayInfo, overdueDays, labelInfo, labelDup, dupText, getOpen, rebuildOpen, unpaidTotal, limitsOf, applyNumbers, storeFile, sendFile, deleteFile, groupOf, FILE_KIND, ORDER_STATUS, priceItems, totalOf, itemRows, orderOf, orderDetail, publicOrder, supplyLeft, linePrice, aggLines, saveFile, log, tgAdmins, tgPartner, tgGroup, link, uah: uah3, h: h3 };
 }
 
 // src/modules/b2b/crm-tone.js
@@ -10799,7 +10807,7 @@ ${[...checks, ...itemLines.slice(0, 20), ...more].join("\n")}${!kind ? "\n\n<b>\
 ${what.slice(0, 25).map((x) => `\u2022 ${h5(x)}`).join("\n")}${what.length > 25 ? `
 \u2026\u0456 \u0449\u0435 ${what.length - 25}` : ""}` : "";
     return `${head}${whatTxt}
-\u041F\u0430\u0440\u0442\u043D\u0435\u0440: \xAB${h5(o.partner)}\xBB
+\u041F\u0430\u0440\u0442\u043D\u0435\u0440: \xAB${h5(o.partner)}\xBB${await orders.authorLine(o.author_id)}
 
 <b>\u0420\u0430\u0445\u0443\u043D\u043E\u043A \u043D\u0430:</b>
 ${h5(o.entity)}
@@ -23732,7 +23740,7 @@ var schema10 = {
 // src/modules/b2b/schema.js
 var schema11 = {
   name: "b2b",
-  version: 47,
+  version: 48,
   tables: [
     `CREATE TABLE IF NOT EXISTS b2b_partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24148,6 +24156,8 @@ var schema11 = {
   // supply_id — закупівля, з якої взято товари (порожньо — «без закупівлі»); дані клієнта й ТТН партнера;
   // crm_* — передача в LP-CRM: номер замовлення в CRM (автоматично або вручну), його статус, код, з яким відправили.
   columns: [
+    // Хто сформував (відправив) закупівлю — користувач сайту; у Telegram-групах його відмічають, якщо підключено Telegram.
+    ["b2b_orders", "author_id", "INTEGER"],
     // Повернення замовлення клієнта (статус «returned»): ТТН до нас, на кого їде (partner — юрособа партнера, warranty — номер гарантійного відділу), коментар партнера.
     ["b2b_orders", "return_ttn", "TEXT DEFAULT ''"],
     ["b2b_orders", "return_to", "TEXT DEFAULT ''"],
