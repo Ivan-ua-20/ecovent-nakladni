@@ -9678,6 +9678,32 @@ ${link(c, `porders/${s3.id}`)}`);
     }
     return c.json({ ok: true, crm_id: crmId, code, paid: pay.paid });
   });
+  app.put("/api/b2b/orders/:id/crm-link", async (c) => {
+    need(c, "b2b.admin");
+    const s3 = await orderOf(c.req.param("id"));
+    if (s3.kind !== "supply" || !["warehouse", "pickup"].includes(s3.delivery)) throw fail(400, "\u041F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u0442\u0438 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM \u043C\u043E\u0436\u043D\u0430 \u043B\u0438\u0448\u0435 \u0434\u043E \u0437\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u0456 \xAB\u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u0430\xBB \u0430\u0431\u043E \xAB\u0441\u0430\u043C\u043E\u0432\u0438\u0432\u0456\u0437\xBB.");
+    if (["cancelled", "draft", "open", "confirm"].includes(s3.status)) throw fail(400, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E \u0441\u043A\u0430\u0441\u043E\u0432\u0430\u043D\u043E, \u0449\u0435 \u043D\u0435 \u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u043E \u0430\u0431\u043E \u043D\u0435 \u043F\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043D\u043E \u043F\u0430\u0440\u0442\u043D\u0435\u0440\u043E\u043C.");
+    if (String(s3.crm_sent_at || "").startsWith("sending:")) throw fail(409, "\u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044F \u0441\u0430\u043C\u0435 \u043D\u0430\u0434\u0441\u0438\u043B\u0430\u0454\u0442\u044C\u0441\u044F \u0432 LP-CRM \u2014 \u043E\u043D\u043E\u0432\u0456\u0442\u044C \u0441\u0442\u043E\u0440\u0456\u043D\u043A\u0443 \u0437\u0430 \u0445\u0432\u0438\u043B\u0438\u043D\u0443.");
+    const val = String((await c.req.json().catch(() => ({}))).crm_id ?? "").replace(/\s/g, "");
+    const isCode = CODE_RE.test(val);
+    if (val && !isCode && !ID_RE.test(val)) throw fail(400, "\u041D\u043E\u043C\u0435\u0440 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM \u2014 \u043B\u0438\u0448\u0435 \u0446\u0438\u0444\u0440\u0438.");
+    if (val) {
+      const dup = await db.get(`SELECT id FROM b2b_orders WHERE id != ? AND (crm_id = ? OR crm_ext = ?)`, [s3.id, val, val]);
+      if (dup) throw fail(400, `\u0426\u0435 \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM \u0443\u0436\u0435 \u043F\u0440\u0438\u0432\u2019\u044F\u0437\u0430\u043D\u0435 \u0434\u043E ${orderNo(dup.id)}.`);
+    }
+    const was = s3.crm_id || s3.crm_ext;
+    await db.run(
+      `UPDATE b2b_orders SET crm_id = ?, crm_ext = ?, crm_sent_at = ?, crm_status = ?, crm_checked_at = '', updated_at = ? WHERE id = ?`,
+      [isCode ? "" : val, isCode ? val : "", val ? nowIso() : "", val ? "\u041F\u0435\u0440\u0435\u0434\u0430\u043D\u043E" : "", nowIso(), s3.id]
+    );
+    await log(s3.id, c.get("user"), val ? `${was && was !== val ? `\u0437\u0430\u043C\u0456\u043D\u0435\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM (\u0431\u0443\u043B\u043E ${was}) \u043D\u0430` : "\u043F\u0440\u0438\u0432'\u044F\u0437\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM"} ${isCode ? `\u043A\u043E\u0434 ${val}` : `\u2116 ${val}`}` : `\u0432\u0456\u0434\u0432\u2019\u044F\u0437\u0430\u043D\u043E \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F LP-CRM${was ? ` ${was}` : ""}`);
+    if (val && !was) {
+      await tgPartner(s3.partner_id, s3.delivery === "pickup" ? `\u{1F4E6} \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(s3.id)} \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u043D\u0430 \u0441\u043A\u043B\u0430\u0434 \u2014 \u0433\u043E\u0442\u0443\u0454\u043C\u043E \u0434\u043E \u0441\u0430\u043C\u043E\u0432\u0438\u0432\u043E\u0437\u0443${isCode ? "" : ` (\u2116 ${val})`}. \u041F\u0435\u0440\u0435\u0434 \u043F\u0440\u0438\u0457\u0437\u0434\u043E\u043C \u0443\u0437\u0433\u043E\u0434\u044C\u0442\u0435 \u0447\u0430\u0441 \u0456\u0437 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u043E\u043C.
+${link(c, `porders/${s3.id}`)}` : `\u{1F69A} \u0417\u0430\u043A\u0443\u043F\u0456\u0432\u043B\u044E ${orderNo(s3.id)} \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u043D\u0430 \u0432\u0456\u0434\u043F\u0440\u0430\u0432\u043A\u0443 \u043D\u0430 \u0432\u0430\u0448 \u0441\u043A\u043B\u0430\u0434${isCode ? "" : ` (\u2116 ${val})`}.
+${link(c, `porders/${s3.id}`)}`);
+    }
+    return c.json({ ok: true });
+  });
   app.put("/api/b2b/clients/:id", async (c) => {
     need(c, "b2b.admin");
     const o = await clientOrder(c);
