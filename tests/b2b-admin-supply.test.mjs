@@ -108,6 +108,24 @@ assert.ok(decodeURIComponent(add.products.replace(/\+/g, ' ')).includes('s:5:"pr
 assert.match(await errOf(() => req('POST', `/api/b2b/orders/${o.id}/crm`)), /Уже в LP-CRM/);
 assert.equal(await status(() => req('POST', `/api/b2b/orders/${o.id}/delivery`, { delivery: 'np' })), 400, 'після передачі в CRM спосіб отримання не змінюється');
 
+// ---------- 5а. Прив'язати замовлення, створене в LP-CRM вручну (без нового в LP-CRM) ----------
+crm.length = 0;
+await req('PUT', `/api/b2b/orders/${o.id}/crm-link`, { crm_id: '' });
+let so = (await req('GET', `/api/b2b/orders/${o.id}`)).order;
+assert.deepEqual([so.crm_id, so.crm_ext], ['', ''], 'відв’язано');
+assert.match(await errOf(() => req('PUT', `/api/b2b/orders/${o.id}/crm-link`, { crm_id: 'abc' })), /лише цифри/);
+tg.length = 0;
+await req('PUT', `/api/b2b/orders/${o.id}/crm-link`, { crm_id: ' 115 197 ' });
+so = (await req('GET', `/api/b2b/orders/${o.id}`));
+assert.deepEqual([so.order.crm_id, so.order.crm_status], ['115197', 'Передано']);
+assert.ok(so.history.some((x) => /прив'язано замовлення LP-CRM № 115197/.test(x.action)), 'в історії');
+assert.ok(tg.some((m) => /передано на відправку на ваш склад \(№ 115197\)/.test(m.text)), 'партнеру — сповіщення');
+assert.equal(crm.filter((x) => x.method === 'addNewOrder').length, 0, 'нового замовлення в LP-CRM не створено');
+assert.match(await errOf(() => req('POST', `/api/b2b/orders/${o.id}/crm`)), /Уже в LP-CRM/);
+assert.match(await errOf(() => req('PUT', `/api/b2b/orders/${o.id}/crm-link`, { crm_id: '115197' }, A)), /./, 'партнер — ні');
+await req('PUT', `/api/b2b/orders/${o.id}/crm-link`, { crm_id: '99001' });
+assert.ok((await req('GET', `/api/b2b/orders/${o.id}`)).history.some((x) => /замінено замовлення LP-CRM \(було 115197\) на № 99001/.test(x.action)));
+
 // ---------- 5б. Самовивіз: після рахунку — одне замовлення в LP-CRM, склад готує товар до приїзду партнера ----------
 // самовивіз без «хто забирає» не оформлюється; вписаний вручну з «зберегти» — у «Кур'єри»
 assert.match(await errOf(() => req('POST', '/api/b2b/p/orders', { entity_id: ea.id, delivery: 'pickup', items: [{ product_id: 12, qty: 2 }] }, A)), /вкажіть, хто забирає/);
@@ -132,6 +150,7 @@ await db.run(`UPDATE b2b_partners SET phone = '+38 (067) 111-22-33' WHERE id = ?
 await db.run(`INSERT INTO settings (key, value) VALUES ('b2b_crm_pickup_delivery', '5') ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
 crm.length = 0;
 tg.length = 0;
+assert.match(await errOf(() => req('PUT', `/api/b2b/orders/${pk.id}/crm-link`, { crm_id: '99001' })), /уже прив’язане до B2B-/, 'те саме замовлення CRM — не у двох закупівлях');
 await req('POST', `/api/b2b/orders/${pk.id}/crm`);
 const pAdd = crm.find((x) => x.method === 'addNewOrder').p;
 assert.equal(pAdd.delivery, '5', 'вид доставки «Самовивіз»');

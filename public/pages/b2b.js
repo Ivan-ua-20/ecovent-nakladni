@@ -955,16 +955,16 @@ export function createB2bPages(ctx = {}) {
           <div class="card">${closed || ro() ? itemsTable(items, { rrp: true }) : priceTable(items, o.status === 'open' ? 'Нові ціни перейдуть і в замовлення клієнтів цієї закупівлі.' : o.status === 'draft' ? 'Ціни в замовленнях клієнтів цієї чернетки теж оновляться.' : o.invoice_no ? `Рахунок № ${esc(o.invoice_no)} доведеться переробити.` : '')}</div>
           ${o.comment ? `<div class="card small"><b>Коментар:</b> ${esc(o.comment)}</div>` : ''}
           ${o.delivery === 'warehouse' && !closed ? `<div class="card form-stack"><h3>🏬 Відправка на склад партнера</h3>
-            ${o.crm_id || o.crm_ext ? `<div>Передано в LP-CRM${o.crm_id ? `: № <b>${esc(o.crm_id)}</b>` : ''}${o.crm_sent_at && !String(o.crm_sent_at).startsWith('sending') ? ` · ${esc(fmtDateTime(o.crm_sent_at))}` : ''}</div>`
+            ${o.crm_id || o.crm_ext ? `<div>Передано в LP-CRM${o.crm_id ? `: № <b>${esc(o.crm_id)}</b>` : ` (код ${esc(o.crm_ext)})`}${o.crm_sent_at && !String(o.crm_sent_at).startsWith('sending') ? ` · ${esc(fmtDateTime(o.crm_sent_at))}` : ''}</div>${ro() ? '' : '<div class="btn-row"><button class="btn sm" id="oCrmLink">Змінити номер LP-CRM</button></div>'}`
               : o.status === 'confirm' ? '<div class="small muted">Передати в LP-CRM можна після підтвердження партнером.</div>'
-                : `<div class="small">Уся закупівля піде одним замовленням у LP-CRM («Нові»), отримувач — склад партнера, ціни — партнера.</div><div class="btn-row"><button class="btn primary" id="oCrm">🚚 Додати в LP-CRM на відправку</button></div>`}
+                : `<div class="small">Уся закупівля піде одним замовленням у LP-CRM («Нові»), отримувач — склад партнера, ціни — партнера. Якщо замовлення в LP-CRM уже створено вручну — прив’яжіть його номер.</div><div class="btn-row"><button class="btn primary" id="oCrm">🚚 Додати в LP-CRM на відправку</button><button class="btn" id="oCrmLink">🔗 Прив’язати з LP-CRM</button></div>`}
           </div>` : ''}
           ${o.delivery === 'pickup' && !closed ? `<div class="card form-stack"><h3>🚗 Самовивіз зі складу</h3>
-            ${o.crm_id || o.crm_ext ? `<div>Передано на склад (LP-CRM)${o.crm_id ? `: № <b>${esc(o.crm_id)}</b>` : ''}${o.crm_sent_at && !String(o.crm_sent_at).startsWith('sending') ? ` · ${esc(fmtDateTime(o.crm_sent_at))}` : ''}</div><div class="small muted">Склад готує товар — партнер приїде забрати.</div>`
+            ${o.crm_id || o.crm_ext ? `<div>Передано на склад (LP-CRM)${o.crm_id ? `: № <b>${esc(o.crm_id)}</b>` : ` (код ${esc(o.crm_ext)})`}${o.crm_sent_at && !String(o.crm_sent_at).startsWith('sending') ? ` · ${esc(fmtDateTime(o.crm_sent_at))}` : ''}</div><div class="small muted">Склад готує товар — партнер приїде забрати.</div>${ro() ? '' : '<div class="btn-row"><button class="btn sm" id="oCrmLink">Змінити номер LP-CRM</button></div>'}`
               : !o.invoice_no ? '<div class="small muted">Після рахунку закупівлю можна передати в LP-CRM, щоб склад підготував товар до приїзду партнера.</div>'
                 : `<div class="small">Уся закупівля піде одним замовленням у LP-CRM («Нові») — склад підготує товар, партнер приїде забрати. Отримувач — хто забирає (або партнер, якщо ще не вказано), ціни — партнера, у коментарі — «САМОВИВІЗ», рахунок, хто забирає і стан оплати.</div>
                   ${o.pickup_by ? '' : '<div class="alert warn small">Партнер ще не вказав, хто забирає, — можна передати й так (у коментарі буде «уточніть у партнера») або вписати нижче.</div>'}
-                  <div class="btn-row"><button class="btn primary" id="oCrm">📦 Передати на склад (LP-CRM)</button></div>`}
+                  <div class="btn-row"><button class="btn primary" id="oCrm">📦 Передати на склад (LP-CRM)</button><button class="btn" id="oCrmLink">🔗 Прив’язати з LP-CRM</button></div>`}
           </div>
           ${pickupCard(o, { editable: !ro(), couriers: pkCouriers })}` : ''}
           <div class="card form-stack">
@@ -1135,6 +1135,20 @@ export function createB2bPages(ctx = {}) {
       b.disabled = true;
       try { const r = await api('POST', `/api/b2b/orders/${o.id}/crm`); toast(r.crm_id ? `Додано в LP-CRM: № ${r.crm_id}` : 'Додано в LP-CRM'); viewOrder(o.id); }
       catch (er) { toast(er.message, true); b.disabled = false; }
+    };
+    if ($('#oCrmLink')) $('#oCrmLink').onclick = () => {
+      const cur = o.crm_id || o.crm_ext || '';
+      const m = modal(cur ? `Номер LP-CRM для ${o.number}` : `Прив’язати ${o.number} до замовлення LP-CRM`, `<form class="form-stack" id="oCrmLinkF">
+          <label class="f"><span>Номер замовлення в LP-CRM (або його код)</span><input name="crm" inputmode="numeric" value="${esc(cur)}" placeholder="115197" autocomplete="off"></label>
+          <div class="small muted">Для замовлення, яке вже створили в LP-CRM вручну: нове в LP-CRM не створюється, закупівля просто позначається переданою.${cur ? ' Порожнє поле — відв’язати.' : ' Партнер отримає сповіщення, що закупівлю передано.'}</div></form>`,
+      { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="oCrmLinkGo">Зберегти</button>' });
+      $('#oCrmLinkGo', m.el).onclick = async (ev) => {
+        const v = $('#oCrmLinkF', m.el).crm.value.trim();
+        if (!v && !cur) return toast('Вкажіть номер замовлення LP-CRM.', true);
+        ev.target.disabled = true;
+        try { await api('PUT', `/api/b2b/orders/${o.id}/crm-link`, { crm_id: v }); m.close(); toast(v ? `Прив’язано: LP-CRM № ${v}` : 'Відв’язано від LP-CRM'); viewOrder(o.id); }
+        catch (er) { toast(er.message, true); ev.target.disabled = false; }
+      };
     };
     if ($('#oCheckPay')) $('#oCheckPay').onclick = () => checkPay(o);
     $$('[data-set]').forEach((b) => (b.onclick = async () => {
