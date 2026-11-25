@@ -1132,6 +1132,33 @@ export function mountB2bClients(app, { db, fetchFn, services = {}, myPartner, or
     return c.json({ ok: true, crm_id: crmId, code, paid: pay.paid });
   });
 
+  // Закупівля «на склад партнера» / «самовивіз»: прив'язати замовлення, уже створене в LP-CRM вручну (замість «Додати в LP-CRM»).
+  // Номер (до 10 цифр) або код (11+ цифр); порожньо — відв'язати. Те саме замовлення CRM не може бути у двох закупівлях.
+  app.put('/api/b2b/orders/:id/crm-link', async (c) => {
+    need(c, 'b2b.admin');
+    const s = await orderOf(c.req.param('id'));
+    if (s.kind !== 'supply' || !['warehouse', 'pickup'].includes(s.delivery)) throw fail(400, 'Прив’язати замовлення LP-CRM можна лише до закупівлі «на склад партнера» або «самовивіз».');
+    if (['cancelled', 'draft', 'open', 'confirm'].includes(s.status)) throw fail(400, 'Закупівлю скасовано, ще не оформлено або не підтверджено партнером.');
+    if (String(s.crm_sent_at || '').startsWith('sending:')) throw fail(409, 'Закупівля саме надсилається в LP-CRM — оновіть сторінку за хвилину.');
+    const val = String((await c.req.json().catch(() => ({}))).crm_id ?? '').replace(/\s/g, '');
+    const isCode = CODE_RE.test(val);
+    if (val && !isCode && !ID_RE.test(val)) throw fail(400, 'Номер замовлення LP-CRM — лише цифри.');
+    if (val) {
+      const dup = await db.get(`SELECT id FROM b2b_orders WHERE id != ? AND (crm_id = ? OR crm_ext = ?)`, [s.id, val, val]);
+      if (dup) throw fail(400, `Це замовлення LP-CRM уже прив’язане до ${orderNo(dup.id)}.`);
+    }
+    const was = s.crm_id || s.crm_ext;
+    await db.run(`UPDATE b2b_orders SET crm_id = ?, crm_ext = ?, crm_sent_at = ?, crm_status = ?, crm_checked_at = '', updated_at = ? WHERE id = ?`,
+      [isCode ? '' : val, isCode ? val : '', val ? nowIso() : '', val ? 'Передано' : '', nowIso(), s.id]);
+    await log(s.id, c.get('user'), val ? `${was && was !== val ? `замінено замовлення LP-CRM (було ${was}) на` : 'прив\'язано замовлення LP-CRM'} ${isCode ? `код ${val}` : `№ ${val}`}` : `відв’язано замовлення LP-CRM${was ? ` ${was}` : ''}`);
+    if (val && !was) {
+      await tgPartner(s.partner_id, s.delivery === 'pickup'
+        ? `📦 Закупівлю ${orderNo(s.id)} передано на склад — готуємо до самовивозу${isCode ? '' : ` (№ ${val})`}. Перед приїздом узгодьте час із менеджером.\n${link(c, `porders/${s.id}`)}`
+        : `🚚 Закупівлю ${orderNo(s.id)} передано на відправку на ваш склад${isCode ? '' : ` (№ ${val})`}.\n${link(c, `porders/${s.id}`)}`);
+    }
+    return c.json({ ok: true });
+  });
+
   // Ручне прив'язування номера замовлення з LP-CRM (якщо створили в CRM самі або номер не повернувся).
   app.put('/api/b2b/clients/:id', async (c) => {
     need(c, 'b2b.admin');
