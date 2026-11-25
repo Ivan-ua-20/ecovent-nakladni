@@ -73,6 +73,7 @@ assert.equal((await req('GET', `/api/b2b/partners/${pa.id}`)).partner.tg_group, 
 
 // ---------- 2. Нова закупівля — детально адмінам і в групу ----------
 await db.run(`UPDATE users SET tg_chat_id = '1' WHERE login = 'owner'`);
+await db.run(`UPDATE users SET tg_chat_id = '555', name = 'Марина' WHERE login = 'pa'`);
 msgs.length = 0;
 const o = await req('POST', '/api/b2b/p/orders', { entity_id: ea.id, items: [{ product_id: 11, qty: 2 }, { product_id: 12, qty: 1 }], comment: 'Терміново' }, A);
 const toGroup = msgs.find((m) => m.chat_id === '-100777');
@@ -83,6 +84,8 @@ assert.match(toGroup.text, /Рахунок і накладна на:<\/b>\nТО�
 assert.match(toGroup.text, /Товари:<\/b>\nТовар 11 — 2 шт — 900,00 грн\nТовар 12 — 1 шт — 450,00 грн/);
 assert.match(toGroup.text, /Разом: 2[\s ]250,00 грн/);
 assert.match(toGroup.text, /Коментар: Терміново/);
+assert.match(toGroup.text, /👤 Сформував\(ла\): <a href="tg:\/\/user\?id=555">Марина<\/a>/, 'хто сформував — з відміткою в Telegram');
+assert.match(toAdmin.text, /Сформував\(ла\): <a href="tg:\/\/user\?id=555">Марина/);
 assert.doesNotMatch(toGroup.text, /#\/b2borders/, 'у групі без посилання на адмінку');
 assert.match(toAdmin.text, /#\/b2borders\/\d+/);
 

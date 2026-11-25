@@ -493,7 +493,7 @@ export function mountB2bTgDocs(app, { db, services, orders, hooks }) {
         : `🧾 <b>Потрібен рахунок · ${orderNo(o.id)}</b>${mode === 'changed' ? ' <i>(закупівлю змінено)</i>' : ''}`;
     const what = !done && o.reinvoice ? await changesSince(o) : [];
     const whatTxt = what.length ? `\n\n<b>Що змінилось:</b>\n${what.slice(0, 25).map((x) => `• ${h(x)}`).join('\n')}${what.length > 25 ? `\n…і ще ${what.length - 25}` : ''}` : '';
-    return `${head}${whatTxt}\nПартнер: «${h(o.partner)}»\n\n`
+    return `${head}${whatTxt}\nПартнер: «${h(o.partner)}»${await orders.authorLine(o.author_id)}\n\n`
       + `<b>Рахунок на:</b>\n${h(o.entity)}\n${o.delivery === 'pickup' ? '🚗 <b>Самовивіз</b> — партнер забирає всю закупівлю зі складу\n' : ''}\n<b>Товари:</b>\n${lines.join('\n')}\n\n<b>Разом: ${m2(o.total)} грн</b> (з ПДВ)`
       + `${o.comment ? `\n<i>Коментар: ${h(String(o.comment).slice(0, 200))}</i>` : ''}${done ? '' : '\n\n↩️ Надішліть рахунок <b>відповіддю на це повідомлення</b>'}`;
   }

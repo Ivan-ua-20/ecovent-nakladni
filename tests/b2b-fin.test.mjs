@@ -82,6 +82,7 @@ const s1 = await req('POST', '/api/b2b/p/orders', { entity_id: ent.id, items: [{
 const reqMsg = sent((b) => b.chat_id === String(FIN) || b.chat_id === FIN).find((b) => /Потрібен рахунок/.test(b.text));
 assert.ok(reqMsg, 'запит рахунку в групі');
 assert.equal(reqMsg.message_thread_id, undefined, 'у гілку General');
+assert.match(reqMsg.text, /👤 Сформував\(ла\): <b>[^<]+<\/b>/, 'без Telegram — ім’я без відмітки');
 assert.match(reqMsg.text, new RegExp(`Потрібен рахунок · B2B-${s1.id}.*ФОП Рубан Ольга Олександрівна, ІПН 1234567890.*Осушувач Evoair Dryora 12 — 2 шт — 900,00.*Разом: 3[\\s ]600,00 грн`, 's'));
 const reqId = (await db.get(`SELECT fin_req_msg FROM b2b_orders WHERE id = ?`, [s1.id])).fin_req_msg;
 assert.ok(reqId);
