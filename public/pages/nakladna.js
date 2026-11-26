@@ -505,16 +505,22 @@ async function viewHistory() {
       <div class="btn-row">
         <input id="hQ" placeholder="Номер замовлення" style="width:200px">
         <select id="hFop" style="width:220px"><option value="">Усі ФОПи</option>${ctx.boot.fops.map((f) => `<option value="${f.id}">${esc(f.short_name)}</option>`).join('')}</select>
+        <select id="hUser" style="width:200px"><option value="">Усі менеджери</option></select>
       </div>
     </div>
     <div id="hList"></div>`;
   const load = async () => {
-    const qs = new URLSearchParams({ q: $('#hQ').value, fop: $('#hFop').value });
+    const qs = new URLSearchParams({ q: $('#hQ').value, fop: $('#hFop').value, user: $('#hUser').value });
     const rows = await api('GET', `/api/history?${qs}`);
     $('#hList').innerHTML = rows.length
       ? `<div class="small muted" style="margin-bottom:8px">Усі накладні, сформовані за останні 30 днів (${rows.length}) — з будь-яким статусом замовлення в LP-CRM. Відкривається збережена накладна; щоб сформувати з актуальних даних LP-CRM — «Сформувати заново» у вікні.</div>
-        <table class="list"><thead><tr><th>Замовлення</th><th>ФОП (остання версія)</th><th>Сума</th><th>Версій</th><th>Остання зміна</th></tr></thead><tbody>
-        ${rows.map((r) => `<tr class="click" data-o="${esc(r.order_id)}"><td><b>№${esc(r.order_id)}</b></td><td>${esc(r.fop_name || '—')}</td><td>${money(r.total)} грн</td><td>${r.versions}</td><td>${esc(fmtDateTime(r.last_at))}</td></tr>`).join('')}
+        <table class="list"><thead><tr><th>Замовлення</th><th>ФОП (остання версія)</th><th>Сума</th><th>Сформував(ла)</th><th>Версій</th><th>Остання зміна</th></tr></thead><tbody>
+        ${rows.map((r) => {
+          const others = String(r.users || '').split(',').filter((x) => x && x !== r.first_user);
+          return `<tr class="click" data-o="${esc(r.order_id)}"><td><b>№${esc(r.order_id)}</b></td><td>${esc(r.fop_name || '—')}</td><td>${money(r.total)} грн</td>
+            <td>${r.first_user ? `<b>${esc(r.first_user)}</b>` : '<span class="muted">—</span>'}${others.length ? `<div class="small muted">також: ${esc(others.join(', '))}</div>` : ''}</td>
+            <td>${r.versions}</td><td>${esc(fmtDateTime(r.last_at))}</td></tr>`;
+        }).join('')}
         </tbody></table>`
       : ($('#hQ').value || $('#hFop').value
         ? '<div class="card empty"><div class="big">Нічого не знайдено</div>Спробуйте інший номер або інший ФОП.<div class="btn-row" style="justify-content:center;margin-top:12px"><button class="btn" id="hClear">Скинути фільтри</button></div></div>'
@@ -525,6 +531,8 @@ async function viewHistory() {
   let t;
   $('#hQ').oninput = () => { clearTimeout(t); t = setTimeout(load, 250); };
   $('#hFop').onchange = load;
+  $('#hUser').onchange = load;
+  api('GET', '/api/history/users').then((us) => { $('#hUser').insertAdjacentHTML('beforeend', us.map((u) => `<option>${esc(u)}</option>`).join('')); }).catch(() => {});
   await load();
 }
 
