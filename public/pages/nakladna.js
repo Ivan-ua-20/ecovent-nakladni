@@ -78,6 +78,12 @@ async function loadInvoice(orderId, fresh = false, wide = false) {
     area.innerHTML = `<div class="alert bad"><b>Не вдалося отримати замовлення.</b><br>${esc(e.message)}
       ${ext ? `<div class="btn-row" style="margin-top:10px"><button class="btn primary" id="invWide">Перевірити за ${esc(e.data.extendDays)} днів</button></div>` : ''}</div>`;
     if (ext) $('#invWide').onclick = () => loadInvoice(orderId, false, true);
+    // Накладну вже формували (статус у LP-CRM з того часу змінився) — запропонувати збережену.
+    const saved = await api('GET', `/api/invoice/${encodeURIComponent(orderId)}/versions`).catch(() => []);
+    if (saved.length && $('#invArea .alert')) {
+      $('#invArea .alert').insertAdjacentHTML('beforeend', `<div class="btn-row" style="margin-top:10px"><button class="btn" id="invSaved">📄 Відкрити збережену накладну (${esc(fmtDateTime(saved[0].created_at))})</button></div>`);
+      $('#invSaved').onclick = () => openSaved(orderId);
+    }
   } finally {
     searching = false;
   }
@@ -409,12 +415,22 @@ async function loadVersions(id) {
   $$('[data-ver]', box).forEach((b) => (b.onclick = () => openVersion(b.dataset.ver)));
 }
 
-async function openVersion(vid) {
+// Збережена накладна з історії (остання версія) — без пошуку серед «Прийнято»: статус у LP-CRM міг уже змінитися.
+async function openSaved(orderId) {
+  const rows = await api('GET', `/api/invoice/${encodeURIComponent(orderId)}/versions`).catch(() => []);
+  if (!rows.length) { toast('Збережених версій цієї накладної немає.', true); return; }
+  return openVersion(rows[0].id, { orderId, all: rows });
+}
+
+async function openVersion(vid, { orderId = '', all = null } = {}) {
   const v = await api('GET', `/api/versions/${vid}`);
-  const m = modal(`Версія від ${fmtDateTime(v.created_at)} — ${v.reason}`,
-    `<div class="small muted" style="margin-bottom:10px">ФОП: ${esc(v.fop_name || '—')} · Сума: ${money(v.total)} грн</div>
+  const m = modal(orderId ? `Накладна №${orderId} — збережена ${fmtDateTime(v.created_at)}` : `Версія від ${fmtDateTime(v.created_at)} — ${v.reason}`,
+    `<div class="small muted" style="margin-bottom:10px">ФОП: ${esc(v.fop_name || '—')} · Сума: ${money(v.total)} грн${orderId ? ` · ${esc(v.reason)}` : ''}</div>
+     ${all && all.length > 1 ? `<label class="f" style="margin-bottom:10px"><span>Версія</span><select id="vPick">${all.map((x) => `<option value="${x.id}" ${String(x.id) === String(vid) ? 'selected' : ''}>${esc(fmtDateTime(x.created_at))} — ${esc(x.reason)} · ${money(x.total)} грн</option>`).join('')}</select></label>` : ''}
      <div style="overflow:auto;background:#eef0ef;padding:16px;border-radius:8px">${renderInvoice(v.data)}</div>`,
-    { wide: true, footer: '<button class="btn" data-close>Закрити</button><button class="btn" id="vWord">Word</button><button class="btn primary" id="vPrint">Друкувати цю версію</button>' });
+    { wide: true, footer: `${orderId ? '<button class="btn" id="vFresh" style="margin-right:auto">Сформувати заново з LP-CRM</button>' : ''}<button class="btn" data-close>Закрити</button><button class="btn" id="vWord">Word</button><button class="btn primary" id="vPrint">Друкувати цю версію</button>` });
+  if ($('#vPick', m.el)) $('#vPick', m.el).onchange = (e) => { m.close(); openVersion(e.target.value, { orderId, all }); };
+  if ($('#vFresh', m.el)) $('#vFresh', m.el).onclick = () => { m.close(); location.hash = `#/invoice/${encodeURIComponent(orderId)}`; };
   $('#vPrint', m.el).onclick = () => printHtml(renderInvoice(v.data));
   $('#vWord', m.el).onclick = () => exportDocx(v.data).catch((e) => toast(e.message, true));
 }
@@ -496,14 +512,15 @@ async function viewHistory() {
     const qs = new URLSearchParams({ q: $('#hQ').value, fop: $('#hFop').value });
     const rows = await api('GET', `/api/history?${qs}`);
     $('#hList').innerHTML = rows.length
-      ? `<table class="list"><thead><tr><th>Замовлення</th><th>ФОП (остання версія)</th><th>Сума</th><th>Версій</th><th>Остання зміна</th></tr></thead><tbody>
+      ? `<div class="small muted" style="margin-bottom:8px">Усі накладні, сформовані за останні 30 днів (${rows.length}) — з будь-яким статусом замовлення в LP-CRM. Відкривається збережена накладна; щоб сформувати з актуальних даних LP-CRM — «Сформувати заново» у вікні.</div>
+        <table class="list"><thead><tr><th>Замовлення</th><th>ФОП (остання версія)</th><th>Сума</th><th>Версій</th><th>Остання зміна</th></tr></thead><tbody>
         ${rows.map((r) => `<tr class="click" data-o="${esc(r.order_id)}"><td><b>№${esc(r.order_id)}</b></td><td>${esc(r.fop_name || '—')}</td><td>${money(r.total)} грн</td><td>${r.versions}</td><td>${esc(fmtDateTime(r.last_at))}</td></tr>`).join('')}
         </tbody></table>`
       : ($('#hQ').value || $('#hFop').value
         ? '<div class="card empty"><div class="big">Нічого не знайдено</div>Спробуйте інший номер або інший ФОП.<div class="btn-row" style="justify-content:center;margin-top:12px"><button class="btn" id="hClear">Скинути фільтри</button></div></div>'
         : '<div class="card empty"><div class="big">Ще немає сформованих накладних</div>Тут з’являться накладні, які ви відкриєте за номером замовлення.<div class="btn-row" style="justify-content:center;margin-top:12px"><a class="btn primary" href="#/invoice">Сформувати накладну</a></div></div>');
     $('#hClear') && ($('#hClear').onclick = () => { $('#hQ').value = ''; $('#hFop').value = ''; $('#hQ').dispatchEvent(new Event('input', { bubbles: true })); $('#hFop').dispatchEvent(new Event('change', { bubbles: true })); });
-    $$('[data-o]').forEach((tr) => (tr.onclick = () => (location.hash = `#/invoice/${encodeURIComponent(tr.dataset.o)}`)));
+    $$('[data-o]').forEach((tr) => (tr.onclick = () => openSaved(tr.dataset.o)));
   };
   let t;
   $('#hQ').oninput = () => { clearTimeout(t); t = setTimeout(load, 250); };

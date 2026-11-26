@@ -31,8 +31,10 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {}, 
   const settings = () => loadSettings(db);
   shared.receiptCache ||= new Map();
   const receiptCache = shared.receiptCache;
-  // Строк зберігання версій накладних — «retention_days» з налаштувань.
-  onCleanup((border) => db.run(`DELETE FROM versions WHERE created_at < ?`, [border]));
+  // Строк зберігання версій накладних — «retention_days» з налаштувань, але не менше 30 днів (історія накладних за місяць).
+  const HISTORY_DAYS = 30;
+  const historyBorder = () => new Date(Date.now() - HISTORY_DAYS * 86400000).toISOString();
+  onCleanup((border) => db.run(`DELETE FROM versions WHERE created_at < ?`, [border < historyBorder() ? border : historyBorder()]));
   // Індекс пошуку замовлень: тримаємо лише період пошуку з налаштувань (+7 днів запасу).
   onCleanup(async () => {
     const days = (Number((await settings()).lpcrm_search_days) || 30) + 7;
@@ -448,16 +450,17 @@ export function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {}, 
   app.get('/api/history', async (c) => {
     const q = (c.req.query('q') || '').trim();
     const fop = (c.req.query('fop') || '').trim();
+    // Усі накладні, сформовані за 30 днів, незалежно від того, який статус замовлення в LP-CRM зараз.
     const where = [];
-    const params = [];
+    const params = [historyBorder()];
     if (q) { where.push('order_id LIKE ?'); params.push(`%${q}%`); }
     if (fop) { where.push('fop_id = ?'); params.push(fop); }
     const rows = await db.all(
       `SELECT v.order_id, v.id AS last_id, v.created_at AS last_at, v.fop_name, v.total,
         (SELECT COUNT(*) FROM versions c WHERE c.order_id = v.order_id) AS versions
        FROM versions v
-       WHERE v.id IN (SELECT MAX(id) FROM versions GROUP BY order_id) ${where.length ? 'AND ' + where.map((w) => 'v.' + w).join(' AND ') : ''}
-       ORDER BY v.id DESC LIMIT 200`,
+       WHERE v.id IN (SELECT MAX(id) FROM versions WHERE created_at >= ? GROUP BY order_id) ${where.length ? 'AND ' + where.map((w) => 'v.' + w).join(' AND ') : ''}
+       ORDER BY v.id DESC LIMIT 3000`,
       params,
     );
     return c.json(rows);

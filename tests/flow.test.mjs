@@ -117,6 +117,11 @@ await get('/api/invoice/777?fresh=1'); // повернули статус — о
 const hist = await get('/api/history');
 assert.equal(hist[0].order_id, '777');
 assert.ok(hist[0].versions >= 4);
+// історія — усі накладні за 30 днів (з будь-яким статусом у LP-CRM); старші — не показуються
+const ago = (d) => new Date(Date.now() - d * 86400000).toISOString();
+await db.run(`INSERT INTO versions (order_id, created_at, reason, total, data_hash, data) VALUES ('555', ?, 'Друк', 100, 'h1', '{}'), ('444', ?, 'Друк', 50, 'h2', '{}')`, [ago(20), ago(40)]);
+const hist30 = (await get('/api/history')).map((r) => r.order_id);
+assert.ok(hist30.includes('555') && !hist30.includes('444'), 'за 30 днів');
 const pub = (await get('/api/bootstrap')).fops.find((f) => f.id === lupu.id);
 assert.equal(pub.checkbox_password, '••••••', 'пароль замасковано');
 // 7. Поле 1: Rozetka(oneday) → ФОП Лупу В.Ф. (вищий пріоритет за відділ)
