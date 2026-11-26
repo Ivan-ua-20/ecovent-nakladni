@@ -3489,15 +3489,26 @@ function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {
       where.push("fop_id = ?");
       params.push(fop);
     }
+    const who = (c.req.query("user") || "").trim();
+    if (who) {
+      where.push("order_id IN (SELECT order_id FROM versions WHERE user_name = ?)");
+      params.push(who);
+    }
     const rows = await db.all(
       `SELECT v.order_id, v.id AS last_id, v.created_at AS last_at, v.fop_name, v.total,
-        (SELECT COUNT(*) FROM versions c WHERE c.order_id = v.order_id) AS versions
+        (SELECT COUNT(*) FROM versions c WHERE c.order_id = v.order_id) AS versions,
+        (SELECT f.user_name FROM versions f WHERE f.order_id = v.order_id ORDER BY f.id LIMIT 1) AS first_user,
+        (SELECT GROUP_CONCAT(DISTINCT u.user_name) FROM versions u WHERE u.order_id = v.order_id AND u.user_name != '') AS users
        FROM versions v
        WHERE v.id IN (SELECT MAX(id) FROM versions WHERE created_at >= ? GROUP BY order_id) ${where.length ? "AND " + where.map((w) => "v." + w).join(" AND ") : ""}
        ORDER BY v.id DESC LIMIT 3000`,
       params
     );
     return c.json(rows);
+  });
+  app.get("/api/history/users", async (c) => {
+    const rows = await db.all(`SELECT DISTINCT user_name FROM versions WHERE created_at >= ? AND user_name != '' ORDER BY user_name`, [historyBorder()]);
+    return c.json(rows.map((r) => r.user_name));
   });
   async function search(q) {
     const s3 = String(q || "").trim();

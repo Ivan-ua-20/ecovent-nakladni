@@ -122,6 +122,12 @@ const ago = (d) => new Date(Date.now() - d * 86400000).toISOString();
 await db.run(`INSERT INTO versions (order_id, created_at, reason, total, data_hash, data) VALUES ('555', ?, 'Друк', 100, 'h1', '{}'), ('444', ?, 'Друк', 50, 'h2', '{}')`, [ago(20), ago(40)]);
 const hist30 = (await get('/api/history')).map((r) => r.order_id);
 assert.ok(hist30.includes('555') && !hist30.includes('444'), 'за 30 днів');
+// хто формував: перший — і решта, хто відкривав або друкував; фільтр за менеджером
+await db.run(`INSERT INTO versions (order_id, created_at, reason, total, data_hash, data, user_name) VALUES ('333', ?, 'Перше відкриття', 10, 'a', '{}', 'Ольга'), ('333', ?, 'Друк', 10, 'b', '{}', 'Іван')`, [ago(2), ago(1)]);
+const r333 = (await get('/api/history')).find((r) => r.order_id === '333');
+assert.deepEqual([r333.first_user, r333.users.split(',').sort().join(',')], ['Ольга', 'Іван,Ольга']);
+assert.deepEqual((await get('/api/history?user=' + encodeURIComponent('Ольга'))).map((r) => r.order_id), ['333']);
+assert.ok((await get('/api/history/users')).includes('Ольга'));
 const pub = (await get('/api/bootstrap')).fops.find((f) => f.id === lupu.id);
 assert.equal(pub.checkbox_password, '••••••', 'пароль замасковано');
 // 7. Поле 1: Rozetka(oneday) → ФОП Лупу В.Ф. (вищий пріоритет за відділ)
