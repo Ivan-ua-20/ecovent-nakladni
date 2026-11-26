@@ -3083,7 +3083,9 @@ function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {
   const settings = () => loadSettings(db);
   shared2.receiptCache ||= /* @__PURE__ */ new Map();
   const receiptCache = shared2.receiptCache;
-  onCleanup((border) => db.run(`DELETE FROM versions WHERE created_at < ?`, [border]));
+  const HISTORY_DAYS = 30;
+  const historyBorder = () => new Date(Date.now() - HISTORY_DAYS * 864e5).toISOString();
+  onCleanup((border) => db.run(`DELETE FROM versions WHERE created_at < ?`, [border < historyBorder() ? border : historyBorder()]));
   onCleanup(async () => {
     const days2 = (Number((await settings()).lpcrm_search_days) || 30) + 7;
     const border = new Date(Date.now() - days2 * 864e5).toISOString().slice(0, 10);
@@ -3478,7 +3480,7 @@ function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {
     const q = (c.req.query("q") || "").trim();
     const fop = (c.req.query("fop") || "").trim();
     const where = [];
-    const params = [];
+    const params = [historyBorder()];
     if (q) {
       where.push("order_id LIKE ?");
       params.push(`%${q}%`);
@@ -3491,8 +3493,8 @@ function mountNakladni(app, { db, fetchFn, onCleanup, onTick = () => {
       `SELECT v.order_id, v.id AS last_id, v.created_at AS last_at, v.fop_name, v.total,
         (SELECT COUNT(*) FROM versions c WHERE c.order_id = v.order_id) AS versions
        FROM versions v
-       WHERE v.id IN (SELECT MAX(id) FROM versions GROUP BY order_id) ${where.length ? "AND " + where.map((w) => "v." + w).join(" AND ") : ""}
-       ORDER BY v.id DESC LIMIT 200`,
+       WHERE v.id IN (SELECT MAX(id) FROM versions WHERE created_at >= ? GROUP BY order_id) ${where.length ? "AND " + where.map((w) => "v." + w).join(" AND ") : ""}
+       ORDER BY v.id DESC LIMIT 3000`,
       params
     );
     return c.json(rows);
