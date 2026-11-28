@@ -197,6 +197,28 @@ export async function rzCarrierPdf(fetchFn, token, carrier, ttn) {
 }
 
 // Лічильники непрочитаного: ordersChatUnread, itemsChatUnread тощо (одним запитом).
+// Реклама (рекламні кампанії, «raising»): у публічній документації API немає — ті самі адреси, що використовує
+// кабінет продавця. Спершу api-seller, якщо там такої адреси немає (404) — cabinet-seller (той самий токен).
+// Повертає { host, status, json } без перевірки success — для розбору на боці модуля.
+export const RZ_CABINET = 'https://cabinet-seller.rozetka.com.ua';
+export async function rzAdsGet(fetchFn, token, path) {
+  let last = null;
+  for (const host of [RZ_API, RZ_CABINET]) {
+    let res;
+    try {
+      res = await fetchFn(`${host}/${String(path).replace(/^\/+/, '')}`, { headers: { 'Content-Language': 'uk', Accept: 'application/json', Authorization: `Bearer ${token}` } });
+    } catch (e) {
+      if (e.pending) throw e;
+      last = { host, status: 0, json: null };
+      continue;
+    }
+    const json = await res.json().catch(() => null);
+    last = { host, status: res.status, json };
+    if (res.status !== 404) return last;
+  }
+  return last;
+}
+
 export async function rzMessageCounts(fetchFn, token) {
   return (await getContent(fetchFn, token, '/messages/counts')) || {};
 }

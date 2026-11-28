@@ -15441,6 +15441,24 @@ async function rzCarrierPdf(fetchFn, token, carrier, ttn) {
   }
   return null;
 }
+var RZ_CABINET = "https://cabinet-seller.rozetka.com.ua";
+async function rzAdsGet(fetchFn, token, path) {
+  let last = null;
+  for (const host of [RZ_API, RZ_CABINET]) {
+    let res;
+    try {
+      res = await fetchFn(`${host}/${String(path).replace(/^\/+/, "")}`, { headers: { "Content-Language": "uk", Accept: "application/json", Authorization: `Bearer ${token}` } });
+    } catch (e) {
+      if (e.pending) throw e;
+      last = { host, status: 0, json: null };
+      continue;
+    }
+    const json = await res.json().catch(() => null);
+    last = { host, status: res.status, json };
+    if (res.status !== 404) return last;
+  }
+  return last;
+}
 async function rzMessageCounts(fetchFn, token) {
   return await getContent(fetchFn, token, "/messages/counts") || {};
 }
@@ -20750,7 +20768,7 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
   onCron("market-history", "\u0406\u0441\u0442\u043E\u0440\u0456\u044F \u0437\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u044C \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u0437\u0430 \u043E\u0431\u0440\u0430\u043D\u0438\u0439 \u043F\u0435\u0440\u0456\u043E\u0434 (\u043F\u043E\u043A\u0438 \u043D\u0435 \u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0435\u043D\u043E)", histAll);
   onCron("market-reviews", "\u0412\u0456\u0434\u0433\u0443\u043A\u0438 \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u0438 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 (\u0440\u0430\u0437 \u043D\u0430 3 \u0433\u043E\u0434)", reviewsAll);
   onCron("market-msgs", "\u041F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F \u043F\u043E\u043A\u0443\u043F\u0446\u0456\u0432 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u2192 Telegram \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430\u043C (\u041F\u043D\u2013\u041F\u0442 9\u201318, \u0421\u0431 10\u201317)", () => rzMsgNotify({ now: shared2.clock ? shared2.clock() : Date.now() }));
-  const RZ_CABINET = "https://seller.rozetka.com.ua/main/messages";
+  const RZ_CABINET2 = "https://seller.rozetka.com.ua/main/messages";
   const MSG_FRESH_DAYS = 7;
   const MSG_SEND_MAX = 15;
   function workTime(ms = Date.now()) {
@@ -20805,13 +20823,13 @@ function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {
         }
         out.chats += items2.length;
         const head = `\u{1F4AC} <b>\u0420\u043E\u0437\u0435\u0442\u043A\u0430${acc.name ? ` \xB7 ${esc3(acc.name)}` : ""}</b>`;
-        const link = (it) => it.type === "orders" && it.ch.order_id ? `${RZ_CABINET}/orders?msgType=orders&search=${encodeURIComponent(it.ch.order_id)}` : it.ch.item_id || it.ch.item?.id ? `${RZ_CABINET}/items?msgType=items&search=${encodeURIComponent(it.ch.item_id || it.ch.item.id)}` : `${RZ_CABINET}/items?msgType=items`;
+        const link = (it) => it.type === "orders" && it.ch.order_id ? `${RZ_CABINET2}/orders?msgType=orders&search=${encodeURIComponent(it.ch.order_id)}` : it.ch.item_id || it.ch.item?.id ? `${RZ_CABINET2}/items?msgType=items&search=${encodeURIComponent(it.ch.item_id || it.ch.item.id)}` : `${RZ_CABINET2}/items?msgType=items`;
         const what = (it) => it.type === "orders" ? `\u0417\u0430\u043C\u043E\u0432\u043B\u0435\u043D\u043D\u044F \u2116${esc3(it.ch.order_id || "")}` : it.ch.item?.name ? `\u041F\u0438\u0442\u0430\u043D\u043D\u044F \u043F\u0440\u043E \u0442\u043E\u0432\u0430\u0440: ${esc3(String(it.ch.item.name).slice(0, 90))}` : "\u041F\u0438\u0442\u0430\u043D\u043D\u044F \u0432\u0456\u0434 \u043F\u043E\u043A\u0443\u043F\u0446\u044F";
         const texts = items2.length > 3 ? [`${head} \xB7 \u043D\u043E\u0432\u0456 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F: ${items2.length}
 ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc3(it.ch.user_fio || "")} \xB7 ${hm(it.neu[it.neu.length - 1].created)}`).join("\n")}${items2.length > 25 ? `
 \u2026\u0456 \u0449\u0435 ${items2.length - 25}` : ""}
 
-<a href="${RZ_CABINET}/orders">\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0438 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438</a>`] : items2.map((it) => `${head} \xB7 \u043D\u043E\u0432\u0435 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F
+<a href="${RZ_CABINET2}/orders">\u0412\u0456\u0434\u043A\u0440\u0438\u0442\u0438 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F \u0432 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438</a>`] : items2.map((it) => `${head} \xB7 \u043D\u043E\u0432\u0435 \u043F\u043E\u0432\u0456\u0434\u043E\u043C\u043B\u0435\u043D\u043D\u044F
 <b>${what(it)}</b> \xB7 \u0447\u0430\u0442 ${esc3(it.ch.id)}
 \u0412\u0456\u0434: ${esc3(it.ch.user_fio || "\u2014")}
 ` + it.neu.slice(-3).map((m) => `\xAB${esc3(String(m.body || (m.files?.length ? "[\u0444\u0430\u0439\u043B]" : "")).slice(0, 300))}\xBB <i>${hm(m.created)}</i>`).join("\n") + `
@@ -21191,6 +21209,15 @@ ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc3(it.ch.user_fio
     return acc;
   };
   const { rzAct } = mountRzPersonal(app, { db, fetchFn, rzCall, accOf });
+  const ADS_PATH = /^(raising-campaigns|raising-campaign-items|raising\/common|raising\/analytic|promo-analytics|balances\/balance-ads)[\w\-/?=&%.,]*$/;
+  app.get("/api/mp/ads/raw/:account", async (c) => {
+    need(c, "api");
+    const acc = await accOf("rozetka", c.req.param("account"));
+    const path = String(c.req.query("path") || "").replace(/^\/+/, "");
+    if (!ADS_PATH.test(path)) throw fail(400, "\u0414\u043E\u0437\u0432\u043E\u043B\u0435\u043D\u043E \u043B\u0438\u0448\u0435 \u0440\u0435\u043A\u043B\u0430\u043C\u043D\u0456 \u0430\u0434\u0440\u0435\u0441\u0438 (raising\u2026, promo-analytics\u2026).");
+    const r = await rzAct(c, acc, (t) => rzAdsGet(fetchFn, t, path));
+    return c.json({ host: r?.host, status: r?.status, json: r?.json });
+  });
   mountMarketTtn(app, { db, fetchFn, rzCall, rzAct, accOf, rzOrderOf });
   app.post("/api/mp/history/start", async (c) => {
     need(c, "api");
