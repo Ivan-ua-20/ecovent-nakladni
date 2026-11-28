@@ -1375,3 +1375,12 @@ body.pub-mode #auth { display: block; padding: 0; min-height: 100vh; background:
 /* «Створити ТТН» (mpttn.js) */
 .tt-dims { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
 @media (max-width: 640px) { .tt-dims { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Маркетплейси → Реклама */
+.ad-kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 8px 0; }
+.ad-note { margin: 6px 0 10px; }
+.ad-table td, .ad-table th { vertical-align: top; }
+.ad-table .ad-per { background: var(--info-soft, #eef5ff); }
+.ad-item { display: flex; gap: 8px; align-items: flex-start; min-width: 260px; }
+.ad-item img { width: 44px; height: 44px; object-fit: contain; border-radius: 6px; background: #fff; flex: none; }
+.bad-t { color: var(--bad, #b42318); }
