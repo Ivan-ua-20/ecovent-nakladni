@@ -219,6 +219,20 @@ export async function rzAdsGet(fetchFn, token, path) {
   return last;
 }
 
+// Зміна реклами (PUT) — як у кабінеті: кампанія raising-campaigns/{id}, оголошення raising-campaign-items/{id}.
+export async function rzAdsPut(fetchFn, token, path, body) {
+  let res;
+  try {
+    res = await fetchFn(`${RZ_API}/${String(path).replace(/^\/+/, '')}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', 'Content-Language': 'uk', Accept: 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body),
+    });
+  } catch (e) {
+    if (e.pending) throw e;
+    throw Object.assign(new Error('Розетка не відповідає. Спробуйте ще раз за хвилину.'), { status: 502 });
+  }
+  return { status: res.status, json: await res.json().catch(() => null) };
+}
+
 export async function rzMessageCounts(fetchFn, token) {
   return (await getContent(fetchFn, token, '/messages/counts')) || {};
 }

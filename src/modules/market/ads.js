@@ -9,11 +9,14 @@
 // Розетка відповідає «access_denied» — вхід без прав на рекламу (Налаштування → Менеджери в кабінеті Розетки).
 import { fail, need } from '../../core/common.js';
 import { shopAllowed } from '../../core/auth.js';
-import { rzAdsGet } from '../../integrations/rozetka.js';
+import { rzAdsGet, rzAdsPut } from '../../integrations/rozetka.js';
+import { logAudit } from '../../core/requisites.js';
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const STATUS = { active: '1', paused: '0', finished: '2' };
 const TTL = 5 * 60 * 1000;
+const AD_STATUS = { paused: 0, active: 1, finished: 2 }; // як у кабінеті Розетки
+const money2 = (v) => Math.round(Number(String(v ?? '').replace(',', '.')) * 100) / 100;
 
 export function mountMarketAds(app, { db, fetchFn, rzAct, accOf, shared = {} }) {
   shared.adsCache ||= new Map();
@@ -101,6 +104,87 @@ export function mountMarketAds(app, { db, fetchFn, rzAct, accOf, shared = {} }) 
       if (page >= (r?._meta?.pageCount || 1)) break;
     }
     return out;
+  });
+
+  // ---------------------------------------------------------------- керування (етап 2)
+  // Зміни йдуть від імені того, хто натиснув (особистий вхід у Розетку, якщо підключено); кожна — в журнал змін.
+  async function accEdit(c, b) {
+    need(c, 'market.edit');
+    const acc = await accOf('rozetka', b.account);
+    if (!shopAllowed(c.get('user'), 'rozetka', acc.id)) throw fail(403, 'У вас немає доступу до цього магазину.');
+    return acc;
+  }
+  async function put(c, acc, path, body) {
+    const r = await rzAct(c, acc, (t) => rzAdsPut(fetchFn, t, path, body));
+    const j = r?.json;
+    if (j?.success) return j.content;
+    const e = j?.errors || {};
+    if (e.message === 'access_denied') throw fail(403, `Немає прав змінювати рекламу магазину «${acc.name}» — потрібен вхід з правами на рекламу (кабінет Розетки → Налаштування → Менеджери).`);
+    const det = e.details && typeof e.details === 'object' ? Object.values(e.details).flat().filter((x) => typeof x === 'string').join('; ') : '';
+    throw fail(400, `Розетка не прийняла зміну: ${[e.description || e.message || `помилка ${r?.status || ''}`, det].filter(Boolean).join(' — ')}`);
+  }
+  const forget = (acc, campaignId = null) => { for (const k of [...cache.keys()]) if (k.startsWith(campaignId == null ? `ci|${acc.id}|` : `ci|${acc.id}|${campaignId}|`)) cache.delete(k); };
+  const audit = (c, acc, refId, action) => logAudit(db, { user: c.get('user'), kind: 'rz-ads', refId: `${acc.id}:${refId}`, action, changes: [] }).catch(() => 0);
+
+  // Кампанія: пауза / запуск.
+  app.post('/api/mp/ads/campaigns/:id{[0-9]+}/status', async (c) => {
+    const b = await c.req.json().catch(() => ({}));
+    const acc = await accEdit(c, b);
+    const id = Number(c.req.param('id'));
+    if (!['active', 'paused'].includes(b.status)) throw fail(400, 'Невідомий статус.');
+    await put(c, acc, `raising-campaigns/${id}`, { id, status: AD_STATUS[b.status] });
+    await audit(c, acc, id, `реклама: кампанію ${b.title ? `«${String(b.title).slice(0, 80)}» ` : ''}${b.status === 'paused' ? 'призупинено' : 'запущено'}`);
+    return c.json({ ok: true });
+  });
+  // Кампанія: бюджет на день (інші поля — як зараз у Розетці).
+  app.post('/api/mp/ads/campaigns/:id{[0-9]+}/budget', async (c) => {
+    const b = await c.req.json().catch(() => ({}));
+    const acc = await accEdit(c, b);
+    const id = Number(c.req.param('id'));
+    const budget = money2(b.budget);
+    if (!(budget >= 1 && budget <= 99999)) throw fail(400, 'Бюджет на день — від 1 до 99 999 грн.');
+    const cur = await get(c, acc, `raising-campaigns/${id}`);
+    const body = { id, title: cur.title, daily_budget: budget, start_date: cur.start_date, end_date: cur.end_date };
+    for (const k of ['auto_activate', 'accept_minbid', 'auto_renewal', 'is_external']) if (cur[k] != null) body[k] = cur[k];
+    await put(c, acc, `raising-campaigns/${id}`, body);
+    await audit(c, acc, id, `реклама: «${String(cur.title || id).slice(0, 80)}» — бюджет на день ${Number(cur.daily_budget) || 0} → ${budget} грн`);
+    return c.json({ ok: true, budget });
+  });
+  // Оголошення (товар у кампанії): ставка і/або пауза / запуск. Беремо оголошення з Розетки як є і змінюємо лише потрібне.
+  app.post('/api/mp/ads/items/:id{[0-9]+}', async (c) => {
+    const b = await c.req.json().catch(() => ({}));
+    const acc = await accEdit(c, b);
+    const id = Number(c.req.param('id'));
+    const campaign = Number(b.campaign) || 0;
+    if (!campaign) throw fail(400, 'Не вказано кампанію.');
+    forget(acc, campaign);
+    const [camp, items] = await Promise.all([get(c, acc, `raising-campaigns/${campaign}`), campaignItems(c, acc, campaign, '')]);
+    const ad = items.find((x) => Number(x.id) === id);
+    if (!ad) throw fail(404, 'Оголошення не знайдено в кампанії — оновіть сторінку.');
+    if (ad.is_editable === false) throw fail(400, 'Розетка не дозволяє змінювати це оголошення.');
+    const next = JSON.parse(JSON.stringify(ad));
+    const was = [];
+    if (b.rate != null && b.rate !== '') {
+      const rate = money2(b.rate);
+      const min = Number(ad.rate?.min) || 0;
+      const max = Number(camp.daily_budget) || 0;
+      if (!(rate > 0)) throw fail(400, 'Вкажіть ставку числом, напр. 6.50.');
+      if (min && rate < min) throw fail(400, `Ставка не може бути меншою за мінімальну (${min} грн).`);
+      if (max && rate > max) throw fail(400, `Ставка не може бути більшою за бюджет кампанії на день (${max} грн).`);
+      next.max_day_money = rate;
+      next.rate = { ...(ad.rate || {}), current: rate };
+      was.push(`ставка ${Number(ad.rate?.current ?? ad.max_day_money) || 0} → ${rate}`);
+    }
+    if (b.status) {
+      if (!['active', 'paused'].includes(b.status)) throw fail(400, 'Невідомий статус.');
+      next.status = AD_STATUS[b.status];
+      was.push(b.status === 'paused' ? 'призупинено' : 'запущено');
+    } else if (typeof next.status === 'string') next.status = AD_STATUS[next.status] ?? next.status;
+    if (!was.length) throw fail(400, 'Нічого не змінено.');
+    await put(c, acc, `raising-campaign-items/${id}`, next);
+    forget(acc, campaign);
+    await audit(c, acc, `${campaign}/${id}`, `реклама: «${String(camp.title || campaign).slice(0, 60)}» → ${String(ad.item?.name_ua || ad.item?.name || ad.item_id).slice(0, 80)}: ${was.join(', ')}`);
+    return c.json({ ok: true });
   });
 
   // ---------------------------------------------------------------- кампанії
