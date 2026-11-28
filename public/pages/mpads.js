@@ -2,7 +2,8 @@
 // Колонки Розетки (покази, кліки, витрати, замовлення з реклами, CPO, CPC) — за весь час кампанії, як у кабінеті;
 // наші колонки — за обраний період: «З реклами» (замовлення з реклами за датами) і «Усі замовлення» товару в магазині.
 import { esc } from '../invoice.js';
-import { $, $$, main, api, toast } from '../core/ui.js';
+import { $, $$, main, api, toast, modal, confirmDanger } from '../core/ui.js';
+import { rzWho, wireRzWho } from './rzme.js';
 
 const STATUSES = [['active', 'Активні'], ['paused', 'Призупинені'], ['finished', 'Завершені']];
 const ST_NAME = { active: ['ok', 'Активна'], paused: ['warn', 'Призупинена'], finished: ['', 'Завершена'], not_active: ['', 'Неактивна'] };
@@ -15,7 +16,37 @@ const kyivDay = (d = new Date()) => new Date(d.getTime() + 2 * 3600e3).toISOStri
 const addDays = (day, k) => new Date(Date.parse(`${day}T12:00:00Z`) + k * 86400e3).toISOString().slice(0, 10);
 const dd = (d) => (d ? String(d).slice(0, 10).split('-').reverse().join('.') : '');
 
-export function createMpAdsPage() {
+export function createMpAdsPage({ can = () => true } = {}) {
+  const canEdit = () => can('market.edit');
+  // Вікно з одним числом (бюджет / ставка) + хто змінює в Розетці. submit(value) — запит; помилка лишає вікно відкритим.
+  async function askNumber(title, label, value, hint, submit) {
+    const m = modal(title, `<form class="form-stack" id="adNumF"><label class="f"><span>${label}</span><input name="v" inputmode="decimal" value="${esc(String(value ?? ''))}" required></label>
+        ${hint ? `<div class="small muted">${hint}</div>` : ''}<div id="adWho"></div></form>`,
+    { footer: '<button class="btn" data-close>Скасувати</button><button class="btn primary" id="adNumGo">Зберегти в Розетці</button>', focus: '[name=v]' });
+    rzWho(st.account).then((h) => { const w = $('#adWho', m.el); if (w) { w.innerHTML = h; wireRzWho(m.el); } });
+    const go = $('#adNumGo', m.el);
+    const run = async (e) => {
+      e?.preventDefault();
+      const v = $('#adNumF', m.el).v.value.trim().replace(',', '.');
+      if (!(Number(v) > 0)) return toast('Вкажіть число більше за 0.', true);
+      go.disabled = true;
+      try { await submit(Number(v)); m.close(); } catch (er) { toast(er.message, true); go.disabled = false; }
+    };
+    go.onclick = run;
+    $('#adNumF', m.el).onsubmit = run;
+  }
+  const campStatus = async (k, status, after) => {
+    const pause = status === 'paused';
+    if (!(await confirmDanger(pause ? `Призупинити кампанію «${k.title}»?` : `Запустити кампанію «${k.title}»?`,
+      pause ? 'Реклама всіх товарів кампанії зупиниться в Розетці, доки ви її не запустите.' : 'Реклама товарів кампанії знову показуватиметься в Розетці (у межах бюджету на день).', pause ? 'Призупинити' : 'Запустити'))) return;
+    try { await api('POST', `/api/mp/ads/campaigns/${k.id}/status`, { account: st.account, status, title: k.title }); toast(pause ? 'Кампанію призупинено' : 'Кампанію запущено'); after(); }
+    catch (er) { toast(er.message, true); }
+  };
+  const campBudget = (k, after) => askNumber(`Бюджет на день — «${k.title}»`, 'Бюджет на день, грн', k.budget,
+    'Ставка жодного товару не може бути більшою за бюджет на день.', async (v) => {
+      await api('POST', `/api/mp/ads/campaigns/${k.id}/budget`, { account: st.account, budget: v });
+      toast(`Бюджет змінено: ${uah(v)} на день`); after();
+    });
   const st = { account: '', status: 'active', from: addDays(kyivDay(), -6), to: kyivDay(), sort: '' };
   try { Object.assign(st, JSON.parse(localStorage.getItem('mpAds') || '{}')); } catch { /* */ }
   const save = () => { try { localStorage.setItem('mpAds', JSON.stringify({ account: st.account, status: st.status })); } catch { /* */ } };
@@ -75,7 +106,7 @@ export function createMpAdsPage() {
       ${rows.length ? `<div class="table-wrap"><table class="list ad-table"><thead><tr>
           <th>Кампанія</th><th class="r">Товарів</th><th class="r">Бюджет / день</th><th class="r">Покази</th><th class="r">Кліки</th><th class="r">CTR</th>
           <th class="r">CPC</th><th class="r">Витрати</th><th class="r">Замовл.</th><th class="r">CPO</th>
-          <th class="r ad-per">З реклами<br><span class="small">за період</span></th><th class="r ad-per">Усі замовл.<br><span class="small">за період</span></th><th>Статус</th></tr></thead>
+          <th class="r ad-per">З реклами<br><span class="small">за період</span></th><th class="r ad-per">Усі замовл.<br><span class="small">за період</span></th><th>Статус</th>${canEdit() ? '<th></th>' : ''}</tr></thead>
         <tbody>${rows.map((x) => `<tr class="click" data-c="${x.id}">
           <td><b>${esc(x.title)}</b><div class="small muted">${dd(x.start)} – ${dd(x.end)}</div></td>
           <td class="r">${x.items}</td>
@@ -84,8 +115,13 @@ export function createMpAdsPage() {
           <td class="r">${n2(x.stat.cpc)}</td><td class="r nowrap">${uah(x.stat.money)}</td><td class="r">${x.stat.orders}</td><td class="r">${x.stat.orders ? n2(x.stat.cpo) : '—'}</td>
           <td class="r ad-per"><b>${x.period.ad_orders}</b>${x.period.ad_sum ? `<div class="small muted">${uah(x.period.ad_sum)}</div>` : ''}</td>
           <td class="r ad-per" data-all="${x.id}"><span class="spinner"></span></td>
-          <td>${(([cls, t]) => `<span class="badge ${cls}">${t}</span>`)(ST_NAME[x.status] || ['', x.status])}</td></tr>`).join('')}</tbody></table></div>`
+          <td>${(([cls, t]) => `<span class="badge ${cls}">${t}</span>`)(ST_NAME[x.status] || ['', x.status])}</td>
+          ${canEdit() ? `<td class="nowrap">${x.editable && x.status !== 'finished' ? `<button class="btn sm" data-bud="${x.id}" title="Змінити бюджет на день">✎ Бюджет</button>
+            <button class="btn sm" data-cst="${x.id}" data-to="${x.status === 'active' ? 'paused' : 'active'}">${x.status === 'active' ? '⏸ Пауза' : '▶ Запустити'}</button>` : ''}</td>` : ''}</tr>`).join('')}</tbody></table></div>`
         : '<div class="card empty">Кампаній у цьому статусі немає.</div>'}`;
+    const byId = new Map(rows.map((x) => [String(x.id), x]));
+    $$('[data-bud]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); campBudget(byId.get(b.dataset.bud), viewList); }));
+    $$('[data-cst]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); campStatus(byId.get(b.dataset.cst), b.dataset.to, viewList); }));
     $$('[data-c]').forEach((tr) => (tr.onclick = () => { location.hash = `#/mpads/${tr.dataset.c}`; }));
     // «Усі замовлення за період» — частинами (товари кампаній із Розетки + наші замовлення)
     const ids = rows.map((x) => x.id);
@@ -117,7 +153,7 @@ export function createMpAdsPage() {
     const th = (key, label, cls = 'r') => `<th class="${cls}"><button class="linkbtn" data-sort="${key}">${label}${st.sort === key ? ' ↓' : ''}</button></th>`;
     $('#adBody').innerHTML = `
       <div class="head-row" style="margin-top:4px"><h3 style="margin:0">${esc(k.title)} ${(([cls, t]) => `<span class="badge ${cls}">${t}</span>`)(ST_NAME[k.status] || ['', k.status])}</h3>
-        <a class="btn" href="#/mpads">← До кампаній</a></div>
+        <div class="btn-row">${canEdit() && k.status !== 'finished' ? `<button class="btn" id="adBud">✎ Бюджет</button><button class="btn" id="adCst">${k.status === 'active' ? '⏸ Призупинити' : '▶ Запустити'}</button>` : ''}<a class="btn" href="#/mpads">← До кампаній</a></div></div>
       <div class="ad-kpi">
         <div class="mp-box"><div class="mp-cap">Бюджет на день</div><b>${uah(k.budget)}</b>${k.left_today != null ? `<div class="small muted">залишок сьогодні ${uah(k.left_today)}</div>` : ''}</div>
         <div class="mp-box"><div class="mp-cap">Покази · кліки · CTR</div><b>${n0(k.stat.views)} · ${n0(k.stat.clicks)} · ${ctr(k.stat)}</b></div>
@@ -133,14 +169,32 @@ export function createMpAdsPage() {
         <td><div class="ad-item">${x.photo ? `<img src="${esc(x.photo)}" alt="" loading="lazy">` : ''}<div><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.name)}</a>
           <div class="small muted">${esc(x.article)}${x.category ? ` · ${esc(x.category)}` : ''}${x.stock != null ? ` · залишок ${x.stock}` : ''}</div></div></div></td>
         <td class="r nowrap">${uah(x.price)}${x.price_old > x.price ? `<div class="small muted"><s>${uah(x.price_old)}</s></div>` : ''}</td>
-        <td class="r nowrap"><b>${n2(x.rate)}</b><div class="small muted">мін. ${n2(x.rate_min)}</div></td>
-        <td>${(([cls, t]) => `<span class="badge ${cls}">${t}</span>`)(ST_NAME[x.status] || ['', x.status])}</td>
+        <td class="r nowrap"><b>${n2(x.rate)}</b><div class="small muted">мін. ${n2(x.rate_min)}</div>${canEdit() && x.editable && x.status !== 'finished' ? `<button class="btn sm" data-rate="${x.id}">✎ Ставка</button>` : ''}</td>
+        <td>${(([cls, t]) => `<span class="badge ${cls}">${t}</span>`)(ST_NAME[x.status] || ['', x.status])}${canEdit() && x.editable && ['active', 'paused'].includes(x.status) ? `<div><button class="btn sm" data-ist="${x.id}" data-to="${x.status === 'active' ? 'paused' : 'active'}">${x.status === 'active' ? '⏸ Пауза' : '▶ Запустити'}</button></div>` : ''}</td>
         <td class="r">${n0(x.stat.views)}</td><td class="r">${n0(x.stat.clicks)}</td><td class="r">${ctr(x.stat)}</td><td class="r">${n2(x.stat.cpc)}</td>
         <td class="r nowrap">${uah(x.stat.money)}</td><td class="r">${x.stat.orders}</td><td class="r">${x.stat.orders ? n2(x.stat.cpo) : '—'}</td>
         <td class="r ad-per"><b>${x.period.ad_orders}</b>${x.period.ad_sum ? `<div class="small muted">${uah(x.period.ad_sum)}</div>` : ''}</td>
         <td class="r ad-per"><b>${x.period.orders}</b>${x.period.qty > x.period.orders ? `<div class="small muted">${n0(x.period.qty)} шт</div>` : ''}${x.period.sum ? `<div class="small muted">${uah(x.period.sum)}</div>` : ''}</td>
       </tr>`).join('')}</tbody></table></div>`;
     $$('[data-sort]').forEach((b) => (b.onclick = () => { st.sort = st.sort === b.dataset.sort ? '' : b.dataset.sort; viewCampaign(id); }));
+    const again = () => viewCampaign(id);
+    if ($('#adBud')) $('#adBud').onclick = () => campBudget(k, again);
+    if ($('#adCst')) $('#adCst').onclick = () => campStatus(k, k.status === 'active' ? 'paused' : 'active', again);
+    const byAd = new Map(d.items.map((x) => [String(x.id), x]));
+    $$('[data-rate]').forEach((b) => (b.onclick = () => {
+      const x = byAd.get(b.dataset.rate);
+      askNumber('Ставка за клік', `Ставка, грн (від ${n2(x.rate_min)} до ${n2(k.budget)})`, x.rate, esc(x.name), async (v) => {
+        await api('POST', `/api/mp/ads/items/${x.id}`, { account: st.account, campaign: k.id, rate: v });
+        toast(`Ставку змінено: ${n2(v)} грн`); again();
+      });
+    }));
+    $$('[data-ist]').forEach((b) => (b.onclick = async () => {
+      const x = byAd.get(b.dataset.ist);
+      const pause = b.dataset.to === 'paused';
+      if (!(await confirmDanger(pause ? 'Призупинити рекламу товару?' : 'Запустити рекламу товару?', esc(x.name), pause ? 'Призупинити' : 'Запустити'))) return;
+      try { await api('POST', `/api/mp/ads/items/${x.id}`, { account: st.account, campaign: k.id, status: b.dataset.to }); toast(pause ? 'Рекламу товару призупинено' : 'Рекламу товару запущено'); again(); }
+      catch (er) { toast(er.message, true); }
+    }));
   }
 
   return { viewMpAds: (id) => (id ? viewCampaign(id) : viewList()).catch((e) => toast(e.message, true)) };

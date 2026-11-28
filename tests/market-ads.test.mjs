@@ -18,9 +18,11 @@ await ord('o4', '2026-11-10', [{ id: '111', name: 'A', qty: 1, price: 100 }]); /
 
 const ok = (content) => new Response(JSON.stringify({ success: true, content }));
 const seen = [];
-const fetchFn = async (url) => {
+const puts = [];
+const fetchFn = async (url, opts = {}) => {
   const u = new URL(url);
   seen.push(u.pathname + u.search);
+  if (opts.method === 'PUT') { puts.push([u.pathname, JSON.parse(opts.body), opts.headers.Authorization]); return ok({ id: 1 }); }
   if (u.searchParams.get('x') === 'deny' || (u.hostname === 'api-seller.rozetka.com.ua' && globalThis.DENY)) return new Response(JSON.stringify({ success: false, errors: { message: 'access_denied', code: 1010, description: 'В доступі відмовлено' } }));
   if (u.pathname === '/raising-campaigns/search') return ok({ advertisingCampaigns: [
     { id: 10, title: 'Пилососи', start_date: '2026-09-22', end_date: '2029-09-22', daily_budget: 600, current_limit_budget: '120.50', status: 'active', type: 'CPC', is_editable: true, items_count: 2, statistics: { views: 1000, clicks: 50, money: '250.00', transactions: 5, cpo: '50.00', cpc: '5.00' } },
@@ -83,4 +85,31 @@ const M = { 'Content-Type': 'application/json', Cookie: lm.headers.get('set-cook
 assert.equal((await req(`/api/mp/ads/campaigns?account=2&${P}`, M)).status, 403, 'чужий магазин');
 assert.equal((await req(`/api/mp/ads/campaigns?account=1&${P}`, M)).status, 200, 'свій магазин — перегляд');
 assert.ok(!seen.some((s) => /pause-|finish-|update|\/create/.test(s.split('?')[0])), 'лише читання');
-console.log('OK — маркетплейси: реклама Розетки (кампанії, товари, замовлення за період)');
+
+// ---------- керування: пауза / запуск, бюджет, ставка, пауза оголошення ----------
+const post = async (path, body, headers = H) => { const r = await mk().request(path, { method: 'POST', headers, body: JSON.stringify(body) }); return { status: r.status, j: await r.json().catch(() => ({})) }; };
+assert.equal((await post('/api/mp/ads/campaigns/10/status', { account: 1, status: 'paused' }, M)).status, 403, 'перегляд — без змін');
+r = await post('/api/mp/ads/campaigns/10/status', { account: 1, status: 'paused', title: 'Пилососи' });
+assert.equal(r.status, 200, JSON.stringify(r.j));
+assert.deepEqual(puts.at(-1).slice(0, 2), ['/raising-campaigns/10', { id: 10, status: 0 }]);
+await post('/api/mp/ads/campaigns/10/status', { account: 1, status: 'active' });
+assert.deepEqual(puts.at(-1)[1], { id: 10, status: 1 });
+assert.match((await post('/api/mp/ads/campaigns/10/budget', { account: 1, budget: 0 })).j.error, /від 1/);
+await post('/api/mp/ads/campaigns/10/budget', { account: 1, budget: '750,5' });
+assert.deepEqual(puts.at(-1), ['/raising-campaigns/10', { id: 10, title: 'Пилососи', daily_budget: 750.5, start_date: '2026-09-22', end_date: '2029-09-22' }, 'Bearer tok']);
+// ставка: межі (мін. 1.70, не більше бюджету 600), оголошення — як у Розетці, змінено лише ставку
+assert.match((await post('/api/mp/ads/items/1', { account: 1, campaign: 10, rate: 1 })).j.error, /мінімальну \(1\.7 грн\)/);
+assert.match((await post('/api/mp/ads/items/1', { account: 1, campaign: 10, rate: 700 })).j.error, /бюджет кампанії на день \(600 грн\)/);
+r = await post('/api/mp/ads/items/1', { account: 1, campaign: 10, rate: '7,25' });
+assert.equal(r.status, 200, JSON.stringify(r.j));
+let [path, body] = puts.at(-1);
+assert.equal(path, '/raising-campaign-items/1');
+assert.deepEqual([body.id, body.item_id, body.max_day_money, body.rate.current, body.rate.min, body.status], [1, 111, 7.25, 7.25, '1.70', 1]);
+await post('/api/mp/ads/items/2', { account: 1, campaign: 10, status: 'paused' });
+[path, body] = puts.at(-1);
+assert.deepEqual([path, body.status, body.max_day_money], ['/raising-campaign-items/2', 0, '5.50'], 'пауза — ставка без змін');
+assert.equal((await post('/api/mp/ads/items/999', { account: 1, campaign: 10, rate: 5 })).status, 404);
+const log = await db.all(`SELECT action FROM audit_log WHERE kind = 'rz-ads' ORDER BY id`);
+assert.ok(log.some((x) => /призупинено/.test(x.action)) && log.some((x) => /бюджет на день 600 → 750\.5/.test(x.action)) && log.some((x) => /ставка 6\.5 → 7\.25/.test(x.action)), 'журнал змін');
+
+console.log('OK — маркетплейси: реклама Розетки (перегляд і керування)');
