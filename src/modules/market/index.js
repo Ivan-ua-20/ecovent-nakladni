@@ -4,7 +4,7 @@
 // синхронізації — по кілька сторінок за раз; незавершений прохід продовжується з наступної сторінки.
 import { fail, need, nowIso } from '../../core/common.js';
 import { shopAllowed, accessOf } from '../../core/auth.js';
-import { rzOrdersSearch, rzItemComments, rzSuccessStatuses, rzOrderChat, rzSendMessage, rzMessageCounts, rzUnreadChats, rzSetOrderStatus, rzGetOrder } from '../../integrations/rozetka.js';
+import { rzOrdersSearch, rzItemComments, rzSuccessStatuses, rzOrderChat, rzSendMessage, rzMessageCounts, rzUnreadChats, rzSetOrderStatus, rzGetOrder, rzAdsGet } from '../../integrations/rozetka.js';
 import { promOrders } from '../../integrations/prom.js';
 import { epcOrdersPage } from '../../integrations/epicentr.js';
 import { mountMarketCrm } from './crm.js';
@@ -969,6 +969,16 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
   // «Створити ТТН» (ROZETKA Delivery, Нова пошта, Meest) із картки замовлення — ttn.js.
   // дії від імені менеджера (його вхід у Розетку), якщо підключено; маршрути вище звертаються до rzAct лише під час запиту
   const { rzAct } = mountRzPersonal(app, { db, fetchFn, rzCall, accOf });
+  // Реклама Розетки — розвідка (адміністратор): «сира» відповідь рекламних адрес кабінету, лише читання.
+  const ADS_PATH = /^(raising-campaigns|raising-campaign-items|raising\/common|raising\/analytic|promo-analytics|balances\/balance-ads)[\w\-/?=&%.,]*$/;
+  app.get('/api/mp/ads/raw/:account', async (c) => {
+    need(c, 'api');
+    const acc = await accOf('rozetka', c.req.param('account'));
+    const path = String(c.req.query('path') || '').replace(/^\/+/, '');
+    if (!ADS_PATH.test(path)) throw fail(400, 'Дозволено лише рекламні адреси (raising…, promo-analytics…).');
+    const r = await rzAct(c, acc, (t) => rzAdsGet(fetchFn, t, path));
+    return c.json({ host: r?.host, status: r?.status, json: r?.json });
+  });
   mountMarketTtn(app, { db, fetchFn, rzCall, rzAct, accOf, rzOrderOf });
   app.post('/api/mp/history/start', async (c) => {
     need(c, 'api');
