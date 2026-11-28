@@ -19641,6 +19641,220 @@ function mountRzPersonal(app, { db, fetchFn, rzCall, accOf }) {
   return { rzAct };
 }
 
+// src/modules/market/ads.js
+var DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+var STATUS = { active: "1", paused: "0", finished: "2" };
+var TTL2 = 5 * 60 * 1e3;
+function mountMarketAds(app, { db, fetchFn, rzAct, accOf, shared: shared2 = {} }) {
+  shared2.adsCache ||= /* @__PURE__ */ new Map();
+  const cache = shared2.adsCache;
+  const cached = async (key, fn) => {
+    const hit = cache.get(key);
+    if (hit && Date.now() - hit.at < TTL2) return hit.value;
+    const value = await fn();
+    cache.set(key, { at: Date.now(), value });
+    if (cache.size > 300) cache.delete(cache.keys().next().value);
+    return value;
+  };
+  async function accFor(c) {
+    need(c, "market.view");
+    const acc = await accOf("rozetka", c.req.query("account"));
+    if (!shopAllowed(c.get("user"), "rozetka", acc.id)) throw fail(403, "\u0423 \u0432\u0430\u0441 \u043D\u0435\u043C\u0430\u0454 \u0434\u043E\u0441\u0442\u0443\u043F\u0443 \u0434\u043E \u0446\u044C\u043E\u0433\u043E \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0443.");
+    return acc;
+  }
+  async function get(c, acc, path) {
+    const r = await rzAct(c, acc, (t) => rzAdsGet(fetchFn, t, path));
+    const j = r?.json;
+    if (j?.success) return j.content;
+    const e = j?.errors || {};
+    if (e.message === "access_denied") {
+      throw fail(403, `\u041D\u0435\u043C\u0430\u0454 \u0434\u043E\u0441\u0442\u0443\u043F\u0443 \u0434\u043E \u0440\u0435\u043A\u043B\u0430\u043C\u0438 \u043C\u0430\u0433\u0430\u0437\u0438\u043D\u0443 \xAB${acc.name}\xBB. \u0412\u0445\u0456\u0434, \u0447\u0435\u0440\u0435\u0437 \u044F\u043A\u0438\u0439 \u043F\u0440\u0430\u0446\u044E\u0454 \u0441\u0435\u0440\u0432\u0456\u0441 (\u0430\u0431\u043E \u0432\u0430\u0448 \u043E\u0441\u043E\u0431\u0438\u0441\u0442\u0438\u0439 \u2014 \xAB\u0420\u043E\u0437\u0435\u0442\u043A\u0430\xBB \u0432\u0433\u043E\u0440\u0456), \u043C\u0430\u0454 \u0431\u0443\u0442\u0438 \u0437 \u043F\u0440\u0430\u0432\u0430\u043C\u0438 \u043D\u0430 \u0440\u0435\u043A\u043B\u0430\u043C\u0443: \u0443 \u043A\u0430\u0431\u0456\u043D\u0435\u0442\u0456 \u0420\u043E\u0437\u0435\u0442\u043A\u0438 \u2014 \u041D\u0430\u043B\u0430\u0448\u0442\u0443\u0432\u0430\u043D\u043D\u044F \u2192 \u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0438.`);
+    }
+    throw fail(502, `\u0420\u043E\u0437\u0435\u0442\u043A\u0430 (\u0440\u0435\u043A\u043B\u0430\u043C\u0430): ${e.description || e.message || `\u043F\u043E\u043C\u0438\u043B\u043A\u0430 ${r?.status || ""}`}`.trim());
+  }
+  const range = (c) => {
+    const to = DAY_RE.test(c.req.query("to") || "") ? c.req.query("to") : new Date(Date.now() + 2 * 36e5).toISOString().slice(0, 10);
+    const from = DAY_RE.test(c.req.query("from") || "") ? c.req.query("from") : new Date(Date.parse(`${to}T12:00:00Z`) - 6 * 864e5).toISOString().slice(0, 10);
+    if (from > to) throw fail(400, "\u0414\u0430\u0442\u0430 \xAB\u0437\xBB \u043F\u0456\u0437\u043D\u0456\u0448\u0430 \u0437\u0430 \xAB\u043F\u043E\xBB.");
+    return { from, to };
+  };
+  async function adOrders(c, acc, { from, to }) {
+    return cached(`ao|${acc.id}|${from}|${to}`, async () => {
+      const rows = [];
+      for (let page = 1; page <= 10; page++) {
+        const r = await get(c, acc, `promo-analytics/order/search?order_created_from=${from}&order_created_to=${to}&page=${page}&pageSize=100&sort=-id`);
+        rows.push(...r?.advertisingOrders || []);
+        if (page >= (r?._meta?.pageCount || 1)) break;
+      }
+      return rows.map((o) => ({
+        order: String(o.order_id),
+        status: Number(o.order_status) || 0,
+        sum: Number(o.order_cost_with_discount) || 0,
+        campaign: Number(o.campaign_id) || 0,
+        item: String(o.item_id || ""),
+        at: String(o.created_at || "")
+      }));
+    });
+  }
+  async function ourOrders(acc, { from, to }, itemIds = null) {
+    const rows = await db.all(
+      `SELECT json_extract(j.value, '$.id') AS item, COUNT(DISTINCT o.id) AS orders, SUM(COALESCE(json_extract(j.value, '$.qty'), 1)) AS qty,
+         SUM(COALESCE(json_extract(j.value, '$.qty'), 1) * COALESCE(json_extract(j.value, '$.price'), 0)) AS sum
+       FROM mp_orders o, json_each(o.items) j
+       WHERE o.mp = 'rozetka' AND o.account_id = ? AND o.created_at >= ? AND o.created_at <= ? AND o.status_group != 3
+         ${itemIds ? `AND json_extract(j.value, '$.id') IN (SELECT value FROM json_each(?))` : ""}
+       GROUP BY item`,
+      itemIds ? [acc.id, `${from} 00:00:00`, `${to} 23:59:59`, JSON.stringify(itemIds)] : [acc.id, `${from} 00:00:00`, `${to} 23:59:59`]
+    );
+    return new Map(rows.map((r) => [String(r.item), { orders: r.orders, qty: r.qty, sum: Math.round(r.sum * 100) / 100 }]));
+  }
+  async function ourOrdersTotal(acc, { from, to }, itemIds) {
+    if (!itemIds.length) return { orders: 0, sum: 0 };
+    const r = await db.get(
+      `SELECT COUNT(DISTINCT o.id) AS orders, SUM(COALESCE(json_extract(j.value, '$.qty'), 1) * COALESCE(json_extract(j.value, '$.price'), 0)) AS sum
+       FROM mp_orders o, json_each(o.items) j
+       WHERE o.mp = 'rozetka' AND o.account_id = ? AND o.created_at >= ? AND o.created_at <= ? AND o.status_group != 3
+         AND json_extract(j.value, '$.id') IN (SELECT value FROM json_each(?))`,
+      [acc.id, `${from} 00:00:00`, `${to} 23:59:59`, JSON.stringify(itemIds)]
+    );
+    return { orders: r?.orders || 0, sum: Math.round((r?.sum || 0) * 100) / 100 };
+  }
+  const num7 = (v) => Number(v) || 0;
+  const statOf = (s3 = {}) => ({ views: num7(s3.views), clicks: num7(s3.clicks), money: num7(s3.money), orders: num7(s3.transactions), cpo: num7(s3.cpo), cpc: num7(s3.cpc) });
+  const campaignItems = (c, acc, id, status) => cached(`ci|${acc.id}|${id}|${status}`, async () => {
+    const out = [];
+    for (let page = 1; page <= 5; page++) {
+      const r = await get(c, acc, `raising-campaign-items/search?expand=item,rate,advertising_state&page=${page}&pageSize=100&sort=-id&campaign_id=${id}${status ? `&campaign_status=${status}` : ""}`);
+      out.push(...r?.advertisingCampaignItems || []);
+      if (page >= (r?._meta?.pageCount || 1)) break;
+    }
+    return out;
+  });
+  app.get("/api/mp/ads/campaigns", async (c) => {
+    const acc = await accFor(c);
+    const st = STATUS[c.req.query("status")] ?? "1";
+    const per = range(c);
+    const list = async () => {
+      const out = [];
+      for (let page = 1; page <= 3; page++) {
+        const r = await get(c, acc, `raising-campaigns/search?expand=items_count,statistics&page=${page}&pageSize=100&status=${st}`);
+        out.push(...r?.advertisingCampaigns || []);
+        if (page >= (r?._meta?.pageCount || 1)) break;
+      }
+      return out;
+    };
+    const [camps, bal, limit, ao] = await Promise.all([
+      list(),
+      get(c, acc, "balances/balance-ads").catch(() => null),
+      get(c, acc, "raising/common/adv-balance-credit-limit").catch(() => null),
+      adOrders(c, acc, per).catch((e) => ({ error: e.message }))
+    ]);
+    const byCamp = /* @__PURE__ */ new Map();
+    for (const o of Array.isArray(ao) ? ao : []) {
+      const x = byCamp.get(o.campaign) || { orders: 0, sum: 0 };
+      x.orders++;
+      x.sum += o.sum;
+      byCamp.set(o.campaign, x);
+    }
+    return c.json({
+      account: { id: acc.id, name: acc.name },
+      period: per,
+      status: c.req.query("status") || "active",
+      balance: bal?.balance ?? null,
+      limit: limit?.limit ?? null,
+      adOrdersError: Array.isArray(ao) ? "" : ao.error,
+      campaigns: camps.map((x) => ({
+        id: x.id,
+        title: x.title,
+        start: x.start_date,
+        end: x.end_date,
+        budget: num7(x.daily_budget),
+        left_today: x.current_limit_budget != null ? num7(x.current_limit_budget) : null,
+        status: x.status,
+        pause_reason: x.pause_reason || 0,
+        type: x.type || "CPC",
+        items: num7(x.items_count),
+        editable: Boolean(x.is_editable),
+        stat: statOf(x.statistics),
+        period: { ad_orders: byCamp.get(x.id)?.orders || 0, ad_sum: Math.round((byCamp.get(x.id)?.sum || 0) * 100) / 100 }
+      }))
+    });
+  });
+  app.get("/api/mp/ads/campaign-orders", async (c) => {
+    const acc = await accFor(c);
+    const per = range(c);
+    const st = STATUS[c.req.query("status")] ?? "1";
+    const ids = String(c.req.query("ids") || "").split(",").map(Number).filter((x) => x > 0).slice(0, 6);
+    const items = await Promise.all(ids.map((id) => campaignItems(c, acc, id, st).catch(() => null)));
+    const out = {};
+    for (let i = 0; i < ids.length; i++) {
+      out[ids[i]] = items[i] ? await ourOrdersTotal(acc, per, [...new Set(items[i].map((x) => String(x.item_id)))]) : null;
+    }
+    return c.json({ period: per, campaigns: out });
+  });
+  app.get("/api/mp/ads/campaigns/:id{[0-9]+}", async (c) => {
+    const acc = await accFor(c);
+    const per = range(c);
+    const id = Number(c.req.param("id"));
+    const st = STATUS[c.req.query("status")] ?? "";
+    const [camp, items, ao] = await Promise.all([
+      get(c, acc, `raising-campaigns/${id}?expand=statistics`),
+      campaignItems(c, acc, id, st),
+      adOrders(c, acc, per).catch((e) => ({ error: e.message }))
+    ]);
+    const ours = await ourOrders(acc, per, items.map((x) => String(x.item_id)));
+    const adBy = /* @__PURE__ */ new Map();
+    for (const o of Array.isArray(ao) ? ao : []) {
+      if (o.campaign !== id) continue;
+      const x = adBy.get(o.item) || { orders: 0, sum: 0 };
+      x.orders++;
+      x.sum += o.sum;
+      adBy.set(o.item, x);
+    }
+    return c.json({
+      account: { id: acc.id, name: acc.name },
+      period: per,
+      adOrdersError: Array.isArray(ao) ? "" : ao.error,
+      campaign: {
+        id: camp.id,
+        title: camp.title,
+        start: camp.start_date,
+        end: camp.end_date,
+        budget: num7(camp.daily_budget),
+        left_today: camp.current_limit_budget != null ? num7(camp.current_limit_budget) : null,
+        status: camp.status,
+        type: camp.type || "CPC",
+        stat: statOf(camp.statistics)
+      },
+      items: items.map((x) => {
+        const it = x.item || {};
+        const item = String(x.item_id);
+        return {
+          id: x.id,
+          item_id: item,
+          name: it.name_ua || it.name || `\u0422\u043E\u0432\u0430\u0440 ${item}`,
+          article: it.article || "",
+          price: num7(it.price),
+          price_old: num7(it.price_old),
+          photo: it.photo_preview || "",
+          url: it.url || "",
+          category: it.catalog_category?.name || "",
+          stock: it.stock_quantity ?? null,
+          sold: it.sold ?? null,
+          rate: num7(x.rate?.current ?? x.max_day_money),
+          rate_min: num7(x.rate?.min),
+          status: x.status,
+          start: x.start_date,
+          end: x.end_date,
+          editable: Boolean(x.is_editable),
+          stat: statOf(x.stat),
+          period: { ad_orders: adBy.get(item)?.orders || 0, ad_sum: Math.round((adBy.get(item)?.sum || 0) * 100) / 100, orders: ours.get(item)?.orders || 0, qty: ours.get(item)?.qty || 0, sum: ours.get(item)?.sum || 0 }
+        };
+      })
+    });
+  });
+}
+
 // src/modules/market/items.js
 var leadCode = (article) => (String(article || "").trim().match(/^(\d{3,12})\b/) || [])[1] || "";
 var latinPart = (article) => String(article || "").trim().replace(/^\d{3,12}\b[\s_-]*/, "");
@@ -21209,6 +21423,7 @@ ${items2.slice(0, 25).map((it) => `\u2022 ${what(it)} \xB7 ${esc3(it.ch.user_fio
     return acc;
   };
   const { rzAct } = mountRzPersonal(app, { db, fetchFn, rzCall, accOf });
+  mountMarketAds(app, { db, fetchFn, rzAct, accOf, shared: shared2 });
   const ADS_PATH = /^(raising-campaigns|raising-campaign-items|raising\/common|raising\/analytic|promo-analytics|balances\/balance-ads)[\w\-/?=&%.,]*$/;
   app.get("/api/mp/ads/raw/:account", async (c) => {
     need(c, "api");

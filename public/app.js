@@ -12,6 +12,7 @@ import { createNpPages } from './pages/np.js';
 import { createCronPages } from './pages/cron.js';
 import { createMarketPages } from './pages/market.js';
 import { createMpSettingsPage } from './pages/mpcrm.js';
+import { createMpAdsPage } from './pages/mpads.js';
 import { createAnAiPages } from './pages/anai.js';
 import { createRahunkyPages } from './pages/rahunky.js';
 import { createUsersPages } from './pages/users.js';
@@ -88,6 +89,7 @@ const SECTIONS = [
     { id: 'mprz', label: 'Розетка' },
     { id: 'mpprom', label: 'Prom' },
     { id: 'mpepc', label: 'Епіцентр' },
+    { id: 'mpads', label: 'Реклама' },
     { id: 'mpset', label: 'Налаштування' },
   ] },
   { id: 'retail', label: 'Рітейл', perm: 'retail.view', home: 'rzorders', tabs: [
@@ -316,6 +318,7 @@ const { viewNp } = createNpPages();
 const { viewCron } = createCronPages();
 const { viewMarket } = createMarketPages({ can });
 const { viewMpSettings } = createMpSettingsPage({ can });
+const { viewMpAds } = createMpAdsPage();
 const { viewAsk } = createAnAiPages({ can });
 const { viewRahunky, viewRahunkyList } = createRahunkyPages(ctx);
 const { viewUsers } = createUsersPages(ctx);
@@ -387,6 +390,7 @@ const routes = {
   mpprom: (id) => viewMarket('prom', id),
   mpepc: (id) => viewMarket('epc', id),
   mpset: (tab) => viewMpSettings(tab),
+  mpads: (id) => viewMpAds(id),
   rzorders: () => RETAIL.viewOrders(),
   rzproducts: () => RETAIL.viewProducts(),
   rzsettings: () => RETAIL.viewSettings(),
@@ -424,7 +428,7 @@ async function route() {
   document.body.classList.toggle('an-mode', sec.id === 'an');
   // Лише перегляд (напр., B2B для менеджера): кнопки змін сховані, сервер зміни й так не прийме.
   main.classList.toggle('ro', Boolean(sec.edit && can(sec.perm) && !can(sec.edit)));
-  main.classList.toggle('mp-wide', ['mprz', 'mpprom', 'mpepc'].includes(name)); // маркетплейси — на всю ширину, як кабінет Розетки
+  main.classList.toggle('mp-wide', ['mprz', 'mpprom', 'mpepc', 'mpads'].includes(name)); // маркетплейси — на всю ширину, як кабінет Розетки
   renderNav(name);
   // На телефоні меню гортається вбік — активний пункт має бути видно
   for (const a of $$('.main-tabs a.active, .subnav a.active')) a.scrollIntoView({ block: 'nearest', inline: 'center' });

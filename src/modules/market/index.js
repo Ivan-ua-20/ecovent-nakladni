@@ -10,6 +10,7 @@ import { epcOrdersPage } from '../../integrations/epicentr.js';
 import { mountMarketCrm } from './crm.js';
 import { mountMarketTtn } from './ttn.js';
 import { mountRzPersonal } from './rzme.js';
+import { mountMarketAds } from './ads.js';
 import { mountMarketItems } from './items.js';
 import { mountMarketRemind, recallSql, RECALL_DAYS } from './remind.js';
 
@@ -969,6 +970,7 @@ export function mountMarket(app, { db, fetchFn, services = {}, onCron = () => {}
   // «Створити ТТН» (ROZETKA Delivery, Нова пошта, Meest) із картки замовлення — ttn.js.
   // дії від імені менеджера (його вхід у Розетку), якщо підключено; маршрути вище звертаються до rzAct лише під час запиту
   const { rzAct } = mountRzPersonal(app, { db, fetchFn, rzCall, accOf });
+  mountMarketAds(app, { db, fetchFn, rzAct, accOf, shared });
   // Реклама Розетки — розвідка (адміністратор): «сира» відповідь рекламних адрес кабінету, лише читання.
   const ADS_PATH = /^(raising-campaigns|raising-campaign-items|raising\/common|raising\/analytic|promo-analytics|balances\/balance-ads)[\w\-/?=&%.,]*$/;
   app.get('/api/mp/ads/raw/:account', async (c) => {
